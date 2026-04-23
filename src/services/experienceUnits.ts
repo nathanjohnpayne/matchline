@@ -9,7 +9,7 @@ import {
 
 import type { ExperienceUnit } from "../types/capability.ts";
 
-import { ownerScope } from "./auth.ts";
+import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "experienceUnits";
@@ -35,6 +35,21 @@ export async function getExperienceUnit(
   return snap.exists() ? snap.data() : undefined;
 }
 
-export async function upsertExperienceUnit(unit: ExperienceUnit): Promise<void> {
-  await setDoc(ref(unit.id), unit, { merge: true });
+/**
+ * Upsert an ExperienceUnit. The caller provides everything except
+ * `owner_uid` — it's stamped here from the current auth state so the
+ * client SDK never has to compute it and can never mis-stamp it. Any
+ * mismatch with the auth user's uid would be rejected by
+ * `firestore.rules` anyway; stamping from the verified client-side
+ * auth state keeps the rules-layer check tight and makes the service
+ * API simpler.
+ */
+export async function upsertExperienceUnit(
+  unit: Omit<ExperienceUnit, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    ref(unit.id),
+    { ...unit, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }

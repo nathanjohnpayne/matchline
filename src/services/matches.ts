@@ -7,7 +7,7 @@ import {
 
 import type { UnitMatch } from "../types/capability.ts";
 
-import { ownerScope } from "./auth.ts";
+import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "unitMatches";
@@ -33,6 +33,13 @@ export async function listMatchesForUnit(
   return snap.docs.map((d) => d.data());
 }
 
-export async function upsertMatch(match: UnitMatch): Promise<void> {
-  await setDoc(ref(match.id), match, { merge: true });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertMatch(
+  match: Omit<UnitMatch, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    ref(match.id),
+    { ...match, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }

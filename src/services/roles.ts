@@ -10,7 +10,7 @@ import {
 import type { JobRequirementUnit } from "../types/capability.ts";
 import type { Role } from "../types/crm.ts";
 
-import { ownerScope } from "./auth.ts";
+import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const ROLES = "roles";
@@ -33,8 +33,15 @@ export async function getRole(id: string): Promise<Role | undefined> {
   return snap.exists() ? snap.data() : undefined;
 }
 
-export async function upsertRole(role: Role): Promise<void> {
-  await setDoc(roleRef(role.id), role, { merge: true });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertRole(
+  role: Omit<Role, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    roleRef(role.id),
+    { ...role, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }
 
 export async function listRequirementsForRole(
@@ -46,6 +53,13 @@ export async function listRequirementsForRole(
   return snap.docs.map((d) => d.data());
 }
 
-export async function upsertRequirement(req: JobRequirementUnit): Promise<void> {
-  await setDoc(reqRef(req.id), req, { merge: true });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertRequirement(
+  req: Omit<JobRequirementUnit, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    reqRef(req.id),
+    { ...req, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }
