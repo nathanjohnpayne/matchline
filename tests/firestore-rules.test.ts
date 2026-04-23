@@ -31,7 +31,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, setDoc } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
@@ -163,7 +163,7 @@ for (const collection of COLLECTIONS) {
       );
     });
 
-    it("owner can delete their own doc", async () => {
+    it("owner can update their own doc", async () => {
       await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
       const ctx = testEnv.authenticatedContext(OWNER_UID);
       await assertSucceeds(
@@ -174,17 +174,22 @@ for (const collection of COLLECTIONS) {
       );
     });
 
+    it("owner can delete their own doc", async () => {
+      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
+      const ctx = testEnv.authenticatedContext(OWNER_UID);
+      // Exercises `allow delete: if isOwner();` directly — the
+      // setDoc-as-delete shortcut in an earlier draft only
+      // exercised the update rule branch (#60 CodeRabbit review).
+      await assertSucceeds(
+        deleteDoc(doc(ctx.firestore(), collection, "doc-1")),
+      );
+    });
+
     it("cross-owner delete is rejected", async () => {
       await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
       const ctx = testEnv.authenticatedContext(OTHER_UID);
-      // Firestore's deleteDoc would be the idiomatic check, but
-      // rewriting a doc as a non-owner covers the same rule branch
-      // (`allow update: isOwner() && isCreatingAsOwner()`).
       await assertFails(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OTHER_UID,
-          data: 99,
-        }),
+        deleteDoc(doc(ctx.firestore(), collection, "doc-1")),
       );
     });
   });
