@@ -29,10 +29,13 @@ describe("friendlyAuthError", () => {
     );
   });
 
-  it("maps weak-password to a length hint", () => {
-    expect(friendlyAuthError({ code: "auth/weak-password" })).toMatch(
-      /8 characters/,
-    );
+  it("maps weak-password to a length-neutral hint (no hard-coded count)", () => {
+    // The message deliberately doesn't hard-code a length, so it
+    // survives both the Firebase default policy (6) and a stricter
+    // custom policy without going stale.
+    const msg = friendlyAuthError({ code: "auth/weak-password" });
+    expect(msg).toMatch(/too short/i);
+    expect(msg).not.toMatch(/\d/);
   });
 
   it("maps email-already-in-use to a try-signing-in hint", () => {

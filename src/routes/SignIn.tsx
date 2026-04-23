@@ -14,7 +14,7 @@ import {
   signInWithEmailAndPassword,
 } from "firebase/auth";
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 
 import { getAuthClient } from "../firebase.ts";
 import { useCurrentUser } from "../lib/auth.tsx";
@@ -33,8 +33,12 @@ export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
 
   // Already signed in → bounce to the post-auth landing surface.
+  // Use <Navigate> rather than calling navigate() during render —
+  // calling the imperative navigate() mid-render is a side-effect
+  // that violates React's render purity and can trip Strict Mode's
+  // double-render warning.
   if (!pending && user) {
-    navigate("/units", { replace: true });
+    return <Navigate to="/units" replace />;
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {

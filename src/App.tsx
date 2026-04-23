@@ -67,8 +67,16 @@ export default function App() {
             ))}
             <button
               type="button"
-              onClick={() => {
-                void signOut(getAuthClient());
+              onClick={async () => {
+                try {
+                  await signOut(getAuthClient());
+                } catch (err) {
+                  // Rare — Firebase's sign-out is mostly a local
+                  // token clear. Log for diagnosis; user can retry.
+                  // A user-visible error surface here is overkill
+                  // for a single-user app at V1 scale.
+                  console.error("Sign-out failed:", err);
+                }
               }}
               className="ml-2 text-xs text-zinc-400 transition duration-150 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-zinc-100"
               aria-label={`Sign out ${user.email ?? ""}`}

@@ -26,7 +26,11 @@ export function friendlyAuthError(err: unknown): string {
     case "auth/invalid-email":
       return "That doesn't look like a valid email.";
     case "auth/weak-password":
-      return "Password must be at least 8 characters.";
+      // Firebase's server-side default policy rejects <6 chars, but
+      // the form's client-side minLength is 8 (stricter UX). Keeping
+      // the message length-neutral means it stays accurate if
+      // Firebase's policy changes or the form's minLength is tuned.
+      return "That password is too short. Try a longer one.";
     case "auth/email-already-in-use":
       return "An account with that email already exists. Try signing in.";
     case "auth/invalid-credential":
