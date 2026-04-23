@@ -58,6 +58,14 @@ designed.
 - **Capability Graph** — the full set of a user's Experience Units
   plus their relationships to skills, tools, domains, and metrics.
 
+## UI design direction
+
+The V1 UI targets an **Attio-like** aesthetic — clean, modern, dense,
+keyboard-first, monochrome with restrained accent. Full guidance
+lives in [`docs/design/ui-guidance.md`](docs/design/ui-guidance.md),
+which is the canonical reference for every `src/routes/**` surface.
+Agents must read it before opening any UI PR.
+
 ## Relation to the Standard
 
 Matchline follows the AI Agent Tooling Standard
