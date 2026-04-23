@@ -99,10 +99,22 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
     return 0;
   }
 
+  // Firestore rejects documents containing `undefined` values by
+  // default. `usage.ownerUid` and `usage.applicationId` are optional
+  // and commonly absent (e.g. embeddings called from a non-user
+  // context), so we build the doc conditionally rather than globally
+  // enabling `ignoreUndefinedProperties` on the admin SDK.
   const doc: LlmCallDoc = {
-    ...usage,
+    stage: usage.stage,
+    model: usage.model,
+    provider: usage.provider,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    latencyMs: usage.latencyMs,
     costUsd,
     createdAt: FieldValue.serverTimestamp(),
+    ...(usage.ownerUid !== undefined && { ownerUid: usage.ownerUid }),
+    ...(usage.applicationId !== undefined && { applicationId: usage.applicationId }),
   };
 
   // Fire-and-forget: the caller's LLM response path must not block on
