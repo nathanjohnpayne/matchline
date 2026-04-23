@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// Matchline V1 is single-user. Every document must carry `owner_uid`
+// matching the authenticated user. The rules here enforce that invariant
+// at the data layer; service-layer code MUST also set owner_uid on write.
+//
+// This file intentionally locks everything down until owner_uid is wired
+// through the data model. Sprint 0 scaffolding does not perform live
+// reads; Sprint 1 must add owner_uid to every schema and update these
+// rules together.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner() {
+      return request.auth != null
+        && resource.data.owner_uid == request.auth.uid;
+    }
+    function isCreatingAsOwner() {
+      return request.auth != null
+        && request.resource.data.owner_uid == request.auth.uid;
+    }
+
+    match /{collection}/{docId} {
+      allow read: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if isOwner() && isCreatingAsOwner();
+      allow delete: if isOwner();
+    }
+  }
+}
