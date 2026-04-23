@@ -22,6 +22,14 @@ import { friendlyAuthError } from "../lib/auth-errors.ts";
 
 type Mode = "sign-in" | "create-account";
 
+/**
+ * Client-side minimum for new accounts. Stricter than Firebase's
+ * default server-side policy (6 chars) so a new account won't be
+ * created below this threshold. Sign-in does NOT enforce this —
+ * existing accounts with older/looser passwords must still work.
+ */
+const MIN_NEW_PASSWORD_LENGTH = 8;
+
 export default function SignIn() {
   const navigate = useNavigate();
   const { user, pending } = useCurrentUser();
@@ -44,6 +52,18 @@ export default function SignIn() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
+
+    // Client-side policy enforcement. The <form> carries noValidate
+    // so the browser's bubble-style validation doesn't fire — that
+    // means `minLength={MIN_NEW_PASSWORD_LENGTH}` on the input is
+    // UX hint, not a gate. Enforce the policy here for create-account
+    // mode only; sign-in mode must accept any length because existing
+    // accounts may have been created under an older/looser policy.
+    if (mode === "create-account" && password.length < MIN_NEW_PASSWORD_LENGTH) {
+      setError("That password is too short. Try a longer one.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
@@ -102,7 +122,7 @@ export default function SignIn() {
                 type="password"
                 autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
                 required
-                minLength={8}
+                minLength={mode === "create-account" ? MIN_NEW_PASSWORD_LENGTH : undefined}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="mt-1 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 transition duration-150 placeholder:text-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:ring-offset-1 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-100 dark:focus:ring-zinc-100 dark:focus:ring-offset-zinc-900"
