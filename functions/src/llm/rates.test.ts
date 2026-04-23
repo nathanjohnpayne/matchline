@@ -55,4 +55,15 @@ describe("rates", () => {
       RATES["new-model"] = { inputUsdPer1k: 0, outputUsdPer1k: 0 };
     }).toThrow(TypeError);
   });
+
+  it("each ModelRate is deep-frozen — nested properties cannot be mutated", () => {
+    const sonnet = RATES["claude-sonnet-4-6"];
+    expect(Object.isFrozen(sonnet)).toBe(true);
+    expect(() => {
+      // @ts-expect-error — deliberately probing nested immutability
+      sonnet.inputUsdPer1k = 999;
+    }).toThrow(TypeError);
+    // Post-mutation attempt: value must still be original.
+    expect(RATES["claude-sonnet-4-6"].inputUsdPer1k).toBe(0.003);
+  });
 });

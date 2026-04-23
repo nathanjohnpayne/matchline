@@ -15,24 +15,28 @@ export interface ModelRate {
   readonly outputUsdPer1k: number;
 }
 
-export const RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
+// Deep-freeze: each ModelRate entry is frozen individually so
+// `RATES[model].inputUsdPer1k = ...` can't silently corrupt pricing.
+// Shallow freeze on the outer container alone would leave nested
+// objects mutable.
+export const RATES: Readonly<Record<string, Readonly<ModelRate>>> = Object.freeze({
   // Anthropic — standard Sonnet tier.
-  "claude-sonnet-4-6": {
+  "claude-sonnet-4-6": Object.freeze({
     inputUsdPer1k: 0.003,
     outputUsdPer1k: 0.015,
-  },
+  }),
 
   // Anthropic — Haiku 4.5 (dated ID, matches config.ts).
-  "claude-haiku-4-5-20251001": {
+  "claude-haiku-4-5-20251001": Object.freeze({
     inputUsdPer1k: 0.001,
     outputUsdPer1k: 0.005,
-  },
+  }),
 
   // OpenAI — text-embedding-3-small. Single input-token rate; no output tokens.
-  "text-embedding-3-small": {
+  "text-embedding-3-small": Object.freeze({
     inputUsdPer1k: 0.00002,
     outputUsdPer1k: 0,
-  },
+  }),
 });
 
 export function rateFor(model: string): ModelRate {

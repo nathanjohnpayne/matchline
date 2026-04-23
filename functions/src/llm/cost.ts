@@ -106,7 +106,11 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
   };
 
   // Fire-and-forget: the caller's LLM response path must not block on
-  // the telemetry write. Errors are logged via .catch.
+  // the telemetry write. Errors are logged via .catch. V1 accepts the
+  // narrow data-loss window during Cloud Run instance scale-down;
+  // upgrading to Cloud Tasks / Pub/Sub for durability is deferred
+  // until Phase 3 telemetry (#41) when real usage reveals whether loss
+  // is measurable. Single-user V1 volume does not justify the infra.
   void getFirestore()
     .collection(LLM_CALLS_COLLECTION)
     .add(doc)
