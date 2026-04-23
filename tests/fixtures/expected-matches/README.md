@@ -10,14 +10,26 @@ One JSON file per (resume, JD) pair. Filename is
 {
   "resume_fixture_id": "nathan-2026",
   "jd_fixture_id": "mux-senior-pm-2026",
+  "k": 10,
+
+  // Expected match IDs in the matcher's top-K, as composite
+  // "unit_id:requirement_id" strings. This format matches what
+  // tests/eval/scoring.ts::topKOverlap consumes (readonly string[]).
+  //
+  // Earlier drafts documented this as { unit_id, requirement_id }
+  // objects, but the scorer expects strings — the composite form
+  // keeps a single ID-per-pair contract and round-trips cleanly
+  // through the Set lookup topKOverlap performs.
   "expected_top_matches": [
-    // Ordered list of expected (unit_id, requirement_id) pairs that
-    // the matching engine should surface in its top-K.
-    { "unit_id": "u_disney_ncp", "requirement_id": "r_video_infra" },
-    { "unit_id": "u_device_cert", "requirement_id": "r_device_certification" }
-  ],
-  "k": 10
+    "u_disney_ncp:r_video_infra",
+    "u_device_cert:r_device_certification"
+  ]
 }
 ```
 
-Scoring is done by `tests/eval/scoring.ts::topKOverlap`.
+At scoring time, the harness flattens the actual top-K `UnitMatch`
+list into the same `"${unit_id}:${requirement_id}"` form before
+calling `topKOverlap`. Callers that want more structured labels
+(rationale fixtures, per-pair confidence) can keep a sibling
+`expected_match_rationales` key — but the primary
+`expected_top_matches` is `string[]` by contract.

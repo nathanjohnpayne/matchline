@@ -16,6 +16,7 @@
 
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
@@ -98,11 +99,13 @@ async function main(): Promise<number> {
   // zero-currentUsage mock with a real Firestore aggregation.
   const currentUsage = { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 };
   // A flow is one (resume × JD) pair, not one resume. With N resumes
-  // and M JDs, a --full run is N×M flows. Projecting on resume count
-  // alone undercounts by Mx and can let over-cap --full runs through
-  // the guard — see Codex P1 on #55.
-  const selectedJdCount = mode === "smoke" ? Math.min(jdFixtures.length, 1) : jdFixtures.length;
-  const flowCount = selected.length * Math.max(selectedJdCount, 1);
+  // and M JDs, a --full run is N×M flows. No floor on the JD
+  // multiplier: if zero JDs are present, the run has zero flows,
+  // projected spend is genuinely zero, and the guard should not trip.
+  // A prior `Math.max(selectedJdCount, 1)` defaulted the multiplier
+  // to 1 and falsely projected N×1 flows on a resumes-only corpus
+  // (blocker from nathanpayne-codex on #55).
+  const flowCount = computeFlowCount(mode, selected.length, jdFixtures.length);
   const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
@@ -169,11 +172,34 @@ function buildReport(
 }
 
 /**
+ * Pure cardinality: given the number of resume and JD fixtures in a
+ * run, how many (resume × JD) flows will execute? Smoke mode pairs
+ * the single selected resume with a single JD (or zero if none
+ * exist); full mode is the full cross product.
+ *
+ * Exported for tests: the zero-JD regression (50 resumes × 0 JDs
+ * should be 0 flows, not 50) was the second blocker from
+ * nathanpayne-codex on #55.
+ */
+export function computeFlowCount(
+  mode: Mode,
+  resumeCount: number,
+  jdCount: number,
+): number {
+  if (resumeCount <= 0 || jdCount <= 0) return 0;
+  if (mode === "smoke") {
+    // Smoke: one resume × one JD, capped at available fixtures.
+    return Math.min(resumeCount, 1) * Math.min(jdCount, 1);
+  }
+  return resumeCount * jdCount;
+}
+
+/**
  * Very conservative upfront estimate of what one mode's run will
  * cost, so the projection guard has something to check against even
  * before real calls happen. `flowCount` is resume×JD pairs, not
- * resume count — see call site. Phase 1 replaces this with per-stage
- * rate × estimated-token math.
+ * resume count — see `computeFlowCount`. Phase 1 replaces this with
+ * per-stage rate × estimated-token math.
  */
 function estimatePlannedSpend(
   mode: Mode,
@@ -187,9 +213,16 @@ function estimatePlannedSpend(
   };
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error("eval harness failed:", err);
-    process.exit(2);
-  });
+// Only run main() when invoked as a script (via `npm run eval` →
+// `tsx tests/eval/run.ts`). Importing run.ts from a test file must
+// not trigger process.exit — vitest caught this in unhandled-error
+// form when run.test.ts imported `computeFlowCount`.
+const isScriptEntry = process.argv[1] === fileURLToPath(import.meta.url);
+if (isScriptEntry) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error("eval harness failed:", err);
+      process.exit(2);
+    });
+}
