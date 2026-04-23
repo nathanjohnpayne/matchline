@@ -3,6 +3,8 @@ dist/
 build/
 .next/
 .out/
+functions/lib/
+*.tsbuildinfo
 
 # Environment and secrets
 .env
