@@ -10,6 +10,7 @@ import {
 import type { JobRequirementUnit } from "../types/capability.ts";
 import type { Role } from "../types/crm.ts";
 
+import { ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const ROLES = "roles";
@@ -23,7 +24,7 @@ const reqRef = (id: string) => typedDoc<JobRequirementUnit>(REQUIREMENTS, id);
 export async function listRoles(
   ...constraints: QueryConstraint[]
 ): Promise<Role[]> {
-  const snap = await getDocs(query(roleCol(), ...constraints));
+  const snap = await getDocs(query(roleCol(), ...ownerScope(), ...constraints));
   return snap.docs.map((d) => d.data());
 }
 
@@ -39,7 +40,9 @@ export async function upsertRole(role: Role): Promise<void> {
 export async function listRequirementsForRole(
   roleId: string,
 ): Promise<JobRequirementUnit[]> {
-  const snap = await getDocs(query(reqCol(), where("role_id", "==", roleId)));
+  const snap = await getDocs(
+    query(reqCol(), ...ownerScope(), where("role_id", "==", roleId)),
+  );
   return snap.docs.map((d) => d.data());
 }
 

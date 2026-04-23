@@ -9,6 +9,7 @@ import {
 
 import type { Application, ApplicationStage } from "../types/crm.ts";
 
+import { ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "applications";
@@ -19,7 +20,7 @@ const ref = (id: string) => typedDoc<Application>(PATH, id);
 export async function listApplications(
   ...constraints: QueryConstraint[]
 ): Promise<Application[]> {
-  const snap = await getDocs(query(col(), ...constraints));
+  const snap = await getDocs(query(col(), ...ownerScope(), ...constraints));
   return snap.docs.map((d) => d.data());
 }
 

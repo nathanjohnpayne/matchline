@@ -7,6 +7,7 @@ import {
 
 import type { UnitMatch } from "../types/capability.ts";
 
+import { ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "unitMatches";
@@ -18,7 +19,7 @@ export async function listMatchesForRequirement(
   requirementId: string,
 ): Promise<UnitMatch[]> {
   const snap = await getDocs(
-    query(col(), where("job_requirement_unit_id", "==", requirementId)),
+    query(col(), ...ownerScope(), where("job_requirement_unit_id", "==", requirementId)),
   );
   return snap.docs.map((d) => d.data());
 }
@@ -27,7 +28,7 @@ export async function listMatchesForUnit(
   experienceUnitId: string,
 ): Promise<UnitMatch[]> {
   const snap = await getDocs(
-    query(col(), where("experience_unit_id", "==", experienceUnitId)),
+    query(col(), ...ownerScope(), where("experience_unit_id", "==", experienceUnitId)),
   );
   return snap.docs.map((d) => d.data());
 }

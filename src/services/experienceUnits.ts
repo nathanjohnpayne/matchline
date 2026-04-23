@@ -9,6 +9,7 @@ import {
 
 import type { ExperienceUnit } from "../types/capability.ts";
 
+import { ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "experienceUnits";
@@ -19,7 +20,7 @@ const ref = (id: string) => typedDoc<ExperienceUnit>(PATH, id);
 export async function listExperienceUnits(
   ...constraints: QueryConstraint[]
 ): Promise<ExperienceUnit[]> {
-  const snap = await getDocs(query(col(), ...constraints));
+  const snap = await getDocs(query(col(), ...ownerScope(), ...constraints));
   return snap.docs.map((d) => d.data());
 }
 

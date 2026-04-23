@@ -20,10 +20,10 @@ export type Stage =
 const defaults: Record<Stage, ModelConfig> = {
   // Frontier class — extraction quality is the foundation of the product.
   extraction: { provider: "anthropic", model: "claude-sonnet-4-6" },
-  requirement_parsing: { provider: "anthropic", model: "claude-haiku-4-5" },
+  requirement_parsing: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
   rationale: { provider: "anthropic", model: "claude-sonnet-4-6" },
   // Cheaper class — generation is the highest-volume stage.
-  generation: { provider: "anthropic", model: "claude-haiku-4-5" },
+  generation: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
   validation: { provider: "anthropic", model: "claude-sonnet-4-6" },
 };
 
