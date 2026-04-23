@@ -45,4 +45,28 @@ describe("priceFor", () => {
       priceFor("claude-unknown", { inputTokens: 1000, outputTokens: 1000 }),
     ).toThrow(/No rate registered/);
   });
+
+  it("rejects negative token counts", () => {
+    expect(() =>
+      priceFor("claude-sonnet-4-6", { inputTokens: -1, outputTokens: 0 }),
+    ).toThrow(/Token counts must be finite, non-negative/);
+    expect(() =>
+      priceFor("claude-sonnet-4-6", { inputTokens: 0, outputTokens: -1 }),
+    ).toThrow(/Token counts must be finite, non-negative/);
+  });
+
+  it("rejects NaN token counts", () => {
+    expect(() =>
+      priceFor("claude-sonnet-4-6", { inputTokens: Number.NaN, outputTokens: 0 }),
+    ).toThrow(/Token counts must be finite, non-negative/);
+  });
+
+  it("rejects Infinity token counts", () => {
+    expect(() =>
+      priceFor("claude-sonnet-4-6", {
+        inputTokens: Number.POSITIVE_INFINITY,
+        outputTokens: 0,
+      }),
+    ).toThrow(/Token counts must be finite, non-negative/);
+  });
 });

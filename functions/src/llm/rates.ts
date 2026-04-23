@@ -15,7 +15,7 @@ export interface ModelRate {
   readonly outputUsdPer1k: number;
 }
 
-export const RATES: Record<string, ModelRate> = {
+export const RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   // Anthropic — standard Sonnet tier.
   "claude-sonnet-4-6": {
     inputUsdPer1k: 0.003,
@@ -33,10 +33,12 @@ export const RATES: Record<string, ModelRate> = {
     inputUsdPer1k: 0.00002,
     outputUsdPer1k: 0,
   },
-};
+});
 
 export function rateFor(model: string): ModelRate {
-  const rate = RATES[model];
+  // Object.hasOwn so inherited keys like "toString" or "constructor"
+  // can't masquerade as valid model identifiers.
+  const rate = Object.hasOwn(RATES, model) ? RATES[model] : undefined;
   if (!rate) {
     throw new Error(
       `No rate registered for model: ${model}. Add an entry to functions/src/llm/rates.ts.`,

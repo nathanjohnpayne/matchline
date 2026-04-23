@@ -48,8 +48,22 @@ export interface LlmCallDoc extends UsageRecord {
 /**
  * Pure price calculator. No I/O. Reused by the eval-harness projection
  * guard (#48) to pre-compute run cost without burning Firestore reads.
+ *
+ * Throws on unknown models (via `rateFor`) or invalid token counts
+ * (negative, `NaN`, `Infinity`) so bad inputs can never silently
+ * persist as a $0 cost and corrupt downstream budget math.
  */
 export function priceFor(model: string, tokens: TokenCounts): number {
+  if (
+    !Number.isFinite(tokens.inputTokens) ||
+    !Number.isFinite(tokens.outputTokens) ||
+    tokens.inputTokens < 0 ||
+    tokens.outputTokens < 0
+  ) {
+    throw new Error(
+      `Token counts must be finite, non-negative numbers (got input=${tokens.inputTokens}, output=${tokens.outputTokens}).`,
+    );
+  }
   const rate = rateFor(model);
   return (
     (tokens.inputTokens / 1000) * rate.inputUsdPer1k +
@@ -58,34 +72,53 @@ export function priceFor(model: string, tokens: TokenCounts): number {
 }
 
 /**
- * Persist one LLM call's usage + cost to Firestore and return the
- * computed dollar cost. Firestore failures are logged but never thrown
- * — a flaky write path must not kill the caller's actual LLM response,
- * per the "fail visibly, not silently" principle applied inversely:
- * cost telemetry failing is a reporting issue, not a correctness one.
+ * Compute the dollar cost for one LLM call and persist a `llm_calls`
+ * doc fire-and-forget — the caller never waits for the Firestore
+ * write, and neither pricing failures nor Firestore failures throw.
+ *
+ * The "telemetry must not kill caller flow" contract applies to BOTH
+ * failure modes: a malformed token count (rejected by `priceFor`) OR
+ * a flaky Firestore write is logged and swallowed. Cost telemetry is
+ * a reporting concern, not a correctness one.
  *
  * The returned value lets the caller surface per-call cost on the
  * Application (Phase 2a Editor footer) without a round-trip read.
+ * Returns `0` when pricing itself fails (logged as a warning).
  */
 export async function recordUsage(usage: UsageRecord): Promise<number> {
-  const costUsd = priceFor(usage.model, usage);
+  let costUsd: number;
+  try {
+    costUsd = priceFor(usage.model, usage);
+  } catch (err) {
+    logger.warn("cost.recordUsage: pricing failed; skipping usage write", {
+      stage: usage.stage,
+      model: usage.model,
+      provider: usage.provider,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+
   const doc: LlmCallDoc = {
     ...usage,
     costUsd,
     createdAt: FieldValue.serverTimestamp(),
   };
 
-  try {
-    await getFirestore().collection(LLM_CALLS_COLLECTION).add(doc);
-  } catch (err) {
-    logger.warn("cost.recordUsage: Firestore write failed; returning cost anyway", {
-      stage: usage.stage,
-      model: usage.model,
-      provider: usage.provider,
-      costUsd,
-      error: err instanceof Error ? err.message : String(err),
+  // Fire-and-forget: the caller's LLM response path must not block on
+  // the telemetry write. Errors are logged via .catch.
+  void getFirestore()
+    .collection(LLM_CALLS_COLLECTION)
+    .add(doc)
+    .catch((err) => {
+      logger.warn("cost.recordUsage: Firestore write failed; returning cost anyway", {
+        stage: usage.stage,
+        model: usage.model,
+        provider: usage.provider,
+        costUsd,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
-  }
 
   return costUsd;
 }

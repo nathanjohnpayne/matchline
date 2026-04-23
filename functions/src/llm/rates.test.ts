@@ -39,4 +39,20 @@ describe("rates", () => {
   it("embedding models have zero output rate (input-only pricing)", () => {
     expect(rateFor(EMBEDDING_MODEL).outputUsdPer1k).toBe(0);
   });
+
+  it("rejects inherited Object.prototype keys (toString, constructor)", () => {
+    // Without Object.hasOwn, `RATES["toString"]` would return a function
+    // and pass the truthy check, silently masquerading as a model.
+    expect(() => rateFor("toString")).toThrow(/No rate registered/);
+    expect(() => rateFor("constructor")).toThrow(/No rate registered/);
+    expect(() => rateFor("hasOwnProperty")).toThrow(/No rate registered/);
+  });
+
+  it("RATES is frozen — pricing table cannot be mutated after export", () => {
+    expect(Object.isFrozen(RATES)).toBe(true);
+    expect(() => {
+      // @ts-expect-error — deliberately probing runtime immutability
+      RATES["new-model"] = { inputUsdPer1k: 0, outputUsdPer1k: 0 };
+    }).toThrow(TypeError);
+  });
 });
