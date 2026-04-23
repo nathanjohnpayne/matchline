@@ -84,11 +84,12 @@ author_identity: nathanjohnpayne
 # CodeRabbit GitHub App. All agent instructions use conditional language
 # and will skip Phase 2.5 automatically.
 coderabbit:
-  # Disabled 2026-04-22: CodeRabbit trial expired and this is a private
-  # repo (CodeRabbit free tier covers public repos only). Re-enable by
-  # flipping to true, restoring .coderabbit.yml, and reinstalling the
-  # GitHub App. All agent instructions skip Phase 2.5 when this is false.
-  enabled: false
+  # Re-enabled 2026-04-23: Nathan purchased a CodeRabbit Pro plan which
+  # covers the private matchline repo. Prior disable (2026-04-22, PR #45)
+  # was driven by trial expiration on the free tier — the free tier covers
+  # public repos only, so the trial lapse meant no coverage on this
+  # private repo. Pro resolves that.
+  enabled: true
 
   # GitHub login of the CodeRabbit bot. Comments by this login are what
   # `scripts/coderabbit-wait.sh` filters on when classifying PR activity.
