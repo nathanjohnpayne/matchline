@@ -2,7 +2,7 @@ import { getDoc, getDocs, query, setDoc } from "firebase/firestore";
 
 import type { Company, Interaction, Person } from "../types/crm.ts";
 
-import { ownerScope } from "./auth.ts";
+import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PEOPLE = "people";
@@ -21,8 +21,15 @@ export async function getPerson(id: string): Promise<Person | undefined> {
   return snap.exists() ? snap.data() : undefined;
 }
 
-export async function upsertPerson(person: Person): Promise<void> {
-  await setDoc(typedDoc<Person>(PEOPLE, person.id), person, { merge: true });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertPerson(
+  person: Omit<Person, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    typedDoc<Person>(PEOPLE, person.id),
+    { ...person, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }
 
 export async function listCompanies(): Promise<Company[]> {
@@ -37,10 +44,15 @@ export async function getCompany(id: string): Promise<Company | undefined> {
   return snap.exists() ? snap.data() : undefined;
 }
 
-export async function upsertCompany(company: Company): Promise<void> {
-  await setDoc(typedDoc<Company>(COMPANIES, company.id), company, {
-    merge: true,
-  });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertCompany(
+  company: Omit<Company, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    typedDoc<Company>(COMPANIES, company.id),
+    { ...company, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }
 
 export async function listInteractions(): Promise<Interaction[]> {
@@ -50,12 +62,13 @@ export async function listInteractions(): Promise<Interaction[]> {
   return snap.docs.map((d) => d.data());
 }
 
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
 export async function upsertInteraction(
-  interaction: Interaction,
+  interaction: Omit<Interaction, "owner_uid">,
 ): Promise<void> {
   await setDoc(
     typedDoc<Interaction>(INTERACTIONS, interaction.id),
-    interaction,
+    { ...interaction, owner_uid: getOwnerUidOrThrow() },
     { merge: true },
   );
 }

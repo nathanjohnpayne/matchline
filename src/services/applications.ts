@@ -9,7 +9,7 @@ import {
 
 import type { Application, ApplicationStage } from "../types/crm.ts";
 
-import { ownerScope } from "./auth.ts";
+import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const PATH = "applications";
@@ -37,6 +37,13 @@ export async function getApplication(
   return snap.exists() ? snap.data() : undefined;
 }
 
-export async function upsertApplication(app: Application): Promise<void> {
-  await setDoc(ref(app.id), app, { merge: true });
+/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+export async function upsertApplication(
+  app: Omit<Application, "owner_uid">,
+): Promise<void> {
+  await setDoc(
+    ref(app.id),
+    { ...app, owner_uid: getOwnerUidOrThrow() },
+    { merge: true },
+  );
 }
