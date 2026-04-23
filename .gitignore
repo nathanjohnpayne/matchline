@@ -1,0 +1,52 @@
+# Build artifacts — regenerate through build system
+dist/
+build/
+.next/
+.out/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Editor
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+# AI / agents (local state and runtime artifacts only)
+# Shared config (settings.json, .cursor/rules/, etc.) remains committed
+.claude/settings.local.json
+.claude/launch.json
+.claude/worktrees/
+.cursor/cache/
+.cursor/state/
+.cursor/plans/
+
+# Testing
+coverage/
+playwright-report/
+test-results/
+
+# Firebase
+.firebase/
+
+# Misc
+tmp/
+.cache/

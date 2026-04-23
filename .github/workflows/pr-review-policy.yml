@@ -1,0 +1,166 @@
+name: PR Review Policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, labeled, unlabeled]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  self-review-check:
+    name: Self-Review Required
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Self-Review section
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -qE '^## Self-Review'; then
+            echo "Self-Review section found."
+          else
+            echo "PR description must contain a '## Self-Review' section."
+            echo "Required items: correctness, regression risk, style/conventions, test coverage, security/dependency hygiene."
+            exit 1
+          fi
+
+  label-gate:
+    name: Label Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block merge if blocking labels present
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const blockingLabels = [
+              'needs-external-review',
+              'needs-human-review',
+              'policy-violation',
+            ];
+            const prLabels = context.payload.pull_request.labels.map(l => l.name);
+            const blockers = prLabels.filter(l => blockingLabels.includes(l));
+
+            if (blockers.length > 0) {
+              core.setFailed(
+                `Merge blocked by label(s): ${blockers.join(', ')}. ` +
+                `Per REVIEW_POLICY.md, the human is the tiebreaker and resolves blocking labels.`
+              );
+            }
+
+  external-review-labeling:
+    name: External Review Check
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for external review triggers from review-policy.yml
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          CONFIG=".github/review-policy.yml"
+          NEEDS_REVIEW=false
+          REASONS=""
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "WARNING: $CONFIG not found, skipping external review check"
+            echo "needs_review=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Read threshold from review-policy.yml
+          THRESHOLD=$(grep 'external_review_threshold:' "$CONFIG" | awk '{print $2}')
+          THRESHOLD=${THRESHOLD:-300}
+
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+
+          # Count lines changed (additions + deletions), excluding lockfiles and generated files
+          LINES_CHANGED=$(git diff --stat "$BASE_SHA"..."$HEAD_SHA" -- \
+            ':!*.lock' ':!*lock.json' ':!*.min.js' ':!*.min.css' \
+            ':!*.generated.*' ':!*.g.dart' ':!*.freezed.dart' \
+            | tail -1 | awk '{print $4+$6}')
+          LINES_CHANGED=${LINES_CHANGED:-0}
+
+          # Use >= to match REVIEW_POLICY.md: "Total lines changed >= external_review_threshold"
+          if [ "$LINES_CHANGED" -ge "$THRESHOLD" ]; then
+            NEEDS_REVIEW=true
+            REASONS="$REASONS- ${LINES_CHANGED} lines changed (threshold: ${THRESHOLD})%0A"
+          fi
+
+          # Extract external_review_paths entries from review-policy.yml.
+          # Delegates to scripts/workflow/parse_policy_list.sh, which is
+          # unit-tested by scripts/ci/check_workflow_parsers (see #57).
+          # History: the earlier inline `awk '/^key:/,/^[^ ]/'` range
+          # parser silently matched only the header line because the
+          # range-start pattern also matched the range-end condition.
+          # See #54 for the post-mortem.
+          PATHS=$(bash scripts/workflow/parse_policy_list.sh "$CONFIG" external_review_paths)
+
+          # Match changed files against patterns. Delegates to
+          # scripts/workflow/match_protected_paths.sh (bash `[[ ]]`
+          # pattern matching under the hood), which is unit-tested by
+          # scripts/ci/check_workflow_parsers (see #57). History: the
+          # earlier inline glob-to-regex sed pipeline double-transformed
+          # `*` and silently missed nested paths. See #54 for the
+          # post-mortem.
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA"..."$HEAD_SHA")
+
+          PATTERNS=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && PATTERNS+=("$line")
+          done <<< "$PATHS"
+
+          if [ "${#PATTERNS[@]}" -gt 0 ]; then
+            MATCHED_FILES=$(printf '%s\n' "$CHANGED_FILES" | bash scripts/workflow/match_protected_paths.sh "${PATTERNS[@]}")
+          else
+            MATCHED_FILES=""
+          fi
+
+          if [ -n "$MATCHED_FILES" ]; then
+            NEEDS_REVIEW=true
+            FILE_LIST=$(echo "$MATCHED_FILES" | sort -u | grep -v '^$' | sed 's/^/  - /' | tr '\n' ',' | sed 's/,/%0A/g')
+            REASONS="${REASONS}- Protected paths modified:%0A${FILE_LIST}"
+          fi
+
+          echo "needs_review=$NEEDS_REVIEW" >> "$GITHUB_OUTPUT"
+          echo "reasons=$REASONS" >> "$GITHUB_OUTPUT"
+
+      - name: Apply label and comment
+        if: steps.check.outputs.needs_review == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASONS: ${{ steps.check.outputs.reasons }}
+        run: |
+          # Check if label already applied to avoid duplicate comments
+          EXISTING=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' | grep '^needs-external-review$' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "Label already applied, skipping."
+            exit 0
+          fi
+
+          gh pr edit "$PR_NUMBER" --add-label "needs-external-review" \
+            --repo "${{ github.repository }}"
+
+          FORMATTED_REASONS=$(echo "$REASONS" | sed 's/%0A/\n/g')
+
+          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$(cat <<EOF
+          **External Review Required**
+
+          This PR has been labeled \`needs-external-review\` based on .github/review-policy.yml:
+
+          $FORMATTED_REASONS
+
+          Per REVIEW_POLICY.md, the authoring agent must post a handoff message and alert the human. The human will coordinate external review by a different agent.
+
+          > Automated check per .github/review-policy.yml
+          EOF
+          )"

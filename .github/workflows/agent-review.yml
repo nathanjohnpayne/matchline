@@ -1,0 +1,561 @@
+# Note: CodeRabbit (Phase 2.5) is handled by the CodeRabbit GitHub App
+# and does not require a CI workflow step. It runs automatically when
+# installed on the repo. See .github/review-policy.yml for enablement.
+name: Agent Review Pipeline
+
+on:
+  pull_request:
+    # `synchronize` (every push on an open PR) is in the list so
+    # `load-config` re-parses `.github/review-policy.yml` on every
+    # commit, not just on `opened` / `ready_for_review`. Without it,
+    # a shell-parser regression can land on main and only surface
+    # weeks later when the next PR happens to be opened. See #59.
+    types: [opened, ready_for_review, labeled, synchronize]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Read review-policy.yml configuration
+  # ──────────────────────────────────────────────
+  load-config:
+    # Runs on opened, ready_for_review, and synchronize so the
+    # parser exercises every commit pushed to an open PR, not just
+    # initial open. Explicitly excludes `labeled`: the `assign` job
+    # allows `labeled` as a trigger, and it depends on this job's
+    # outputs — letting load-config run on labeled would cause
+    # assign to re-fire on every label edit and re-request
+    # reviewers who have already reviewed. Downstream jobs keep
+    # their own action-specific guards; they stay no-ops on
+    # synchronize. See #59 for the SKIPPED-as-SUCCESS miss this
+    # closes and Codex's P2 on PR #131 for why labeled is excluded.
+    if: >
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' ||
+       github.event.action == 'ready_for_review' ||
+       github.event.action == 'synchronize')
+    runs-on: ubuntu-latest
+    outputs:
+      threshold: ${{ steps.config.outputs.threshold }}
+      paths: ${{ steps.config.outputs.paths }}
+      reviewers: ${{ steps.config.outputs.reviewers }}
+      author_identity: ${{ steps.config.outputs.author_identity }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Parse review-policy.yml
+        id: config
+        run: |
+          CONFIG=".github/review-policy.yml"
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: $CONFIG not found"
+            exit 1
+          fi
+
+          THRESHOLD=$(grep 'external_review_threshold:' "$CONFIG" | awk '{print $2}')
+          echo "threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+
+          # Extract external_review_paths as a JSON array. Delegates to
+          # scripts/workflow/parse_policy_list.sh (unit-tested by
+          # scripts/ci/check_workflow_parsers — see #57). History: the
+          # earlier inline `awk '/^key:/,/^[^ ]/'` range parser silently
+          # dropped all list entries because the range-start pattern
+          # also matched the range-end condition; see #54.
+          #
+          # `jq -c` (compact) is required here: multi-line JSON cannot
+          # be written via the `key=value` GITHUB_OUTPUT format. Before
+          # #54 fixed the awk extractor, PATHS was always `[]` (single-
+          # line) so this latent bug was hidden; PR #58 / #30 tripped it.
+          PATHS=$(bash scripts/workflow/parse_policy_list.sh "$CONFIG" external_review_paths \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "paths=$PATHS" >> "$GITHUB_OUTPUT"
+
+          # Extract available_reviewers as a JSON array via the same
+          # extracted parser. Before #54 this was always `[]`, which
+          # silently broke the assign step's reviewer lookup.
+          REVIEWERS=$(bash scripts/workflow/parse_policy_list.sh "$CONFIG" available_reviewers \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "reviewers=$REVIEWERS" >> "$GITHUB_OUTPUT"
+
+          AUTHOR=$(grep 'author_identity:' "$CONFIG" | awk '{print $2}')
+          echo "author_identity=${AUTHOR:-nathanjohnpayne}" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────
+  # Job 2: Auto-label PRs that need external review
+  # ──────────────────────────────────────────────
+  triage:
+    needs: [load-config]
+    if: >
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review')
+    runs-on: ubuntu-latest
+    outputs:
+      needs_external: ${{ steps.check.outputs.needs_external }}
+    steps:
+      - name: Evaluate PR against review-policy.yml
+        id: check
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          THRESHOLD: ${{ needs.load-config.outputs.threshold }}
+          PROTECTED_PATHS: ${{ needs.load-config.outputs.paths }}
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const threshold = parseInt(process.env.THRESHOLD, 10);
+            const protectedPaths = JSON.parse(process.env.PROTECTED_PATHS);
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              }
+            );
+
+            // Exclude lockfiles, minified, and generated files from line count
+            // to match REVIEW_POLICY.md threshold definition
+            const excludePatterns = [
+              /\.lock$/, /lock\.json$/, /\.min\.js$/, /\.min\.css$/,
+              /\.generated\./, /\.g\.dart$/, /\.freezed\.dart$/,
+            ];
+            const countedFiles = files.filter(
+              f => !excludePatterns.some(p => p.test(f.filename))
+            );
+            const totalChanges = countedFiles.reduce(
+              (sum, f) => sum + f.additions + f.deletions, 0
+            );
+
+            // Convert glob patterns to regex for matching
+            function globToRegex(pattern) {
+              let re = pattern
+                .replace(/\./g, '\\.')
+                .replace(/\*\*/g, '___GLOBSTAR___')
+                .replace(/\*/g, '[^/]*')
+                .replace(/___GLOBSTAR___/g, '.*');
+              return new RegExp('^' + re + '$');
+            }
+
+            const touchesProtected = files.some(f =>
+              protectedPaths.some(p => globToRegex(p).test(f.filename))
+            );
+
+            // Use >= to match REVIEW_POLICY.md definition
+            const needsExternal = totalChanges >= threshold || touchesProtected;
+
+            if (needsExternal) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                labels: ['needs-external-review'],
+              });
+            }
+
+            core.setOutput('needs_external', needsExternal.toString());
+
+  # ──────────────────────────────────────────────
+  # Job 3: Assign reviewer (internal self-peer review)
+  # ──────────────────────────────────────────────
+  assign:
+    needs: [load-config, triage]
+    if: >
+      always() &&
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review' || github.event.action == 'labeled')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign reviewer identity based on Authoring-Agent
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          AUTHOR_IDENTITY: ${{ needs.load-config.outputs.author_identity }}
+          REVIEWERS_JSON: ${{ needs.load-config.outputs.reviewers }}
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            const authorIdentity = process.env.AUTHOR_IDENTITY || 'nathanjohnpayne';
+            const reviewers = JSON.parse(process.env.REVIEWERS_JSON || '[]');
+
+            // Under the new policy, all PRs are authored by the author identity.
+            if (author !== authorIdentity) {
+              console.log(`Author ${author} is not ${authorIdentity}; skipping auto-assignment.`);
+              return;
+            }
+
+            if (reviewers.length === 0) {
+              console.log('No reviewers configured in review-policy.yml');
+              return;
+            }
+
+            // Read the Authoring-Agent line from the PR body to determine which
+            // agent wrote the code. Per REVIEW_POLICY.md, the same agent reviews
+            // under its own reviewer identity (e.g., claude → nathanpayne-claude).
+            const body = pr.body || '';
+            const agentMatch = body.match(/^Authoring-Agent:\s*(\w+)/mi);
+            let reviewer;
+
+            if (agentMatch) {
+              const agentName = agentMatch[1].toLowerCase();
+              const matchingReviewer = reviewers.find(
+                r => r.endsWith(`-${agentName}`)
+              );
+              if (matchingReviewer) {
+                reviewer = matchingReviewer;
+                console.log(`Authoring-Agent: ${agentName} → assigning ${reviewer}`);
+              } else {
+                console.log(`Authoring-Agent: ${agentName} has no matching reviewer identity, using first available.`);
+                reviewer = reviewers[0];
+              }
+            } else {
+              console.log('No Authoring-Agent line found in PR body; assigning first available reviewer.');
+              reviewer = reviewers[0];
+            }
+
+            const { data: existingReviewers } = await github.rest.pulls.listRequestedReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const alreadyRequested = existingReviewers.users.map(u => u.login);
+
+            if (!alreadyRequested.includes(reviewer)) {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                reviewers: [reviewer],
+              });
+              console.log(`Assigned ${reviewer} for internal self-peer review.`);
+            }
+
+  # Note: no CI-side invoke-reviewer job exists. Phase 2 internal
+  # self-peer review is performed by the authoring agent in its own
+  # session — the agent switches its identity to its reviewer account
+  # (e.g., nathanpayne-claude) via a PAT from 1Password and posts the
+  # review with that PAT. See REVIEW_POLICY.md § Phase 2 and CLAUDE.md
+  # "After opening the PR" steps 4–7. A headless Claude/Codex CLI
+  # invocation in CI is intentionally NOT used: it (a) bypasses the
+  # in-session tool context the agent already has, (b) adds a stale
+  # API-key failure surface unrelated to the PR, and (c) duplicates
+  # work the agent is already doing as part of the PR loop.
+
+  # ──────────────────────────────────────────────
+  # Job 4: Detect agent disagreement → escalate
+  # ──────────────────────────────────────────────
+  detect-disagreement:
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml
+
+      - name: Check for conflicting reviews
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+
+            let reviewerAccounts;
+            try {
+              const config = yaml.load(fs.readFileSync('.github/review-policy.yml', 'utf8'));
+              reviewerAccounts = config.available_reviewers || [];
+            } catch (e) {
+              reviewerAccounts = ['nathanpayne-claude', 'nathanpayne-codex', 'nathanpayne-cursor'];
+            }
+
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            // Track each reviewer's last opinionated state (APPROVED or CHANGES_REQUESTED).
+            // Ignore COMMENTED reviews — they don't change a reviewer's effective position.
+            const latestByReviewer = {};
+            for (const review of reviews.data) {
+              if (reviewerAccounts.includes(review.user.login)) {
+                if (review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED') {
+                  latestByReviewer[review.user.login] = review.state;
+                }
+              }
+            }
+
+            const states = Object.values(latestByReviewer);
+            const hasApproval = states.includes('APPROVED');
+            const hasChangesRequested = states.includes('CHANGES_REQUESTED');
+
+            // Check if the label is currently applied
+            const labels = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+            const hasLabel = labels.data.some(l => l.name === 'needs-human-review');
+
+            if (hasApproval && hasChangesRequested) {
+              // Disagreement exists — apply label if not already present
+              if (!hasLabel) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  labels: ['needs-human-review'],
+                });
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: '**Agent disagreement detected.** One reviewer approved and another requested changes. Escalating to @nathanjohnpayne for human tiebreaker per REVIEW_POLICY.md.',
+                });
+              }
+            } else if (hasLabel && !(hasApproval && hasChangesRequested)) {
+              // Disagreement resolved — reviewers are no longer in a mixed state
+              // (either all approved, all requesting changes, or only one opinion
+              // remains). Remove the label automatically.
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  name: 'needs-human-review',
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: '**Agent disagreement resolved.** Reviewers are no longer in a mixed state. Removing `needs-human-review` label.',
+                });
+              } catch (e) {
+                // Label may already be removed — ignore 404
+                if (e.status !== 404) throw e;
+              }
+            }
+
+  # ──────────────────────────────────────────────
+  # Job 5: Block self-approval
+  # ──────────────────────────────────────────────
+  block-self-approval:
+    if: >
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dismiss self-approval from reviewer bot accounts
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install js-yaml
+        run: npm install js-yaml
+
+      - name: Check and dismiss
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+
+            const prAuthor = context.payload.pull_request.user.login;
+            const reviewer = context.payload.review.user.login;
+
+            // Only block self-approval from reviewer bot accounts.
+            // The human (nathanjohnpayne) IS the PR author under the shared
+            // identity model, but must be allowed to approve for tiebreaker
+            // and human-escalated reviews per REVIEW_POLICY.md.
+            let reviewerAccounts;
+            try {
+              const config = yaml.load(fs.readFileSync('.github/review-policy.yml', 'utf8'));
+              reviewerAccounts = config.available_reviewers || [];
+            } catch (e) {
+              reviewerAccounts = ['nathanpayne-claude', 'nathanpayne-codex', 'nathanpayne-cursor'];
+            }
+
+            // A reviewer bot account cannot approve a PR it authored.
+            // Since all PRs are authored by nathanjohnpayne, this only fires
+            // if a bot account somehow ends up as the PR author (shouldn't
+            // happen under the policy, but guard against it).
+            const isReviewerBot = reviewerAccounts.includes(reviewer);
+            if (prAuthor === reviewer && isReviewerBot) {
+              await github.rest.pulls.dismissReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                review_id: context.payload.review.id,
+                message: 'Self-approval is not permitted. This review has been dismissed automatically.',
+              });
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ['policy-violation'],
+              });
+
+              core.setFailed('Self-approval detected and dismissed.');
+            }
+
+  # ──────────────────────────────────────────────
+  # Job 6: Auto-merge on approval (if no external review required)
+  # ──────────────────────────────────────────────
+  # Must `needs:` on detect-disagreement and block-self-approval to force
+  # those sibling jobs to COMPLETE before this one starts. Both siblings
+  # can apply blocking labels as a side effect (`needs-human-review` from
+  # detect-disagreement, `policy-violation` from block-self-approval), and
+  # without the ordering constraint they run in parallel with auto-merge.
+  # A sibling applying a label 200ms after the runtime re-verify step
+  # below fetches labels but 100ms before `gh pr merge` dispatches would
+  # still slip through. `always()` in the if: expression keeps auto-merge
+  # running even if a sibling fails — ordering, not gating, is what
+  # `needs:` is for here. See #61 for the cross-event race and this PR
+  # for the same-workflow race nathanpayne-codex caught during review.
+  auto-merge-on-approval:
+    needs: [detect-disagreement, block-self-approval]
+    if: >
+      always() &&
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      !contains(github.event.pull_request.labels.*.name, 'needs-external-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'needs-human-review')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check if CodeRabbit is enabled
+        id: cr
+        run: |
+          CONFIG=".github/review-policy.yml"
+          # Parse only the `coderabbit:` block — stop at the next top-level key.
+          # The previous `sed -n '/^coderabbit:/,$ p'` was scope-unsafe: it
+          # captured everything from `coderabbit:` to EOF, so a later top-level
+          # block with `enabled: true` (e.g., the `codex:` block added in #31)
+          # produced a false positive and triggered the CodeRabbit wait loop.
+          #
+          # The end-of-block test is "a new line whose first character is
+          # neither whitespace nor `#`" — which catches the next top-level YAML
+          # key while still permitting column-0 comments (`# ...`) and blank
+          # lines inside the block. The earlier `^[^[:space:]]` regex was
+          # too strict: a YAML-valid column-0 comment prematurely exited the
+          # block and produced a false negative. Fix surfaced by nathanpayne-codex
+          # external review on PR #53.
+          if awk '
+            /^coderabbit:/ {in_block=1; next}
+            in_block && /^[^[:space:]#]/ {in_block=0}
+            in_block && /^[[:space:]]*enabled:[[:space:]]*true([[:space:]]*#.*)?$/ {found=1}
+            END {exit found ? 0 : 1}
+          ' "$CONFIG"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for CodeRabbit review
+        if: steps.cr.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Delegate to scripts/coderabbit-wait.sh so auto-merge honors the
+          # same semantics the agent-driven flow uses: HEAD-anchored
+          # freshness (#136 — do not merge on a stale review from a prior
+          # HEAD), rate-limit retry (#138 — CodeRabbit does not auto-retry
+          # after its published window elapses), and the coderabbit.*
+          # knobs in .github/review-policy.yml. Exit-code translation:
+          #   0 — cleared on current HEAD, no high-severity markers.
+          #   2 — cleared but findings present (Potential issue / ⚠️).
+          #       Blocks auto-merge per REVIEW_POLICY.md § Phase 2.5,
+          #       which requires every Potential issue / ⚠️ finding to
+          #       be explicitly addressed (fixed or dismissed with
+          #       reasoning) before moving on. The agent-driven flow
+          #       does that in-session; the auto-merge workflow has
+          #       no way to address a finding, so it stops here and
+          #       lets the author push a fix (or post a dismissal
+          #       reply). A new approving review after the fix
+          #       re-triggers this job.
+          #   3 — API / infra error. Block and surface.
+          #   4 — max_wait_seconds grace window elapsed without a review.
+          #       CodeRabbit is advisory; log a warning and proceed.
+          #   5 — rate-limit retry budget exhausted. Do NOT merge —
+          #       block and let the human intervene.
+          set +e
+          bash scripts/coderabbit-wait.sh "$PR_NUMBER" "$REPO"
+          rc=$?
+          set -e
+          case "$rc" in
+            0)
+              echo "CodeRabbit cleared on current HEAD — proceeding to merge."
+              ;;
+            2)
+              echo "::error::CodeRabbit flagged Potential issue / ⚠️ findings on the current HEAD. Per REVIEW_POLICY.md § Phase 2.5, each must be explicitly addressed (fixed or dismissed with reasoning) before merge. Blocking auto-merge; address the findings and request a new approval to re-trigger."
+              exit 1
+              ;;
+            4)
+              echo "::warning::CodeRabbit grace window elapsed without a review. CodeRabbit is advisory — proceeding to merge."
+              ;;
+            5)
+              echo "::error::CodeRabbit rate-limit retry budget exhausted. Blocking auto-merge; human must re-trigger or merge manually."
+              exit 1
+              ;;
+            *)
+              echo "::error::coderabbit-wait.sh failed with exit code $rc. Blocking auto-merge."
+              exit 1
+              ;;
+          esac
+
+      - name: Re-verify blocking labels right before merge
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+        run: |
+          # Guard against the TOCTOU race between the trigger-time label
+          # snapshot and the actual merge. The job's top-level `if:` expression
+          # evaluates labels from the `pull_request_review` event payload at
+          # the moment GitHub Actions dispatched the event. Two things can
+          # make that snapshot stale by the time we reach the merge step:
+          #
+          #   1. Eventual consistency. If a label is applied milliseconds
+          #      before the review event fires, the event payload can still
+          #      be generated without the label attached. Observed on PR #60
+          #      (2026-04-14), where the `needs-external-review` label was
+          #      applied 2 seconds before the review event but the job's
+          #      `if:` check evaluated to true anyway, merging the PR before
+          #      any external review could happen. See #61.
+          #
+          #   2. The "Wait for CodeRabbit review" step above can sleep for
+          #      up to 5 minutes on a coderabbit-enabled repo. During that
+          #      window, an agent can legitimately apply a blocking label
+          #      (e.g., a human spotting something after approval) and the
+          #      job would still merge because the `if:` already evaluated.
+          #
+          # Re-fetch the authoritative label state from the GitHub API
+          # immediately before merging. Abort if any blocking label is now
+          # present. Also check `policy-violation`, which is applied by the
+          # block-self-approval job earlier in this same workflow run (and
+          # again, the `if:` at job start wouldn't have seen it).
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '[.labels[].name] | join(",")')
+          echo "Labels at merge time: [$LABELS]"
+          case ",$LABELS," in
+            *,needs-external-review,*|*,needs-human-review,*|*,policy-violation,*)
+              echo "::error::Blocking label present at merge time: $LABELS. Aborting auto-merge."
+              exit 1
+              ;;
+          esac
+          echo "No blocking labels present — proceeding to merge."
+
+      - name: Enable auto-merge
+        run: gh pr merge --squash --auto "$PR_URL" || gh pr merge --squash "$PR_URL" || true
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}

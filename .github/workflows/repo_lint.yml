@@ -1,0 +1,63 @@
+name: repo-lint
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: make_ci_scripts_executable
+        run: chmod +x scripts/ci/*
+
+      - name: check_required_root_files
+        run: ./scripts/ci/check_required_root_files
+
+      - name: check_no_tool_folder_instructions
+        run: ./scripts/ci/check_no_tool_folder_instructions
+
+      - name: check_no_forbidden_top_level_dirs
+        run: ./scripts/ci/check_no_forbidden_top_level_dirs
+
+      - name: check_dist_not_modified
+        run: ./scripts/ci/check_dist_not_modified
+
+      - name: check_spec_test_alignment
+        run: ./scripts/ci/check_spec_test_alignment
+
+      - name: check_duplicate_docs
+        run: ./scripts/ci/check_duplicate_docs
+
+      - name: check_review_policy_exists
+        run: |
+          MISSING=0
+          if [ ! -f ".github/review-policy.yml" ]; then
+            echo "ERROR: .github/review-policy.yml is missing"
+            MISSING=1
+          fi
+          if [ ! -f "REVIEW_POLICY.md" ]; then
+            echo "ERROR: REVIEW_POLICY.md is missing"
+            MISSING=1
+          fi
+          exit $MISSING
+
+      - name: check_codex_scripts
+        run: ./scripts/ci/check_codex_scripts
+
+      - name: check_workflow_parsers
+        run: ./scripts/ci/check_workflow_parsers
+
+      - name: check_governance_files
+        run: |
+          MISSING=0
+          for file in SECURITY.md .github/CODEOWNERS .github/dependabot.yml; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: $file is missing"
+              MISSING=1
+            fi
+          done
+          exit $MISSING

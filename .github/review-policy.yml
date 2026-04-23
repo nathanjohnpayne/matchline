@@ -1,0 +1,235 @@
+# .github/review-policy.yml
+#
+# AI Agent Code Review Policy Configuration
+# See REVIEW_POLICY.md for full documentation.
+#
+# This file is read by AI coding agents at the start of every review cycle
+# to determine review requirements and identity configuration.
+
+# ---------------------------------------------------------------------------
+# External Review Threshold
+# ---------------------------------------------------------------------------
+# Total lines changed (additions + deletions) that trigger mandatory external
+# review by a different agent. The agent evaluates this after internal
+# self-peer review passes.
+#
+# Set to 0 to require external review on every PR.
+# Set to a very high number (e.g., 999999) to effectively disable.
+external_review_threshold: 300
+
+# ---------------------------------------------------------------------------
+# Protected Paths
+# ---------------------------------------------------------------------------
+# File paths that always require external review regardless of line count.
+# Glob patterns are supported. If any file in the PR diff matches a pattern
+# listed here, external review is mandatory.
+external_review_paths:
+  - "src/auth/**"
+  - "src/payments/**"
+  - "**/*secret*"
+  - "**/*credential*"
+  - ".github/**"
+
+# ---------------------------------------------------------------------------
+# Reviewer Identities
+# ---------------------------------------------------------------------------
+# Registered GitHub accounts that may post reviews. Each agent has exactly
+# one reviewer identity. To add a new agent, create a GitHub account
+# following the pattern nathanpayne-{agent} and add it here.
+available_reviewers:
+  - nathanpayne-claude
+  - nathanpayne-cursor
+  - nathanpayne-codex
+
+# ---------------------------------------------------------------------------
+# Default External Reviewer
+# ---------------------------------------------------------------------------
+# When the agent needs to suggest an external reviewer in a handoff message,
+# it defaults to this identity. The agent may override this suggestion based
+# on context (e.g., suggesting the agent with the most relevant expertise).
+default_external_reviewer: nathanpayne-codex
+
+# ---------------------------------------------------------------------------
+# Author Identity
+# ---------------------------------------------------------------------------
+# All agents commit code under this single shared identity.
+# Do not change this unless the repo owner account changes.
+author_identity: nathanjohnpayne
+
+# ---------------------------------------------------------------------------
+# CodeRabbit (Automated External Review — Phase 2.5)
+# ---------------------------------------------------------------------------
+# When enabled, CodeRabbit provides automated code review on every PR as an
+# independent second reviewer (Phase 2.5). This runs after internal self-peer
+# review and before the threshold check for agent handoff.
+#
+# CodeRabbit is typically enabled for public repositories (free plan) and
+# disabled for private ones. The template ships with enabled: false; set to
+# true when deploying to a public repo.
+#
+# CodeRabbit review is advisory — it does not block merge via CI. The agent
+# is required to read and address substantive CodeRabbit findings before
+# proceeding past Phase 2.5.
+#
+# When enabled, the agent MUST:
+#   1. Wait for CodeRabbit to post before proceeding (up to 3 min; ask
+#      the human if it hasn't appeared).
+#   2. Read BOTH API endpoints:
+#      - gh api repos/{owner}/{repo}/issues/{pr}/comments  (PR-level summary)
+#      - gh api repos/{owner}/{repo}/pulls/{pr}/comments    (inline diff comments)
+#   3. Grep inline comments for "Potential issue" or "⚠️" — every flagged
+#      finding must be explicitly addressed (fixed or dismissed with reasoning).
+#
+# To reverse: set enabled: false, delete .coderabbit.yml, uninstall the
+# CodeRabbit GitHub App. All agent instructions use conditional language
+# and will skip Phase 2.5 automatically.
+coderabbit:
+  enabled: true
+
+  # GitHub login of the CodeRabbit bot. Comments by this login are what
+  # `scripts/coderabbit-wait.sh` filters on when classifying PR activity.
+  bot_login: "coderabbitai[bot]"
+
+  # Maximum total seconds `scripts/coderabbit-wait.sh` will poll before
+  # timing out. Used by Phase 2.5 grace window + any downstream auto-merge
+  # workflow that wants to block merge until CodeRabbit has reviewed the
+  # current HEAD. The default of 300s (5 min) accommodates CodeRabbit's
+  # typical ~2–3 min review latency plus a short buffer. Raise it for
+  # repos where CodeRabbit consistently runs long; lower it if the
+  # auto-merge workflow would rather proceed than wait. See
+  # nathanjohnpayne/mergepath#136 for the race-with-auto-merge case.
+  max_wait_seconds: 300
+
+  # Maximum number of times `scripts/coderabbit-wait.sh` will parse a
+  # "Rate limit exceeded" comment, sleep the published window + 30s
+  # buffer, and post `@coderabbitai, try again.` to re-trigger.
+  # CodeRabbit does not auto-retry after its rate-limit window elapses;
+  # the wait helper does. Set to 0 to disable retries entirely (the
+  # caller will see exit code 5 / rate_limit_stalled on the first
+  # rate-limit comment). See nathanjohnpayne/mergepath#138.
+  max_rate_limit_retries: 2
+
+  # Wallclock freshness floor for the HEAD_ANCHOR in
+  # `scripts/coderabbit-wait.sh`. Stacked with the `head_ref_force_pushed`
+  # anchor advance — `HEAD_ANCHOR = max(HEAD_COMMITTER_DATE,
+  # latest_force_push, NOW - wallclock_freshness_window_seconds)`.
+  #
+  # Without this floor, an ordinary push of a commit with an old
+  # committer date (cherry-pick, rebase with
+  # `--committer-date-is-author-date`, or rewritten metadata) lets
+  # prior-round CodeRabbit comments pass the `created_at >= HEAD_ANCHOR`
+  # filter and the script can exit cleared/findings without waiting
+  # for a review on the actual current HEAD. The floor bounds that
+  # exposure to this many seconds.
+  #
+  # Mirrors codex-review-request.sh's `reaction_freshness_window_seconds`.
+  # Default 1800s (30min): long enough for a typical Phase 2.5 cycle
+  # (push → CodeRabbit → merge) to complete without forcing extra
+  # waits, short enough that cross-cycle staleness is caught. Raise
+  # for repos where PRs commonly take longer than 30min of wall time
+  # between consecutive CodeRabbit reviews.
+  wallclock_freshness_window_seconds: 1800
+
+# ---------------------------------------------------------------------------
+# Codex (Automated External Review — Phase 4a)
+# ---------------------------------------------------------------------------
+# When enabled, the OpenAI Codex GitHub App provides automated external review
+# on PRs carrying the `needs-external-review` label. The agent posts
+# `@codex review` as a PR comment; Codex responds with a standard GitHub code
+# review as `chatgpt-codex-connector[bot]`.
+#
+# This replaces the human-shuttled Phase 4 external review on the happy path.
+# On timeout, disagreement, or runaway, the flow falls back to the manual
+# CLI path described in REVIEW_POLICY.md § Phase 4b.
+#
+# Prerequisite: the ChatGPT Codex Connector GitHub App must be installed on
+# the repository with Code Review enabled at
+# https://chatgpt.com/codex/cloud/settings/code-review.
+#
+# The agent MUST:
+#   1. Run `scripts/codex-review-request.sh <PR#>` to post the trigger
+#      comment and poll for the Codex review.
+#   2. Parse the returned JSON. Address each P0/P1 finding with a fix OR
+#      a reply explaining why the finding does not apply.
+#   3. Repeat up to `max_review_rounds`. On runaway (round > max), escalate
+#      to the human per REVIEW_POLICY.md § Disagreements and Tiebreaking.
+#   4. On timeout (silence within `review_timeout_seconds`), the script
+#      exits with code 4 (FALLBACK_REQUIRED). The agent then falls back
+#      to the manual handoff in REVIEW_POLICY.md § Phase 4b, targeting
+#      `cli_login` below.
+#   5. Before merging, run `scripts/codex-review-check.sh <PR#>` to verify
+#      the merge gate. All of the following must hold:
+#        a) required CI checks are green
+#        b) an approving review from a registered reviewer identity
+#           (`available_reviewers`) is present on the PR
+#        c) Codex has signaled clearance on the current HEAD in one of two
+#           forms — NEVER an `APPROVED` review state, because the Codex
+#           GitHub App does not post `APPROVED` reviews:
+#            - a `COMMENTED` review from `chatgpt-codex-connector[bot]`
+#              on or after the latest commit, with no unaddressed P0/P1
+#              inline findings on the `/pulls/{pr}/comments` endpoint, OR
+#            - a 👍 / `+1` reaction from `chatgpt-codex-connector[bot]`
+#              on the PR issue, posted after the latest commit
+#      See #29 for the observational evidence behind this behavior.
+codex:
+  enabled: true
+
+  # GitHub login of the Codex GitHub App bot. Reviews posted by this login
+  # satisfy the external-review requirement in `.github/workflows/pr-audit.yml`.
+  # Do not change unless OpenAI renames the app. Confirmed via GitHub API
+  # metadata; see issue #26 for the audit trail.
+  bot_login: "chatgpt-codex-connector[bot]"
+
+  # Fallback CLI reviewer identity used when the Codex App path times out.
+  # This identity posts reviews manually via the Codex CLI as a human-driven
+  # Phase 4b handoff. Must be a member of `available_reviewers` above.
+  cli_login: nathanpayne-codex
+
+  # Maximum number of `@codex review` rounds before escalating as runaway.
+  # The 3rd round trips the guard. Normal termination is either approval,
+  # disagreement (repeat-after-rebuttal), or timeout → Phase 4b fallback.
+  max_review_rounds: 2
+
+  # Poll timeout per round, in seconds, for `codex-review-request.sh`.
+  # If Codex has not posted a review within this window, treat as timeout
+  # and exit with code 4. Silence is NEVER treated as implicit approval;
+  # see issue #27 for the explicit-review-required decision.
+  review_timeout_seconds: 600
+
+  # When true, `codex-review-check.sh` requires all required CI checks to
+  # report green before allowing merge. Strongly recommended; do not disable
+  # without explicit human authorization.
+  require_ci_green: true
+
+  # Maximum age, in seconds, of a `+1` / 👍 reaction from the Codex bot that
+  # can clear gate (c) in codex-review-check.sh and be treated as a current
+  # signal by the pre-flight scan in codex-review-request.sh.
+  #
+  # Background: GitHub's REST and GraphQL APIs do not expose a per-PR push
+  # timestamp for ordinary (non-force) pushes. The timeline endpoint has a
+  # `committed` event for each commit, but its `created_at` field is null
+  # (verified against PR #63 on 2026-04-15). For force-push, the
+  # `head_ref_force_pushed` event provides a tight per-PR arrival time;
+  # for ordinary push, the best anchor we can derive is the commit's
+  # committer date, which is commit metadata and can be arbitrarily old
+  # (cherry-pick, rebase with `--committer-date-is-author-date`, or any
+  # commit amended from a previously-authored SHA).
+  #
+  # Consequence: without a freshness constraint, a stale 👍 reaction from
+  # a prior HEAD would pass `reaction.created_at >= HEAD_COMMITTER_DATE`
+  # when the new HEAD's committer date is older than the prior 👍 — a
+  # false clear.
+  #
+  # Mitigation: require the 👍 reaction to be created within this many
+  # seconds of the scan time. A stale 👍 from a prior HEAD is filtered
+  # out once it ages past the window, closing the exposure in practice.
+  # The window must be long enough for a typical Phase 4a cycle (push →
+  # `@codex review` trigger → Codex response → gate check) to complete
+  # without forcing a re-trigger, and short enough that cross-cycle
+  # staleness is caught.
+  #
+  # Default 1800 seconds (30 min) is conservative for the agent flow;
+  # typical cycles complete in 1–5 minutes. Applies to both
+  # codex-review-check.sh gate (c) and codex-review-request.sh pre-flight
+  # and poll scans.
+  reaction_freshness_window_seconds: 1800
