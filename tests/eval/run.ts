@@ -97,7 +97,13 @@ async function main(): Promise<number> {
   // and operators see the monthly picture. Phase 1 replaces the
   // zero-currentUsage mock with a real Firestore aggregation.
   const currentUsage = { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 };
-  const plannedAdd = estimatePlannedSpend(mode, selected.length);
+  // A flow is one (resume × JD) pair, not one resume. With N resumes
+  // and M JDs, a --full run is N×M flows. Projecting on resume count
+  // alone undercounts by Mx and can let over-cap --full runs through
+  // the guard — see Codex P1 on #55.
+  const selectedJdCount = mode === "smoke" ? Math.min(jdFixtures.length, 1) : jdFixtures.length;
+  const flowCount = selected.length * Math.max(selectedJdCount, 1);
+  const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
   if (mode === "full" && shouldBlock(capChecks)) {
@@ -165,17 +171,18 @@ function buildReport(
 /**
  * Very conservative upfront estimate of what one mode's run will
  * cost, so the projection guard has something to check against even
- * before real calls happen. Phase 1 replaces this with per-stage
+ * before real calls happen. `flowCount` is resume×JD pairs, not
+ * resume count — see call site. Phase 1 replaces this with per-stage
  * rate × estimated-token math.
  */
 function estimatePlannedSpend(
   mode: Mode,
-  fixtureCount: number,
+  flowCount: number,
 ): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
-  const perFixture = mode === "full" ? 0.75 : 0.0;
+  const perFlow = mode === "full" ? 0.75 : 0.0;
   return {
-    anthropicUsd: fixtureCount * perFixture * 0.7,
-    openaiUsd: fixtureCount * perFixture * 0.3,
+    anthropicUsd: flowCount * perFlow * 0.7,
+    openaiUsd: flowCount * perFlow * 0.3,
     firebaseUsd: 0,
   };
 }
