@@ -11,6 +11,12 @@ export type RelationshipType =
 
 export interface Person {
   id: UUID;
+  /**
+   * Firebase Auth UID of the document's owner. Stamped by the service
+   * layer on write; enforced by `firestore.rules`. See sub-issue #59
+   * for the `ownerScope()` helper threading.
+   */
+  owner_uid: UUID;
   name: string;
   role: string;
   company_id: UUID;
@@ -24,6 +30,8 @@ export type Priority = "low" | "medium" | "high";
 
 export interface Company {
   id: UUID;
+  /** See Person.owner_uid. */
+  owner_uid: UUID;
   name: string;
   industry?: string;
   size?: CompanySize;
@@ -36,6 +44,8 @@ export type RemotePolicy = "onsite" | "hybrid" | "remote";
 
 export interface Role {
   id: UUID;
+  /** See Person.owner_uid. */
+  owner_uid: UUID;
   company_id: UUID;
   title: string;
   jd_raw: string;
@@ -68,6 +78,8 @@ export interface AssetRef {
 
 export interface Application {
   id: UUID;
+  /** See Person.owner_uid. */
+  owner_uid: UUID;
   role_id: UUID;
   stage: ApplicationStage;
   applied_at?: ISOTimestamp;
@@ -81,6 +93,8 @@ export type InteractionDirection = "inbound" | "outbound";
 
 export interface Interaction {
   id: UUID;
+  /** See Person.owner_uid. */
+  owner_uid: UUID;
   person_id: UUID;
   application_id?: UUID;
   type: InteractionType;

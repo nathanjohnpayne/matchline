@@ -30,6 +30,12 @@ export interface DateRange {
 
 export interface ExperienceUnit {
   id: UUID;
+  /**
+   * Firebase Auth UID of the document's owner. Stamped by the service
+   * layer on write; enforced by `firestore.rules`. See sub-issue #59
+   * for the `ownerScope()` helper threading.
+   */
+  owner_uid: UUID;
   source_type: UnitSourceType;
   source_ref: string;
   raw_text: string;
@@ -84,6 +90,8 @@ export type RequirementPriority = "high" | "medium" | "low";
 
 export interface JobRequirementUnit {
   id: UUID;
+  /** See ExperienceUnit.owner_uid. */
+  owner_uid: UUID;
   role_id: UUID;
   raw_text: string;
   normalized_requirement: string;
@@ -104,6 +112,8 @@ export interface JobRequirementUnit {
 
 export interface UnitMatch {
   id: UUID;
+  /** See ExperienceUnit.owner_uid. */
+  owner_uid: UUID;
   experience_unit_id: UUID;
   job_requirement_unit_id: UUID;
 
@@ -129,6 +139,8 @@ export type NarrativePurpose =
 
 export interface UnitCluster {
   id: UUID;
+  /** See ExperienceUnit.owner_uid. */
+  owner_uid: UUID;
   application_id: UUID;
   label: string;
   experience_unit_ids: UUID[];
