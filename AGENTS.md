@@ -10,6 +10,7 @@ Agent instructions are organized into focused sub-files under `docs/agents/`. Re
 4. **[Documentation Rules](docs/agents/documentation-rules.md)** --- When and what to update
 5. **[Testing Requirements](docs/agents/testing-requirements.md)** --- Coverage expectations, test deletion policy
 6. **[Deployment Process](docs/agents/deployment-process.md)** --- Build/deploy flow, 1Password-backed auth
+7. **[UI Design Guidance](docs/design/ui-guidance.md)** --- Attio-inspired direction for every `src/routes/**` surface; read before any UI PR
 
 ## Code Review Policy
 
