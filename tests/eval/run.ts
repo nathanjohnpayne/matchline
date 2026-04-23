@@ -38,9 +38,22 @@ function listFixtures(dir: string, ext: string): string[] {
           d.name.toLowerCase() !== `readme${ext}`,
       )
       .map((d) => d.name);
-  } catch {
-    return [];
+  } catch (err) {
+    // ENOENT is expected — a fixture subdir simply doesn't exist yet.
+    // Anything else (permission, I/O) should fail visibly so a broken
+    // mount or a typo'd path never silently reports "no fixtures".
+    if (isEnoent(err)) return [];
+    throw err;
   }
+}
+
+function isEnoent(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === "ENOENT"
+  );
 }
 
 function percentile(sorted: readonly number[], p: number): number | null {
@@ -79,9 +92,6 @@ async function main(): Promise<number> {
     });
   }
 
-  const sortedLatencies: number[] = [];
-  const sortedCosts: number[] = [];
-
   // Projection guard: even with no real LLM calls today, the harness
   // always reports against the caps so the output shape is stable
   // and operators see the monthly picture. Phase 1 replaces the
@@ -91,38 +101,65 @@ async function main(): Promise<number> {
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
   if (mode === "full" && shouldBlock(capChecks)) {
-    // Phase 0 won't actually block — there's no real spend. But the
-    // branch exists so the behavior is testable and so Phase 1 only
-    // has to wire real currentUsage to flip this live.
+    // Projection guard is enforcing from day 1: once Phase 1 wires
+    // real `currentUsage` from the llm_calls Firestore aggregation,
+    // this branch will trip in actual over-budget scenarios. Keeping
+    // it non-enforcing "until Phase 1" would ship a guard CI treats
+    // as success — which is exactly the failure mode a guard exists
+    // to prevent. Exit 1 now, so the gate works identically the
+    // moment real spend flows through.
     console.error(
       "\nRefusing to run --full: projection exceeds a monthly cap.\n" +
         "Re-run with --smoke or wait for next month's cap reset.\n",
     );
-    // Intentionally don't return 1 here in Phase 0; empty spend can't
-    // trip the guard. Logged for future diff.
+    console.log(formatReport(buildReport(mode, fixtureResults, capChecks)));
+    return 1;
   }
 
-  const report: EvalReport = {
-    mode,
-    fixtureResults,
-    capChecks,
-    aggregate: {
-      extractionAccuracyMean: mean(fixtureResults.map((r) => r.extractionAccuracy).filter((n): n is number => n !== null)),
-      matchAccuracyMean: mean(fixtureResults.map((r) => r.matchAccuracy).filter((n): n is number => n !== null)),
-      latencyP50: percentile(sortedLatencies, 50),
-      latencyP95: percentile(sortedLatencies, 95),
-      costP50: percentile(sortedCosts, 50),
-      costP95: percentile(sortedCosts, 95),
-      totalCostUsd: 0,
-    },
-  };
-
+  const report = buildReport(mode, fixtureResults, capChecks);
   console.log(formatReport(report));
   console.log(
     `\n(fixtures available: ${resumeFixtures.length} resumes × ${jdFixtures.length} JDs)`,
   );
 
   return 0;
+}
+
+function buildReport(
+  mode: Mode,
+  fixtureResults: readonly FixtureResult[],
+  capChecks: ReturnType<typeof checkCaps>,
+): EvalReport {
+  const latencies = fixtureResults
+    .map((r) => r.latencyMs)
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  const costs = fixtureResults
+    .map((r) => r.costUsd)
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  return {
+    mode,
+    fixtureResults,
+    capChecks,
+    aggregate: {
+      extractionAccuracyMean: mean(
+        fixtureResults
+          .map((r) => r.extractionAccuracy)
+          .filter((n): n is number => n !== null),
+      ),
+      matchAccuracyMean: mean(
+        fixtureResults
+          .map((r) => r.matchAccuracy)
+          .filter((n): n is number => n !== null),
+      ),
+      latencyP50: percentile(latencies, 50),
+      latencyP95: percentile(latencies, 95),
+      costP50: percentile(costs, 50),
+      costP95: percentile(costs, 95),
+      totalCostUsd: costs.reduce((a, b) => a + b, 0),
+    },
+  };
 }
 
 /**
