@@ -84,6 +84,46 @@ export function shouldMarkReembed(
 }
 
 /**
+ * Fields the generic `updateFields` service method refuses at
+ * runtime. Mirrors (and belts-and-suspenders) the compile-time
+ * exclusion in `EditableFields`. Keeps the approval state machine
+ * (owned by `setApproval`) and the re-embed flag lifecycle (owned
+ * by `updateFields` internal logic + the re-embed callable) from
+ * being bypassed by a JS-land caller or a `partial as any` escape
+ * hatch.
+ *
+ * Exported so the service and the tests stay in lockstep — add a
+ * field here to widen the guard, and the test in
+ * `experienceUnits-state.test.ts` will verify every entry rejects.
+ */
+export const STATE_MACHINE_OWNED_FIELDS: readonly string[] = [
+  "user_approved",
+  "rejected",
+  "flagged",
+  "reembed_pending",
+] as const;
+
+/**
+ * Runtime guard: throw if a partial update touches any
+ * state-machine-owned field. The thrown error names the correct
+ * entry point so the caller's first stack trace tells them where
+ * to go.
+ */
+export function assertNoStateMachineFields(
+  partial: Readonly<Record<string, unknown>>,
+): void {
+  for (const forbidden of STATE_MACHINE_OWNED_FIELDS) {
+    if (forbidden in partial) {
+      throw new Error(
+        `updateFields: "${forbidden}" is owned by the approval/re-embed ` +
+          `state machine. Use setApproval(id, state) to flip approval flags ` +
+          `and markReembedPending(id, pending) to clear the re-embed flag.`,
+      );
+    }
+  }
+}
+
+/**
  * Input shape for `buildManualUnit` and the public `manualInsert`
  * service. Required fields are the minimum a manual Unit needs to be
  * useful for matching; everything else has a sensible default applied
@@ -146,6 +186,12 @@ export function buildManualUnit(
     evidence_type: "user_confirmed",
     confidence_score: input.confidence_score ?? 1.0,
     user_approved: input.user_approved ?? true,
+    // Manual Units are born needing an embedding — they arrive with
+    // no stored vector and the re-embed callable (#84) is the only
+    // path that computes one. Without this flag, a manual Unit
+    // would stay permanently unembedded until an unrelated edit
+    // triggered the flag. Codex P2 review on #78 caught this.
+    reembed_pending: true,
     created_at: nowIso,
     updated_at: nowIso,
     // Conditional spread — Firestore rejects explicit `undefined` on

@@ -15,6 +15,7 @@ import type { ExperienceUnit } from "../types/capability.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import {
+  assertNoStateMachineFields,
   buildManualUnit,
   flagsForApprovalState,
   shouldMarkReembed,
@@ -125,14 +126,37 @@ export async function upsertExperienceUnit(
 }
 
 /**
- * Server-stamped fields and identity fields the caller can never
- * legitimately mutate via `updateFields`. `id` is the document key;
- * `owner_uid` is enforced by rules; `created_at` is set once on
- * insert and is meaningful as a fixed timestamp.
+ * Fields `updateFields` refuses to edit. Broken into two groups:
+ *
+ *   - **Server-stamped identity.** `id`, `owner_uid`, `created_at`
+ *     are set at insert time and never mutate. `updated_at` is
+ *     stamped by `updateFields` itself on every write. Letting a
+ *     caller pass these via the partial would silently overwrite
+ *     them.
+ *   - **State-machine-owned.** `user_approved`, `rejected`, and
+ *     `flagged` together encode a four-way state that MUST only
+ *     flip via `setApproval()`. The Codex P1 review on #78 caught
+ *     a real bug here: before this exclusion, a caller could write
+ *     `{ user_approved: true }` against a rejected Unit and leave
+ *     `rejected: true` in place — a contradictory document that
+ *     would pass both the approved query (used by matching) and
+ *     the rejected query. `reembed_pending` is in the same family:
+ *     owned by `updateFields`'s internal logic + the re-embed
+ *     callable, never by an ad-hoc partial from a route.
+ *
+ * The type-level exclusion gives a compile-time error if a caller
+ * passes any of these — the approval bug can't recur silently.
  */
 type EditableFields = Omit<
   ExperienceUnit,
-  "id" | "owner_uid" | "created_at" | "updated_at" | "reembed_pending"
+  | "id"
+  | "owner_uid"
+  | "created_at"
+  | "updated_at"
+  | "reembed_pending"
+  | "user_approved"
+  | "rejected"
+  | "flagged"
 >;
 
 /**
@@ -151,6 +175,11 @@ export async function updateFields(
   id: string,
   partial: Partial<EditableFields>,
 ): Promise<void> {
+  // Type-level guard (EditableFields Omit) is the primary defense;
+  // this runtime guard catches JS-land or `as any` bypasses that
+  // would otherwise recreate the Codex-P1 stale-flag contradiction.
+  assertNoStateMachineFields(partial as Readonly<Record<string, unknown>>);
+
   const update: UpdateData<ExperienceUnit> = {
     ...partial,
     updated_at: nowIso(),

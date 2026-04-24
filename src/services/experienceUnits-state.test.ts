@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertNoStateMachineFields,
   buildManualUnit,
   EMBEDDING_INVALIDATING_FIELDS,
   flagsForApprovalState,
   shouldMarkReembed,
+  STATE_MACHINE_OWNED_FIELDS,
   type ManualUnitInput,
 } from "./experienceUnits-state.ts";
 
@@ -203,15 +205,116 @@ describe("buildManualUnit", () => {
     expect(unit.date_range).toEqual(range);
   });
 
-  it("does NOT stamp rejected, flagged, or reembed_pending (defaults via undefined)", () => {
-    // Manual Units start clean: no rejection, no flag, no re-embed
-    // pending. The spread shape should omit those keys entirely so
-    // Firestore doesn't try to write `false` and create unnecessary
-    // index churn.
+  it("does NOT stamp rejected or flagged (defaults via undefined)", () => {
+    // Manual Units start clean on the approval axis: no rejection,
+    // no flag. The spread shape should omit those keys entirely so
+    // Firestore doesn't write `false` and create unnecessary index
+    // churn.
     const unit = buildManualUnit(MIN_INPUT, UID, ID, NOW);
     expect("rejected" in unit).toBe(false);
     expect("flagged" in unit).toBe(false);
-    expect("reembed_pending" in unit).toBe(false);
+  });
+
+  it("stamps reembed_pending=true so the worker picks up the new Unit", () => {
+    // Manual Units arrive without an embedding — the re-embed
+    // callable (#84) is the only path that computes one, driven by
+    // the `reembed_pending` flag. Codex P2 review on #78 caught
+    // that omitting this flag would leave manual Units permanently
+    // unembedded until an unrelated edit triggered the flag later.
+    // Pin so a future "clean default" refactor can't silently
+    // reintroduce that gap.
+    const unit = buildManualUnit(MIN_INPUT, UID, ID, NOW);
+    expect(unit.reembed_pending).toBe(true);
+  });
+});
+
+describe("assertNoStateMachineFields", () => {
+  // Regression pins for the Codex P1 on #78: without this guard,
+  // a JS-land or `as any` caller could write a single approval
+  // flag via `updateFields` and bypass `setApproval`'s atomic
+  // three-flag write, leaving a contradictory document (e.g.
+  // `user_approved: true` AND `rejected: true`).
+
+  it("throws when partial includes user_approved", () => {
+    expect(() => assertNoStateMachineFields({ user_approved: true })).toThrow(
+      /"user_approved".*state machine.*setApproval/,
+    );
+  });
+
+  it("throws when partial includes rejected", () => {
+    expect(() => assertNoStateMachineFields({ rejected: true })).toThrow(
+      /"rejected"/,
+    );
+  });
+
+  it("throws when partial includes flagged", () => {
+    expect(() => assertNoStateMachineFields({ flagged: true })).toThrow(
+      /"flagged"/,
+    );
+  });
+
+  it("throws when partial includes reembed_pending", () => {
+    expect(() =>
+      assertNoStateMachineFields({ reembed_pending: false }),
+    ).toThrow(/"reembed_pending".*markReembedPending/);
+  });
+
+  it("does not throw on pure content edits (skills, tools, raw_text, etc.)", () => {
+    expect(() =>
+      assertNoStateMachineFields({
+        skills: ["a"],
+        tools: ["b"],
+        raw_text: "new text",
+        normalized_summary: "new summary",
+        confidence_score: 0.8,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not throw on empty partial", () => {
+    expect(() => assertNoStateMachineFields({})).not.toThrow();
+  });
+
+  it("error message names the correct entry point for each forbidden field", () => {
+    // The thrown message must direct the caller to the right API.
+    // Users of setApproval get a setApproval hint; reembed_pending
+    // gets markReembedPending.
+    try {
+      assertNoStateMachineFields({ user_approved: true });
+      expect.fail("expected throw");
+    } catch (err) {
+      expect((err as Error).message).toMatch(/setApproval/);
+    }
+    try {
+      assertNoStateMachineFields({ reembed_pending: true });
+      expect.fail("expected throw");
+    } catch (err) {
+      expect((err as Error).message).toMatch(/markReembedPending/);
+    }
+  });
+});
+
+describe("STATE_MACHINE_OWNED_FIELDS", () => {
+  it("covers every approval-state flag AND reembed_pending", () => {
+    // Pin the set so a future widening of the state-machine domain
+    // (e.g. adding a new approval axis) updates this constant and
+    // the test together — out-of-sync drift would let the new
+    // flag slip past the runtime guard.
+    expect(STATE_MACHINE_OWNED_FIELDS).toEqual([
+      "user_approved",
+      "rejected",
+      "flagged",
+      "reembed_pending",
+    ]);
+  });
+
+  it("every entry is rejected by assertNoStateMachineFields", () => {
+    // Self-consistency check: the guard and the list must agree.
+    for (const field of STATE_MACHINE_OWNED_FIELDS) {
+      expect(() =>
+        assertNoStateMachineFields({ [field]: true }),
+      ).toThrow();
+    }
   });
 });
 

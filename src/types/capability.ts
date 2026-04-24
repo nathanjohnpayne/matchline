@@ -72,7 +72,14 @@ export interface ExperienceUnit {
   user_approved: boolean;
   /** True when the user has explicitly rejected this Unit. Excluded from matching. */
   rejected?: boolean;
-  /** True when the user has flagged this Unit for later review. Orthogonal to approval. */
+  /**
+   * True when the user has flagged this Unit for later review.
+   * Exclusive-with-approved by design: flagging forces
+   * `user_approved: false` via `flagsForApprovalState()` — "I want
+   * a second look at this" implies "don't use it for matching
+   * yet." If a future requirement needs flagged-AND-approved, add
+   * a new field rather than widening this one.
+   */
   flagged?: boolean;
 
   /**
