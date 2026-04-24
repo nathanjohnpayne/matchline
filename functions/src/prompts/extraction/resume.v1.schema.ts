@@ -65,7 +65,14 @@ const DateRangeSchema = z
     start: ISODateSchema,
     end: ISODateSchema.optional(),
   })
-  .strict();
+  .strict()
+  // Chronology check: if `end` is present, it must not precede
+  // `start`. ISO-8601 YYYY-MM-DD strings sort lexically, so a
+  // string compare is the same as a date compare.
+  .refine((r) => r.end === undefined || r.end >= r.start, {
+    message: "date_range.end must not precede date_range.start",
+    path: ["end"],
+  });
 
 export const ExtractedUnitV1Schema = z
   .object({

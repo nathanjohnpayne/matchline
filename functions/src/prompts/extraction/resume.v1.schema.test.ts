@@ -109,6 +109,50 @@ describe("ExtractionResponseV1Schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects a date_range where end precedes start (chronology)", () => {
+    // Impossible experience window — 2024-06 → 2020-01 is a real
+    // shape the model could emit if it misreads "2020–2024" as
+    // inverted ordering. Fail fast so downstream recency math
+    // doesn't have to guard against it.
+    const bad = {
+      raw_text: "Worked there.",
+      normalized_summary: "Worked there.",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+      date_range: { start: "2024-06-01", end: "2020-01-01" },
+    };
+    const result = ExtractedUnitV1Schema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a date_range where end equals start (single-day)", () => {
+    const ok = {
+      raw_text: "One-day event.",
+      normalized_summary: "One-day event.",
+      unit_type: "achievement",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+      date_range: { start: "2024-06-01", end: "2024-06-01" },
+    };
+    const result = ExtractedUnitV1Schema.safeParse(ok);
+    expect(result.success).toBe(true);
+  });
+
   it("accepts a unit with no date_range (optional field)", () => {
     const ok = {
       raw_text: "Shipped a side project.",
