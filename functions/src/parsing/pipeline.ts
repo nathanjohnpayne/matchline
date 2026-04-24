@@ -80,11 +80,19 @@ export async function runJdParsingPipeline(
 }
 
 /**
- * Atomic clear-and-replace keyed on (ownerUid, roleId). Re-parsing
- * the same Role (user edits the JD and re-submits) must not leave
- * stale Requirement Units from the prior parse — including the
- * case where the new parse yields zero Requirements. The clear pass
- * runs regardless of `units.length`.
+ * Transactional clear-and-replace keyed on (ownerUid, roleId).
+ * Re-parsing the same Role (user edits the JD and re-submits) must
+ * not leave stale Requirement Units from the prior parse — even
+ * under concurrent re-parse calls on the same Role, and even when
+ * the new parse yields zero Requirements.
+ *
+ * **Concurrency: runs in a Firestore transaction.** A plain
+ * read-then-WriteBatch is NOT safe under concurrent parses of the
+ * same Role: two callers can each read the same pre-state, then
+ * both delete it and write their own set, leaving a union of both
+ * runs' new docs (Codex P1 round 4 on #19). The transaction
+ * retries on contention so one run sees the other's commits as
+ * part of its read set and cleanly replaces.
  *
  * **Security: the clear query is scoped by BOTH role_id AND
  * owner_uid.** The admin SDK bypasses `firestore.rules`, so
@@ -92,14 +100,12 @@ export async function runJdParsingPipeline(
  * role_id and cause cross-tenant deletion. Scoping by owner_uid
  * confines the clear to docs the caller owns; an attacker-submitted
  * role_id that points at someone else's Role produces zero matches
- * and the operation is a no-op on the victim's data. (See #74 for
- * the callable-level ownership precondition that also rejects the
- * attack up-front.)
+ * and the operation is a no-op on the victim's data. (The callable
+ * also enforces a role-ownership precondition up-front — see #19
+ * PR commit ee4cb73.)
  *
- * All operations land in one `WriteBatch.commit()` so the replace is
- * atomic: observers see either the old set or the new set, never a
- * mid-transition mix. V1 scale (tens of Requirements per Role) is
- * well under Firestore's 500-op batch limit; post-V1 we'll chunk.
+ * V1 scale (tens of Requirements per Role) is well under
+ * Firestore's 500-op transaction limit; post-V1 we'll chunk.
  *
  * Caller contract: every `unit` must have `role_id === ctx.roleId`
  * AND `owner_uid === ctx.ownerUid`. The pipeline guarantees this
@@ -124,21 +130,23 @@ async function writeRequirementsAsBatch(
   }
 
   const db = getAdminDb();
-  const existing = await db
-    .collection(COLLECTION)
-    .where("role_id", "==", roleId)
-    .where("owner_uid", "==", ownerUid)
-    .get();
+  await db.runTransaction(async (tx) => {
+    const existingQuery = db
+      .collection(COLLECTION)
+      .where("role_id", "==", roleId)
+      .where("owner_uid", "==", ownerUid);
+    const existing = await tx.get(existingQuery);
 
-  // Nothing to do — skip the batch commit() round-trip.
-  if (existing.docs.length === 0 && units.length === 0) return;
+    // Skip empty no-op transaction to avoid a pointless commit
+    // round-trip. Firestore transactions still have to commit even
+    // if they performed no writes; short-circuiting saves that.
+    if (existing.docs.length === 0 && units.length === 0) return;
 
-  const batch = db.batch();
-  for (const doc of existing.docs) {
-    batch.delete(doc.ref);
-  }
-  for (const u of units) {
-    batch.set(db.collection(COLLECTION).doc(u.id), u);
-  }
-  await batch.commit();
+    for (const doc of existing.docs) {
+      tx.delete(doc.ref);
+    }
+    for (const u of units) {
+      tx.set(db.collection(COLLECTION).doc(u.id), u);
+    }
+  });
 }
