@@ -161,16 +161,28 @@ export function parsePromptSections(
   raw: string,
   sourcePathForError = "<inline>",
 ): { system: string; userFewShot: string } {
-  // Line-based match so "## Systematic approach" or any substring of
-  // the marker in the preamble doesn't masquerade as a section
-  // heading. Exact-string line equality is the check; anything
-  // beyond the heading goes on the next line.
+  // Line-based match with fence awareness:
+  //   - Only exact `## System` / `## User (few-shot)` lines count
+  //     (so `## Systematic approach` in preamble is ignored).
+  //   - Lines inside a fenced code block (```...```) are skipped
+  //     entirely — a prompt author documenting the format with a
+  //     fenced example won't trigger the parser (Codex P2).
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
   let systemLine = -1;
   let userLine = -1;
+  let inFence = false;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i] === "## System" && systemLine < 0) systemLine = i;
-    else if (lines[i] === "## User (few-shot)" && userLine < 0) userLine = i;
+    const line = lines[i]!;
+    // A line that starts with ``` (optional language tag) toggles
+    // the fence state. Trim trailing whitespace to tolerate
+    // "``` ts" and similar.
+    if (line.replace(/\s+$/, "").startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (line === "## System" && systemLine < 0) systemLine = i;
+    else if (line === "## User (few-shot)" && userLine < 0) userLine = i;
   }
   if (systemLine < 0) {
     throw new Error(

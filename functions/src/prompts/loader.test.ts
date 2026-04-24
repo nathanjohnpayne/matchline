@@ -89,6 +89,32 @@ describe("parsePromptSections", () => {
     expect(userFewShot).toBe("Real example here.");
   });
 
+  it("ignores section headings inside fenced code blocks (Codex P2 fix)", () => {
+    // A prompt author documenting the format with a fenced example
+    // in the preamble must not trip the parser. Only real (non-
+    // fenced) top-level headings count.
+    const raw = [
+      "# Preamble with format example",
+      "",
+      "```markdown",
+      "## System",
+      "example system content that IS NOT the real heading",
+      "",
+      "## User (few-shot)",
+      "example user content that IS NOT the real heading",
+      "```",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
   it("ignores a mention of '## System' inside preamble commentary", () => {
     // Commentary above the real heading that quotes the heading
     // in prose (e.g. "the ## System section below...") must not be
