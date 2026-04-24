@@ -1,20 +1,19 @@
 /**
- * One row of the Unit Review list. Presentational — receives a Unit
- * and renders it; does not subscribe, write, or subscribe to auth.
+ * One row of the Unit Review list. Has two modes:
  *
- * Per #79 scope, the row shows five columns:
- *   1. `normalized_summary` — primary text
- *   2. `unit_type` — secondary tag
- *   3. Approval state pill — approved / rejected / pending / flagged
- *   4. `confidence_score` — rendered as 0–100 %
- *   5. Source provenance — `source_type · source_ref`
+ *   - **view**: the read-only summary-line render used by #79.
+ *   - **editing / saving / error**: the inline-edit form from #81
+ *     composed under the same <li>, with an optimistic
+ *     `applyOptimistic` render of the view row on top so the user
+ *     sees their draft in the preview while saving.
  *
- * Interaction (approve/reject/flag buttons, inline edit) lands in
- * subsequent sub-issues (#81, #82). This component is the render
- * target for both.
+ * The "Edit" control is a small pencil-style button on the right
+ * side of the row in view mode. Approval / reject / flag buttons
+ * (sub-issue #82) will land adjacent to this in the same button
+ * cluster.
  */
 
-import type { ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 
 import {
   displayStateOf,
@@ -22,18 +21,39 @@ import {
 } from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
+import InlineEditForm from "./InlineEditForm.tsx";
+import {
+  draftDiff,
+  editableFromUnit,
+  presentationUnit,
+  type EditableUnitFields,
+  type EditStatus,
+} from "./inlineEditState.ts";
+
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
+  /**
+   * Handler to commit an edit. Receives the changed-fields partial
+   * (diff between the draft and the current Unit). The row
+   * calls this on Save; the promise's resolve / reject drives the
+   * edit-state machine. Absent when the view is rendered without
+   * edit-mode wiring (e.g. the `UnitReviewView` tests that pre-date
+   * #81).
+   */
+  readonly onSaveEdit?: (
+    id: string,
+    partial: Partial<EditableUnitFields>,
+  ) => Promise<void>;
 }
 
 type DisplayState = ApprovalState;
 
-/**
- * Tailwind classes per display state. Monochrome + one slate accent
- * (approved = slate) per `docs/design/ui-guidance.md`. Rejected uses
- * a muted zinc so it fades; flagged uses an amber-tinted zinc as a
- * visible-but-not-alarming accent.
- */
+// EditStatus is imported from inlineEditState.ts so the row's
+// state shape and the pure helpers (presentationUnit, draftDiff,
+// applyMetricUpdate) all agree on the discriminated-union
+// definition. Each row owns its own useState<EditStatus> so
+// concurrent edits to two different Units can't cross-contaminate.
+
 const STATE_PILL_CLASSES: Record<DisplayState, string> = {
   approved:
     "bg-slate-900 text-slate-50 dark:bg-slate-100 dark:text-slate-900",
@@ -52,61 +72,184 @@ const STATE_LABELS: Record<DisplayState, string> = {
   pending: "Pending",
 };
 
-/**
- * Format confidence 0–1 as "87%". Clamps to [0, 100] for display so
- * a pathological server-side value (e.g. 1.2) doesn't render as
- * "120%" in the UI.
- */
 function formatConfidence(score: number): string {
   const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
   return `${pct}%`;
 }
 
-export default function UnitRow({ unit }: UnitRowProps): ReactElement {
-  const state: DisplayState = displayStateOf(unit);
+export default function UnitRow({
+  unit,
+  onSaveEdit,
+}: UnitRowProps): ReactElement {
+  const [status, setStatus] = useState<EditStatus>({ kind: "view" });
+
+  // If the underlying Unit changes while we're in view mode (e.g.
+  // subscription delivered a new snapshot), nothing to do. If the
+  // Unit id itself changes (row re-used for a different Unit —
+  // shouldn't happen in the current keyed-by-id list but defensive),
+  // drop back to view to avoid showing stale drafts.
+  useEffect(() => {
+    setStatus({ kind: "view" });
+    // Intentional: react only to id changes, not other field
+    // changes. A subscription update on the same id during an edit
+    // keeps the user's draft in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unit.id]);
+
+  // Row preview policy lives in `presentationUnit` (pure):
+  //   - view / editing / error: live persisted Unit
+  //   - saving: optimistic merge of draft over edit-start snapshot
+  // See `presentationUnit` docstring for rationale.
+  const presentedUnit = presentationUnit(unit, status);
+
+  const state: DisplayState = displayStateOf(presentedUnit);
   const provenance =
-    unit.source_ref.length > 0
-      ? `${unit.source_type} · ${unit.source_ref}`
-      : unit.source_type;
+    presentedUnit.source_ref.length > 0
+      ? `${presentedUnit.source_type} · ${presentedUnit.source_ref}`
+      : presentedUnit.source_type;
+
+  const startEdit = () => {
+    // Snapshot the live Unit as our diff base. All subsequent
+    // comparisons and the optimistic render happen against this
+    // snapshot, not the subscription's latest echo — the user
+    // edits a stable target.
+    setStatus({
+      kind: "editing",
+      draft: editableFromUnit(unit),
+      baseSnapshot: unit,
+    });
+  };
+
+  const cancelEdit = () => {
+    setStatus({ kind: "view" });
+  };
+
+  const save = async () => {
+    if (status.kind !== "editing" && status.kind !== "error") return;
+    if (onSaveEdit === undefined) return;
+    const { draft, baseSnapshot } = status;
+    // Diff the draft against the EDIT-START snapshot, not the
+    // live `unit` prop. nathanpayne-codex Phase 4b on #90 caught
+    // this: if a concurrent subscription update lands mid-edit
+    // (re-embed callable clearing the pending flag, another tab,
+    // etc.), the live base has drifted and diffing against it
+    // would (a) silently drop fields the user edited but whose
+    // new value happens to equal the drifted base, or (b)
+    // spuriously include base-side changes the user didn't
+    // touch. The snapshot is stable from click-Edit to
+    // click-Save.
+    const partial = draftDiff(baseSnapshot, draft);
+    if (Object.keys(partial).length === 0) {
+      // No changes; just exit edit mode.
+      setStatus({ kind: "view" });
+      return;
+    }
+    setStatus({ kind: "saving", draft, baseSnapshot });
+    try {
+      await onSaveEdit(baseSnapshot.id, partial);
+      setStatus({ kind: "view" });
+    } catch (err) {
+      setStatus({
+        kind: "error",
+        draft,
+        baseSnapshot,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  };
+
+  const onDraftChange = (next: EditableUnitFields) => {
+    if (status.kind === "editing") {
+      setStatus({ kind: "editing", draft: next, baseSnapshot: status.baseSnapshot });
+    } else if (status.kind === "error") {
+      // Typing while in error state dismisses the error and
+      // returns to editing — user is actively fixing. The
+      // baseSnapshot is preserved so the retry still diffs
+      // against the original edit-start base.
+      setStatus({
+        kind: "editing",
+        draft: next,
+        baseSnapshot: status.baseSnapshot,
+      });
+    }
+    // Ignore draft changes in saving/view states.
+  };
+
+  const formStatus =
+    status.kind === "editing"
+      ? "editing"
+      : status.kind === "saving"
+        ? "saving"
+        : "error";
+  const formError = status.kind === "error" ? status.error : null;
 
   return (
     <li
-      className="flex items-start gap-4 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
+      className="border-b border-zinc-200 dark:border-zinc-800"
       data-state={state}
       data-unit-id={unit.id}
+      data-edit-mode={status.kind === "view" ? "view" : "editing"}
     >
-      <div className="flex-1 min-w-0">
-        <p
-          className="truncate text-sm text-zinc-900 dark:text-zinc-100"
-          title={unit.normalized_summary}
+      <div className="flex items-start gap-4 px-4 py-3">
+        <div className="flex-1 min-w-0">
+          <p
+            className="truncate text-sm text-zinc-900 dark:text-zinc-100"
+            title={presentedUnit.normalized_summary}
+          >
+            {presentedUnit.normalized_summary}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="uppercase tracking-wide">
+              {presentedUnit.unit_type}
+            </span>
+            <span aria-hidden="true"> · </span>
+            <span>{provenance}</span>
+            {presentedUnit.reembed_pending === true && (
+              <>
+                <span aria-hidden="true"> · </span>
+                <span className="text-amber-700 dark:text-amber-300">
+                  re-embed pending
+                </span>
+              </>
+            )}
+          </p>
+        </div>
+        <span
+          className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATE_PILL_CLASSES[state]}`}
         >
-          {unit.normalized_summary}
-        </p>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          <span className="uppercase tracking-wide">{unit.unit_type}</span>
-          <span aria-hidden="true"> · </span>
-          <span>{provenance}</span>
-          {unit.reembed_pending === true && (
-            <>
-              <span aria-hidden="true"> · </span>
-              <span className="text-amber-700 dark:text-amber-300">
-                re-embed pending
-              </span>
-            </>
-          )}
-        </p>
+          {STATE_LABELS[state]}
+        </span>
+        <span
+          className="shrink-0 text-xs tabular-nums text-zinc-500 dark:text-zinc-400"
+          aria-label={`Confidence ${formatConfidence(presentedUnit.confidence_score)}`}
+        >
+          {formatConfidence(presentedUnit.confidence_score)}
+        </span>
+        {onSaveEdit !== undefined && status.kind === "view" && (
+          <button
+            type="button"
+            onClick={startEdit}
+            aria-label={`Edit ${unit.normalized_summary}`}
+            className="shrink-0 text-xs text-zinc-400 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-zinc-100"
+            data-action="edit"
+          >
+            Edit
+          </button>
+        )}
       </div>
-      <span
-        className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATE_PILL_CLASSES[state]}`}
-      >
-        {STATE_LABELS[state]}
-      </span>
-      <span
-        className="shrink-0 text-xs tabular-nums text-zinc-500 dark:text-zinc-400"
-        aria-label={`Confidence ${formatConfidence(unit.confidence_score)}`}
-      >
-        {formatConfidence(unit.confidence_score)}
-      </span>
+
+      {(status.kind === "editing" ||
+        status.kind === "saving" ||
+        status.kind === "error") && (
+        <InlineEditForm
+          draft={status.draft}
+          onChange={onDraftChange}
+          onSave={save}
+          onCancel={cancelEdit}
+          status={formStatus}
+          error={formError}
+        />
+      )}
     </li>
   );
 }
