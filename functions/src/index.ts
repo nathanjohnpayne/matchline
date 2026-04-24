@@ -14,3 +14,6 @@ export const health = onRequest((_req, res) => {
 
 /** Phase 1: pasted resume → array of extracted ExperienceUnits. */
 export { extractFromResumeCallable as extractFromResume } from "./callables/extractFromResume.js";
+
+/** Phase 1: pasted JD + roleId → array of parsed JobRequirementUnits. */
+export { parseJobRequirementsCallable as parseJobRequirements } from "./callables/parseJobRequirements.js";

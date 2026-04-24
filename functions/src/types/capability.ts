@@ -48,6 +48,52 @@ export interface DateRange {
   end?: ISODate;
 }
 
+export type RequirementCategory =
+  | "skill"
+  | "tool"
+  | "domain"
+  | "experience_level"
+  | "scope"
+  | "soft_skill"
+  | "credential";
+
+export type SeniorityLevel =
+  | "junior"
+  | "mid"
+  | "senior"
+  | "staff"
+  | "principal"
+  | "director";
+
+export type RequirementSource =
+  | "responsibilities"
+  | "qualifications"
+  | "nice_to_have"
+  | "description";
+
+export type RequirementPriority = "high" | "medium" | "low";
+
+export interface JobRequirementUnit {
+  id: UUID;
+  owner_uid: UUID;
+  role_id: UUID;
+  raw_text: string;
+  normalized_requirement: string;
+  category: RequirementCategory;
+
+  keywords: string[];
+  tools: string[];
+  domains: string[];
+  seniority_level?: SeniorityLevel;
+
+  priority: RequirementPriority;
+  must_have: boolean;
+
+  extracted_from: RequirementSource;
+
+  embedding?: number[];
+}
+
 export interface ExperienceUnit {
   id: UUID;
   owner_uid: UUID;
