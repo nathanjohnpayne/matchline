@@ -32,10 +32,13 @@ export default function Wordmark({
   return (
     <span
       className={`font-medium tracking-tight ${className ?? ""}`.trim()}
+      role="img"
       aria-label="matchline"
     >
       {monogram ? "m" : "match"}
-      <span className="font-bold">|</span>
+      <span aria-hidden="true" className="font-bold">
+        |
+      </span>
       {monogram ? null : "line"}
     </span>
   );
