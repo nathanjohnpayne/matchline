@@ -133,6 +133,31 @@ describe("ExtractionResponseV1Schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects impossible calendar dates (e.g. month 13, Feb 31)", () => {
+    // YYYY-MM-DD shape would accept 2024-13-40 on a regex-only
+    // check. The real-date refine rejects it via round-trip
+    // through new Date() — same guard that catches Feb 31, etc.
+    const makeUnit = (start: string) => ({
+      raw_text: "...",
+      normalized_summary: "...",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+      date_range: { start },
+    });
+    expect(ExtractedUnitV1Schema.safeParse(makeUnit("2024-13-40")).success).toBe(false);
+    expect(ExtractedUnitV1Schema.safeParse(makeUnit("2024-02-31")).success).toBe(false);
+    expect(ExtractedUnitV1Schema.safeParse(makeUnit("2023-02-29")).success).toBe(false); // not a leap year
+    expect(ExtractedUnitV1Schema.safeParse(makeUnit("2024-02-29")).success).toBe(true);  // is a leap year
+  });
+
   it("accepts a date_range where end equals start (single-day)", () => {
     const ok = {
       raw_text: "One-day event.",

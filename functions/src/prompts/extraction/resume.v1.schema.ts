@@ -59,7 +59,21 @@ const MetricSchema = z
   })
   .strict();
 
-const ISODateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+// Two-stage validation: the regex enforces YYYY-MM-DD shape; the
+// refine enforces that the string names a real calendar date.
+// Example rejection: "2024-02-31" parses lexically but coerces to
+// "2024-03-02" on round-trip, so we reject it — otherwise it would
+// sneak into recency-scoring math as a real date.
+const ISODateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD")
+  .refine(
+    (s) => {
+      const d = new Date(`${s}T00:00:00Z`);
+      return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(s);
+    },
+    { message: "must be a real calendar date (e.g. 2024-02-31 is not)" },
+  );
 const DateRangeSchema = z
   .object({
     start: ISODateSchema,
