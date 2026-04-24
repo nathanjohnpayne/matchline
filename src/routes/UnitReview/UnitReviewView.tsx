@@ -77,12 +77,12 @@ export default function UnitReviewView({
   error,
   onAddManually,
 }: UnitReviewViewProps): ReactElement {
-  // Counter counts ALL approved Units from the ready-state snapshot
-  // — rejected don't enter the filter because the state machine
-  // guarantees rejected → user_approved: false. See countApproved's
-  // test for the corrupt-data edge case. In loading/error the
-  // counter renders 0 of 20, which is accurate: we don't have a
-  // snapshot to report against.
+  // Counter is only rendered in the `ready` branch. Showing "N of 20"
+  // in loading or error states would leak stale or unknown-truth
+  // information into the header — specifically: an error AFTER a
+  // successful snapshot would still display the now-stale approved
+  // count next to the error banner. See nathanpayne-codex Phase 4b
+  // round 2 on #86.
   const approved = countApproved(units);
   const visible = sortByUpdatedDesc(excludeRejected(units));
 
@@ -98,7 +98,7 @@ export default function UnitReviewView({
             No Unit enters matching until you approve it.
           </p>
         </div>
-        <ApprovalCounter approved={approved} />
+        {status === "ready" && <ApprovalCounter approved={approved} />}
       </header>
 
       {status === "loading" && (

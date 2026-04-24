@@ -39,13 +39,14 @@ function unit(partial: Partial<ExperienceUnit> & { id: string }): ExperienceUnit
 }
 
 describe("UnitReviewView", () => {
-  it("renders a loading indicator when status is 'loading' (NOT the empty state)", () => {
+  it("renders a loading indicator when status is 'loading' (NOT the empty state, NOT the counter)", () => {
     // Regression pin for nathanpayne-codex Phase 4b on #86: before
     // the explicit load-state prop, a fresh mount with `units: []`
     // rendered "No Experience Units yet" before the first Firestore
     // snapshot arrived — a misleading false-empty surface on the
     // landing page. Loading state must be distinct from empty
-    // corpus.
+    // corpus AND must not render the approval counter (we have no
+    // snapshot, so any count is a lie).
     const html = renderToStaticMarkup(
       <UnitReviewView status="loading" units={[]} />,
     );
@@ -56,14 +57,20 @@ describe("UnitReviewView", () => {
     // with an "Add Unit manually" CTA before the list populates.
     expect(html).not.toContain("No Experience Units yet.");
     expect(html).not.toContain("Add Unit manually");
+    // Counter must NOT render in loading.
+    expect(html).not.toContain("approved");
+    expect(html).not.toContain("data-milestone");
   });
 
-  it("renders the error alert when status is 'error' (NOT the empty state)", () => {
+  it("renders the error alert when status is 'error' (NOT the empty state, NOT the counter)", () => {
     // Second half of the load-state discrimination: on error the
     // empty state must not render under the error banner. The
     // error surface is terminal for this subscription — showing
     // the empty state alongside would mislead the user into
-    // thinking the corpus is empty rather than unreadable.
+    // thinking the corpus is empty rather than unreadable. And the
+    // approval counter must NOT render in error (this is the
+    // "error-after-success leaks stale count" regression from
+    // nathanpayne-codex Phase 4b round 2).
     const err = new Error("Permission denied");
     const html = renderToStaticMarkup(
       <UnitReviewView status="error" units={[]} error={err} />,
@@ -73,6 +80,36 @@ describe("UnitReviewView", () => {
     expect(html).not.toContain("No Experience Units yet.");
     expect(html).not.toContain("Add Unit manually");
     expect(html).not.toContain("Loading Units");
+    expect(html).not.toContain("data-milestone");
+  });
+
+  it("does NOT render the approval counter when status is 'error' even with a stale populated units prop", () => {
+    // Specific regression: error-after-success transition. The
+    // container should clear `units` on error (belt-and-suspenders
+    // in index.tsx), but even if some code path leaves a populated
+    // array in place, the view's `status === "ready"` gate on the
+    // counter must prevent a stale count from rendering next to
+    // the error banner. Pin both layers of the defense.
+    const err = new Error("Permission denied after snapshot");
+    const staleUnits = [
+      unit({ id: "a", user_approved: true }),
+      unit({ id: "b", user_approved: true }),
+      unit({ id: "c", user_approved: true }),
+    ];
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="error" units={staleUnits} error={err} />,
+    );
+    // Error surface renders.
+    expect(html).toContain('data-load-state="error"');
+    expect(html).toContain("Permission denied after snapshot");
+    // Counter's "3 of 20" or "3 approved" MUST NOT leak. Neither
+    // the milestone marker nor any variant of the approved-count
+    // copy should appear.
+    expect(html).not.toContain("data-milestone");
+    expect(html).not.toContain("of 20 approved");
+    // And the list itself must not render either — the status gate
+    // must hide everything except the error banner.
+    expect(html).not.toMatch(/data-unit-id="/);
   });
 
   it("renders the error alert with a fallback message when error is null", () => {

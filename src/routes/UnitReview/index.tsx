@@ -49,6 +49,19 @@ export default function UnitReview(): ReactElement {
         setStatus("ready");
       },
       (err) => {
+        // Clear the prior snapshot on error transition. Belt-and-
+        // suspenders against any future code that reads `units`
+        // outside the `status === "ready"` gate — a successful
+        // snapshot followed by an error (e.g. a rules change, a
+        // transient permission flip) would otherwise leave stale
+        // Units in state that the view's non-ready branches could
+        // pick up. nathanpayne-codex Phase 4b round 2 on #86.
+        //
+        // Firestore's onSnapshot error is terminal for the
+        // subscription — no auto-recovery happens here. The stale
+        // data would sit until the component unmounts. Clearing
+        // now matches the semantic of "this subscription is dead."
+        setUnits([]);
         setError(err);
         setStatus("error");
       },
