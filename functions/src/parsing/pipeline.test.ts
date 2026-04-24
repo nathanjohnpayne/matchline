@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { JobRequirementUnit } from "../types/capability.ts";
 
+import type { JdParsingContext } from "./jd.ts";
 import { JdParsingError } from "./errors.ts";
 import { runJdParsingPipeline } from "./pipeline.ts";
 
@@ -25,7 +26,7 @@ function mockRequirement(
   return { ...base, ...overrides };
 }
 
-const CTX = { ownerUid: "user-alice", roleId: "role-1" };
+const CTX: JdParsingContext = { ownerUid: "user-alice", roleId: "role-1" };
 
 describe("runJdParsingPipeline", () => {
   it("parses, embeds, stamps embedding, persists atomically, and returns Units", async () => {
@@ -48,15 +49,23 @@ describe("runJdParsingPipeline", () => {
     expect(embed).toHaveBeenCalledWith(["one", "two"], {
       ownerUid: "user-alice",
     });
+    // persistBatch receives ctx as first arg, units as second.
     expect(persistBatch).toHaveBeenCalledTimes(1);
+    expect(persistBatch).toHaveBeenCalledWith(CTX, expect.any(Array));
     expect(result[0]!.embedding).toEqual([0.1, 0.2]);
     expect(result[1]!.embedding).toEqual([0.3, 0.4]);
   });
 
-  it("short-circuits when parse returns zero requirements", async () => {
+  it("zero-result parse STILL calls persistBatch so stale Requirements are cleared", async () => {
+    // Regression test for Codex P1 round 3 on #19: a re-parse
+    // that yields zero Requirements used to short-circuit before
+    // persistBatch, leaving the previous parse's Units in place.
+    // The pipeline now always calls persistBatch — the clear
+    // pass inside it keys on (ownerUid, roleId) and wipes any
+    // stale set under that Role.
     const parse = vi.fn(async () => []);
     const embed = vi.fn();
-    const persistBatch = vi.fn();
+    const persistBatch = vi.fn(async () => {});
 
     const result = await runJdParsingPipeline("empty", CTX, {
       parse,
@@ -65,8 +74,12 @@ describe("runJdParsingPipeline", () => {
     });
 
     expect(result).toEqual([]);
+    // Embed skipped — nothing to embed when parse returned empty.
     expect(embed).not.toHaveBeenCalled();
-    expect(persistBatch).not.toHaveBeenCalled();
+    // persistBatch STILL called, with empty units. This is the
+    // fix: the clear-stale pass runs regardless of parse output.
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+    expect(persistBatch).toHaveBeenCalledWith(CTX, []);
   });
 
   it("throws on embedding count mismatch before persisting", async () => {
@@ -107,7 +120,7 @@ describe("runJdParsingPipeline", () => {
     await runJdParsingPipeline("JD text", CTX, { parse, embed, persistBatch });
 
     expect(persistBatch).toHaveBeenCalledTimes(1);
-    expect(persistBatch.mock.calls[0]![0]).toHaveLength(4);
+    expect(persistBatch.mock.calls[0]![1]).toHaveLength(4);
   });
 
   it("a batch-commit failure rejects the pipeline", async () => {
@@ -120,5 +133,28 @@ describe("runJdParsingPipeline", () => {
     await expect(
       runJdParsingPipeline("JD text", CTX, { parse, embed, persistBatch }),
     ).rejects.toThrow(/firestore batch failed/);
+  });
+
+  it("passes ctx (ownerUid + roleId) to persistBatch so the clear query can scope correctly", async () => {
+    // Security property: persistBatch's clear query needs both
+    // ownerUid AND roleId. Exposing ctx directly in the
+    // persistBatch signature (rather than deriving from units[0])
+    // means the clear runs correctly even when units is empty.
+    const parse = vi.fn(async () => []);
+    const embed = vi.fn();
+    const persistBatch = vi.fn(async () => {});
+
+    const customCtx: JdParsingContext = {
+      ownerUid: "user-bob",
+      roleId: "role-special",
+    };
+
+    await runJdParsingPipeline("text", customCtx, {
+      parse,
+      embed,
+      persistBatch,
+    });
+
+    expect(persistBatch).toHaveBeenCalledWith(customCtx, []);
   });
 });
