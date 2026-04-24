@@ -7,7 +7,7 @@
  * doesn't copy non-TS files, so this script bridges that gap.
  */
 
-import { readdirSync, mkdirSync, copyFileSync } from "node:fs";
+import { readdirSync, mkdirSync, copyFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,31 +16,50 @@ const functionsRoot = join(here, "..");
 const srcDir = join(functionsRoot, "src");
 const libDir = join(functionsRoot, "lib");
 
+let deleted = 0;
 let copied = 0;
 
-function walk(src, dest) {
-  for (const entry of readdirSync(src, { withFileTypes: true })) {
-    const srcPath = join(src, entry.name);
-    const destPath = join(dest, entry.name);
-    if (entry.isDirectory()) {
-      walk(srcPath, destPath);
-    } else if (entry.name.endsWith(".md")) {
-      mkdirSync(dirname(destPath), { recursive: true });
-      copyFileSync(srcPath, destPath);
-      copied += 1;
-    }
+/**
+ * Walk `dir` and run `onFile` for every file. Swallows ENOENT on
+ * the top call so a missing `dir` is a no-op (incremental first
+ * builds don't have lib/ yet).
+ */
+function forEachFile(dir, onFile) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err && err.code === "ENOENT") return;
+    throw err;
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) forEachFile(fullPath, onFile);
+    else onFile(fullPath, entry.name);
   }
 }
 
-try {
-  walk(srcDir, libDir);
-  console.log(`copy-md: copied ${copied} markdown file(s) from src/ to lib/`);
-} catch (err) {
-  if (err && err.code === "ENOENT") {
-    // No src/ yet, or lib/ doesn't exist — nothing to do. tsc will
-    // fail earlier if src/ is truly missing.
-    console.log("copy-md: nothing to copy (src or lib not present yet)");
-    process.exit(0);
+// Pre-clean: remove every *.md from lib/ so a deleted-in-src prompt
+// does NOT linger as a stale deployable (Codex P2 on #49). copy
+// step below then re-mirrors src/'s current .md set authoritatively.
+forEachFile(libDir, (fullPath, name) => {
+  if (name.endsWith(".md")) {
+    unlinkSync(fullPath);
+    deleted += 1;
   }
-  throw err;
-}
+});
+
+// Copy current src/**/*.md into matching lib/ paths.
+forEachFile(srcDir, (fullPath, name) => {
+  if (name.endsWith(".md")) {
+    const rel = fullPath.slice(srcDir.length);
+    const dest = join(libDir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(fullPath, dest);
+    copied += 1;
+  }
+});
+
+console.log(
+  `copy-md: removed ${deleted} stale .md from lib/, copied ${copied} current .md from src/ → lib/`,
+);
