@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import { APPROVED_MILESTONE } from "./ApprovalCounter.tsx";
+import {
+  EMPTY_FILTER_STATE,
+  type FilterState,
+} from "./filterState.ts";
 import UnitReviewView from "./UnitReviewView.tsx";
 
 /**
@@ -294,6 +298,156 @@ describe("UnitReviewView", () => {
       <UnitReviewView status="ready" units={[unit({ id: "normal" })]} />,
     );
     expect(html).not.toContain("re-embed pending");
+  });
+
+  describe("filter integration (#80)", () => {
+    const withFilter = (partial: Partial<FilterState>): FilterState => ({
+      ...EMPTY_FILTER_STATE,
+      ...partial,
+    });
+    const noop = () => {};
+
+    it("renders the Filters panel when onFiltersChange + onClearFilters are both wired", () => {
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={[unit({ id: "a" })]}
+          filters={EMPTY_FILTER_STATE}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      expect(html).toContain('aria-label="Unit filters"');
+    });
+
+    it("does NOT render the Filters panel when handlers are absent (backward compat)", () => {
+      // Pre-#80 callers passed no filter props; rendering the
+      // filter panel in that shape would surface a non-functional
+      // UI. The "both wired or neither" contract is explicit.
+      const html = renderToStaticMarkup(
+        <UnitReviewView status="ready" units={[unit({ id: "a" })]} />,
+      );
+      expect(html).not.toContain('aria-label="Unit filters"');
+    });
+
+    it("applies skills filter to the visible row list", () => {
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={[
+            unit({ id: "a", skills: ["sql"] }),
+            unit({ id: "b", skills: ["python"] }),
+            unit({ id: "c", skills: ["sql", "python"] }),
+          ]}
+          filters={withFilter({ skills: ["sql"] })}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      expect(html).toContain('data-unit-id="a"');
+      expect(html).not.toContain('data-unit-id="b"');
+      expect(html).toContain('data-unit-id="c"');
+    });
+
+    it("renders the 'no filter match' panel (NOT the empty state) when filters hide everything", () => {
+      // Distinct surface when corpus is non-empty but filters hit
+      // nothing. The empty-state CTA ("Add Unit manually") would
+      // be wrong here — the user should clear the filter, not add
+      // a new Unit. Pin the distinct copy + data attribute.
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={[
+            unit({ id: "a", skills: ["sql"] }),
+            unit({ id: "b", skills: ["python"] }),
+          ]}
+          filters={withFilter({ skills: ["firebase"] })}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      expect(html).toContain('data-filter-state="empty"');
+      expect(html).toContain("No Units match these filters.");
+      // Empty-state CTA MUST NOT render here — it would mislead
+      // the user into adding a Unit when the fix is to clear the
+      // filter.
+      expect(html).not.toContain("No Experience Units yet.");
+      expect(html).not.toContain("Add Unit manually");
+    });
+
+    it("still renders the genuine empty state (not filter-empty) when corpus is empty, even with active filters", () => {
+      // If corpus is empty AND filters happen to be active (e.g.
+      // user navigated via a shared URL with filter params to a
+      // signed-in account with no Units), the empty state is
+      // still the right surface — "Add Unit manually" is the
+      // actionable fix, clearing filters wouldn't help.
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={[]}
+          filters={withFilter({ skills: ["sql"] })}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      expect(html).toContain("No Experience Units yet.");
+      expect(html).toContain("Add Unit manually");
+      expect(html).not.toContain('data-filter-state="empty"');
+    });
+
+    it("counter shows the GLOBAL approved count, not the filtered count", () => {
+      // The "≥20 approved" milestone is about onboarding
+      // progress, not filter-specific. Filtering should never
+      // rubber-band the counter.
+      const units = Array.from({ length: 15 }, (_, i) =>
+        unit({
+          id: `u-${i}`,
+          user_approved: true,
+          skills: i < 5 ? ["sql"] : ["python"],
+        }),
+      );
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={units}
+          filters={withFilter({ skills: ["sql"] })}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      // 15 approved globally, filter restricts visible list to 5
+      expect(html).toContain(`15 of ${APPROVED_MILESTONE} approved`);
+      // Visible list has only the 5 sql Units
+      const visibleIds = Array.from(
+        html.matchAll(/data-unit-id="([^"]+)"/g),
+      ).map((m) => m[1]);
+      expect(visibleIds).toHaveLength(5);
+    });
+
+    it("chip sources seed from the full non-rejected corpus, not the currently-filtered set", () => {
+      // If a user filters to skill=sql, the Tools chip list should
+      // still show tools from other Units — otherwise the user
+      // gets trapped in a reduced filter space and can never pick
+      // up a second filter axis. Pin the "chips seed from corpus,
+      // not filtered view" invariant.
+      const html = renderToStaticMarkup(
+        <UnitReviewView
+          status="ready"
+          units={[
+            unit({ id: "a", skills: ["sql"], tools: ["snowflake"] }),
+            unit({ id: "b", skills: ["python"], tools: ["airflow"] }),
+          ]}
+          filters={withFilter({ skills: ["sql"] })}
+          onFiltersChange={noop}
+          onClearFilters={noop}
+        />,
+      );
+      // Snowflake chip visible (sql Unit's tool)
+      expect(html).toContain(">snowflake<");
+      // Airflow chip ALSO visible (python Unit's tool, even though
+      // that Unit is filtered out of the list)
+      expect(html).toContain(">airflow<");
+    });
   });
 
   it("orders rows by updated_at descending (most recent first)", () => {

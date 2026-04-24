@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertNoStateMachineFields,
   buildManualUnit,
+  displayStateOf,
   EMBEDDING_INVALIDATING_FIELDS,
   flagsForApprovalState,
   SERVER_STAMPED_IMMUTABLE_FIELDS,
@@ -10,6 +11,48 @@ import {
   STATE_MACHINE_OWNED_FIELDS,
   type ManualUnitInput,
 } from "./experienceUnits-state.ts";
+
+describe("displayStateOf", () => {
+  // Read-direction inverse of flagsForApprovalState. Pin the
+  // round-trip so the read and write mappings can't drift apart.
+
+  it("returns 'rejected' when rejected=true, regardless of user_approved", () => {
+    // Rejected takes precedence — even if a corrupt document has
+    // user_approved: true alongside rejected: true, the display
+    // state is "rejected" so the UI doesn't leak the corruption
+    // into the approval surface.
+    expect(
+      displayStateOf({ user_approved: true, rejected: true }),
+    ).toBe("rejected");
+    expect(
+      displayStateOf({ user_approved: false, rejected: true }),
+    ).toBe("rejected");
+  });
+
+  it("returns 'flagged' when flagged=true and not rejected", () => {
+    expect(
+      displayStateOf({ user_approved: false, flagged: true }),
+    ).toBe("flagged");
+  });
+
+  it("returns 'approved' when user_approved=true, not rejected, not flagged", () => {
+    expect(displayStateOf({ user_approved: true })).toBe("approved");
+  });
+
+  it("returns 'pending' when no flag is set", () => {
+    expect(displayStateOf({ user_approved: false })).toBe("pending");
+  });
+
+  it("round-trips with flagsForApprovalState for every state", () => {
+    // Self-consistency: for every ApprovalState, writing its flags
+    // and then reading back gets the same state. Rules out any
+    // asymmetry between the read and write mappings.
+    for (const state of ["approved", "rejected", "flagged", "pending"] as const) {
+      const flags = flagsForApprovalState(state);
+      expect(displayStateOf(flags)).toBe(state);
+    }
+  });
+});
 
 describe("flagsForApprovalState", () => {
   it("'approved' sets user_approved=true and clears rejected/flagged", () => {
