@@ -19,6 +19,7 @@
 
 import type { ReactElement } from "react";
 
+import type { ApprovalState } from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import ApprovalCounter from "./ApprovalCounter.tsx";
@@ -106,6 +107,17 @@ export interface UnitReviewViewProps {
     id: string,
     partial: Partial<EditableUnitFields>,
   ) => Promise<void>;
+  /**
+   * Flip the Unit's approval state. Passed through to every
+   * `UnitRow` so the Approve / Flag / Reject buttons in the
+   * action cluster work per-row. Absent in pre-#82 callers —
+   * backward compat kept on the row component via its own
+   * `onSetApproval?` prop.
+   */
+  readonly onSetApproval?: (
+    id: string,
+    state: ApprovalState,
+  ) => Promise<void>;
 }
 
 export default function UnitReviewView({
@@ -117,6 +129,7 @@ export default function UnitReviewView({
   onClearFilters,
   onAddManually,
   onSaveEdit,
+  onSetApproval,
 }: UnitReviewViewProps): ReactElement {
   // Counter is only rendered in the `ready` branch. Showing "N of 20"
   // in loading or error states would leak stale or unknown-truth
@@ -229,7 +242,12 @@ export default function UnitReviewView({
             data-load-state="ready"
           >
             {visible.map((unit) => (
-              <UnitRow key={unit.id} unit={unit} onSaveEdit={onSaveEdit} />
+              <UnitRow
+                key={unit.id}
+                unit={unit}
+                onSaveEdit={onSaveEdit}
+                onSetApproval={onSetApproval}
+              />
             ))}
           </ul>
         ))}

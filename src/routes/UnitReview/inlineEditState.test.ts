@@ -8,6 +8,8 @@ import {
   draftDiff,
   editableFromUnit,
   presentationUnit,
+  shouldShowRejectConfirm,
+  type ApprovalUiStatus,
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
@@ -363,6 +365,111 @@ describe("presentationUnit", () => {
     // live value — the user is committing what they saw at edit
     // start.
     expect(result.confidence_score).toBe(0.5);
+  });
+});
+
+describe("shouldShowRejectConfirm", () => {
+  // Three-input predicate; exhaustively pin every combination
+  // that matters. nathanpayne-codex Phase 4b on #93 caught that
+  // the prior SSR-only test was false-confidence — couldn't
+  // detect removal of any of the three preconditions because
+  // it never put the row into a state where they applied.
+  // Testing the predicate directly closes the gap.
+
+  const VIEW: EditStatus = { kind: "view" };
+  const editingStatus = (
+    base = unit({ id: "x" }),
+  ): EditStatus => ({
+    kind: "editing",
+    draft: editableFromUnit(base),
+    baseSnapshot: base,
+  });
+  const savingStatus = (
+    base = unit({ id: "x" }),
+  ): EditStatus => ({
+    kind: "saving",
+    draft: editableFromUnit(base),
+    baseSnapshot: base,
+  });
+  const errorStatus = (
+    base = unit({ id: "x" }),
+  ): EditStatus => ({
+    kind: "error",
+    draft: editableFromUnit(base),
+    baseSnapshot: base,
+    error: new Error("save failed"),
+  });
+
+  const IDLE: ApprovalUiStatus = { kind: "idle" };
+  const CONFIRMING: ApprovalUiStatus = { kind: "confirming-reject" };
+  const PENDING: ApprovalUiStatus = { kind: "pending" };
+  const ERR: ApprovalUiStatus = { kind: "error", error: new Error("svc") };
+
+  it("renders confirm panel when handler wired + confirming + view (the happy path)", () => {
+    expect(shouldShowRejectConfirm(CONFIRMING, VIEW, true)).toBe(true);
+  });
+
+  it("hides confirm panel when handler is absent (backward compat for pre-#82 callers)", () => {
+    expect(shouldShowRejectConfirm(CONFIRMING, VIEW, false)).toBe(false);
+  });
+
+  it("hides confirm panel when not confirming (idle state — first render)", () => {
+    expect(shouldShowRejectConfirm(IDLE, VIEW, true)).toBe(false);
+  });
+
+  it("hides confirm panel when not confirming (pending — request in flight elsewhere)", () => {
+    expect(shouldShowRejectConfirm(PENDING, VIEW, true)).toBe(false);
+  });
+
+  it("hides confirm panel when not confirming (error — last action failed)", () => {
+    expect(shouldShowRejectConfirm(ERR, VIEW, true)).toBe(false);
+  });
+
+  it("hides confirm panel when in editing mode (REGRESSION: Codex P2 on #93)", () => {
+    // The original P2: a user clicks Reject (entering
+    // confirming-reject), then clicks Edit (status flips to
+    // editing). Without the view-mode gate, the confirmation
+    // panel persists alongside the edit form — two overlapping
+    // state machines, with the panel's confirm-Reject button
+    // committing while the user thinks they're editing.
+    //
+    // This test would FAIL if the view-mode check were
+    // removed from `shouldShowRejectConfirm` — exactly the
+    // false-confidence gap nathanpayne-codex Phase 4b on #93
+    // identified in the prior SSR-only test.
+    expect(shouldShowRejectConfirm(CONFIRMING, editingStatus(), true)).toBe(
+      false,
+    );
+  });
+
+  it("hides confirm panel when saving (status drifted to saving mid-confirm)", () => {
+    expect(shouldShowRejectConfirm(CONFIRMING, savingStatus(), true)).toBe(
+      false,
+    );
+  });
+
+  it("hides confirm panel when in error mode (status drifted to error mid-confirm)", () => {
+    expect(shouldShowRejectConfirm(CONFIRMING, errorStatus(), true)).toBe(
+      false,
+    );
+  });
+
+  it("requires ALL THREE preconditions — flipping any one to false hides the panel", () => {
+    // Self-consistency: assert the predicate is conjunctive,
+    // not disjunctive. With the happy-path inputs as the base,
+    // each individual flip should yield false.
+    const baseHandler = true;
+    const baseStatus: EditStatus = VIEW;
+    const baseUi: ApprovalUiStatus = CONFIRMING;
+    expect(shouldShowRejectConfirm(baseUi, baseStatus, baseHandler)).toBe(true);
+    // Flip handler
+    expect(shouldShowRejectConfirm(baseUi, baseStatus, false)).toBe(false);
+    // Flip approval ui
+    expect(shouldShowRejectConfirm(IDLE, baseStatus, baseHandler)).toBe(false);
+    // Flip status
+    expect(
+      shouldShowRejectConfirm(baseUi, editingStatus(), baseHandler),
+    ).toBe(false);
   });
 });
 
