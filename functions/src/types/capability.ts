@@ -113,7 +113,26 @@ export interface ExperienceUnit {
 
   evidence_type: EvidenceType;
   confidence_score: number;
+
+  /**
+   * Tri-state approval surface. See `src/types/capability.ts` for the
+   * full table — these three fields together encode approved / pending
+   * / rejected / flagged. The flag combination is set via
+   * `flagsForApprovalState()` in
+   * `src/services/experienceUnits-state.ts`; the same helper would be
+   * mirrored here if a server-side state flip lands (sub-issue #82
+   * confirms the rejected-exclusion query path).
+   */
   user_approved: boolean;
+  rejected?: boolean;
+  flagged?: boolean;
+
+  /**
+   * True when a write has invalidated the stored embedding. Cleared by
+   * `functions/src/callables/reembedExperienceUnit.ts` (sub-issue #84)
+   * after the embedding is regenerated.
+   */
+  reembed_pending?: boolean;
 
   date_range?: DateRange;
 

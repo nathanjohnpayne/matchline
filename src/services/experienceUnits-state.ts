@@ -1,0 +1,155 @@
+/**
+ * Pure state helpers for ExperienceUnit, factored out of
+ * `experienceUnits.ts` so they can be exercised without booting
+ * Firestore. The Firestore-touching glue in `experienceUnits.ts`
+ * delegates to these so the four-way approval state and the re-embed
+ * trigger logic are tested at a tight unit-level.
+ *
+ * If you add a new approval state or a new field that should
+ * invalidate the embedding, update the relevant helper here AND its
+ * test in `experienceUnits-state.test.ts`. The route layer is not
+ * allowed to know about the flag fields directly — it only ever
+ * passes a state name through `setApproval(id, state)` and a partial
+ * through `updateFields(id, partial)`.
+ */
+
+/**
+ * The four approval states the Unit Review surface exposes. Each maps
+ * to a unique combination of `user_approved` / `rejected` / `flagged`
+ * via `flagsForApprovalState()` below.
+ */
+export type ApprovalState = "approved" | "rejected" | "flagged" | "pending";
+
+export interface ApprovalFlags {
+  user_approved: boolean;
+  rejected: boolean;
+  flagged: boolean;
+}
+
+/**
+ * Map an `ApprovalState` to the flag combination that represents it on
+ * the Firestore document. Always returns all three flags explicitly
+ * (no `undefined`) so the resulting object can be passed to
+ * `updateDoc` without leaving stale flags from a prior state — e.g.
+ * flipping rejected → approved must clear `rejected: true`, not just
+ * set `user_approved: true` and leave a stale rejection.
+ *
+ * Decision: `flagged` is treated as orthogonal-but-exclusive — setting
+ * a Unit to `flagged` forces `user_approved: false`. The rationale is
+ * UX: "I want a second look at this" implies "don't use it for
+ * matching yet." If we ever need a "flagged AND approved" combination
+ * (e.g. "approved but reviewer noted X for the future"), it should be
+ * a separate field, not the same `flagged` flag.
+ */
+export function flagsForApprovalState(state: ApprovalState): ApprovalFlags {
+  switch (state) {
+    case "approved":
+      return { user_approved: true, rejected: false, flagged: false };
+    case "rejected":
+      return { user_approved: false, rejected: true, flagged: false };
+    case "flagged":
+      return { user_approved: false, rejected: false, flagged: true };
+    case "pending":
+      return { user_approved: false, rejected: false, flagged: false };
+  }
+}
+
+/**
+ * Fields whose mutation invalidates the stored embedding. The
+ * embedding is computed from `normalized_summary` (and indirectly
+ * from `raw_text` upstream of normalization), so changes to either
+ * mean the cached vector is stale.
+ *
+ * Kept as a frozen Set so an accidental `add()` from a future caller
+ * throws rather than silently widening the trigger surface.
+ */
+export const EMBEDDING_INVALIDATING_FIELDS: ReadonlySet<string> = new Set([
+  "raw_text",
+  "normalized_summary",
+]);
+
+/**
+ * Predicate: does this partial update touch any field that
+ * invalidates the embedding? If yes, the service layer must set
+ * `reembed_pending: true` on the same write so the re-embed callable
+ * (sub-issue #84) picks the Unit up.
+ */
+export function shouldMarkReembed(
+  partial: Readonly<Record<string, unknown>>,
+): boolean {
+  for (const key of Object.keys(partial)) {
+    if (EMBEDDING_INVALIDATING_FIELDS.has(key)) return true;
+  }
+  return false;
+}
+
+/**
+ * Input shape for `buildManualUnit` and the public `manualInsert`
+ * service. Required fields are the minimum a manual Unit needs to be
+ * useful for matching; everything else has a sensible default applied
+ * inside `buildManualUnit`. Defaults at this boundary mean future
+ * non-form entry paths (e.g. CLI importer, bulk upload) get the same
+ * defaults without reimplementing them.
+ */
+export interface ManualUnitInput {
+  raw_text: string;
+  normalized_summary: string;
+  unit_type: import("../types/capability.ts").UnitType;
+
+  source_ref?: string;
+  skills?: string[];
+  tools?: string[];
+  domains?: string[];
+  seniority_signals?: string[];
+  scope_signals?: string[];
+  business_outcomes?: string[];
+  metrics?: import("../types/capability.ts").Metric[];
+  date_range?: import("../types/capability.ts").DateRange;
+
+  /** Defaults to 1.0 — user-entered Units are user-trusted. */
+  confidence_score?: number;
+  /** Defaults to true — manual entries are pre-approved. */
+  user_approved?: boolean;
+}
+
+/**
+ * Pure constructor for a manually-authored ExperienceUnit. Stamps
+ * every server-controlled or default field so the result is a fully
+ * valid `ExperienceUnit` ready to write to Firestore.
+ *
+ * Extracted from the `manualInsert` service so the stamping rules
+ * (defaults, `source_type: "manual"`, `evidence_type: "user_confirmed"`,
+ * conditional `date_range` spread) can be unit-tested without
+ * mocking Firestore or auth — see `experienceUnits-state.test.ts`.
+ */
+export function buildManualUnit(
+  input: ManualUnitInput,
+  ownerUid: string,
+  id: string,
+  nowIso: string,
+): import("../types/capability.ts").ExperienceUnit {
+  return {
+    id,
+    owner_uid: ownerUid,
+    source_type: "manual",
+    source_ref: input.source_ref ?? "manual entry",
+    raw_text: input.raw_text,
+    normalized_summary: input.normalized_summary,
+    unit_type: input.unit_type,
+    skills: input.skills ?? [],
+    tools: input.tools ?? [],
+    domains: input.domains ?? [],
+    seniority_signals: input.seniority_signals ?? [],
+    scope_signals: input.scope_signals ?? [],
+    business_outcomes: input.business_outcomes ?? [],
+    metrics: input.metrics ?? [],
+    evidence_type: "user_confirmed",
+    confidence_score: input.confidence_score ?? 1.0,
+    user_approved: input.user_approved ?? true,
+    created_at: nowIso,
+    updated_at: nowIso,
+    // Conditional spread — Firestore rejects explicit `undefined` on
+    // optional fields; the field must be omitted entirely when absent.
+    ...(input.date_range !== undefined ? { date_range: input.date_range } : {}),
+  };
+}
