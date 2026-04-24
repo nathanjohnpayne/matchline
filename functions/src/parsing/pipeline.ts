@@ -62,35 +62,48 @@ export async function runJdParsingPipeline(
 }
 
 /**
- * Atomic replace-by-role_id write. Re-parsing the same Role (user
- * edits the JD and re-submits) must not leave stale Requirement
- * Units from the prior parse. Without the delete pass,
+ * Atomic replace-by-(role_id, owner_uid) write. Re-parsing the same
+ * Role (user edits the JD and re-submits) must not leave stale
+ * Requirement Units from the prior parse. Without the delete pass,
  * `listRequirementsForRole(role_id)` would return old+new mixed,
  * corrupting match scoring and gap detection.
+ *
+ * **Security: the delete query is scoped by BOTH role_id AND
+ * owner_uid.** The admin SDK bypasses `firestore.rules`, so
+ * scoping by role_id alone would let a caller submit another user's
+ * role_id and cause cross-tenant deletion of their Requirements
+ * before the new batch writes. Scoping by owner_uid means the delete
+ * only finds docs the caller actually owns; an attacker-submitted
+ * role_id that points at someone else's Role produces zero matches
+ * and the replace becomes a no-op on the victim's data. (A separate
+ * guard at the callable level verifies role ownership up-front —
+ * see #19's follow-on hardening.)
  *
  * All operations land in one `WriteBatch.commit()` so the replace is
  * atomic: observers see either the old set or the new set, never a
  * mid-transition mix. V1 scale (tens of Requirements per Role) is
- * well under Firestore's 500-op batch limit; when we approach it
- * we'll chunk into sequential batches with an end-of-chain marker
- * document, but that's post-V1.
+ * well under Firestore's 500-op batch limit; post-V1 we'll chunk
+ * when we approach it.
  *
- * Caller contract: all `units` must share the same `role_id` — the
- * pipeline guarantees this because it stamps `role_id` from `ctx`
- * on every Unit. We sanity-check here as a belt-and-suspenders
- * guard.
+ * Caller contract: all `units` must share the same `role_id` AND
+ * `owner_uid` — the pipeline guarantees this because it stamps both
+ * from `ctx` on every Unit. We sanity-check here as a
+ * belt-and-suspenders guard.
  */
 async function writeRequirementsAsBatch(
   units: readonly JobRequirementUnit[],
 ): Promise<void> {
   if (units.length === 0) return;
 
-  const roleId = units[0]!.role_id;
-  const allSameRole = units.every((u) => u.role_id === roleId);
-  if (!allSameRole) {
+  const { role_id: roleId, owner_uid: ownerUid } = units[0]!;
+  const allMatch = units.every(
+    (u) => u.role_id === roleId && u.owner_uid === ownerUid,
+  );
+  if (!allMatch) {
     throw new Error(
-      "writeRequirementsAsBatch: all units must share the same role_id — " +
-        "found mixed role_ids in the batch. This signals a pipeline bug; aborting.",
+      "writeRequirementsAsBatch: all units must share the same role_id " +
+        "AND owner_uid — found mismatched values in the batch. This signals " +
+        "a pipeline bug; aborting.",
     );
   }
 
@@ -98,6 +111,7 @@ async function writeRequirementsAsBatch(
   const existing = await db
     .collection(COLLECTION)
     .where("role_id", "==", roleId)
+    .where("owner_uid", "==", ownerUid)
     .get();
 
   const batch = db.batch();
