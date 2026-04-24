@@ -15,7 +15,7 @@ Return your response via the `record_job_requirements` tool. The schema is stric
 
 Hard rules:
 
-1. **Evidence grounded.** Every `raw_text` must be a near-verbatim span from the input. `normalized_requirement` is a short clean paraphrase — it's allowed to rephrase but not to introduce requirements the JD doesn't state.
+1. **Evidence grounded.** Every `raw_text` must be a near-verbatim span from the input. `normalized_requirement` is a short clean paraphrase — it's allowed to rephrase but not to introduce requirements the JD doesn't state. **Preserve logical operators.** If the JD says "X, Y, **or** Z", the normalized form must also say "or" — changing "or" to "and" turns a disjunctive requirement ("any of these is sufficient") into a conjunctive one ("all of these are required") and strengthens the ask. Same in reverse.
 
 2. **Category honestly assigned.** The `category` enum is narrow on purpose:
    - `"skill"` — a capability or practice ("cross-functional leadership", "SQL").
@@ -97,7 +97,7 @@ Example tool call (abbreviated):
     },
     {
       "raw_text": "Deep familiarity with HLS, DASH, or DRM systems.",
-      "normalized_requirement": "Familiarity with HLS, DASH, and DRM streaming protocols.",
+      "normalized_requirement": "Familiarity with HLS, DASH, or DRM streaming protocols.",
       "category": "tool",
       "keywords": [],
       "tools": ["HLS", "DASH", "DRM"],

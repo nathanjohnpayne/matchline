@@ -24,7 +24,7 @@
     },
     {
       "raw_text": "Deep familiarity with HLS, DASH, or DRM systems.",
-      "normalized_requirement": "Familiarity with HLS, DASH, and DRM streaming protocols.",
+      "normalized_requirement": "Familiarity with HLS, DASH, or DRM streaming protocols.",
       "category": "tool",
       "keywords": [],
       "tools": ["HLS", "DASH", "DRM"],
