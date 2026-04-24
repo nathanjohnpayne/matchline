@@ -16,7 +16,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isOwner() {
+      // Null-guard `resource` and `resource.data` before the
+      // owner_uid comparison. Without these, the rules engine
+      // throws "Null value error" on any delete evaluation
+      // where the doc isn't visible (nonexistent-doc deletes,
+      // and observed flakily during cross-project emulator
+      // contention — see #92). Strictly more restrictive than
+      // the prior version: null resource → false instead of
+      // an evaluation error.
       return request.auth != null
+        && resource != null
+        && resource.data != null
         && resource.data.owner_uid == request.auth.uid;
     }
     function isCreatingAsOwner() {
