@@ -23,10 +23,11 @@ import type { ExperienceUnit } from "../../types/capability.ts";
 
 import InlineEditForm from "./InlineEditForm.tsx";
 import {
-  applyOptimistic,
   draftDiff,
   editableFromUnit,
+  presentationUnit,
   type EditableUnitFields,
+  type EditStatus,
 } from "./inlineEditState.ts";
 
 export interface UnitRowProps {
@@ -47,39 +48,11 @@ export interface UnitRowProps {
 
 type DisplayState = ApprovalState;
 
-/**
- * Inline-edit status for this row. Kept local to the row so
- * concurrent edits to two different Units don't cross-contaminate
- * state. The discriminated union mirrors `inlineEditState.ts`.
- *
- * **baseSnapshot** is the Unit as-observed at edit-start. We
- * diff the draft against THIS on save, NOT against the live
- * `unit` prop — otherwise a concurrent subscription update
- * (another tab, a background callable like the re-embed clearing
- * `reembed_pending`) that lands mid-edit would shift the
- * comparison base and either spuriously mark fields the user
- * didn't touch or silently drop fields they DID edit when those
- * fields happen to match the new base. nathanpayne-codex Phase 4b
- * on #90.
- */
-type EditStatus =
-  | { kind: "view" }
-  | {
-      kind: "editing";
-      draft: EditableUnitFields;
-      baseSnapshot: ExperienceUnit;
-    }
-  | {
-      kind: "saving";
-      draft: EditableUnitFields;
-      baseSnapshot: ExperienceUnit;
-    }
-  | {
-      kind: "error";
-      draft: EditableUnitFields;
-      baseSnapshot: ExperienceUnit;
-      error: Error;
-    };
+// EditStatus is imported from inlineEditState.ts so the row's
+// state shape and the pure helpers (presentationUnit, draftDiff,
+// applyMetricUpdate) all agree on the discriminated-union
+// definition. Each row owns its own useState<EditStatus> so
+// concurrent edits to two different Units can't cross-contaminate.
 
 const STATE_PILL_CLASSES: Record<DisplayState, string> = {
   approved:
@@ -123,17 +96,11 @@ export default function UnitRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unit.id]);
 
-  // Optimistic render during saving/error uses the EDIT-START
-  // snapshot as the base, not the live prop. A subscription
-  // update that lands mid-save would otherwise cause the
-  // presented row to flip back-and-forth between the live base
-  // and the optimistic draft as updates arrive, which looks like
-  // flicker to the user. Using the snapshot gives a stable "this
-  // is what you're committing" preview until the save resolves.
-  const presentedUnit =
-    status.kind === "saving" || status.kind === "error"
-      ? applyOptimistic(status.baseSnapshot, status.draft)
-      : unit;
+  // Row preview policy lives in `presentationUnit` (pure):
+  //   - view / editing / error: live persisted Unit
+  //   - saving: optimistic merge of draft over edit-start snapshot
+  // See `presentationUnit` docstring for rationale.
+  const presentedUnit = presentationUnit(unit, status);
 
   const state: DisplayState = displayStateOf(presentedUnit);
   const provenance =

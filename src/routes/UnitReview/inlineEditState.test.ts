@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import {
+  applyMetricUpdate,
   applyOptimistic,
   draftDiff,
   editableFromUnit,
+  presentationUnit,
   type EditableUnitFields,
+  type EditStatus,
 } from "./inlineEditState.ts";
 
 function unit(partial: Partial<ExperienceUnit> & { id: string }): ExperienceUnit {
@@ -280,5 +283,161 @@ describe("draftDiff", () => {
       date_range: { start: "2024-01-01", end: "2024-06-01" },
     });
     expect(draftDiff(u, draftOf(u))).toEqual({});
+  });
+});
+
+describe("presentationUnit", () => {
+  it("renders the live unit in view mode", () => {
+    const live = unit({ id: "x", raw_text: "live" });
+    expect(presentationUnit(live, { kind: "view" })).toBe(live);
+  });
+
+  it("renders the LIVE unit in editing mode (draft is in the form below, not the row header)", () => {
+    // The row header shows truth in editing mode — the draft
+    // lives in the form. Otherwise the user would see their
+    // typed-but-uncommitted edits in two places (form + header).
+    const live = unit({ id: "x", raw_text: "persisted" });
+    const status: EditStatus = {
+      kind: "editing",
+      draft: { ...editableFromUnit(live), raw_text: "draft" },
+      baseSnapshot: live,
+    };
+    const result = presentationUnit(live, status);
+    expect(result.raw_text).toBe("persisted");
+  });
+
+  it("renders the optimistic merge in saving mode (draft over edit-start snapshot)", () => {
+    const live = unit({ id: "x", raw_text: "persisted" });
+    const draftText = "saving optimistic";
+    const status: EditStatus = {
+      kind: "saving",
+      draft: { ...editableFromUnit(live), raw_text: draftText },
+      baseSnapshot: live,
+    };
+    const result = presentationUnit(live, status);
+    expect(result.raw_text).toBe(draftText);
+  });
+
+  it("rolls back to the LIVE unit in error mode (regression: nathanpayne-codex Phase 4b r2 on #90)", () => {
+    // Prior behavior: error state kept the optimistic merge
+    // visible next to the error banner, which lied about the
+    // persisted state. The form below keeps the draft for retry,
+    // but the row header rolls back to truth.
+    const live = unit({ id: "x", raw_text: "persisted" });
+    const status: EditStatus = {
+      kind: "error",
+      draft: { ...editableFromUnit(live), raw_text: "draft would be lying" },
+      baseSnapshot: live,
+      error: new Error("Save failed"),
+    };
+    const result = presentationUnit(live, status);
+    // Header shows the persisted text, NOT the draft.
+    expect(result.raw_text).toBe("persisted");
+    expect(result.raw_text).not.toBe("draft would be lying");
+  });
+
+  it("uses the snapshot (not the live prop) as the optimistic base in saving mode", () => {
+    // If the subscription delivers an update mid-save, the live
+    // unit drifts. The optimistic preview must stay stable on
+    // the snapshot so it doesn't flicker between drift-merge
+    // and snapshot-merge as updates arrive.
+    const snapshot = unit({
+      id: "x",
+      raw_text: "snapshot",
+      confidence_score: 0.5,
+    });
+    const drifted = unit({
+      id: "x",
+      raw_text: "drifted-mid-save",
+      confidence_score: 0.99, // server changed this during save
+    });
+    const status: EditStatus = {
+      kind: "saving",
+      draft: { ...editableFromUnit(snapshot), raw_text: "user-edit" },
+      baseSnapshot: snapshot,
+    };
+    const result = presentationUnit(drifted, status);
+    // raw_text comes from the draft
+    expect(result.raw_text).toBe("user-edit");
+    // confidence_score comes from the SNAPSHOT, not the drifted
+    // live value — the user is committing what they saw at edit
+    // start.
+    expect(result.confidence_score).toBe(0.5);
+  });
+});
+
+describe("applyMetricUpdate", () => {
+  it("merges defined fields into the metric", () => {
+    const m = { claim: "old", confidence: "low" as const };
+    const result = applyMetricUpdate(m, {
+      claim: "new",
+      value: 40,
+      unit: "M",
+    });
+    expect(result).toEqual({
+      claim: "new",
+      confidence: "low",
+      value: 40,
+      unit: "M",
+    });
+  });
+
+  it("strips a key when the partial sets it to undefined (Codex P1 #90 Phase 4b r2)", () => {
+    // Regression pin: the prior `updateAt` in the form did
+    // `{ ...m, ...partial }` which left `value: undefined` in
+    // the merged object. The service's `buildUpdatePayload` only
+    // sanitizes top-level undefined, so the nested undefined
+    // would have reached `updateDoc()` and Firestore would have
+    // rejected the save. Pin that the strip happens here so a
+    // future caller that passes undefined gets the natural
+    // "key absent" shape.
+    const m = {
+      claim: "40M users",
+      value: 40,
+      unit: "M",
+      direction: "up" as const,
+      confidence: "high" as const,
+    };
+    const result = applyMetricUpdate(m, { value: undefined });
+    expect("value" in result).toBe(false);
+    // Other fields preserved
+    expect(result.claim).toBe("40M users");
+    expect(result.unit).toBe("M");
+    expect(result.direction).toBe("up");
+    expect(result.confidence).toBe("high");
+  });
+
+  it("strips multiple undefined fields in one update", () => {
+    const m = {
+      claim: "x",
+      value: 1,
+      unit: "ms",
+      direction: "down" as const,
+      confidence: "medium" as const,
+    };
+    const result = applyMetricUpdate(m, {
+      value: undefined,
+      unit: undefined,
+      direction: undefined,
+    });
+    expect("value" in result).toBe(false);
+    expect("unit" in result).toBe(false);
+    expect("direction" in result).toBe(false);
+    expect(result.claim).toBe("x");
+    expect(result.confidence).toBe("medium");
+  });
+
+  it("does not mutate the input metric", () => {
+    const m = { claim: "x", value: 5, confidence: "high" as const };
+    const snapshot = { ...m };
+    applyMetricUpdate(m, { value: undefined });
+    expect(m).toEqual(snapshot);
+  });
+
+  it("an empty partial returns a copy of the original (no-op)", () => {
+    const m = { claim: "x", value: 5, confidence: "high" as const };
+    const result = applyMetricUpdate(m, {});
+    expect(result).toEqual(m);
+    expect(result).not.toBe(m);
   });
 });

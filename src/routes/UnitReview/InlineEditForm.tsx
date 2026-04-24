@@ -26,7 +26,10 @@ import type {
   UnitType,
 } from "../../types/capability.ts";
 
-import type { EditableUnitFields } from "./inlineEditState.ts";
+import {
+  applyMetricUpdate,
+  type EditableUnitFields,
+} from "./inlineEditState.ts";
 
 export interface InlineEditFormProps {
   readonly draft: EditableUnitFields;
@@ -415,15 +418,30 @@ interface MetricsEditorProps {
  * value, unit, direction, confidence. The `claim` is required; the
  * rest are optional per the `Metric` type. "Remove" deletes a row;
  * "Add metric" appends an empty scaffold (claim="", confidence="high").
+ *
+ * Optional fields (value, unit, direction) use the omit-key
+ * convention: when the user clears a field, the key is REMOVED
+ * from the metric object rather than set to `undefined`. Reason:
+ * the service's `buildUpdatePayload` only sanitizes top-level
+ * undefined; nested undefined inside the metrics array would
+ * still reach `updateDoc()` and Firestore would reject the save.
+ * nathanpayne-codex Phase 4b on #90.
  */
 function MetricsEditor({
   metrics,
   disabled,
   onChange,
 }: MetricsEditorProps): ReactElement {
+  /**
+   * Update one metric via the pure `applyMetricUpdate` helper,
+   * which strips undefined keys so the result has optional
+   * fields absent rather than explicit-undefined. Pure so the
+   * key-strip logic is unit-tested in
+   * `inlineEditState.test.ts`.
+   */
   const updateAt = (index: number, partial: Partial<Metric>) => {
     const next = metrics.map((m, i) =>
-      i === index ? { ...m, ...partial } : m,
+      i === index ? applyMetricUpdate(m, partial) : m,
     );
     onChange(next);
   };

@@ -24,7 +24,7 @@
  * this module owns the pure logic those transitions apply.
  */
 
-import type { ExperienceUnit } from "../../types/capability.ts";
+import type { ExperienceUnit, Metric } from "../../types/capability.ts";
 
 /**
  * Fields the inline-edit UI can mutate. The state-machine- and
@@ -56,17 +56,29 @@ export type EditableUnitFields = Pick<
 >;
 
 /**
- * Edit-mode status for a single row. `error` carries the last
- * service error when the row is in that state so the view can
- * surface the message.
+ * Edit-mode status for a single row.
+ *
+ * **baseSnapshot** is the Unit observed when the user clicked
+ * Edit. We diff drafts against this, NOT the live subscription
+ * value, so a concurrent update landing mid-edit can't shift
+ * the comparison base. nathanpayne-codex Phase 4b on #90.
  */
 export type EditStatus =
   | { readonly kind: "view" }
-  | { readonly kind: "editing"; readonly draft: EditableUnitFields }
-  | { readonly kind: "saving"; readonly draft: EditableUnitFields }
+  | {
+      readonly kind: "editing";
+      readonly draft: EditableUnitFields;
+      readonly baseSnapshot: ExperienceUnit;
+    }
+  | {
+      readonly kind: "saving";
+      readonly draft: EditableUnitFields;
+      readonly baseSnapshot: ExperienceUnit;
+    }
   | {
       readonly kind: "error";
       readonly draft: EditableUnitFields;
+      readonly baseSnapshot: ExperienceUnit;
       readonly error: Error;
     };
 
@@ -98,6 +110,65 @@ export function editableFromUnit(unit: ExperienceUnit): EditableUnitFields {
     // date_range, omit the key entirely from the draft.
     ...(unit.date_range !== undefined ? { date_range: unit.date_range } : {}),
   };
+}
+
+/**
+ * Choose the Unit to render in the row preview, given the live
+ * subscription value and the current edit status. Pure so the
+ * "rollback on error" policy is unit-tested.
+ *
+ * Policy (nathanpayne-codex Phase 4b round 2 on #90):
+ *
+ *   - `view` / `editing`: render the live persisted Unit.
+ *   - `saving`: render the optimistic merge of draft over the
+ *     edit-start snapshot. Gives instant "this is what's about
+ *     to commit" feedback. Snapshot (not live) avoids flicker
+ *     if the subscription delivers an update mid-save.
+ *   - `error`: render the LIVE persisted Unit. The form below
+ *     keeps the draft so the user can retry, but the row
+ *     header rolls back to truth — otherwise the optimistic
+ *     preview would lie about the persisted state next to the
+ *     error banner.
+ */
+export function presentationUnit(
+  liveUnit: ExperienceUnit,
+  status: EditStatus,
+): ExperienceUnit {
+  if (status.kind === "saving") {
+    return applyOptimistic(status.baseSnapshot, status.draft);
+  }
+  return liveUnit;
+}
+
+/**
+ * Apply a partial update to a `Metric` (one row in the nested
+ * metrics editor), stripping any keys whose value is `undefined`
+ * so the result has optional fields absent rather than
+ * explicit-undefined.
+ *
+ * Load-bearing for the service-layer write path: the service's
+ * `buildUpdatePayload` only sanitizes top-level undefined, so a
+ * metric with `value: undefined` would carry into `updateDoc()`
+ * and Firestore would reject the save. nathanpayne-codex Phase 4b
+ * round 2 on #90 caught this — clearing a metric's value/unit/
+ * direction fields would have failed every save.
+ *
+ * Required Metric fields (`claim`, `confidence`) are unaffected
+ * by intent — even if a caller passes them as undefined, the
+ * strip removes them and the result is a malformed Metric. The
+ * form never passes undefined for those.
+ */
+export function applyMetricUpdate(
+  metric: Metric,
+  partial: Partial<Metric>,
+): Metric {
+  const merged: Record<string, unknown> = { ...metric, ...partial };
+  for (const [key, value] of Object.entries(merged)) {
+    if (value === undefined) {
+      delete merged[key];
+    }
+  }
+  return merged as unknown as Metric;
 }
 
 /**
