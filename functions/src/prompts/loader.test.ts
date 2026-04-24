@@ -89,6 +89,31 @@ describe("parsePromptSections", () => {
     expect(userFewShot).toBe("Real example here.");
   });
 
+  it("treats a `` ```lang `` line INSIDE a fence as content, not a close", () => {
+    // Per CommonMark, a closing fence can only be followed by
+    // whitespace. Lines like ```js inside an open fence are
+    // content, not closes — so in-fence `## System` lines after
+    // them must still be ignored.
+    const raw = [
+      "```markdown",
+      "Here's a fenced info-string example:",
+      "```js",
+      "// fake js content",
+      "## System",
+      "still fake (still inside the outer fence)",
+      "```",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
   it("handles tilde fences (~~~) per CommonMark", () => {
     const raw = [
       "Preamble with a tilde-fenced example:",

@@ -177,26 +177,35 @@ export function parsePromptSections(
   // outer 4-tick fence (Codex P2 round 4).
   let fenceLen = 0;
   let fenceChar: "`" | "~" | "" = "";
+  // CommonMark fences (rounds 4-6 of Codex review):
+  //   - Up to 3 leading spaces of indentation.
+  //   - 3+ backticks OR 3+ tildes.
+  //   - Opening can be followed by an info string (language tag).
+  //   - Closing must be followed by whitespace only. A `` ```js `` inside
+  //     an open fence is NOT a close — it's content.
+  //   - Closing length must be ≥ opening length, same char.
+  const OPENING = /^ {0,3}(`{3,}|~{3,})/;
+  const CLOSING = /^ {0,3}(`{3,}|~{3,})\s*$/;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    // CommonMark fences: up to 3 leading spaces, then 3+ backticks
-    // OR 3+ tildes. Closing fence must use the same char and have
-    // equal-or-greater length. (Codex P2 rounds 4 + 5.)
-    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const fence = fenceMatch[1]!;
-      const n = fence.length;
-      const ch = fence[0] as "`" | "~";
-      if (fenceLen === 0) {
-        fenceLen = n;
-        fenceChar = ch;
-      } else if (ch === fenceChar && n >= fenceLen) {
-        fenceLen = 0;
-        fenceChar = "";
+    if (fenceLen === 0) {
+      const m = line.match(OPENING);
+      if (m) {
+        fenceLen = m[1]!.length;
+        fenceChar = m[1]![0] as "`" | "~";
+        continue;
+      }
+    } else {
+      const m = line.match(CLOSING);
+      if (m) {
+        const fence = m[1]!;
+        if ((fence[0] as "`" | "~") === fenceChar && fence.length >= fenceLen) {
+          fenceLen = 0;
+          fenceChar = "";
+        }
       }
       continue;
     }
-    if (fenceLen > 0) continue;
     if (line === "## System" && systemLine < 0) systemLine = i;
     else if (line === "## User (few-shot)" && userLine < 0) userLine = i;
   }
