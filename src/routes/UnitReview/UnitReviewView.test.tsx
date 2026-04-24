@@ -39,17 +39,69 @@ function unit(partial: Partial<ExperienceUnit> & { id: string }): ExperienceUnit
 }
 
 describe("UnitReviewView", () => {
-  it("renders the empty state when no Units are provided", () => {
-    const html = renderToStaticMarkup(<UnitReviewView units={[]} />);
+  it("renders a loading indicator when status is 'loading' (NOT the empty state)", () => {
+    // Regression pin for nathanpayne-codex Phase 4b on #86: before
+    // the explicit load-state prop, a fresh mount with `units: []`
+    // rendered "No Experience Units yet" before the first Firestore
+    // snapshot arrived — a misleading false-empty surface on the
+    // landing page. Loading state must be distinct from empty
+    // corpus.
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="loading" units={[]} />,
+    );
+    expect(html).toContain('data-load-state="loading"');
+    expect(html).toContain("Loading Units");
+    // The empty-state copy and CTA must NOT render while loading
+    // — otherwise the user briefly sees "No Experience Units yet"
+    // with an "Add Unit manually" CTA before the list populates.
+    expect(html).not.toContain("No Experience Units yet.");
+    expect(html).not.toContain("Add Unit manually");
+  });
+
+  it("renders the error alert when status is 'error' (NOT the empty state)", () => {
+    // Second half of the load-state discrimination: on error the
+    // empty state must not render under the error banner. The
+    // error surface is terminal for this subscription — showing
+    // the empty state alongside would mislead the user into
+    // thinking the corpus is empty rather than unreadable.
+    const err = new Error("Permission denied");
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="error" units={[]} error={err} />,
+    );
+    expect(html).toContain('data-load-state="error"');
+    expect(html).toContain("Permission denied");
+    expect(html).not.toContain("No Experience Units yet.");
+    expect(html).not.toContain("Add Unit manually");
+    expect(html).not.toContain("Loading Units");
+  });
+
+  it("renders the error alert with a fallback message when error is null", () => {
+    // Defensive: if the container fires setStatus("error") without
+    // also setting the error object, the alert still renders with
+    // a "Unknown error." fallback rather than a hanging colon.
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="error" units={[]} error={null} />,
+    );
+    expect(html).toContain("Unknown error.");
+  });
+
+  it("renders the empty state only when status is 'ready' AND no Units", () => {
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="ready" units={[]} />,
+    );
     expect(html).toContain("No Experience Units yet.");
     expect(html).toContain("Add Unit manually");
     // Counter is still rendered in the header, showing 0 of 20
     expect(html).toContain(`0 of ${APPROVED_MILESTONE} approved`);
+    // And the three load-state markers are mutually exclusive
+    expect(html).not.toContain('data-load-state="loading"');
+    expect(html).not.toContain('data-load-state="error"');
   });
 
   it("renders one <li> per non-rejected Unit", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[
           unit({ id: "a" }),
           unit({ id: "b" }),
@@ -67,6 +119,7 @@ describe("UnitReviewView", () => {
     // pipeline will see via listApprovedExperienceUnits.
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[
           unit({ id: "approved-one", user_approved: true }),
           unit({ id: "rejected-one", rejected: true, user_approved: false }),
@@ -90,6 +143,7 @@ describe("UnitReviewView", () => {
       "Drove a 14-month replatform of the streaming playback SDK across Roku, Fire TV, Apple TV, Android TV, web, iOS, and Android, cutting rebuffer rate from 3.1% to 0.7% across 40M monthly CTV viewers while preserving feature parity with the legacy stack.";
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[unit({ id: "long", normalized_summary: longSummary })]}
       />,
     );
@@ -106,6 +160,7 @@ describe("UnitReviewView", () => {
   it("renders all five columns on each row (summary, type, state, confidence, provenance)", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[
           unit({
             id: "only",
@@ -130,7 +185,9 @@ describe("UnitReviewView", () => {
     const units = Array.from({ length: 19 }, (_, i) =>
       unit({ id: `u-${i}`, user_approved: true }),
     );
-    const html = renderToStaticMarkup(<UnitReviewView units={units} />);
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="ready" units={units} />,
+    );
     expect(html).toContain('data-milestone="pending"');
     expect(html).toContain(`19 of ${APPROVED_MILESTONE} approved`);
     expect(html).not.toContain("onboarding complete");
@@ -140,7 +197,9 @@ describe("UnitReviewView", () => {
     const units = Array.from({ length: APPROVED_MILESTONE }, (_, i) =>
       unit({ id: `u-${i}`, user_approved: true }),
     );
-    const html = renderToStaticMarkup(<UnitReviewView units={units} />);
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="ready" units={units} />,
+    );
     expect(html).toContain('data-milestone="hit"');
     expect(html).toContain("onboarding complete");
   });
@@ -149,7 +208,9 @@ describe("UnitReviewView", () => {
     const units = Array.from({ length: 25 }, (_, i) =>
       unit({ id: `u-${i}`, user_approved: true }),
     );
-    const html = renderToStaticMarkup(<UnitReviewView units={units} />);
+    const html = renderToStaticMarkup(
+      <UnitReviewView status="ready" units={units} />,
+    );
     expect(html).toContain('data-milestone="hit"');
     expect(html).toContain("25 approved — onboarding complete");
   });
@@ -157,6 +218,7 @@ describe("UnitReviewView", () => {
   it("renders each approval state with its distinct pill", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[
           unit({ id: "a", user_approved: true }),
           unit({ id: "b" }),
@@ -174,7 +236,7 @@ describe("UnitReviewView", () => {
   it("surfaces a subscription error via role=alert", () => {
     const err = new Error("Permission denied");
     const html = renderToStaticMarkup(
-      <UnitReviewView units={[]} error={err} />,
+      <UnitReviewView status="error" units={[]} error={err} />,
     );
     expect(html).toContain('role="alert"');
     expect(html).toContain("Permission denied");
@@ -183,6 +245,7 @@ describe("UnitReviewView", () => {
   it("renders the re-embed-pending badge when set on a Unit", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[unit({ id: "freshly-manual", reembed_pending: true })]}
       />,
     );
@@ -191,7 +254,7 @@ describe("UnitReviewView", () => {
 
   it("does not render the re-embed-pending badge by default", () => {
     const html = renderToStaticMarkup(
-      <UnitReviewView units={[unit({ id: "normal" })]} />,
+      <UnitReviewView status="ready" units={[unit({ id: "normal" })]} />,
     );
     expect(html).not.toContain("re-embed pending");
   });
@@ -199,6 +262,7 @@ describe("UnitReviewView", () => {
   it("orders rows by updated_at descending (most recent first)", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView
+        status="ready"
         units={[
           unit({ id: "old", updated_at: "2026-01-01T00:00:00.000Z" }),
           unit({ id: "new", updated_at: "2026-04-01T00:00:00.000Z" }),

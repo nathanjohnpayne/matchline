@@ -9,12 +9,17 @@
  * `src/services/experienceUnits-state.ts`.
  *
  * Subscription lifecycle:
- *   - On mount: subscribe via `subscribeByOwner`. The service layer
- *     throws if no user is signed in; the `AuthProvider` gate in
- *     `App.tsx` ensures we never render this route without a
- *     resolved user.
- *   - On snapshot: update local state.
- *   - On error: capture into local state for the view to surface.
+ *   - On mount: status = "loading". Subscribe via `subscribeByOwner`.
+ *     The service layer throws if no user is signed in; the
+ *     `AuthProvider` gate in `App.tsx` ensures we never render this
+ *     route without a resolved user.
+ *   - On first snapshot: status = "ready", units = snapshot payload.
+ *   - On error: status = "error", error = err. nathanpayne-codex
+ *     review on #86 caught the prior loading/empty conflation — a
+ *     fresh mount was rendering "No Experience Units yet" before the
+ *     first snapshot arrived, and the empty state also rendered under
+ *     the error banner. Three states must be distinct: pre-first-
+ *     snapshot loading, terminal error, genuinely-empty corpus.
  *   - On unmount: call the returned `Unsubscribe`.
  */
 
@@ -23,22 +28,33 @@ import { useEffect, useState, type ReactElement } from "react";
 import { subscribeByOwner } from "../../services/experienceUnits.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
-import UnitReviewView from "./UnitReviewView.tsx";
+import UnitReviewView, { type LoadState } from "./UnitReviewView.tsx";
 
 export default function UnitReview(): ReactElement {
+  const [status, setStatus] = useState<LoadState>("loading");
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    // Reset error on each subscribe attempt so a transient rules
-    // rejection doesn't persist across a resubscribe.
+    // Reset to loading on each subscribe so a resubscribe (e.g. if
+    // the route re-mounts after a sign-out/sign-in cycle) doesn't
+    // carry a stale error or stale units.
+    setStatus("loading");
     setError(null);
+    setUnits([]);
+
     const unsubscribe = subscribeByOwner(
-      (next) => setUnits(next),
-      (err) => setError(err),
+      (next) => {
+        setUnits(next);
+        setStatus("ready");
+      },
+      (err) => {
+        setError(err);
+        setStatus("error");
+      },
     );
     return unsubscribe;
   }, []);
 
-  return <UnitReviewView units={units} error={error} />;
+  return <UnitReviewView status={status} units={units} error={error} />;
 }

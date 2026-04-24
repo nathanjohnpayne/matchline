@@ -30,19 +30,38 @@ import {
   sortByUpdatedDesc,
 } from "./filterUnits.ts";
 
+/**
+ * Subscription load state. Explicit three-way discriminated union
+ * so loading, error, and "genuinely empty" never render the same
+ * way. nathanpayne-codex review on #86 caught the prior
+ * conflation: with a single `units: []` prop, a fresh mount showed
+ * "No Experience Units yet" before the first Firestore snapshot
+ * arrived (false empty), and on error the empty state rendered
+ * under the error banner (double-misleading surface).
+ */
+export type LoadState = "loading" | "error" | "ready";
+
 export interface UnitReviewViewProps {
   /**
+   * Subscription state discriminator. Required — there is no
+   * sensible default because every rendering branch depends on
+   * which of the three states we're in.
+   */
+  readonly status: LoadState;
+  /**
    * Full owner-scoped Unit set from the Firestore subscription.
-   * Rejected Units are included here — the view applies the
-   * rejected-exclusion filter before rendering. Future filter sub-
-   * issue (#80) composes additional filters on top.
+   * Meaningful only when `status === "ready"`; should be an empty
+   * array in the "loading" and "error" branches. Rejected Units
+   * are included here — the view applies the rejected-exclusion
+   * filter before rendering. Future filter sub-issue (#80)
+   * composes additional filters on top.
    */
   readonly units: readonly ExperienceUnit[];
   /**
-   * Error from the subscription, surfaced if Firestore returns a
-   * terminal error (most commonly: rules rejection because auth
-   * resolved later than the route was rendered). Pass `null` for
-   * the normal case.
+   * Error from the subscription, surfaced when `status === "error"`.
+   * Firestore's onSnapshot error is terminal for the subscription —
+   * we don't auto-retry, so the error-state surface is the end of
+   * the line until the route re-mounts.
    */
   readonly error?: Error | null;
   /**
@@ -53,14 +72,17 @@ export interface UnitReviewViewProps {
 }
 
 export default function UnitReviewView({
+  status,
   units,
   error,
   onAddManually,
 }: UnitReviewViewProps): ReactElement {
-  // Note: the counter counts ALL approved Units — rejected don't
-  // enter the filter because the state machine guarantees
-  // rejected → user_approved: false. See countApproved's test for
-  // the corrupt-data edge case.
+  // Counter counts ALL approved Units from the ready-state snapshot
+  // — rejected don't enter the filter because the state machine
+  // guarantees rejected → user_approved: false. See countApproved's
+  // test for the corrupt-data edge case. In loading/error the
+  // counter renders 0 of 20, which is accurate: we don't have a
+  // snapshot to report against.
   const approved = countApproved(units);
   const visible = sortByUpdatedDesc(excludeRejected(units));
 
@@ -79,27 +101,41 @@ export default function UnitReviewView({
         <ApprovalCounter approved={approved} />
       </header>
 
-      {error && (
+      {status === "loading" && (
         <div
-          role="alert"
-          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+          className="rounded-lg border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
+          role="status"
+          aria-live="polite"
+          data-load-state="loading"
         >
-          Couldn&rsquo;t load Units: {error.message}
+          Loading Units&hellip;
         </div>
       )}
 
-      {visible.length === 0 ? (
-        <EmptyState onAddManually={onAddManually} />
-      ) : (
-        <ul
-          className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
-          aria-label="Experience Units"
+      {status === "error" && (
+        <div
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+          data-load-state="error"
         >
-          {visible.map((unit) => (
-            <UnitRow key={unit.id} unit={unit} />
-          ))}
-        </ul>
+          Couldn&rsquo;t load Units: {error?.message ?? "Unknown error."}
+        </div>
       )}
+
+      {status === "ready" &&
+        (visible.length === 0 ? (
+          <EmptyState onAddManually={onAddManually} />
+        ) : (
+          <ul
+            className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+            aria-label="Experience Units"
+            data-load-state="ready"
+          >
+            {visible.map((unit) => (
+              <UnitRow key={unit.id} unit={unit} />
+            ))}
+          </ul>
+        ))}
     </section>
   );
 }
