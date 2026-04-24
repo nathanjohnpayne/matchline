@@ -176,13 +176,24 @@ export function parsePromptSections(
   // inner) work correctly — the inner 3-tick line doesn't close the
   // outer 4-tick fence (Codex P2 round 4).
   let fenceLen = 0;
+  let fenceChar: "`" | "~" | "" = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const fenceMatch = line.match(/^(`{3,})/);
+    // CommonMark fences: up to 3 leading spaces, then 3+ backticks
+    // OR 3+ tildes. Closing fence must use the same char and have
+    // equal-or-greater length. (Codex P2 rounds 4 + 5.)
+    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/);
     if (fenceMatch) {
-      const n = fenceMatch[1]!.length;
-      if (fenceLen === 0) fenceLen = n; // opening
-      else if (n >= fenceLen) fenceLen = 0; // closing (matching or greater)
+      const fence = fenceMatch[1]!;
+      const n = fence.length;
+      const ch = fence[0] as "`" | "~";
+      if (fenceLen === 0) {
+        fenceLen = n;
+        fenceChar = ch;
+      } else if (ch === fenceChar && n >= fenceLen) {
+        fenceLen = 0;
+        fenceChar = "";
+      }
       continue;
     }
     if (fenceLen > 0) continue;

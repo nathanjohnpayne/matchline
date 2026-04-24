@@ -89,6 +89,69 @@ describe("parsePromptSections", () => {
     expect(userFewShot).toBe("Real example here.");
   });
 
+  it("handles tilde fences (~~~) per CommonMark", () => {
+    const raw = [
+      "Preamble with a tilde-fenced example:",
+      "",
+      "~~~markdown",
+      "## System",
+      "fake",
+      "~~~",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
+  it("handles indented fences (up to 3 leading spaces) per CommonMark", () => {
+    const raw = [
+      "Preamble with an indented fence:",
+      "",
+      "   ```",
+      "   ## System",
+      "   fake",
+      "   ```",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
+  it("does NOT cross-close a backtick fence with a tilde fence", () => {
+    // A tilde run inside a backtick fence must not close the outer
+    // backtick fence — CommonMark requires same-char closure.
+    const raw = [
+      "```markdown",
+      "Inside a backtick fence:",
+      "~~~",
+      "## System",
+      "fake",
+      "~~~",
+      "```",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
   it("handles nested fences correctly (4-tick outer showing 3-tick inner)", () => {
     // CommonMark rule: a fence opened with N backticks is only
     // closed by a fence of N or more backticks. A 3-tick line
