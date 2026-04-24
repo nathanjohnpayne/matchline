@@ -73,20 +73,26 @@ const LABEL_CLS =
   "mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400";
 
 /**
- * Parse the CSV-ish tag input used for string-array fields. We
- * render the stored array as comma-joined text (since that's the
- * simplest single-line input) and split on commit. Entries are
- * trimmed; empty entries dropped.
+ * Parse the newline-delimited tag input used for string-array
+ * fields. Previously the form used commas, but string-array
+ * values can legitimately contain commas (e.g. "Sales, Marketing"
+ * as a domain, "PlayStation 4, 5" as a skill) and a comma
+ * round-trip was lossy — nathanpayne-codex Phase 4b on #90.
+ *
+ * Newline is a safe delimiter: a tag value that's a real multi-
+ * line string is vanishingly rare in practice, and the field is
+ * a `<textarea>` so users can type multiple lines naturally.
+ * Entries are trimmed; empty lines dropped.
  */
 function parseTags(raw: string): string[] {
   return raw
-    .split(",")
+    .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 
 function joinTags(values: readonly string[]): string {
-  return values.join(", ");
+  return values.join("\n");
 }
 
 export default function InlineEditForm({
@@ -114,21 +120,29 @@ export default function InlineEditForm({
         | "scope_signals"
         | "business_outcomes",
     ) =>
-    (event: ChangeEvent<HTMLInputElement>) => {
+    (event: ChangeEvent<HTMLTextAreaElement>) => {
       setField(key, parseTags(event.target.value));
     };
+
+  // Date-range invariants (DateRange type requires `start: ISODate`):
+  //
+  //   - Valid shapes: { start } | { start, end } | (no range at all)
+  //   - Invalid shapes: { start: "" } | { start: "", end } | { end }
+  //
+  // nathanpayne-codex Phase 4b on #90 caught that setDateEnd could
+  // construct `{ start: "", end: value }` when the user typed an
+  // end date without a start — violating the type invariant. Both
+  // handlers now refuse to emit an invalid-shaped range.
 
   const setDateStart = (event: ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
     if (value === "") {
-      // Clearing the start when end is also empty removes the range;
-      // otherwise leave end in place (caller can clear it separately).
+      // Clearing start removes the whole range. If the user
+      // still wants the end value, they can retype after setting
+      // start again. Keeping end while start is empty would
+      // produce an invalid DateRange.
       const next = { ...draft };
-      if (draft.date_range?.end === undefined) {
-        delete next.date_range;
-      } else {
-        next.date_range = { start: "", end: draft.date_range.end };
-      }
+      delete next.date_range;
       onChange(next);
       return;
     }
@@ -145,12 +159,15 @@ export default function InlineEditForm({
 
   const setDateEnd = (event: ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value;
+    const currentStart = draft.date_range?.start;
     if (value === "") {
-      // Clearing end when start is set means "ongoing"
-      if (draft.date_range?.start !== undefined && draft.date_range.start !== "") {
+      // Clearing end. If we have a start, drop to start-only
+      // ("ongoing"). If start is also empty/absent, remove the
+      // whole range. Both paths produce valid shapes.
+      if (currentStart !== undefined && currentStart !== "") {
         onChange({
           ...draft,
-          date_range: { start: draft.date_range.start },
+          date_range: { start: currentStart },
         });
       } else {
         const next = { ...draft };
@@ -159,12 +176,16 @@ export default function InlineEditForm({
       }
       return;
     }
+    // Setting end. Requires a non-empty start; without one, we
+    // can't construct a valid range. Silently ignore — the end
+    // input is also `disabled` in the template when start is
+    // empty (UX hint).
+    if (currentStart === undefined || currentStart === "") {
+      return;
+    }
     onChange({
       ...draft,
-      date_range: {
-        start: draft.date_range?.start ?? "",
-        end: value,
-      },
+      date_range: { start: currentStart, end: value },
     });
   };
 
@@ -286,10 +307,10 @@ export default function InlineEditForm({
       ).map(([key, label]) => (
         <label key={key} className="block">
           <span className={LABEL_CLS}>{label}</span>
-          <input
-            type="text"
-            placeholder="comma-separated"
-            className={TEXT_INPUT_CLS}
+          <textarea
+            rows={Math.max(2, draft[key].length + 1)}
+            placeholder="one per line"
+            className={`${TEXT_INPUT_CLS} font-mono`}
             value={joinTags(draft[key])}
             onChange={setTags(key)}
             disabled={saving}
@@ -310,13 +331,23 @@ export default function InlineEditForm({
           />
         </label>
         <label className="block">
-          <span className={LABEL_CLS}>End date (blank = ongoing)</span>
+          <span className={LABEL_CLS}>
+            End date (blank = ongoing)
+          </span>
           <input
             type="date"
             className={TEXT_INPUT_CLS}
             value={draft.date_range?.end ?? ""}
             onChange={setDateEnd}
-            disabled={saving}
+            // End requires a non-empty start to form a valid
+            // DateRange. UX hint: disable when start isn't set so
+            // the user types start first. Backstop: setDateEnd
+            // ignores the event when start is empty.
+            disabled={
+              saving ||
+              draft.date_range?.start === undefined ||
+              draft.date_range.start === ""
+            }
           />
         </label>
         <label className="block">

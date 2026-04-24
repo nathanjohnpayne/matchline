@@ -394,7 +394,11 @@ describe("buildUpdatePayload", () => {
   // sentinel — a distinct reference the test can identify.
   const DELETE = Symbol("DELETE_SENTINEL");
   const NOW = "2026-05-01T00:00:00.000Z";
-  const options = { now: NOW, deleteSentinel: () => DELETE };
+  const options = {
+    now: NOW,
+    deleteSentinel: () => DELETE,
+    deletableFields: new Set(["date_range"]),
+  };
 
   it("stamps updated_at from the injected timestamp", () => {
     const payload = buildUpdatePayload({}, options);
@@ -454,6 +458,45 @@ describe("buildUpdatePayload", () => {
       options,
     );
     expect(payload.updated_at).toBe("1970-01-01T00:00:00.000Z");
+  });
+
+  it("throws when undefined is passed for a non-deletable (required) field", () => {
+    // nathanpayne-codex Phase 4b on #90: a blanket
+    // undefined→delete translation silently removed required
+    // fields when a caller bug slipped an undefined through. The
+    // whitelist narrows the translation to known-optional fields.
+    expect(() =>
+      buildUpdatePayload({ raw_text: undefined }, options),
+    ).toThrow(/"raw_text".*required/);
+    expect(() => buildUpdatePayload({ skills: undefined }, options)).toThrow(
+      /"skills".*required/,
+    );
+    expect(() =>
+      buildUpdatePayload({ confidence_score: undefined }, options),
+    ).toThrow(/"confidence_score".*required/);
+  });
+
+  it("allows undefined for whitelisted fields (date_range)", () => {
+    // Positive case of the whitelist — date_range is the only
+    // field in `DELETABLE_EDITABLE_FIELDS` today. Pin that it
+    // still translates correctly under the stricter rule.
+    const payload = buildUpdatePayload({ date_range: undefined }, options);
+    expect(payload.date_range).toBe(DELETE);
+  });
+
+  it("empty deletableFields set rejects undefined for every field", () => {
+    // A caller that passes an empty whitelist is effectively
+    // saying "no field is deletable here" — all undefined values
+    // throw. Pin the edge case so a future caller that narrows
+    // the whitelist to nothing gets deterministic behavior.
+    const strictOptions = {
+      now: NOW,
+      deleteSentinel: () => DELETE,
+      deletableFields: new Set<string>(),
+    };
+    expect(() =>
+      buildUpdatePayload({ date_range: undefined }, strictOptions),
+    ).toThrow(/"date_range".*required/);
   });
 });
 

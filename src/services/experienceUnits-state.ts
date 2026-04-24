@@ -146,20 +146,27 @@ export const SERVER_STAMPED_IMMUTABLE_FIELDS: readonly string[] = [
 
 /**
  * Translate a partial update payload into a Firestore-valid
- * shape, converting explicit `undefined` on any field into a
- * deletion sentinel. The `deleteSentinel` factory is injected so
- * this helper stays pure — the caller (the service's
- * `updateFields`) passes Firestore's `deleteField()`; tests pass
- * a stand-in marker to verify the translation happens without
- * booting Firestore.
+ * shape, converting explicit `undefined` on WHITELISTED optional
+ * fields into a deletion sentinel. Unlisted fields that arrive
+ * with `undefined` throw — `undefined` on a required field is a
+ * caller bug (the form should never emit one), and silently
+ * translating to `deleteField()` would remove a required field
+ * rather than surface the bug.
+ *
+ * The `deleteSentinel` factory is injected so this helper stays
+ * pure — the caller (the service's `updateFields`) passes
+ * Firestore's `deleteField()`; tests pass a stand-in marker to
+ * verify the translation happens without booting Firestore.
  *
  * Load-bearing for optional-field removal: the inline-edit form
- * from #81 signals "remove this optional field" by including its
- * key in the partial with `undefined` (the natural TS shape of
- * "the user cleared this"), but Firestore's `updateDoc` rejects
- * raw undefined. Codex P1 on #90 caught the prior service
- * behavior which spread raw undefined into updateDoc — clearing
- * the date range would fail the save every time.
+ * signals "remove this optional field" by including its key in
+ * the partial with `undefined`, but Firestore's `updateDoc`
+ * rejects raw undefined. Codex P1 on #90 caught the prior
+ * service spreading raw undefined — date-range clears would fail.
+ * nathanpayne-codex Phase 4b on #90 caught the follow-on: a
+ * blanket undefined→delete translation is unsafe for REQUIRED
+ * fields. The whitelist narrows the translation to exactly the
+ * fields that should be clearable.
  *
  * Always stamps `updated_at` from the injected timestamp.
  */
@@ -168,11 +175,27 @@ export function buildUpdatePayload<TDeleteSentinel>(
   options: {
     readonly now: string;
     readonly deleteSentinel: () => TDeleteSentinel;
+    /**
+     * Field names allowed to translate `undefined` into
+     * `deleteSentinel()`. Everything else: `undefined` throws.
+     * Today this is `{"date_range"}` — the only optional field
+     * on EditableUnitFields. If a future editable field is
+     * optional (e.g. `external_url?: string`), add it here.
+     */
+    readonly deletableFields: ReadonlySet<string>;
   },
 ): Record<string, unknown> {
   const update: Record<string, unknown> = { updated_at: options.now };
   for (const [key, value] of Object.entries(partial)) {
     if (value === undefined) {
+      if (!options.deletableFields.has(key)) {
+        throw new Error(
+          `updateFields: cannot set "${key}" to undefined — the field ` +
+            `is required, and undefined-means-delete is only allowed ` +
+            `for whitelisted optional fields. If this field should be ` +
+            `clearable, add it to the deletableFields set.`,
+        );
+      }
       update[key] = options.deleteSentinel();
     } else {
       update[key] = value;
@@ -180,6 +203,20 @@ export function buildUpdatePayload<TDeleteSentinel>(
   }
   return update;
 }
+
+/**
+ * Fields on `EditableFields` that are optional in the schema and
+ * therefore allowed to convert `undefined` → `deleteField()` in
+ * `buildUpdatePayload`. Exported so tests can verify the set is
+ * the one they expect; imported by `experienceUnits.ts` as the
+ * `deletableFields` arg.
+ *
+ * If you widen this, update the schema to make the field
+ * optional AND update the form to support clearing it.
+ */
+export const DELETABLE_EDITABLE_FIELDS: ReadonlySet<string> = new Set([
+  "date_range",
+]);
 
 /**
  * Runtime guard: throw if a partial update touches any

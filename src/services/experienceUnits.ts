@@ -19,6 +19,7 @@ import {
   assertNoStateMachineFields,
   buildManualUnit,
   buildUpdatePayload,
+  DELETABLE_EDITABLE_FIELDS,
   flagsForApprovalState,
   shouldMarkReembed,
   type ApprovalState,
@@ -191,7 +192,16 @@ export async function updateFields(
   // sentinel. Codex P1 on #90 caught this.
   const update = buildUpdatePayload(
     partial as Readonly<Record<string, unknown>>,
-    { now: nowIso(), deleteSentinel: deleteField },
+    {
+      now: nowIso(),
+      deleteSentinel: deleteField,
+      // Only `date_range` is optional in EditableFields; every
+      // other editable field is required and `undefined` on it
+      // would be a caller bug. Whitelist narrows the delete
+      // translation to exactly what's safe to clear.
+      // nathanpayne-codex Phase 4b on #90.
+      deletableFields: DELETABLE_EDITABLE_FIELDS,
+    },
   ) as UpdateData<ExperienceUnit>;
   if (shouldMarkReembed(partial as Readonly<Record<string, unknown>>)) {
     update.reembed_pending = true;

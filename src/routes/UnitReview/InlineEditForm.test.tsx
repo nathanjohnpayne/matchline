@@ -81,9 +81,13 @@ describe("InlineEditForm", () => {
     expect(html).toContain("normalized summary");
     expect(html).toContain('value="profile.html"');
 
-    // Tag fields rendered as comma-joined
+    // Tag fields rendered as newline-delimited <textarea> (one
+    // per line). Comma was lossy for values containing commas
+    // like "Sales, Marketing" — nathanpayne-codex Phase 4b.
     expect(html).toContain('data-field="skills"');
-    expect(html).toContain('value="sql, python"');
+    expect(html).toMatch(
+      /<textarea[^>]*data-field="skills"[^>]*>sql\npython<\/textarea>/,
+    );
     expect(html).toContain('data-field="tools"');
     expect(html).toContain('data-field="domains"');
     expect(html).toContain('data-field="seniority_signals"');
@@ -181,6 +185,54 @@ describe("InlineEditForm", () => {
     expect(html).toContain(
       '<option value="medium" selected="">medium</option>',
     );
+  });
+
+  it("tag values containing commas round-trip through the textarea (regression: #90 Phase 4b)", () => {
+    // Previously the form used comma-delimited tags, which was
+    // lossy for values like "Sales, Marketing" (a legit domain).
+    // Newline-delimited preserves commas verbatim. Pin the
+    // textarea's joined content to show the value survives.
+    const u = unit({
+      id: "x",
+      skills: ["PlayStation 4, 5", "sql"],
+      domains: ["Sales, Marketing"],
+    });
+    const html = render(draftOf(u), "editing");
+    expect(html).toMatch(
+      /<textarea[^>]*data-field="skills"[^>]*>PlayStation 4, 5\nsql<\/textarea>/,
+    );
+    expect(html).toMatch(
+      /<textarea[^>]*data-field="domains"[^>]*>Sales, Marketing<\/textarea>/,
+    );
+  });
+
+  it("disables the end-date input when start is empty (prevents invalid {start: ''} shape)", () => {
+    // nathanpayne-codex Phase 4b caught that setDateEnd could
+    // construct { start: "", end: value } when the user typed
+    // end without start — violating the DateRange type. Backstop:
+    // the template disables end when start is empty.
+    const u = unit({ id: "x" }); // no date_range
+    const html = render(draftOf(u), "editing");
+    const dateInputs = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    expect(dateInputs).toHaveLength(2);
+    // Start (first date input) must NOT be disabled. End (second)
+    // MUST be disabled when start is empty.
+    expect(dateInputs[0]!).not.toMatch(/disabled/);
+    expect(dateInputs[1]!).toMatch(/disabled/);
+  });
+
+  it("end-date input is NOT disabled when start is set (user can type end)", () => {
+    const u = unit({ id: "x", date_range: { start: "2024-01-01" } });
+    const html = render(draftOf(u), "editing");
+    // The start input has value=2024-01-01 and is not disabled;
+    // the end input has value="" and is NOT disabled (saving is
+    // false, start is set).
+    const dateInputs = html.match(/<input[^>]*type="date"[^>]*>/g) ?? [];
+    expect(dateInputs).toHaveLength(2);
+    // Neither should carry disabled in editing mode with start set.
+    for (const input of dateInputs) {
+      expect(input).not.toMatch(/disabled/);
+    }
   });
 
   it("renders an empty date input for a Unit without a date_range", () => {

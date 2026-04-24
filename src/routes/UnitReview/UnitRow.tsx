@@ -51,12 +51,35 @@ type DisplayState = ApprovalState;
  * Inline-edit status for this row. Kept local to the row so
  * concurrent edits to two different Units don't cross-contaminate
  * state. The discriminated union mirrors `inlineEditState.ts`.
+ *
+ * **baseSnapshot** is the Unit as-observed at edit-start. We
+ * diff the draft against THIS on save, NOT against the live
+ * `unit` prop — otherwise a concurrent subscription update
+ * (another tab, a background callable like the re-embed clearing
+ * `reembed_pending`) that lands mid-edit would shift the
+ * comparison base and either spuriously mark fields the user
+ * didn't touch or silently drop fields they DID edit when those
+ * fields happen to match the new base. nathanpayne-codex Phase 4b
+ * on #90.
  */
 type EditStatus =
   | { kind: "view" }
-  | { kind: "editing"; draft: EditableUnitFields }
-  | { kind: "saving"; draft: EditableUnitFields }
-  | { kind: "error"; draft: EditableUnitFields; error: Error };
+  | {
+      kind: "editing";
+      draft: EditableUnitFields;
+      baseSnapshot: ExperienceUnit;
+    }
+  | {
+      kind: "saving";
+      draft: EditableUnitFields;
+      baseSnapshot: ExperienceUnit;
+    }
+  | {
+      kind: "error";
+      draft: EditableUnitFields;
+      baseSnapshot: ExperienceUnit;
+      error: Error;
+    };
 
 const STATE_PILL_CLASSES: Record<DisplayState, string> = {
   approved:
@@ -100,9 +123,16 @@ export default function UnitRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unit.id]);
 
+  // Optimistic render during saving/error uses the EDIT-START
+  // snapshot as the base, not the live prop. A subscription
+  // update that lands mid-save would otherwise cause the
+  // presented row to flip back-and-forth between the live base
+  // and the optimistic draft as updates arrive, which looks like
+  // flicker to the user. Using the snapshot gives a stable "this
+  // is what you're committing" preview until the save resolves.
   const presentedUnit =
     status.kind === "saving" || status.kind === "error"
-      ? applyOptimistic(unit, status.draft)
+      ? applyOptimistic(status.baseSnapshot, status.draft)
       : unit;
 
   const state: DisplayState = displayStateOf(presentedUnit);
@@ -112,7 +142,15 @@ export default function UnitRow({
       : presentedUnit.source_type;
 
   const startEdit = () => {
-    setStatus({ kind: "editing", draft: editableFromUnit(unit) });
+    // Snapshot the live Unit as our diff base. All subsequent
+    // comparisons and the optimistic render happen against this
+    // snapshot, not the subscription's latest echo — the user
+    // edits a stable target.
+    setStatus({
+      kind: "editing",
+      draft: editableFromUnit(unit),
+      baseSnapshot: unit,
+    });
   };
 
   const cancelEdit = () => {
@@ -122,21 +160,32 @@ export default function UnitRow({
   const save = async () => {
     if (status.kind !== "editing" && status.kind !== "error") return;
     if (onSaveEdit === undefined) return;
-    const draft = status.draft;
-    const partial = draftDiff(unit, draft);
+    const { draft, baseSnapshot } = status;
+    // Diff the draft against the EDIT-START snapshot, not the
+    // live `unit` prop. nathanpayne-codex Phase 4b on #90 caught
+    // this: if a concurrent subscription update lands mid-edit
+    // (re-embed callable clearing the pending flag, another tab,
+    // etc.), the live base has drifted and diffing against it
+    // would (a) silently drop fields the user edited but whose
+    // new value happens to equal the drifted base, or (b)
+    // spuriously include base-side changes the user didn't
+    // touch. The snapshot is stable from click-Edit to
+    // click-Save.
+    const partial = draftDiff(baseSnapshot, draft);
     if (Object.keys(partial).length === 0) {
       // No changes; just exit edit mode.
       setStatus({ kind: "view" });
       return;
     }
-    setStatus({ kind: "saving", draft });
+    setStatus({ kind: "saving", draft, baseSnapshot });
     try {
-      await onSaveEdit(unit.id, partial);
+      await onSaveEdit(baseSnapshot.id, partial);
       setStatus({ kind: "view" });
     } catch (err) {
       setStatus({
         kind: "error",
         draft,
+        baseSnapshot,
         error: err instanceof Error ? err : new Error(String(err)),
       });
     }
@@ -144,11 +193,17 @@ export default function UnitRow({
 
   const onDraftChange = (next: EditableUnitFields) => {
     if (status.kind === "editing") {
-      setStatus({ kind: "editing", draft: next });
+      setStatus({ kind: "editing", draft: next, baseSnapshot: status.baseSnapshot });
     } else if (status.kind === "error") {
       // Typing while in error state dismisses the error and
-      // returns to editing — user is actively fixing.
-      setStatus({ kind: "editing", draft: next });
+      // returns to editing — user is actively fixing. The
+      // baseSnapshot is preserved so the retry still diffs
+      // against the original edit-start base.
+      setStatus({
+        kind: "editing",
+        draft: next,
+        baseSnapshot: status.baseSnapshot,
+      });
     }
     // Ignore draft changes in saving/view states.
   };
