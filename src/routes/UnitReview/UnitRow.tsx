@@ -16,26 +16,17 @@
 
 import type { ReactElement } from "react";
 
+import {
+  displayStateOf,
+  type ApprovalState,
+} from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
 }
 
-type DisplayState = "approved" | "rejected" | "flagged" | "pending";
-
-/**
- * Derive the user-facing approval state from the three flag fields.
- * Mirrors (read-direction) what `flagsForApprovalState()` does on
- * write. Kept local to the row component because this is display
- * concern — the service's write path is the authoritative mapping.
- */
-function displayState(unit: ExperienceUnit): DisplayState {
-  if (unit.rejected === true) return "rejected";
-  if (unit.flagged === true) return "flagged";
-  if (unit.user_approved) return "approved";
-  return "pending";
-}
+type DisplayState = ApprovalState;
 
 /**
  * Tailwind classes per display state. Monochrome + one slate accent
@@ -72,7 +63,7 @@ function formatConfidence(score: number): string {
 }
 
 export default function UnitRow({ unit }: UnitRowProps): ReactElement {
-  const state = displayState(unit);
+  const state: DisplayState = displayStateOf(unit);
   const provenance =
     unit.source_ref.length > 0
       ? `${unit.source_type} · ${unit.source_ref}`

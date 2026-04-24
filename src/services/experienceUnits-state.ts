@@ -27,6 +27,33 @@ export interface ApprovalFlags {
 }
 
 /**
+ * Read-direction inverse of `flagsForApprovalState`. Given a Unit,
+ * return the `ApprovalState` its three flags encode. Rejected is
+ * checked first because `flagsForApprovalState("rejected")` sets
+ * `flagged: false`; flagged is checked before approval because the
+ * flagged state forces `user_approved: false` by design (see
+ * "flagged is exclusive-with-approved" rationale on the write
+ * mapping).
+ *
+ * Consumed by `UnitRow` (for the pill), `Filters` (for the approval
+ * filter), and any downstream surface that needs the user-visible
+ * state from the stored flags. Keep this as the single source of
+ * truth for read-direction state derivation so callers can't
+ * independently reinvent the mapping and drift out of sync with
+ * `flagsForApprovalState`.
+ */
+export function displayStateOf(unit: {
+  readonly user_approved: boolean;
+  readonly rejected?: boolean;
+  readonly flagged?: boolean;
+}): ApprovalState {
+  if (unit.rejected === true) return "rejected";
+  if (unit.flagged === true) return "flagged";
+  if (unit.user_approved) return "approved";
+  return "pending";
+}
+
+/**
  * Map an `ApprovalState` to the flag combination that represents it on
  * the Firestore document. Always returns all three flags explicitly
  * (no `undefined`) so the resulting object can be passed to

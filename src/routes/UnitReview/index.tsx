@@ -29,11 +29,13 @@ import { subscribeByOwner } from "../../services/experienceUnits.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import UnitReviewView, { type LoadState } from "./UnitReviewView.tsx";
+import { useFilterState } from "./useFilterState.ts";
 
 export default function UnitReview(): ReactElement {
   const [status, setStatus] = useState<LoadState>("loading");
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
   const [error, setError] = useState<Error | null>(null);
+  const { filters, setFilters, clearFilters } = useFilterState();
 
   useEffect(() => {
     // Reset to loading on each subscribe so a resubscribe (e.g. if
@@ -69,5 +71,14 @@ export default function UnitReview(): ReactElement {
     return unsubscribe;
   }, []);
 
-  return <UnitReviewView status={status} units={units} error={error} />;
+  return (
+    <UnitReviewView
+      status={status}
+      units={units}
+      error={error}
+      filters={filters}
+      onFiltersChange={setFilters}
+      onClearFilters={clearFilters}
+    />
+  );
 }
