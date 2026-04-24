@@ -156,8 +156,14 @@ export default function UnitRow({
   const approvalPending = approvalUi.kind === "pending";
   const showApprovalButtons =
     onSetApproval !== undefined && status.kind === "view";
+  // Gate the confirmation panel on view mode too — `startEdit`
+  // also clears approvalUi, but this gate is the load-bearing
+  // guarantee. Codex P2 on #93 caught that an outside-of-view-
+  // mode confirmation would render alongside the edit form.
   const showRejectConfirm =
-    onSetApproval !== undefined && approvalUi.kind === "confirming-reject";
+    onSetApproval !== undefined &&
+    approvalUi.kind === "confirming-reject" &&
+    status.kind === "view";
   const approvalError =
     approvalUi.kind === "error" ? approvalUi.error : null;
 
@@ -174,6 +180,16 @@ export default function UnitRow({
       : presentedUnit.source_type;
 
   const startEdit = () => {
+    // Clear any in-flight approval UI on entering edit mode.
+    // The action cluster (Approve/Flag/Reject + the reject
+    // confirmation panel) is gated on status.kind === "view",
+    // so leaving approvalUi at e.g. "confirming-reject" while
+    // entering edit mode would leave the confirmation panel
+    // rendered alongside the edit form — overlapping state
+    // machines, and a click on the panel's Reject button would
+    // commit while the user thinks they're editing. Codex P2
+    // on #93.
+    setApprovalUi({ kind: "idle" });
     // Snapshot the live Unit as our diff base. All subsequent
     // comparisons and the optimistic render happen against this
     // snapshot, not the subscription's latest echo — the user
