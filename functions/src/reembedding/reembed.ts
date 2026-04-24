@@ -47,14 +47,32 @@ export interface ReembedDeps {
     options: { readonly ownerUid: string },
   ) => Promise<number[]>;
   /**
-   * Persist the new embedding AND clear `reembed_pending` in one
-   * atomic write.
+   * Persist the new embedding AND clear `reembed_pending` — but
+   * only if the Unit's `normalized_summary` still matches the
+   * `embeddedText` we embedded from. Codex P1 on #91 caught a
+   * race: between the initial read and this write, a concurrent
+   * edit could flip `reembed_pending` back to `true` for new
+   * content; unconditionally clearing here would leave the Unit
+   * with a stale embedding and no pending flag to trigger
+   * repair. The default implementation uses a Firestore
+   * transaction to re-read before writing.
+   *
+   * Returns the result of the CAS so tests can assert stale
+   * writes were skipped.
    */
   readonly persistEmbedding?: (
     unitId: string,
     embedding: number[],
-  ) => Promise<void>;
+    embeddedText: string,
+  ) => Promise<PersistResult>;
 }
+
+/**
+ * Outcome of the persist step. `"wrote"` means the embedding is
+ * now live; `"skipped_stale"` means the Unit changed during the
+ * embed call and we left it alone for the next trigger to handle.
+ */
+export type PersistResult = "wrote" | "skipped_stale";
 
 /**
  * Thrown when the requested Unit is missing or owned by a
@@ -106,7 +124,7 @@ export class ReembedNotPending extends Error {
 export async function reembedExperienceUnit(
   ctx: ReembedContext,
   deps: ReembedDeps = {},
-): Promise<void> {
+): Promise<PersistResult> {
   const getUnit = deps.getUnit ?? defaultGetUnit;
   const embedFn = deps.embed ?? embed;
   const persistEmbedding = deps.persistEmbedding ?? defaultPersistEmbedding;
@@ -155,7 +173,10 @@ export async function reembedExperienceUnit(
   // same Unit later.
   const vector = await embedFn(input, { ownerUid: ctx.ownerUid });
 
-  await persistEmbedding(ctx.unitId, vector);
+  // Pass `input` (the exact string we embedded from) to the
+  // persist step so it can detect concurrent edits and skip
+  // writing a stale embedding. See `persistEmbedding` docstring.
+  return persistEmbedding(ctx.unitId, vector, input);
 }
 
 async function defaultGetUnit(
@@ -168,18 +189,45 @@ async function defaultGetUnit(
 async function defaultPersistEmbedding(
   unitId: string,
   embedding: number[],
-): Promise<void> {
-  // Atomic single-doc update: `embedding` set, `reembed_pending`
-  // cleared. Firestore guarantees atomicity within a single
-  // `update()` call — no half-written state between the two
-  // fields. `updated_at` also stamped so the row's "most recent"
-  // sort order reflects the refresh.
-  await getAdminDb()
-    .collection(COLLECTION)
-    .doc(unitId)
-    .update({
+  embeddedText: string,
+): Promise<PersistResult> {
+  // Transactional compare-and-set: re-read the Unit, verify its
+  // trimmed `normalized_summary` still matches what we embedded
+  // from, then write the embedding + clear the flag. If the
+  // content changed between the initial read and now, skip the
+  // write entirely — the Unit already has `reembed_pending:
+  // true` for the NEW content, and the next trigger will embed
+  // that correctly. Codex P1 on #91.
+  //
+  // The write is still a single-doc `update()` inside the
+  // transaction, so the embedding/flag pair stays atomic — no
+  // half-written state is observable.
+  const db = getAdminDb();
+  const docRef = db.collection(COLLECTION).doc(unitId);
+  return db.runTransaction<PersistResult>(async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists) {
+      // Unit was deleted during our embed call. Nothing to do.
+      return "skipped_stale";
+    }
+    const current = snap.data() as ExperienceUnit;
+    const currentSummary =
+      typeof current.normalized_summary === "string"
+        ? current.normalized_summary.trim()
+        : "";
+    if (currentSummary !== embeddedText) {
+      // Content changed. Our embedding is stale. The Unit's
+      // reembed_pending should already be `true` for the new
+      // content (set by whatever write changed the summary); if
+      // it isn't, the caller's edit flow is broken — but we
+      // still don't want to write our stale embedding here.
+      return "skipped_stale";
+    }
+    tx.update(docRef, {
       embedding,
       reembed_pending: false,
       updated_at: new Date().toISOString(),
     });
+    return "wrote";
+  });
 }

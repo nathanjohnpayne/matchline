@@ -53,20 +53,55 @@ describe("reembedExperienceUnit", () => {
     });
     const getUnit = vi.fn(async () => target);
     const embedFn = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const persistEmbedding = vi.fn(async () => {});
+    const persistEmbedding = vi.fn(async () => "wrote" as const);
 
-    await reembedExperienceUnit(CTX, {
+    const result = await reembedExperienceUnit(CTX, {
       getUnit,
       embed: embedFn,
       persistEmbedding,
     });
 
+    expect(result).toBe("wrote");
     expect(getUnit).toHaveBeenCalledWith("unit-1");
     expect(embedFn).toHaveBeenCalledWith(
       "Shipped playback SDK across 40M CTVs.",
       { ownerUid: "user-alice" },
     );
-    expect(persistEmbedding).toHaveBeenCalledWith("unit-1", [0.1, 0.2, 0.3]);
+    // Persist receives the embedded text so it can compare-and-
+    // set against the current Unit's summary, skipping stale
+    // writes (Codex P1 on #91).
+    expect(persistEmbedding).toHaveBeenCalledWith(
+      "unit-1",
+      [0.1, 0.2, 0.3],
+      "Shipped playback SDK across 40M CTVs.",
+    );
+  });
+
+  it("returns 'skipped_stale' when the persist step detects a concurrent edit", async () => {
+    // Codex P1 on #91 caught the race: an edit during embedding
+    // could leave the Unit with a stale embedding and a false
+    // reembed_pending (no trigger to repair). The persist step
+    // now compare-and-sets against normalized_summary; when it
+    // returns "skipped_stale", the core pipeline propagates it so
+    // callers/tests can observe the no-op.
+    const target = unit({ id: "unit-1" });
+    const getUnit = vi.fn(async () => target);
+    const embedFn = vi.fn(async () => [0.0]);
+    const persistEmbedding = vi.fn(async () => "skipped_stale" as const);
+
+    const result = await reembedExperienceUnit(CTX, {
+      getUnit,
+      embed: embedFn,
+      persistEmbedding,
+    });
+    expect(result).toBe("skipped_stale");
+    // Embedding was still attempted (we had no way to know the
+    // content was stale until the transactional re-read inside
+    // persist). Cost is incurred even on stale-writes — that's
+    // unavoidable at this level; preventing the paid call on
+    // every stale race would require a second full transaction
+    // around the embed itself, which isn't worth the latency.
+    expect(embedFn).toHaveBeenCalled();
   });
 
   it("throws ReembedNotFoundOrForbidden when the Unit doesn't exist", async () => {

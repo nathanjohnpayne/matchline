@@ -74,8 +74,15 @@ export const reembedExperienceUnitCallable = onCall(
     const ownerUid = request.auth.uid;
 
     try {
-      await reembedExperienceUnit({ ownerUid, unitId });
-      return { ok: true };
+      const result = await reembedExperienceUnit({ ownerUid, unitId });
+      // "wrote" — embedding is now live.
+      // "skipped_stale" — a concurrent edit changed the Unit
+      // between read and persist; we didn't write and the Unit
+      // keeps its `reembed_pending: true` for the new content
+      // (Codex P1 on #91). Returning the result lets the
+      // frontend surface a "still pending" state without a
+      // second network round-trip.
+      return { ok: true, result };
     } catch (err) {
       if (err instanceof ReembedNotFoundOrForbidden) {
         // Anti-enumeration: same response for "no such Unit" and
