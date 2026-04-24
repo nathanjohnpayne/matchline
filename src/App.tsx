@@ -1,6 +1,7 @@
 import { signOut } from "firebase/auth";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import Wordmark from "./components/Wordmark.tsx";
 import { getAuthClient } from "./firebase.ts";
 import { useCurrentUser } from "./lib/auth.tsx";
 import ApplicationEditor from "./routes/ApplicationEditor.tsx";
@@ -48,9 +49,7 @@ export default function App() {
     <div className="flex h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <header className="border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold tracking-tight">
-            match<span className="text-zinc-400 dark:text-zinc-500">|</span>line
-          </div>
+          <Wordmark className="text-lg" />
           <nav className="flex items-center gap-4 text-sm">
             {navItems.map((item) => (
               <NavLink
