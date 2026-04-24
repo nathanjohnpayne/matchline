@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import ManualAddForm, {
+  applyDateStartChange,
   toManualUnitInput,
   validateForm,
 } from "./ManualAddForm.tsx";
@@ -223,6 +224,62 @@ describe("toManualUnitInput", () => {
     expect(withMetrics.metrics).toEqual([
       { claim: "40M users", confidence: "high" },
     ]);
+  });
+});
+
+describe("applyDateStartChange", () => {
+  // Codex P2 on #94: clearing start should cascade-clear end so
+  // the form can return to a valid no-date state in one click.
+  // Otherwise the user is stuck with an invalid {end-only}
+  // shape and the end input disabled, with no way to fix it
+  // without manually clearing end too.
+
+  it("setting a non-empty start preserves end (normal edit)", () => {
+    const next = applyDateStartChange(
+      {
+        ...VALID_FORM,
+        date_start: "2024-01-01",
+        date_end: "2024-06-01",
+      },
+      "2024-02-01",
+    );
+    expect(next.date_start).toBe("2024-02-01");
+    expect(next.date_end).toBe("2024-06-01");
+  });
+
+  it("clearing start ALSO clears end (regression: Codex P2 on #94)", () => {
+    const next = applyDateStartChange(
+      {
+        ...VALID_FORM,
+        date_start: "2024-01-01",
+        date_end: "2024-06-01",
+      },
+      "",
+    );
+    expect(next.date_start).toBe("");
+    expect(next.date_end).toBe("");
+  });
+
+  it("clearing start when end was already empty is a no-op (still empty)", () => {
+    const next = applyDateStartChange(
+      { ...VALID_FORM, date_start: "2024-01-01", date_end: "" },
+      "",
+    );
+    expect(next.date_start).toBe("");
+    expect(next.date_end).toBe("");
+  });
+
+  it("does not mutate non-date fields", () => {
+    const base = {
+      ...VALID_FORM,
+      raw_text: "abc",
+      skills: "sql",
+      date_start: "2024-01-01",
+      date_end: "2024-06-01",
+    };
+    const next = applyDateStartChange(base, "");
+    expect(next.raw_text).toBe("abc");
+    expect(next.skills).toBe("sql");
   });
 });
 

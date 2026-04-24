@@ -21,7 +21,13 @@
  * not worth the abstraction at V1.
  */
 
-import { useState, type ChangeEvent, type FormEvent, type ReactElement } from "react";
+import {
+  useEffect,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactElement,
+} from "react";
 
 import type {
   Metric,
@@ -154,6 +160,25 @@ export function validateForm(state: FormState): ValidationErrors {
 }
 
 /**
+ * Apply a start-date change to the form state. When start is
+ * cleared, end is cleared too — leaving an end-only state would
+ * be an invalid DateRange shape that triggers the validation
+ * error on submit and is awkward to recover from (the end input
+ * is disabled when start is empty). Codex P2 on #94.
+ *
+ * Pure so the date-clear cascade is unit-tested without React.
+ */
+export function applyDateStartChange(
+  state: FormState,
+  next: string,
+): FormState {
+  if (next === "") {
+    return { ...state, date_start: "", date_end: "" };
+  }
+  return { ...state, date_start: next };
+}
+
+/**
  * Build the `ManualUnitInput` payload from the form state. Only
  * called after validation passes, so the required-field
  * assertions here are belt-and-suspenders. Optional fields
@@ -212,6 +237,34 @@ export default function ManualAddForm({
   ) => {
     setState((s) => ({ ...s, [key]: value }));
   };
+
+  /**
+   * Start-date input handler — delegates to the pure
+   * `applyDateStartChange` helper which handles the cascade
+   * clear of end-date when start is wiped (Codex P2 on #94).
+   */
+  const setDateStart = (value: string) => {
+    setState((s) => applyDateStartChange(s, value));
+  };
+
+  /**
+   * Escape-to-close handler. Standard modal accessibility — the
+   * Escape key closes the dialog same as the Cancel button.
+   * Skipped while submitting so a stray keypress mid-save
+   * doesn't lose draft state. CodeRabbit Minor on #94 also
+   * suggested a focus trap; deferring that to a follow-up
+   * (would need a new dep or a non-trivial custom hook; not
+   * worth it for V1 single-user).
+   */
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !submitting) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose, submitting]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -397,7 +450,7 @@ export default function ManualAddForm({
                 type="date"
                 className={TEXT_INPUT_CLS}
                 value={state.date_start}
-                onChange={(e) => setField("date_start", e.target.value)}
+                onChange={(e) => setDateStart(e.target.value)}
                 disabled={submitting}
                 data-field="date_start"
               />
