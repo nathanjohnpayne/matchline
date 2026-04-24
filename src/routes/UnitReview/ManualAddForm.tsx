@@ -152,9 +152,19 @@ export function validateForm(state: FormState): ValidationErrors {
   if (state.date_end.length > 0 && state.date_start.length === 0) {
     out.date_range = "End date requires a start date.";
   }
-  const conf = Number(state.confidence_score);
-  if (Number.isNaN(conf) || conf < 0 || conf > 1) {
-    out.confidence_score = "Confidence must be between 0 and 1.";
+  // Empty confidence is NOT a valid 0 — `Number("")` coerces to
+  // 0, which would silently write `confidence_score: 0` to
+  // Firestore. Reject explicit-empty so the user is forced to
+  // put a number back in (default is "1"; clearing was almost
+  // certainly accidental). CodeRabbit Major on #94.
+  const trimmedConf = state.confidence_score.trim();
+  if (trimmedConf.length === 0) {
+    out.confidence_score = "Confidence is required (0–1).";
+  } else {
+    const conf = Number(trimmedConf);
+    if (Number.isNaN(conf) || conf < 0 || conf > 1) {
+      out.confidence_score = "Confidence must be between 0 and 1.";
+    }
   }
   return out;
 }
@@ -179,12 +189,18 @@ export function applyDateStartChange(
 }
 
 /**
- * Build the `ManualUnitInput` payload from the form state. Only
- * called after validation passes, so the required-field
- * assertions here are belt-and-suspenders. Optional fields
- * convert empty strings / empty arrays / undefined dates into
- * absent keys (matches the natural `ManualUnitInput` shape and
- * lets `buildManualUnit` apply its defaults uniformly).
+ * Build the `ManualUnitInput` payload from the form state.
+ *
+ * **Assumes validation passed.** `validateForm` is the gate; if
+ * it succeeded, `confidence_score` is a non-empty numeric string
+ * in [0, 1]. CodeRabbit Major on #94 caught that an empty
+ * `confidence_score` coerces to 0 via `Number("")` — that's
+ * specifically why `validateForm` rejects empty.
+ *
+ * Optional fields convert empty strings / empty arrays /
+ * undefined dates into absent keys (matches the natural
+ * `ManualUnitInput` shape and lets `buildManualUnit` apply its
+ * defaults uniformly).
  */
 export function toManualUnitInput(state: FormState): ManualUnitInput {
   const skills = parseTags(state.skills);

@@ -110,6 +110,33 @@ describe("validateForm", () => {
     ).toEqual({ confidence_score: expect.stringMatching(/0 and 1/i) });
   });
 
+  it("rejects empty confidence_score (regression: CodeRabbit Major on #94)", () => {
+    // Empty string would coerce to 0 via Number(""), silently
+    // writing confidence_score: 0 to Firestore — almost
+    // certainly NOT what the user intended when they cleared
+    // the field. Validation rejects empty so the user has to
+    // put a number back in.
+    expect(
+      validateForm({ ...VALID_FORM, confidence_score: "" }),
+    ).toEqual({ confidence_score: expect.stringMatching(/required/i) });
+  });
+
+  it("rejects whitespace-only confidence_score (same coercion-to-0 trap)", () => {
+    // `Number("   ")` is 0 too. Trim before length check so a
+    // user who typed spaces and then deleted the digits hits
+    // the same required-field error.
+    expect(
+      validateForm({ ...VALID_FORM, confidence_score: "   " }),
+    ).toEqual({ confidence_score: expect.stringMatching(/required/i) });
+  });
+
+  it("accepts confidence_score with leading/trailing whitespace around a valid number", () => {
+    // Trim is consistent: " 0.5 " is valid via the trim path.
+    expect(
+      validateForm({ ...VALID_FORM, confidence_score: " 0.5 " }),
+    ).toEqual({});
+  });
+
   it("returns multiple errors when multiple fields are invalid", () => {
     const errors = validateForm({
       ...VALID_FORM,
