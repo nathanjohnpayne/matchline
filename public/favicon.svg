@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>matchline</title>
+  <style>
+    text {
+      fill: #0F0F10;
+      font-family: Inter, -apple-system, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #F5F5F5; }
+    }
+  </style>
+  <text x="32" y="46" text-anchor="middle" font-size="36" font-weight="500" letter-spacing="-1">m<tspan dx="2" font-weight="700">|</tspan></text>
+</svg>

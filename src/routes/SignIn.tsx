@@ -16,6 +16,7 @@ import {
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
+import Wordmark from "../components/Wordmark.tsx";
 import { getAuthClient } from "../firebase.ts";
 import { useCurrentUser } from "../lib/auth.tsx";
 import { friendlyAuthError } from "../lib/auth-errors.ts";
@@ -85,9 +86,7 @@ export default function SignIn() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4 dark:bg-zinc-950">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-            match<span className="text-zinc-400 dark:text-zinc-500">|</span>line
-          </div>
+          <Wordmark className="text-3xl text-zinc-900 dark:text-zinc-100" />
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
             From what you&rsquo;ve done to what&rsquo;s next.
           </p>
