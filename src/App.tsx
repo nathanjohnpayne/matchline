@@ -9,7 +9,7 @@ import Onboarding from "./routes/Onboarding.tsx";
 import Pipeline from "./routes/Pipeline.tsx";
 import RoleDetail from "./routes/RoleDetail.tsx";
 import SignIn from "./routes/SignIn.tsx";
-import UnitReview from "./routes/UnitReview.tsx";
+import UnitReview from "./routes/UnitReview/index.tsx";
 
 const navItems = [
   { to: "/onboarding", label: "Onboarding" },
