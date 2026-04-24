@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# check_prompt_schema_pairs
+#
+# Enforces the versioned-prompt file-pair invariant:
+#
+#   Every functions/src/prompts/<stage>/<name>.v<N>.md
+#   must have a co-located <name>.v<N>.schema.ts (and vice versa).
+#
+# Orphan .md or orphan .schema.ts indicates drift — either the
+# prompt body was added without a response contract, or the contract
+# was added without the prompt it validates. Both are bugs that
+# break the loader.
+#
+# See:
+#   - functions/src/prompts/loader.ts     — consumes the pair
+#   - rules/repo_rules.md § CI Enforcement — references this check
+#
+# Exit codes:
+#   0 — all pairs match (including when prompts/ doesn't exist yet)
+#   1 — at least one orphan found
+
+set -euo pipefail
+
+PROMPTS_DIR="functions/src/prompts"
+
+if [ ! -d "$PROMPTS_DIR" ]; then
+  echo "check_prompt_schema_pairs: no $PROMPTS_DIR (nothing to check)"
+  exit 0
+fi
+
+ORPHANS=""
+
+# Find every .md and check for the matching .schema.ts.
+while IFS= read -r md_file; do
+  # Strip ".md" to derive the expected schema path.
+  base="${md_file%.md}"
+  schema="${base}.schema.ts"
+  if [ ! -f "$schema" ]; then
+    ORPHANS="${ORPHANS}  - prompt: $md_file (expected: $schema)\n"
+  fi
+done < <(find "$PROMPTS_DIR" -type f -name "*.v*.md" 2>/dev/null)
+
+# Find every .schema.ts and check for the matching .md.
+while IFS= read -r schema_file; do
+  base="${schema_file%.schema.ts}"
+  md="${base}.md"
+  if [ ! -f "$md" ]; then
+    ORPHANS="${ORPHANS}  - schema: $schema_file (expected: $md)\n"
+  fi
+done < <(find "$PROMPTS_DIR" -type f -name "*.v*.schema.ts" -not -name "*.schema.test.ts" 2>/dev/null)
+
+if [ -n "$ORPHANS" ]; then
+  echo "check_prompt_schema_pairs: FAIL — orphan prompt or schema file(s):"
+  printf "%b" "$ORPHANS"
+  echo ""
+  echo "Every .v<N>.md must have a co-located .v<N>.schema.ts and vice versa."
+  echo "See functions/src/prompts/loader.ts for the convention."
+  exit 1
+fi
+
+echo "check_prompt_schema_pairs: PASS"
+exit 0

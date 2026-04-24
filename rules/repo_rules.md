@@ -80,6 +80,7 @@ All checks must pass before merge.
 - check_duplicate_docs
 - check_review_policy_exists (inline in repo_lint.yml): .github/review-policy.yml and REVIEW_POLICY.md must both exist
 - check_codex_scripts: `scripts/codex-review-request.sh` and `scripts/codex-review-check.sh` must exist and be executable in every repo. Required for `CLAUDE.md` step 8 Phase 4a (automated external review via the OpenAI Codex GitHub App) — missing either script silently forces callers to Phase 4b fallback.
+- check_prompt_schema_pairs: every `functions/src/prompts/<stage>/<name>.v<N>.md` must have a co-located `<name>.v<N>.schema.ts` and vice versa. Enforces the versioned-prompt pair invariant the loader in `functions/src/prompts/loader.ts` depends on. See issue #49.
 
 The L/XL decomposition rule above is enforced at agent-workflow time,
 not via a CI script — Project v2 field state isn't available to
@@ -100,3 +101,4 @@ All checks must pass before merge.
 - check_duplicate_docs
 - check_review_policy_exists (inline in repo_lint.yml): .github/review-policy.yml and REVIEW_POLICY.md must both exist
 - check_codex_scripts: `scripts/codex-review-request.sh` and `scripts/codex-review-check.sh` must exist and be executable in every repo. Required for `CLAUDE.md` step 8 Phase 4a (automated external review via the OpenAI Codex GitHub App) — missing either script silently forces callers to Phase 4b fallback.
+- check_prompt_schema_pairs: every `functions/src/prompts/<stage>/<name>.v<N>.md` must have a co-located `<name>.v<N>.schema.ts` and vice versa. Enforces the versioned-prompt pair invariant the loader in `functions/src/prompts/loader.ts` depends on. See issue #49.
