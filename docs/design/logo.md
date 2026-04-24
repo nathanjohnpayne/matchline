@@ -41,62 +41,81 @@ All three respect dark mode via `prefers-color-scheme` and render in
 
 ## In-app usage
 
-Do **not** import the SVG files for in-app chrome. Render the wordmark
-as inline JSX with Tailwind classes — that keeps the mark color-bound
-to the app's theme tokens and avoids font-loading complexity for a
-couple of characters.
-
-The canonical JSX pattern:
+Render the wordmark through the reusable component — do **not**
+import the SVG files for in-app chrome and do **not** hand-roll the
+inline JSX at new call sites.
 
 ```tsx
-<span className="font-medium tracking-tight">
-  match<span className="font-bold">|</span>line
+import Wordmark from "./components/Wordmark.tsx";
+
+<Wordmark className="text-lg" />              // full wordmark
+<Wordmark className="text-3xl" monogram />    // monogram variant
+```
+
+`<Wordmark />` is the single source of truth for the variant-C
+treatment. It guarantees:
+
+- **Visual contract.** `font-medium` letters + `font-bold` pipe +
+  `tracking-tight` on the outer span. Inherits parent color so
+  light/dark parity is automatic.
+- **Accessibility contract.** Outer span carries `role="img"` +
+  `aria-label="matchline"` so screen readers announce the brand
+  as a single named graphic. Inner pipe span carries
+  `aria-hidden="true"` so the separator glyph isn't announced
+  (otherwise assistive tech reads the mark as "matchline pipe").
+- **Test pin.** `src/components/Wordmark.test.tsx` pins both
+  contracts, including a regression guard against the pre-variant-C
+  treatment (`font-semibold` + zinc-tinted pipe).
+
+Size the wrapper with Tailwind text-size utilities (`text-lg`,
+`text-3xl`, etc.) on `className` or on an enclosing element. Do not
+override color on the pipe — monochrome is the commitment.
+
+If you ever need to recreate the pattern outside the component (email
+HTML, a one-off standalone surface), the equivalent markup is:
+
+```tsx
+<span
+  role="img"
+  aria-label="matchline"
+  className="font-medium tracking-tight"
+>
+  match
+  <span aria-hidden="true" className="font-bold">|</span>
+  line
 </span>
 ```
 
 - `font-medium` → Tailwind weight 500 (letters)
 - `font-bold` on the pipe → Tailwind weight 700 (the seam)
 - `tracking-tight` → matches the negative letter-spacing used in the SVGs
-- Inherits color from parent → automatically light/dark safe
+- `role="img"` + `aria-label` + `aria-hidden` → the same accessible
+  name behavior the component provides
 
-For the monogram variant:
+## Call sites
 
-```tsx
-<span className="font-medium tracking-tight">
-  m<span className="font-bold">|</span>
-</span>
-```
+The variant-C treatment ships at two in-app surfaces as of #76. Both
+use `<Wordmark />`; extend this list rather than introducing a third
+hand-rolled copy:
 
-Size the wrapper element rather than the text. Use Tailwind text-size
-utilities (`text-lg`, `text-3xl`, etc.) on the parent or on the
-wordmark span itself depending on context.
-
-## Existing call sites
-
-Two places currently render the wordmark inline at weight 600 with a
-zinc-gray pipe. Both should migrate to the variant-C treatment:
-
-- `src/App.tsx` (app header, currently at `font-semibold` with
-  `text-zinc-400 dark:text-zinc-500` pipe)
-- `src/routes/SignIn.tsx` (sign-in card header, same treatment)
-
-The change is: swap `font-semibold` → `font-medium` on the outer span,
-and replace the colored pipe span with a weight-700 monochrome pipe
-span (no color override, inherits the parent's color).
+- `src/App.tsx` — app header, `<Wordmark className="text-lg" />`
+- `src/routes/SignIn.tsx` — sign-in card header,
+  `<Wordmark className="text-3xl text-zinc-900 dark:text-zinc-100" />`
 
 ## Favicon wiring
 
-The `favicon.svg` file sits in `public/` but is not yet linked from
-`index.html`. Add inside the `<head>`:
+The SVG favicon is wired via `index.html`:
 
 ```html
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 ```
 
-For older browsers that don't support SVG favicons, also generate a
-32×32 PNG fallback (the 16×16 size is too small for typographic marks
-and should use the 32×32 rasterized at browser scale). Commit as
-`public/favicon.png` and add the fallback link:
+**PNG fallback — deliberately scoped out for V1.** SVG favicons are
+supported in Chrome 80+, Firefox 41+, Safari 9+, which covers the V1
+single-user target. When the app goes external-facing, generate a
+32×32 PNG (the 16×16 size is too small for typographic marks — use
+32×32 rasterized at browser scale), commit as `public/favicon.png`,
+and add the fallback link:
 
 ```html
 <link rel="alternate icon" type="image/png" href="/favicon.png" />
