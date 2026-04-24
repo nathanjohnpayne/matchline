@@ -51,6 +51,9 @@ jobs:
       - name: check_workflow_parsers
         run: ./scripts/ci/check_workflow_parsers
 
+      - name: check_prompt_schema_pairs
+        run: ./scripts/ci/check_prompt_schema_pairs
+
       - name: check_governance_files
         run: |
           MISSING=0
