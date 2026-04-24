@@ -1,0 +1,37 @@
+{
+  "units": [
+    {
+      "raw_text": "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox (reduced memory footprint 30%, shipped to 5M DAU).",
+      "normalized_summary": "Led 64-bit NCP migration across Disney+ playback on PlayStation and Xbox, cutting memory footprint 30% at 5M DAU.",
+      "unit_type": "technical_decision",
+      "skills": ["cross-platform playback", "memory optimization"],
+      "tools": ["NCP", "PlayStation 4", "PlayStation 5", "Xbox"],
+      "domains": ["streaming video infrastructure"],
+      "seniority_signals": ["led"],
+      "scope_signals": ["5M DAU"],
+      "business_outcomes": ["30% memory reduction"],
+      "metrics": [
+        { "claim": "Reduced memory footprint 30%", "value": 30, "unit": "%", "direction": "down", "confidence": "high" },
+        { "claim": "Shipped to 5M DAU", "value": 5000000, "unit": "users", "direction": "up", "confidence": "high" }
+      ],
+      "evidence_type": "verified",
+      "confidence_score": 0.95,
+      "date_range": { "start": "2018-01-01", "end": "2024-12-31" }
+    },
+    {
+      "raw_text": "Owned device certification pipeline for smart TVs (Samsung, LG).",
+      "normalized_summary": "Owned smart-TV device certification pipeline covering Samsung and LG.",
+      "unit_type": "ownership",
+      "skills": ["device certification"],
+      "tools": ["Samsung", "LG"],
+      "domains": ["streaming video infrastructure"],
+      "seniority_signals": ["owned"],
+      "scope_signals": [],
+      "business_outcomes": [],
+      "metrics": [],
+      "evidence_type": "verified",
+      "confidence_score": 0.85,
+      "date_range": { "start": "2018-01-01", "end": "2024-12-31" }
+    }
+  ]
+}
