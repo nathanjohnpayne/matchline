@@ -23,11 +23,15 @@
  *   - On unmount: call the returned `Unsubscribe`.
  */
 
-import { useEffect, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { subscribeByOwner } from "../../services/experienceUnits.ts";
+import {
+  subscribeByOwner,
+  updateFields,
+} from "../../services/experienceUnits.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
+import type { EditableUnitFields } from "./inlineEditState.ts";
 import UnitReviewView, { type LoadState } from "./UnitReviewView.tsx";
 import { useFilterState } from "./useFilterState.ts";
 
@@ -36,6 +40,21 @@ export default function UnitReview(): ReactElement {
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
   const [error, setError] = useState<Error | null>(null);
   const { filters, setFilters, clearFilters } = useFilterState();
+
+  const onSaveEdit = useCallback(
+    async (id: string, partial: Partial<EditableUnitFields>) => {
+      // Service layer's updateFields owns re-embed-flag setting,
+      // updated_at stamping, and the state-machine-owned-field
+      // guard (throws if `user_approved` / `rejected` / `flagged`
+      // / `reembed_pending` / identity fields slip in — they
+      // shouldn't, the EditableUnitFields type excludes them, but
+      // belt-and-suspenders). The row's save flow catches any
+      // reject and surfaces it as an inline error; the
+      // subscription's next snapshot carries the written state.
+      await updateFields(id, partial);
+    },
+    [],
+  );
 
   useEffect(() => {
     // Reset to loading on each subscribe so a resubscribe (e.g. if
@@ -79,6 +98,7 @@ export default function UnitReview(): ReactElement {
       filters={filters}
       onFiltersChange={setFilters}
       onClearFilters={clearFilters}
+      onSaveEdit={onSaveEdit}
     />
   );
 }

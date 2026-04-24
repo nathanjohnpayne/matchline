@@ -25,6 +25,7 @@ import ApprovalCounter from "./ApprovalCounter.tsx";
 import EmptyState from "./EmptyState.tsx";
 import Filters from "./Filters.tsx";
 import UnitRow from "./UnitRow.tsx";
+import type { EditableUnitFields } from "./inlineEditState.ts";
 import {
   applyFilters,
   distinctFieldValues,
@@ -94,6 +95,17 @@ export interface UnitReviewViewProps {
    * #79 (the form doesn't exist yet); #83 wires it.
    */
   readonly onAddManually?: () => void;
+  /**
+   * Commit an inline edit. Receives the changed-fields partial
+   * (already diffed against the current Unit by the row). Passed
+   * through to every `UnitRow` so edits work per-row. Absent in
+   * pre-#81 callers — backward compat kept on the row component
+   * via its own `onSaveEdit?` prop.
+   */
+  readonly onSaveEdit?: (
+    id: string,
+    partial: Partial<EditableUnitFields>,
+  ) => Promise<void>;
 }
 
 export default function UnitReviewView({
@@ -104,6 +116,7 @@ export default function UnitReviewView({
   onFiltersChange,
   onClearFilters,
   onAddManually,
+  onSaveEdit,
 }: UnitReviewViewProps): ReactElement {
   // Counter is only rendered in the `ready` branch. Showing "N of 20"
   // in loading or error states would leak stale or unknown-truth
@@ -216,7 +229,7 @@ export default function UnitReviewView({
             data-load-state="ready"
           >
             {visible.map((unit) => (
-              <UnitRow key={unit.id} unit={unit} />
+              <UnitRow key={unit.id} unit={unit} onSaveEdit={onSaveEdit} />
             ))}
           </ul>
         ))}
