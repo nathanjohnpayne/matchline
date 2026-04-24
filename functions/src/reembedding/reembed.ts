@@ -82,6 +82,27 @@ export class ReembedEmptyInput extends Error {
   }
 }
 
+/**
+ * Thrown when the Unit's `reembed_pending` flag is not `true`.
+ * The endpoint is meant to consume Units the state machine has
+ * flagged for refresh — firing on unchanged Units would generate
+ * unbounded paid embedding requests with no actual change to the
+ * stored vector. Codex P2 on #91 caught the prior version which
+ * embedded any owned Unit unconditionally.
+ *
+ * If a future use case needs forced re-embedding (e.g. prompt-
+ * embedding-model swap), add an explicit `force: true` input to
+ * the callable rather than removing this gate.
+ */
+export class ReembedNotPending extends Error {
+  constructor() {
+    super(
+      "Unit does not need re-embedding (reembed_pending is not true).",
+    );
+    this.name = "ReembedNotPending";
+  }
+}
+
 export async function reembedExperienceUnit(
   ctx: ReembedContext,
   deps: ReembedDeps = {},
@@ -98,7 +119,31 @@ export async function reembedExperienceUnit(
     throw new ReembedNotFoundOrForbidden();
   }
 
-  const input = unit.normalized_summary.trim();
+  // Pending-state gate. Codex P2 on #91: without this, an
+  // authenticated caller could spam the endpoint and generate
+  // unbounded paid embedding requests on unchanged Units. The
+  // flag's whole purpose IS the gate — respect it. A legit
+  // caller that wants forced re-embed (future: model swap, debug
+  // tooling) should pass an explicit `force: true` — we don't
+  // need that capability today.
+  if (unit.reembed_pending !== true) {
+    throw new ReembedNotPending();
+  }
+
+  // Defensive type guard on normalized_summary. Firestore docs
+  // can be malformed (historic migration, manual console edit,
+  // schema drift) and calling `.trim()` on a non-string would
+  // throw a raw TypeError that bypasses the callable's error
+  // mapping. Treating malformed content as "no content" funnels
+  // into the same `failed-precondition` the empty-string case
+  // gets, which is the right UX — both conditions mean "this
+  // Unit needs real content before re-embed can proceed."
+  // CodeRabbit Major on #91.
+  const rawSummary = unit.normalized_summary;
+  if (typeof rawSummary !== "string") {
+    throw new ReembedEmptyInput();
+  }
+  const input = rawSummary.trim();
   if (input.length === 0) {
     throw new ReembedEmptyInput();
   }

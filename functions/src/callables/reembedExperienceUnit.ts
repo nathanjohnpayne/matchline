@@ -21,11 +21,21 @@ import { openaiKey } from "../llm/openai.js";
 import {
   ReembedEmptyInput,
   ReembedNotFoundOrForbidden,
+  ReembedNotPending,
   reembedExperienceUnit,
 } from "../reembedding/reembed.js";
 
+/**
+ * Request payload shape. Canonical key is `unitId` (matches the
+ * codebase's camelCase convention for callable fields — see
+ * `parseJobRequirements.ts` `roleId`). `unit_id` is accepted as a
+ * backward-compat alias because the #84 issue body spelled it
+ * snake_case and a caller reading that issue body might send the
+ * snake_case form. CodeRabbit Major on #91.
+ */
 interface ReembedData {
   readonly unitId?: string;
+  readonly unit_id?: string;
 }
 
 export const reembedExperienceUnitCallable = onCall(
@@ -43,7 +53,12 @@ export const reembedExperienceUnitCallable = onCall(
     }
 
     const data = request.data as ReembedData;
-    const rawUnitId = data?.unitId;
+    // Accept either `unitId` (canonical) or `unit_id` (issue-body
+    // spelling, backward-compat). Canonical wins if both are
+    // present — a caller sending both likely intends the one
+    // matching codebase convention.
+    const rawUnitId =
+      typeof data?.unitId === "string" ? data.unitId : data?.unit_id;
     if (typeof rawUnitId !== "string" || rawUnitId.trim().length === 0) {
       throw new HttpsError(
         "invalid-argument",
@@ -75,6 +90,17 @@ export const reembedExperienceUnitCallable = onCall(
         throw new HttpsError(
           "failed-precondition",
           "Unit has no normalized_summary to embed.",
+        );
+      }
+      if (err instanceof ReembedNotPending) {
+        // Pending-state gate — prevents abuse that would spam
+        // paid embedding calls on unchanged Units. Codex P2 on
+        // #91. If a future use case needs forced re-embed (model
+        // swap, debug), extend the callable with a `force: true`
+        // input rather than removing this gate.
+        throw new HttpsError(
+          "failed-precondition",
+          "Unit does not need re-embedding (reembed_pending is not true).",
         );
       }
       // Embedding API transport failure (or anything else). The

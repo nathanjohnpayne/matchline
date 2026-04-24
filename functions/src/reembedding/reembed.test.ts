@@ -5,6 +5,7 @@ import type { ExperienceUnit } from "../types/capability.js";
 import {
   ReembedEmptyInput,
   ReembedNotFoundOrForbidden,
+  ReembedNotPending,
   reembedExperienceUnit,
   type ReembedContext,
 } from "./reembed.js";
@@ -106,6 +107,65 @@ describe("reembedExperienceUnit", () => {
     await expect(
       reembedExperienceUnit(CTX, { getUnit, embed: embedFn, persistEmbedding }),
     ).rejects.toBeInstanceOf(ReembedEmptyInput);
+    expect(embedFn).not.toHaveBeenCalled();
+    expect(persistEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("throws ReembedEmptyInput when normalized_summary is a non-string (malformed Firestore data)", async () => {
+    // Defensive guard: if Firestore ever returns a doc where
+    // `normalized_summary` isn't a string (historic migration,
+    // manual console edit, schema drift), calling `.trim()` on
+    // it would throw a raw TypeError that bypasses the
+    // callable's error mapping. The guard funnels malformed
+    // content into the same `failed-precondition` the empty
+    // case gets. CodeRabbit Major on #91.
+    const malformed = unit({
+      id: "unit-1",
+      normalized_summary: null as unknown as string,
+    });
+    const getUnit = vi.fn(async () => malformed);
+    const embedFn = vi.fn();
+    const persistEmbedding = vi.fn();
+
+    await expect(
+      reembedExperienceUnit(CTX, { getUnit, embed: embedFn, persistEmbedding }),
+    ).rejects.toBeInstanceOf(ReembedEmptyInput);
+    expect(embedFn).not.toHaveBeenCalled();
+    expect(persistEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("throws ReembedNotPending when reembed_pending is false (prevents paid-embed spam)", async () => {
+    // Codex P2 on #91: without this gate, an authenticated caller
+    // could call the endpoint repeatedly on an unchanged Unit
+    // and trigger unbounded paid embedding requests. The flag's
+    // whole purpose is the gate — a Unit whose embedding is
+    // current shouldn't get re-embedded.
+    const target = unit({ id: "unit-1", reembed_pending: false });
+    const getUnit = vi.fn(async () => target);
+    const embedFn = vi.fn();
+    const persistEmbedding = vi.fn();
+
+    await expect(
+      reembedExperienceUnit(CTX, { getUnit, embed: embedFn, persistEmbedding }),
+    ).rejects.toBeInstanceOf(ReembedNotPending);
+    expect(embedFn).not.toHaveBeenCalled();
+    expect(persistEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("throws ReembedNotPending when reembed_pending is missing entirely (undefined)", async () => {
+    // Optional field — `reembed_pending?: boolean` in the type.
+    // A Unit that was never flagged (e.g. extracted resume Unit
+    // with embedding already in place) has no such field. The
+    // strict `=== true` check treats both `false` and
+    // `undefined` as "not pending", which is correct.
+    const target = unit({ id: "unit-1", reembed_pending: undefined });
+    const getUnit = vi.fn(async () => target);
+    const embedFn = vi.fn();
+    const persistEmbedding = vi.fn();
+
+    await expect(
+      reembedExperienceUnit(CTX, { getUnit, embed: embedFn, persistEmbedding }),
+    ).rejects.toBeInstanceOf(ReembedNotPending);
     expect(embedFn).not.toHaveBeenCalled();
     expect(persistEmbedding).not.toHaveBeenCalled();
   });
