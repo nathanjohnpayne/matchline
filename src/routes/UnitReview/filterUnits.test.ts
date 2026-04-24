@@ -103,6 +103,21 @@ describe("sortByUpdatedDesc", () => {
     expect(result.map((u) => u.id)).toEqual(["newer-create", "older-create"]);
   });
 
+  it("comparator returns 0 when both timestamps match exactly (Array.sort contract)", () => {
+    // Regression pin for Codex P2 + CodeRabbit Major on #86: the
+    // prior implementation returned -1 on full equality, violating
+    // the comparator contract. Engines can (and do) treat that as
+    // "a < b AND b < a" and reorder arbitrarily. Pin the
+    // insertion-order preservation that correct `0`-return buys us.
+    const ts = "2026-03-01T00:00:00.000Z";
+    const result = sortByUpdatedDesc([
+      unit({ id: "first", updated_at: ts, created_at: ts }),
+      unit({ id: "second", updated_at: ts, created_at: ts }),
+      unit({ id: "third", updated_at: ts, created_at: ts }),
+    ]);
+    expect(result.map((u) => u.id)).toEqual(["first", "second", "third"]);
+  });
+
   it("does not mutate the input array (regression — React props should be stable)", () => {
     // If the sort mutates, the subscribed-units state array the
     // component passed in would get reordered in place, which is a
@@ -134,20 +149,23 @@ describe("countApproved", () => {
     expect(countApproved([])).toBe(0);
   });
 
-  it("does NOT count rejected Units toward the approved total (they have user_approved=false by the state machine)", () => {
-    // The flag combinations are mutually exclusive by design
-    // (see `flagsForApprovalState`), but pin this explicitly — a
-    // hypothetical hand-constructed {user_approved: true, rejected:
-    // true} Unit should not count.
+  it("counts user_approved even when rejected=true (corrupt-data case)", () => {
+    // The flag combinations are mutually exclusive by design — see
+    // `flagsForApprovalState` — so a `{user_approved: true, rejected:
+    // true}` Unit should never exist in practice. This test pins the
+    // counter's behavior on that hypothetical corrupt data: the
+    // counter reflects the stored flag directly, not a sanitized
+    // version. The rationale is observability — if the data is
+    // corrupt, the counter telling the truth (value 2 below) is the
+    // fastest signal something wrong happened. A sanitized counter
+    // would silently mask the corruption.
+    //
+    // Title reworded to match the asserted behavior (CodeRabbit
+    // Minor on #86).
     const units = [
       unit({ id: "a", user_approved: true }),
       unit({ id: "b", user_approved: true, rejected: true }),
     ];
-    // We count what the flag says, not what "makes sense" — because
-    // rejected Units should never have user_approved: true in
-    // practice (setApproval enforces it). This test pins the
-    // counter's behavior: if the data is corrupt, the counter
-    // tells the truth about the data, not a sanitized version.
     expect(countApproved(units)).toBe(2);
   });
 });

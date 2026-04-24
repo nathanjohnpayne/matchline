@@ -30,9 +30,15 @@ export function excludeRejected(
  * first, so after an edit the Unit rises to the top and the user
  * sees their change immediately.
  *
- * Stable when `updated_at` ties — falls back to `created_at` so new
- * manual inserts in rapid succession stay in insert order rather
- * than shuffling on re-render.
+ * Stable when `updated_at` ties — falls back to `created_at`, then
+ * returns `0` when both timestamps match. Returning `0` on full
+ * equality is load-bearing: the `Array.prototype.sort` comparator
+ * contract requires `0` for equal values, and violating it makes
+ * the result engine-dependent (V8 preserves insertion order for
+ * ties since it became stable, but the contract violation is the
+ * real issue — both Codex P2 and CodeRabbit flagged this). Multiple
+ * Units stamped in the same ISO-millisecond (e.g. a batch manual
+ * import) were affected.
  */
 export function sortByUpdatedDesc(
   units: readonly ExperienceUnit[],
@@ -41,7 +47,10 @@ export function sortByUpdatedDesc(
     if (a.updated_at !== b.updated_at) {
       return a.updated_at < b.updated_at ? 1 : -1;
     }
-    return a.created_at < b.created_at ? 1 : -1;
+    if (a.created_at !== b.created_at) {
+      return a.created_at < b.created_at ? 1 : -1;
+    }
+    return 0;
   });
 }
 

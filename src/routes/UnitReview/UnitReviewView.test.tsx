@@ -79,6 +79,30 @@ describe("UnitReviewView", () => {
     expect(html).not.toContain('data-unit-id="rejected-one"');
   });
 
+  it("truncates the primary text visually + exposes the full summary via title attribute (native tooltip)", () => {
+    // #79 contract: "normalized_summary ... truncated with full-text
+    // tooltip." Truncation is visual (Tailwind `.truncate` = CSS
+    // text-overflow: ellipsis). Tooltip is the native `title`
+    // attribute — accessible hover-tooltip without a new dep.
+    // CodeRabbit Major on the original PR flagged that the tooltip
+    // wasn't wired; this test pins both halves of the contract.
+    const longSummary =
+      "Drove a 14-month replatform of the streaming playback SDK across Roku, Fire TV, Apple TV, Android TV, web, iOS, and Android, cutting rebuffer rate from 3.1% to 0.7% across 40M monthly CTV viewers while preserving feature parity with the legacy stack.";
+    const html = renderToStaticMarkup(
+      <UnitReviewView
+        units={[unit({ id: "long", normalized_summary: longSummary })]}
+      />,
+    );
+    // Truncation class applied on the primary text <p>.
+    expect(html).toMatch(/<p[^>]*class="[^"]*truncate[^"]*"[^>]*>/);
+    // Full text present via the title attribute even though the
+    // visible rendering will ellipsis-clip.
+    expect(html).toContain(`title="${longSummary}"`);
+    // And the visible text itself is still the full string — the
+    // CSS handles the visual truncation, not the markup.
+    expect(html).toContain(longSummary);
+  });
+
   it("renders all five columns on each row (summary, type, state, confidence, provenance)", () => {
     const html = renderToStaticMarkup(
       <UnitReviewView

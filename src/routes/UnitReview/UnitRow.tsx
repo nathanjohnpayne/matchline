@@ -85,7 +85,10 @@ export default function UnitRow({ unit }: UnitRowProps): ReactElement {
       data-unit-id={unit.id}
     >
       <div className="flex-1 min-w-0">
-        <p className="truncate text-sm text-zinc-900 dark:text-zinc-100">
+        <p
+          className="truncate text-sm text-zinc-900 dark:text-zinc-100"
+          title={unit.normalized_summary}
+        >
           {unit.normalized_summary}
         </p>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
