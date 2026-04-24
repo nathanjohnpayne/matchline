@@ -26,9 +26,11 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import {
+  setApproval,
   subscribeByOwner,
   updateFields,
 } from "../../services/experienceUnits.ts";
+import type { ApprovalState } from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import type { EditableUnitFields } from "./inlineEditState.ts";
@@ -52,6 +54,22 @@ export default function UnitReview(): ReactElement {
       // reject and surfaces it as an inline error; the
       // subscription's next snapshot carries the written state.
       await updateFields(id, partial);
+    },
+    [],
+  );
+
+  const onSetApproval = useCallback(
+    async (id: string, state: ApprovalState) => {
+      // Service's setApproval ALWAYS writes the full
+      // user_approved / rejected / flagged triple via
+      // flagsForApprovalState — guarantees a state transition
+      // can't leave a stale flag from the prior state. The row's
+      // approval-button cluster catches any reject and surfaces
+      // it inline. The rejected-exclusion integration test in
+      // tests/rejected-exclusion.integration.test.ts pins the
+      // zero-fabrication invariant end-to-end against the
+      // matching pipeline's input query.
+      await setApproval(id, state);
     },
     [],
   );
@@ -99,6 +117,7 @@ export default function UnitReview(): ReactElement {
       onFiltersChange={setFilters}
       onClearFilters={clearFilters}
       onSaveEdit={onSaveEdit}
+      onSetApproval={onSetApproval}
     />
   );
 }

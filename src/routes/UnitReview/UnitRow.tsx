@@ -7,10 +7,13 @@
  *     `applyOptimistic` render of the view row on top so the user
  *     sees their draft in the preview while saving.
  *
- * The "Edit" control is a small pencil-style button on the right
- * side of the row in view mode. Approval / reject / flag buttons
- * (sub-issue #82) will land adjacent to this in the same button
- * cluster.
+ * Action buttons in the right cluster (view mode only): Approve,
+ * Flag, Reject, Edit. Reject opens an inline confirmation
+ * because rejected Units are excluded from matching — that's a
+ * decision worth a one-click confirm. Approve and Flag commit
+ * directly. The integration test in
+ * `tests/rejected-exclusion.integration.test.ts` pins the
+ * zero-fabrication invariant end-to-end (#82).
  */
 
 import { useEffect, useState, type ReactElement } from "react";
@@ -37,12 +40,23 @@ export interface UnitRowProps {
    * (diff between the draft and the current Unit). The row
    * calls this on Save; the promise's resolve / reject drives the
    * edit-state machine. Absent when the view is rendered without
-   * edit-mode wiring (e.g. the `UnitReviewView` tests that pre-date
-   * #81).
+   * edit-mode wiring.
    */
   readonly onSaveEdit?: (
     id: string,
     partial: Partial<EditableUnitFields>,
+  ) => Promise<void>;
+  /**
+   * Handler to flip the Unit's approval state via `setApproval`.
+   * The row calls this from the Approve / Reject / Flag buttons.
+   * Absent when the view is rendered without action wiring (the
+   * pre-#82 view-only tests). Reject path passes through a
+   * confirmation step in the row itself before invoking the
+   * handler — the handler doesn't see a second-thoughts cancel.
+   */
+  readonly onSetApproval?: (
+    id: string,
+    state: ApprovalState,
   ) => Promise<void>;
 }
 
@@ -77,11 +91,28 @@ function formatConfidence(score: number): string {
   return `${pct}%`;
 }
 
+/**
+ * Approval-action UI status for the row's button cluster. Most
+ * actions commit directly. Reject opens an inline confirmation
+ * because a rejected Unit is excluded from matching — that's a
+ * decision worth a one-click confirm. The `pending` state covers
+ * both "request in flight" and prevents button mashing.
+ */
+type ApprovalUiStatus =
+  | { kind: "idle" }
+  | { kind: "confirming-reject" }
+  | { kind: "pending" }
+  | { kind: "error"; error: Error };
+
 export default function UnitRow({
   unit,
   onSaveEdit,
+  onSetApproval,
 }: UnitRowProps): ReactElement {
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
+  const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
+    kind: "idle",
+  });
 
   // If the underlying Unit changes while we're in view mode (e.g.
   // subscription delivered a new snapshot), nothing to do. If the
@@ -90,11 +121,45 @@ export default function UnitRow({
   // drop back to view to avoid showing stale drafts.
   useEffect(() => {
     setStatus({ kind: "view" });
+    setApprovalUi({ kind: "idle" });
     // Intentional: react only to id changes, not other field
     // changes. A subscription update on the same id during an edit
     // keeps the user's draft in place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unit.id]);
+
+  const handleApproval = async (state: ApprovalState) => {
+    if (onSetApproval === undefined) return;
+    setApprovalUi({ kind: "pending" });
+    try {
+      await onSetApproval(unit.id, state);
+      setApprovalUi({ kind: "idle" });
+    } catch (err) {
+      setApprovalUi({
+        kind: "error",
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+    }
+  };
+
+  const requestReject = () => {
+    if (onSetApproval === undefined) return;
+    setApprovalUi({ kind: "confirming-reject" });
+  };
+  const cancelReject = () => {
+    setApprovalUi({ kind: "idle" });
+  };
+  const confirmReject = () => {
+    void handleApproval("rejected");
+  };
+
+  const approvalPending = approvalUi.kind === "pending";
+  const showApprovalButtons =
+    onSetApproval !== undefined && status.kind === "view";
+  const showRejectConfirm =
+    onSetApproval !== undefined && approvalUi.kind === "confirming-reject";
+  const approvalError =
+    approvalUi.kind === "error" ? approvalUi.error : null;
 
   // Row preview policy lives in `presentationUnit` (pure):
   //   - view / editing / error: live persisted Unit
@@ -225,18 +290,100 @@ export default function UnitRow({
         >
           {formatConfidence(presentedUnit.confidence_score)}
         </span>
+        {showApprovalButtons && (
+          <div
+            className="flex shrink-0 items-center gap-2 text-xs"
+            data-action-cluster="true"
+          >
+            <button
+              type="button"
+              onClick={() => void handleApproval("approved")}
+              disabled={approvalPending || state === "approved"}
+              aria-label={`Approve ${unit.normalized_summary}`}
+              className="text-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-100"
+              data-action="approve"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleApproval("flagged")}
+              disabled={approvalPending || state === "flagged"}
+              aria-label={`Flag ${unit.normalized_summary} for review`}
+              className="text-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-100"
+              data-action="flag"
+            >
+              Flag
+            </button>
+            <button
+              type="button"
+              onClick={requestReject}
+              disabled={approvalPending || state === "rejected"}
+              aria-label={`Reject ${unit.normalized_summary}`}
+              className="text-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-100"
+              data-action="reject"
+            >
+              Reject
+            </button>
+          </div>
+        )}
         {onSaveEdit !== undefined && status.kind === "view" && (
           <button
             type="button"
             onClick={startEdit}
+            disabled={approvalPending}
             aria-label={`Edit ${unit.normalized_summary}`}
-            className="shrink-0 text-xs text-zinc-400 hover:text-zinc-900 dark:text-zinc-500 dark:hover:text-zinc-100"
+            className="shrink-0 text-xs text-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-500 dark:hover:text-zinc-100"
             data-action="edit"
           >
             Edit
           </button>
         )}
       </div>
+
+      {showRejectConfirm && (
+        <div
+          role="dialog"
+          aria-label="Confirm reject"
+          className="border-t border-zinc-200 bg-amber-50 px-4 py-3 dark:border-zinc-800 dark:bg-amber-950"
+          data-confirm="reject"
+        >
+          <p className="text-sm text-amber-900 dark:text-amber-200">
+            Reject this Unit? Rejected Units stay in the database
+            but are excluded from matching.
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={confirmReject}
+              disabled={approvalPending}
+              className="rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-50 hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              data-action="confirm-reject"
+            >
+              {approvalPending ? "Rejecting…" : "Reject"}
+            </button>
+            <button
+              type="button"
+              onClick={cancelReject}
+              disabled={approvalPending}
+              className="rounded-md px-3 py-1 text-xs text-zinc-500 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-400 dark:hover:text-zinc-100"
+              data-action="cancel-reject"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {approvalError !== null && (
+        <div
+          role="alert"
+          className="border-t border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+          data-approval-error="true"
+        >
+          Action failed: {approvalError.message}
+        </div>
+      )}
 
       {(status.kind === "editing" ||
         status.kind === "saving" ||
