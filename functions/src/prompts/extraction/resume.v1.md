@@ -26,7 +26,7 @@ Hard rules:
    - `"user_confirmed"` is reserved for the approval pass; never use it during extraction.
 3. **Confidence honest.** `confidence_score` is a number in [0, 1]. Anchor: 0.95 for unambiguous first-person claims with numeric evidence; 0.80 for clear first-person claims without numerics; 0.60 for claims that require modest inference; below 0.50 should not be emitted — if you'd label it <0.50, drop the Unit.
 4. **Normalize skills / tools / domains.** Use the canonical forms from the input where possible. When the input uses a proprietary synonym (e.g. "Disney+ playback" instead of "streaming video infrastructure"), include both the verbatim form in `skills`/`tools` and the normalized canonical form. The ontology normalizer runs downstream and will dedupe.
-5. **Metrics with units.** When a claim includes a number ("reduced memory 30%", "5M users"), populate the `metrics` array with `{value, unit, direction, confidence}` — don't bury the number in prose.
+5. **Metrics with units.** When a claim includes a number ("reduced memory 30%", "5M users"), populate the `metrics` array with `{claim, value, unit, direction, confidence}` — `claim` is the short human-readable summary of what the number measures, and it's required. Don't bury the number in prose.
 6. **No fabrication.** If the raw text doesn't support a claim, don't emit a Unit for it. Half-Units are better than invented Units. Zero-fabrication is a product-defining invariant — the validation layer catches slips, but you should not lean on it.
 
 Do not return `id`, `owner_uid`, `embedding`, `created_at`, `updated_at`, or `user_approved` — those are server-stamped downstream.
