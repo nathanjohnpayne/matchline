@@ -1,5 +1,4 @@
 {
-  "_note": "Hand-authored fixture demonstrating the ExtractionResponseV1 shape. Used by functions/src/prompts/extraction/resume.v1.schema.test.ts to assert the schema parses a known-good response. Keep this file in sync when the prompt's example changes.",
   "units": [
     {
       "raw_text": "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox (reduced memory footprint 30%, shipped to 5M DAU).",

@@ -147,6 +147,30 @@ describe("ExtractionResponseV1Schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects an LLM-emitted server-stamped field (strict schema)", () => {
+    // Silent-strip behavior would mean the model could invent an
+    // `id` or `owner_uid` and parsing would succeed — defeating the
+    // retry / manual-review path on hallucinated structure. The
+    // schema uses .strict() so any unknown key fails validation.
+    const bad = {
+      raw_text: "Some raw text.",
+      normalized_summary: "Summary.",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+      id: "uuid-the-model-invented",
+    };
+    const result = ExtractedUnitV1Schema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
   it("rejects an empty string for required text fields", () => {
     const bad = {
       raw_text: "",

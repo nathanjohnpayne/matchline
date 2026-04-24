@@ -44,44 +44,57 @@ const EvidenceTypeSchema = z.enum([
 const MetricDirectionSchema = z.enum(["up", "down"]);
 const MetricConfidenceSchema = z.enum(["high", "medium", "low"]);
 
-const MetricSchema = z.object({
-  claim: z.string().min(1),
-  value: z.number().optional(),
-  unit: z.string().optional(),
-  direction: MetricDirectionSchema.optional(),
-  confidence: MetricConfidenceSchema,
-});
+// `.strict()` on every object: unknown fields fail validation
+// rather than getting silently stripped. If the model emits a
+// server-stamped field (id, owner_uid, embedding) or any other
+// drift, we want retry / manual-review to fire — not a silent
+// success with truncated data.
+const MetricSchema = z
+  .object({
+    claim: z.string().min(1),
+    value: z.number().optional(),
+    unit: z.string().optional(),
+    direction: MetricDirectionSchema.optional(),
+    confidence: MetricConfidenceSchema,
+  })
+  .strict();
 
 const ISODateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const DateRangeSchema = z.object({
-  start: ISODateSchema,
-  end: ISODateSchema.optional(),
-});
+const DateRangeSchema = z
+  .object({
+    start: ISODateSchema,
+    end: ISODateSchema.optional(),
+  })
+  .strict();
 
-export const ExtractedUnitV1Schema = z.object({
-  raw_text: z.string().min(1),
-  normalized_summary: z.string().min(1),
-  unit_type: UnitTypeSchema,
+export const ExtractedUnitV1Schema = z
+  .object({
+    raw_text: z.string().min(1),
+    normalized_summary: z.string().min(1),
+    unit_type: UnitTypeSchema,
 
-  skills: z.array(z.string()),
-  tools: z.array(z.string()),
-  domains: z.array(z.string()),
-  seniority_signals: z.array(z.string()),
-  scope_signals: z.array(z.string()),
-  business_outcomes: z.array(z.string()),
-  metrics: z.array(MetricSchema),
+    skills: z.array(z.string()),
+    tools: z.array(z.string()),
+    domains: z.array(z.string()),
+    seniority_signals: z.array(z.string()),
+    scope_signals: z.array(z.string()),
+    business_outcomes: z.array(z.string()),
+    metrics: z.array(MetricSchema),
 
-  evidence_type: EvidenceTypeSchema,
-  // Prompt says "below 0.50 should not be emitted" — enforce at
-  // schema level too so a hallucination flood is rejected.
-  confidence_score: z.number().min(0.5).max(1),
+    evidence_type: EvidenceTypeSchema,
+    // Prompt says "below 0.50 should not be emitted" — enforce at
+    // schema level too so a hallucination flood is rejected.
+    confidence_score: z.number().min(0.5).max(1),
 
-  date_range: DateRangeSchema.optional(),
-});
+    date_range: DateRangeSchema.optional(),
+  })
+  .strict();
 
-export const ExtractionResponseV1Schema = z.object({
-  units: z.array(ExtractedUnitV1Schema),
-});
+export const ExtractionResponseV1Schema = z
+  .object({
+    units: z.array(ExtractedUnitV1Schema),
+  })
+  .strict();
 
 export type ExtractedUnitV1 = z.infer<typeof ExtractedUnitV1Schema>;
 export type ExtractionResponseV1 = z.infer<typeof ExtractionResponseV1Schema>;
