@@ -61,11 +61,49 @@ export async function runJdParsingPipeline(
   return stamped;
 }
 
+/**
+ * Atomic replace-by-role_id write. Re-parsing the same Role (user
+ * edits the JD and re-submits) must not leave stale Requirement
+ * Units from the prior parse. Without the delete pass,
+ * `listRequirementsForRole(role_id)` would return old+new mixed,
+ * corrupting match scoring and gap detection.
+ *
+ * All operations land in one `WriteBatch.commit()` so the replace is
+ * atomic: observers see either the old set or the new set, never a
+ * mid-transition mix. V1 scale (tens of Requirements per Role) is
+ * well under Firestore's 500-op batch limit; when we approach it
+ * we'll chunk into sequential batches with an end-of-chain marker
+ * document, but that's post-V1.
+ *
+ * Caller contract: all `units` must share the same `role_id` — the
+ * pipeline guarantees this because it stamps `role_id` from `ctx`
+ * on every Unit. We sanity-check here as a belt-and-suspenders
+ * guard.
+ */
 async function writeRequirementsAsBatch(
   units: readonly JobRequirementUnit[],
 ): Promise<void> {
+  if (units.length === 0) return;
+
+  const roleId = units[0]!.role_id;
+  const allSameRole = units.every((u) => u.role_id === roleId);
+  if (!allSameRole) {
+    throw new Error(
+      "writeRequirementsAsBatch: all units must share the same role_id — " +
+        "found mixed role_ids in the batch. This signals a pipeline bug; aborting.",
+    );
+  }
+
   const db = getAdminDb();
+  const existing = await db
+    .collection(COLLECTION)
+    .where("role_id", "==", roleId)
+    .get();
+
   const batch = db.batch();
+  for (const doc of existing.docs) {
+    batch.delete(doc.ref);
+  }
   for (const u of units) {
     batch.set(db.collection(COLLECTION).doc(u.id), u);
   }

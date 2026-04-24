@@ -32,8 +32,8 @@ Hard rules:
 4. **Priority honestly set.** `priority` is your read of how central the requirement is to the role, distinct from `must_have`:
    - `"high"` — central to the role; the JD returns to it or emphasizes it.
    - `"medium"` — mentioned once clearly, not emphasized.
-   - `"low"` — mentioned in passing or under "nice to have".
-   A single must-have can be priority: low (e.g. a nice-to-have credential) and a non-must-have can be priority: high (e.g. "we strongly prefer X"). Don't collapse these axes.
+   - `"low"` — mentioned in passing.
+   The two axes are independent. A must-have can be priority: low when it's a formal gate the JD mentions once without emphasis (e.g. "bachelor's degree required" listed among qualifications but not discussed elsewhere). A non-must-have can be priority: high when the JD is emphatic about it (e.g. a capability the JD returns to repeatedly in responsibilities, explicitly marked as "strongly preferred"). Don't collapse the axes.
 
 5. **`extracted_from` attribution.** Where in the JD did this Unit come from?
    - `"responsibilities"` — under a "What you'll do" / "Responsibilities" section.
