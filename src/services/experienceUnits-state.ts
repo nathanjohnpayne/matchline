@@ -86,11 +86,18 @@ export function shouldMarkReembed(
 /**
  * Fields the generic `updateFields` service method refuses at
  * runtime. Mirrors (and belts-and-suspenders) the compile-time
- * exclusion in `EditableFields`. Keeps the approval state machine
- * (owned by `setApproval`) and the re-embed flag lifecycle (owned
- * by `updateFields` internal logic + the re-embed callable) from
- * being bypassed by a JS-land caller or a `partial as any` escape
- * hatch.
+ * exclusion in `EditableFields`. Two families:
+ *
+ *   - **State-machine-owned** (approval flags + re-embed flag):
+ *     owned by `setApproval` and the re-embed lifecycle; a bypass
+ *     recreates the Codex-P1 stale-flag contradiction.
+ *   - **Server-stamped immutable** (id, owner_uid, created_at):
+ *     set once on insert. Overwriting id silently re-targets the
+ *     doc; overwriting owner_uid would be rejected by rules but
+ *     pollutes intent; overwriting created_at loses the insert
+ *     timestamp. `updated_at` is in this set too — `updateFields`
+ *     stamps it itself from the current clock, and a caller-supplied
+ *     value would override that.
  *
  * Exported so the service and the tests stay in lockstep — add a
  * field here to widen the guard, and the test in
@@ -103,11 +110,24 @@ export const STATE_MACHINE_OWNED_FIELDS: readonly string[] = [
   "reembed_pending",
 ] as const;
 
+export const SERVER_STAMPED_IMMUTABLE_FIELDS: readonly string[] = [
+  "id",
+  "owner_uid",
+  "created_at",
+  "updated_at",
+] as const;
+
 /**
  * Runtime guard: throw if a partial update touches any
- * state-machine-owned field. The thrown error names the correct
- * entry point so the caller's first stack trace tells them where
- * to go.
+ * state-machine-owned or server-stamped immutable field. The
+ * thrown error names the correct entry point (or explains why the
+ * field is immutable) so the caller's first stack trace tells them
+ * where to go.
+ *
+ * The compile-time `EditableFields` Omit is the primary defense;
+ * this guard catches JS-land callers and `as any` bypasses. Codex
+ * P1 (round 1) motivated the state-machine set; Codex P2 (round 2)
+ * motivated widening to the server-stamped immutables.
  */
 export function assertNoStateMachineFields(
   partial: Readonly<Record<string, unknown>>,
@@ -118,6 +138,15 @@ export function assertNoStateMachineFields(
         `updateFields: "${forbidden}" is owned by the approval/re-embed ` +
           `state machine. Use setApproval(id, state) to flip approval flags ` +
           `and markReembedPending(id, pending) to clear the re-embed flag.`,
+      );
+    }
+  }
+  for (const forbidden of SERVER_STAMPED_IMMUTABLE_FIELDS) {
+    if (forbidden in partial) {
+      throw new Error(
+        `updateFields: "${forbidden}" is server-stamped and immutable after ` +
+          `insert. id/owner_uid/created_at are set once on create; ` +
+          `updated_at is stamped by updateFields itself on every write.`,
       );
     }
   }

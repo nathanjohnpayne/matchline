@@ -5,6 +5,7 @@ import {
   buildManualUnit,
   EMBEDDING_INVALIDATING_FIELDS,
   flagsForApprovalState,
+  SERVER_STAMPED_IMMUTABLE_FIELDS,
   shouldMarkReembed,
   STATE_MACHINE_OWNED_FIELDS,
   type ManualUnitInput,
@@ -271,6 +272,32 @@ describe("assertNoStateMachineFields", () => {
     ).not.toThrow();
   });
 
+  it("throws when partial includes id (server-stamped, immutable)", () => {
+    // Codex P2 (round 2) caught that `as any` callers could
+    // retarget the doc by passing a new id. Guard extended.
+    expect(() => assertNoStateMachineFields({ id: "other-doc" })).toThrow(
+      /"id".*server-stamped/,
+    );
+  });
+
+  it("throws when partial includes owner_uid (rules would reject, but guard is clearer)", () => {
+    expect(() =>
+      assertNoStateMachineFields({ owner_uid: "attacker" }),
+    ).toThrow(/"owner_uid"/);
+  });
+
+  it("throws when partial includes created_at (would lose insert timestamp)", () => {
+    expect(() =>
+      assertNoStateMachineFields({ created_at: "1970-01-01T00:00:00Z" }),
+    ).toThrow(/"created_at"/);
+  });
+
+  it("throws when partial includes updated_at (updateFields stamps it itself)", () => {
+    expect(() =>
+      assertNoStateMachineFields({ updated_at: "1970-01-01T00:00:00Z" }),
+    ).toThrow(/"updated_at"/);
+  });
+
   it("does not throw on empty partial", () => {
     expect(() => assertNoStateMachineFields({})).not.toThrow();
   });
@@ -314,6 +341,27 @@ describe("STATE_MACHINE_OWNED_FIELDS", () => {
       expect(() =>
         assertNoStateMachineFields({ [field]: true }),
       ).toThrow();
+    }
+  });
+});
+
+describe("SERVER_STAMPED_IMMUTABLE_FIELDS", () => {
+  it("covers id, owner_uid, created_at, updated_at", () => {
+    // Pin the set so a future widening (e.g. adding schema_version
+    // as an immutable) updates this constant and the test together.
+    expect(SERVER_STAMPED_IMMUTABLE_FIELDS).toEqual([
+      "id",
+      "owner_uid",
+      "created_at",
+      "updated_at",
+    ]);
+  });
+
+  it("every entry is rejected by assertNoStateMachineFields", () => {
+    for (const field of SERVER_STAMPED_IMMUTABLE_FIELDS) {
+      expect(() =>
+        assertNoStateMachineFields({ [field]: "x" }),
+      ).toThrow(/server-stamped/);
     }
   });
 });
