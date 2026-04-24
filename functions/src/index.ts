@@ -17,3 +17,10 @@ export { extractFromResumeCallable as extractFromResume } from "./callables/extr
 
 /** Phase 1: pasted JD + roleId → array of parsed JobRequirementUnits. */
 export { parseJobRequirementsCallable as parseJobRequirements } from "./callables/parseJobRequirements.js";
+
+/**
+ * Phase 1: regenerate the embedding for a single ExperienceUnit
+ * whose `reembed_pending` flag was set by an edit or a manual
+ * insert. Atomic embed-and-clear.
+ */
+export { reembedExperienceUnitCallable as reembedExperienceUnit } from "./callables/reembedExperienceUnit.js";
