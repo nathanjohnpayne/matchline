@@ -1,4 +1,5 @@
 import {
+  deleteField,
   getDoc,
   getDocs,
   onSnapshot,
@@ -17,6 +18,7 @@ import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import {
   assertNoStateMachineFields,
   buildManualUnit,
+  buildUpdatePayload,
   flagsForApprovalState,
   shouldMarkReembed,
   type ApprovalState,
@@ -180,10 +182,17 @@ export async function updateFields(
   // would otherwise recreate the Codex-P1 stale-flag contradiction.
   assertNoStateMachineFields(partial as Readonly<Record<string, unknown>>);
 
-  const update: UpdateData<ExperienceUnit> = {
-    ...partial,
-    updated_at: nowIso(),
-  };
+  // Build the update payload via the pure helper, translating
+  // explicit `undefined` on optional fields into `deleteField()`
+  // sentinels. Firestore's `updateDoc` rejects raw `undefined` —
+  // the #81 inline-edit form signals "remove this optional field"
+  // by including the key with `undefined`, and the service layer
+  // is the narrowest place to convert to the Firestore-valid
+  // sentinel. Codex P1 on #90 caught this.
+  const update = buildUpdatePayload(
+    partial as Readonly<Record<string, unknown>>,
+    { now: nowIso(), deleteSentinel: deleteField },
+  ) as UpdateData<ExperienceUnit>;
   if (shouldMarkReembed(partial as Readonly<Record<string, unknown>>)) {
     update.reembed_pending = true;
   }

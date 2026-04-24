@@ -145,6 +145,43 @@ export const SERVER_STAMPED_IMMUTABLE_FIELDS: readonly string[] = [
 ] as const;
 
 /**
+ * Translate a partial update payload into a Firestore-valid
+ * shape, converting explicit `undefined` on any field into a
+ * deletion sentinel. The `deleteSentinel` factory is injected so
+ * this helper stays pure — the caller (the service's
+ * `updateFields`) passes Firestore's `deleteField()`; tests pass
+ * a stand-in marker to verify the translation happens without
+ * booting Firestore.
+ *
+ * Load-bearing for optional-field removal: the inline-edit form
+ * from #81 signals "remove this optional field" by including its
+ * key in the partial with `undefined` (the natural TS shape of
+ * "the user cleared this"), but Firestore's `updateDoc` rejects
+ * raw undefined. Codex P1 on #90 caught the prior service
+ * behavior which spread raw undefined into updateDoc — clearing
+ * the date range would fail the save every time.
+ *
+ * Always stamps `updated_at` from the injected timestamp.
+ */
+export function buildUpdatePayload<TDeleteSentinel>(
+  partial: Readonly<Record<string, unknown>>,
+  options: {
+    readonly now: string;
+    readonly deleteSentinel: () => TDeleteSentinel;
+  },
+): Record<string, unknown> {
+  const update: Record<string, unknown> = { updated_at: options.now };
+  for (const [key, value] of Object.entries(partial)) {
+    if (value === undefined) {
+      update[key] = options.deleteSentinel();
+    } else {
+      update[key] = value;
+    }
+  }
+  return update;
+}
+
+/**
  * Runtime guard: throw if a partial update touches any
  * state-machine-owned or server-stamped immutable field. The
  * thrown error names the correct entry point (or explains why the
