@@ -161,34 +161,35 @@ export function parsePromptSections(
   raw: string,
   sourcePathForError = "<inline>",
 ): { system: string; userFewShot: string } {
-  const systemMarker = "\n## System";
-  const userMarker = "\n## User (few-shot)";
-  // Normalize to LF so we handle CRLF-checked-out files uniformly.
-  // Prepend "\n" so the markers match even when the file starts with
-  // the header (no preceding commentary).
-  const normalized = "\n" + raw.replace(/\r\n/g, "\n");
-  const systemIdx = normalized.indexOf(systemMarker);
-  const userIdx = normalized.indexOf(userMarker);
-  if (systemIdx < 0) {
+  // Line-based match so "## Systematic approach" or any substring of
+  // the marker in the preamble doesn't masquerade as a section
+  // heading. Exact-string line equality is the check; anything
+  // beyond the heading goes on the next line.
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  let systemLine = -1;
+  let userLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] === "## System" && systemLine < 0) systemLine = i;
+    else if (lines[i] === "## User (few-shot)" && userLine < 0) userLine = i;
+  }
+  if (systemLine < 0) {
     throw new Error(
       `Prompt at ${sourcePathForError} is missing a '## System' section.`,
     );
   }
-  if (userIdx < 0) {
+  if (userLine < 0) {
     throw new Error(
       `Prompt at ${sourcePathForError} is missing a '## User (few-shot)' section.`,
     );
   }
-  if (userIdx < systemIdx) {
+  if (userLine < systemLine) {
     throw new Error(
       `Prompt at ${sourcePathForError}: '## User (few-shot)' appears before '## System'. ` +
         `Fix the ordering so the system prompt is defined first.`,
     );
   }
-  const system = normalized
-    .slice(systemIdx + systemMarker.length, userIdx)
-    .trim();
-  const userFewShot = normalized.slice(userIdx + userMarker.length).trim();
+  const system = lines.slice(systemLine + 1, userLine).join("\n").trim();
+  const userFewShot = lines.slice(userLine + 1).join("\n").trim();
   return { system, userFewShot };
 }
 

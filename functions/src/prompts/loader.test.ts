@@ -66,6 +66,48 @@ describe("parsePromptSections", () => {
       /appears before '## System'/,
     );
   });
+
+  it("does not match substring headings like '## Systematic approach'", () => {
+    // Prior indexOf-based scan would have matched "## System"
+    // inside "## Systematic" and sliced wrong. Line-based match
+    // now requires the line to equal "## System" exactly — the
+    // substring heading below doesn't count.
+    const raw = [
+      "# Preamble",
+      "",
+      "## Systematic approach",
+      "This section looks like a System heading but isn't.",
+      "",
+      "## System",
+      "Real rules here.",
+      "",
+      "## User (few-shot)",
+      "Real example here.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules here.");
+    expect(userFewShot).toBe("Real example here.");
+  });
+
+  it("ignores a mention of '## System' inside preamble commentary", () => {
+    // Commentary above the real heading that quotes the heading
+    // in prose (e.g. "the ## System section below...") must not be
+    // mistaken for the real heading. Line-based match means only
+    // lines that ARE exactly "## System" count.
+    const raw = [
+      "Preamble line 1.",
+      "This prompt uses a ## System heading convention (see below).",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
 });
 
 describe("loadPromptText (integration with real prompt files)", () => {
