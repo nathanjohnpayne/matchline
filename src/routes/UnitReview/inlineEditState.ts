@@ -141,6 +141,54 @@ export function presentationUnit(
 }
 
 /**
+ * Approval-action UI status for the row's button cluster.
+ * Lives in this module so the gate-predicate helper below has a
+ * stable type to consume; the row component owns the
+ * `useState<ApprovalUiStatus>`.
+ */
+export type ApprovalUiStatus =
+  | { readonly kind: "idle" }
+  | { readonly kind: "confirming-reject" }
+  | { readonly kind: "pending" }
+  | { readonly kind: "error"; readonly error: Error };
+
+/**
+ * Predicate: should the reject-confirmation panel render?
+ *
+ * Three preconditions, ALL required:
+ *
+ *   1. The row has an approval handler wired (`hasHandler`).
+ *      Backward compat with pre-#82 callers; no handler → no
+ *      buttons → no confirmation.
+ *   2. The user has clicked Reject (`approvalUi.kind ===
+ *      "confirming-reject"`).
+ *   3. The row is in view mode (`status.kind === "view"`). If
+ *      the user enters edit mode mid-confirmation, the
+ *      confirmation panel must disappear — otherwise two
+ *      overlapping state machines render and a click on the
+ *      confirm button commits a rejection while the user is
+ *      typing in the edit form. Codex P2 on #93.
+ *
+ * Pure so it's unit-testable without React. The static-render
+ * tests on UnitRow can't simulate user-driven state transitions,
+ * which means a test that just renders the initial mount can't
+ * detect removal of the view-mode gate (false confidence —
+ * nathanpayne-codex Phase 4b on #93). Testing this predicate
+ * directly closes that gap.
+ */
+export function shouldShowRejectConfirm(
+  approvalUi: ApprovalUiStatus,
+  status: EditStatus,
+  hasHandler: boolean,
+): boolean {
+  return (
+    hasHandler &&
+    approvalUi.kind === "confirming-reject" &&
+    status.kind === "view"
+  );
+}
+
+/**
  * Apply a partial update to a `Metric` (one row in the nested
  * metrics editor), stripping any keys whose value is `undefined`
  * so the result has optional fields absent rather than

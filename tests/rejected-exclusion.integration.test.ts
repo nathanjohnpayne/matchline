@@ -5,11 +5,18 @@
  * NOT appear in the matching pipeline's input.
  *
  * The matching pipeline (sub-issue #20) feeds on
- * `listApprovedExperienceUnits()` from `src/services/`, which is
- * `where("user_approved", "==", true)` over the owner's
- * collection. This test exercises the same query against the
+ * `listApprovedExperienceUnits()` from `src/services/`. This
+ * test imports the SAME constraint factory the service uses
+ * (`approvedUnitsQueryConstraints`) and runs it against the
  * Firestore emulator with seeded Units in every approval state,
- * and asserts only `user_approved: true` rows come back.
+ * asserting only `user_approved: true` rows come back.
+ *
+ * Sharing the constraint factory is load-bearing: an earlier
+ * version of this test hand-wrote
+ * `where("user_approved", "==", true)` inline, so a regression
+ * in the service's query (e.g. someone flipping the operator)
+ * would have shipped green because the test's hand-written copy
+ * didn't see the change. nathanpayne-codex Phase 4b on #93.
  *
  * Why an emulator test and not a unit test:
  *
@@ -43,6 +50,8 @@ import {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import { approvedUnitsQueryConstraints } from "../src/services/experienceUnits.ts";
 
 const COLLECTION = "experienceUnits";
 const OWNER_UID = "user-alice";
@@ -126,9 +135,15 @@ async function seed(
 }
 
 /**
- * Run the same query that `listApprovedExperienceUnits` issues:
- * owner-scoped + `where("user_approved", "==", true)`. Returns
- * the ids of matching docs.
+ * Run the same query that `listApprovedExperienceUnits` issues —
+ * owner-scoped + the production `approvedUnitsQueryConstraints`.
+ * Returns the ids of matching docs.
+ *
+ * Critically: the where-clauses come from
+ * `approvedUnitsQueryConstraints` directly, NOT a hand-written
+ * copy. A regression in the production constraint shape (e.g.
+ * someone changing the operator from `==` to `!=` or pointing
+ * at a different field) breaks this test, not just runtime.
  *
  * `ctx.firestore()` returns a modular-SDK Firestore instance
  * (same shape as the existing `tests/firestore-rules.test.ts`
@@ -141,13 +156,29 @@ async function listApprovedIds(ownerUid: string): Promise<string[]> {
     query(
       collection(ctx.firestore(), COLLECTION),
       where("owner_uid", "==", ownerUid),
-      where("user_approved", "==", true),
+      ...approvedUnitsQueryConstraints(),
     ),
   );
   return snap.docs.map((d) => d.id);
 }
 
 describe("rejected-exclusion invariant (zero-fabrication / #82)", () => {
+  it("the production constraint factory has the documented shape", () => {
+    // Belt-and-suspenders: the integration tests below use the
+    // factory and would catch a regression via behavior, but
+    // pinning the shape directly makes the load-bearing
+    // contract explicit. If a future change widens or narrows
+    // the constraints, this test forces the change to be
+    // deliberate.
+    const constraints = approvedUnitsQueryConstraints();
+    expect(constraints).toHaveLength(1);
+    // The constraint object is opaque (Firestore's QueryFieldFilterConstraint
+    // is internal), so we can't introspect operator/field/value
+    // directly. The behavior tests below cover the semantic
+    // — one constraint, applied alongside ownerScope, must
+    // exclude the rejected/pending/flagged states.
+  });
+
   it("approved Units appear in listApprovedExperienceUnits", async () => {
     await seed("approved-1", OWNER_UID, "approved");
     await seed("approved-2", OWNER_UID, "approved");

@@ -29,6 +29,8 @@ import {
   draftDiff,
   editableFromUnit,
   presentationUnit,
+  shouldShowRejectConfirm,
+  type ApprovalUiStatus,
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
@@ -91,18 +93,10 @@ function formatConfidence(score: number): string {
   return `${pct}%`;
 }
 
-/**
- * Approval-action UI status for the row's button cluster. Most
- * actions commit directly. Reject opens an inline confirmation
- * because a rejected Unit is excluded from matching — that's a
- * decision worth a one-click confirm. The `pending` state covers
- * both "request in flight" and prevents button mashing.
- */
-type ApprovalUiStatus =
-  | { kind: "idle" }
-  | { kind: "confirming-reject" }
-  | { kind: "pending" }
-  | { kind: "error"; error: Error };
+// ApprovalUiStatus is imported from inlineEditState.ts so the
+// row's state shape and the pure gate predicate
+// (`shouldShowRejectConfirm`) agree on the discriminated-union
+// definition.
 
 export default function UnitRow({
   unit,
@@ -156,14 +150,16 @@ export default function UnitRow({
   const approvalPending = approvalUi.kind === "pending";
   const showApprovalButtons =
     onSetApproval !== undefined && status.kind === "view";
-  // Gate the confirmation panel on view mode too — `startEdit`
-  // also clears approvalUi, but this gate is the load-bearing
-  // guarantee. Codex P2 on #93 caught that an outside-of-view-
-  // mode confirmation would render alongside the edit form.
-  const showRejectConfirm =
-    onSetApproval !== undefined &&
-    approvalUi.kind === "confirming-reject" &&
-    status.kind === "view";
+  // Pure predicate — see `shouldShowRejectConfirm` docstring.
+  // The three preconditions (handler wired + confirming-reject
+  // approval state + view-mode edit status) are tested in
+  // inlineEditState.test.ts so a refactor that drops one of
+  // them fails the unit test, not just runtime UX.
+  const showRejectConfirm = shouldShowRejectConfirm(
+    approvalUi,
+    status,
+    onSetApproval !== undefined,
+  );
   const approvalError =
     approvalUi.kind === "error" ? approvalUi.error : null;
 

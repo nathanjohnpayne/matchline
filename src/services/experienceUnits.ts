@@ -54,6 +54,29 @@ export async function listExperienceUnits(
 }
 
 /**
+ * The non-owner-scoped query constraints that mark a Unit as
+ * eligible for the matching pipeline. Exported as a pure helper
+ * so the production service path AND the rejected-exclusion
+ * integration test (`tests/rejected-exclusion.integration.test.ts`)
+ * use the EXACT same constraint shape.
+ *
+ * nathanpayne-codex Phase 4b on #93 caught that the prior
+ * integration test hand-wrote `where("user_approved", "==", true)`
+ * inline. A regression here — e.g. someone changing the operator
+ * to `!=` or pointing it at a different field — would have
+ * shipped green because the test's hand-written copy didn't see
+ * the change. Sharing the constraint factory closes that gap.
+ *
+ * `ownerScope()` is layered on top by `listExperienceUnits` /
+ * the integration test; it's deliberately not bundled here so
+ * the constraints stay independently testable and the
+ * cross-tenant exclusion check stays explicit at every callsite.
+ */
+export function approvedUnitsQueryConstraints(): QueryConstraint[] {
+  return [where("user_approved", "==", true)];
+}
+
+/**
  * Returns Units that are eligible to enter the matching pipeline.
  * Used by both the Role Detail Matches tab (sub-issue #21) and the
  * `#82` rejected-exclusion integration test that pins the
@@ -68,7 +91,7 @@ export async function listExperienceUnits(
  * implied by `user_approved == true`).
  */
 export async function listApprovedExperienceUnits(): Promise<ExperienceUnit[]> {
-  return listExperienceUnits(where("user_approved", "==", true));
+  return listExperienceUnits(...approvedUnitsQueryConstraints());
 }
 
 /**
