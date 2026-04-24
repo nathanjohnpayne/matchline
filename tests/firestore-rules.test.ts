@@ -192,5 +192,23 @@ for (const collection of COLLECTIONS) {
         deleteDoc(doc(ctx.firestore(), collection, "doc-1")),
       );
     });
+
+    it("delete of nonexistent doc is rejected (regression: #92 null-guard)", async () => {
+      // The null-guard in `isOwner()` makes `resource == null`
+      // evaluate to false rather than throwing a Null value
+      // error mid-evaluation. The observable result is the
+      // same — the delete is rejected — but the failure path
+      // is now explicit denial rather than a runtime evaluation
+      // error masked as PERMISSION_DENIED. Without the guard,
+      // some emulator runs surfaced this as a failed
+      // assertSucceeds on existing-doc deletes (cross-project
+      // contention scenario). Pin the explicit-denial behavior
+      // for the missing-doc case so a future rule weakening
+      // can't quietly allow it.
+      const ctx = testEnv.authenticatedContext(OWNER_UID);
+      await assertFails(
+        deleteDoc(doc(ctx.firestore(), collection, "does-not-exist")),
+      );
+    });
   });
 }
