@@ -11,3 +11,6 @@ initializeApp();
 export const health = onRequest((_req, res) => {
   res.json({ status: "ok", service: "matchline", version: "0.0.0" });
 });
+
+/** Phase 1: pasted resume → array of extracted ExperienceUnits. */
+export { extractFromResumeCallable as extractFromResume } from "./callables/extractFromResume.js";
