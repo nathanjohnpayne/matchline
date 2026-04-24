@@ -210,6 +210,11 @@ function stampOne(
   idx: number,
   generateId: () => string,
 ): ExperienceUnit {
+  // Firestore rejects documents containing `undefined` values by
+  // default. `date_range` on the extraction response is optional,
+  // so we only include it when present — same pattern as
+  // recordUsage in functions/src/llm/cost.ts (Codex P1 on #47 and
+  // repeated here on #68; both legitimate).
   return {
     id: generateId(),
     owner_uid: ctx.ownerUid,
@@ -228,8 +233,8 @@ function stampOne(
     evidence_type: raw.evidence_type,
     confidence_score: raw.confidence_score,
     user_approved: false,
-    date_range: raw.date_range,
     created_at: nowIso,
     updated_at: nowIso,
+    ...(raw.date_range !== undefined && { date_range: raw.date_range }),
   };
 }

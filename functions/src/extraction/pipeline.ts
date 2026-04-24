@@ -32,8 +32,13 @@ export interface PipelineDeps {
   readonly extract?: typeof extractFromResume;
   /** Override for tests; defaults to the OpenAI embeddings wrapper. */
   readonly embed?: typeof embedMany;
-  /** Override for tests; defaults to admin-SDK Firestore write. */
-  readonly persist?: (unit: ExperienceUnit) => Promise<void>;
+  /**
+   * Override for tests; defaults to an atomic Firestore batch write.
+   * Receives the full stamped batch so implementations can commit
+   * all-or-nothing. Partial-write recovery is the caller's problem
+   * only if it provides a non-atomic persist.
+   */
+  readonly persistBatch?: (units: readonly ExperienceUnit[]) => Promise<void>;
 }
 
 export async function runExtractionPipeline(
@@ -43,7 +48,7 @@ export async function runExtractionPipeline(
 ): Promise<ExperienceUnit[]> {
   const extract = deps.extract ?? extractFromResume;
   const embed = deps.embed ?? embedMany;
-  const persist = deps.persist ?? writeUnitToFirestore;
+  const persistBatch = deps.persistBatch ?? writeUnitsAsBatch;
 
   // Step 1: LLM extraction. Throws ExtractionError on retry-budget
   // exhaustion; the callable maps that to "needs manual review".
@@ -71,15 +76,23 @@ export async function runExtractionPipeline(
     embedding: embeddings[i],
   }));
 
-  // Step 3: persist. Parallel writes — each unit is independent.
-  // If any single write fails, the whole batch rejects; the
-  // callable surfaces that as a non-ExtractionError and the
-  // frontend retries from scratch.
-  await Promise.all(stamped.map((u) => persist(u)));
+  // Step 3: persist atomically. Firestore WriteBatch commits
+  // all-or-none (up to 500 ops per batch — well above any single
+  // extraction run). Without atomicity, a mid-batch failure would
+  // leave partial data + fresh-id retries would duplicate the
+  // survivors — a data-corruption shape Codex caught on this PR.
+  await persistBatch(stamped);
 
   return stamped;
 }
 
-async function writeUnitToFirestore(unit: ExperienceUnit): Promise<void> {
-  await getAdminDb().collection(COLLECTION).doc(unit.id).set(unit);
+async function writeUnitsAsBatch(
+  units: readonly ExperienceUnit[],
+): Promise<void> {
+  const db = getAdminDb();
+  const batch = db.batch();
+  for (const u of units) {
+    batch.set(db.collection(COLLECTION).doc(u.id), u);
+  }
+  await batch.commit();
 }
