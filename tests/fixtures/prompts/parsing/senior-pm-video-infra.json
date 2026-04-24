@@ -1,0 +1,59 @@
+{
+  "requirements": [
+    {
+      "raw_text": "Drive strategy for our playback SDK across connected-TV platforms.",
+      "normalized_requirement": "Product strategy for playback SDK across connected-TV platforms.",
+      "category": "skill",
+      "keywords": ["product strategy", "playback SDK", "connected-TV"],
+      "tools": [],
+      "domains": ["streaming video infrastructure"],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "responsibilities"
+    },
+    {
+      "raw_text": "7+ years of product management, with at least 3 years shipping consumer video products.",
+      "normalized_requirement": "7+ years product management experience, 3+ in consumer video.",
+      "category": "experience_level",
+      "keywords": ["7+ years", "product management", "consumer video"],
+      "tools": [],
+      "domains": ["consumer video"],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "raw_text": "Deep familiarity with HLS, DASH, or DRM systems.",
+      "normalized_requirement": "Familiarity with HLS, DASH, or DRM streaming protocols.",
+      "category": "tool",
+      "keywords": [],
+      "tools": ["HLS", "DASH", "DRM"],
+      "domains": ["streaming video infrastructure"],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "raw_text": "Experience with live-streaming infrastructure.",
+      "normalized_requirement": "Live-streaming infrastructure experience.",
+      "category": "domain",
+      "keywords": [],
+      "tools": [],
+      "domains": ["live streaming"],
+      "priority": "low",
+      "must_have": false,
+      "extracted_from": "nice_to_have"
+    },
+    {
+      "raw_text": "MBA or equivalent business training.",
+      "normalized_requirement": "MBA or equivalent business degree.",
+      "category": "credential",
+      "keywords": [],
+      "tools": [],
+      "domains": [],
+      "priority": "low",
+      "must_have": false,
+      "extracted_from": "nice_to_have"
+    }
+  ]
+}

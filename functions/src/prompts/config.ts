@@ -17,8 +17,11 @@ export const PROMPT_CONFIG = {
   extraction: {
     resume: "v1",
   },
-  // Future stages (parsing, matching, generation, validation) land
-  // their first prompts alongside their respective tickets.
+  parsing: {
+    jd: "v1",
+  },
+  // Future stages (matching, generation, validation) land their
+  // first prompts alongside their respective tickets.
 } as const;
 
 /** Stages with at least one prompt entry. */
