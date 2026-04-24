@@ -22,9 +22,12 @@ import type { ReactElement } from "react";
 import type { ApprovalState } from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
+import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
+
 import ApprovalCounter from "./ApprovalCounter.tsx";
 import EmptyState from "./EmptyState.tsx";
 import Filters from "./Filters.tsx";
+import ManualAddForm from "./ManualAddForm.tsx";
 import UnitRow from "./UnitRow.tsx";
 import type { EditableUnitFields } from "./inlineEditState.ts";
 import {
@@ -92,10 +95,30 @@ export interface UnitReviewViewProps {
    */
   readonly onClearFilters?: () => void;
   /**
-   * Stub handler for the "Add Unit manually" CTA. `undefined` in
-   * #79 (the form doesn't exist yet); #83 wires it.
+   * Open the manual-add modal. Threaded to both the empty-state
+   * CTA and the header "+ Add Unit" button. Container handles
+   * the open/close state.
    */
   readonly onAddManually?: () => void;
+  /**
+   * True when the manual-add modal is open. View renders the
+   * `ManualAddForm` overlay when this is true. Defaults to false
+   * for callers that don't wire the modal (pre-#83 backward
+   * compat).
+   */
+  readonly manualAddOpen?: boolean;
+  /**
+   * Submit handler for the manual-add modal. The view renders
+   * `ManualAddForm` with this; the container calls
+   * `manualInsert` and closes on success.
+   */
+  readonly onSubmitManualAdd?: (input: ManualUnitInput) => Promise<void>;
+  /**
+   * Close the manual-add modal. Called by the form's Cancel
+   * button. The container also flips this to false on a
+   * successful submit.
+   */
+  readonly onCloseManualAdd?: () => void;
   /**
    * Commit an inline edit. Receives the changed-fields partial
    * (already diffed against the current Unit by the row). Passed
@@ -128,6 +151,9 @@ export default function UnitReviewView({
   onFiltersChange,
   onClearFilters,
   onAddManually,
+  manualAddOpen = false,
+  onSubmitManualAdd,
+  onCloseManualAdd,
   onSaveEdit,
   onSetApproval,
 }: UnitReviewViewProps): ReactElement {
@@ -161,8 +187,8 @@ export default function UnitReviewView({
 
   return (
     <section className="mx-auto max-w-5xl space-y-4">
-      <header className="flex items-center justify-between">
-        <div>
+      <header className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">
             Unit Review
           </h1>
@@ -171,7 +197,19 @@ export default function UnitReviewView({
             No Unit enters matching until you approve it.
           </p>
         </div>
-        {status === "ready" && <ApprovalCounter approved={approved} />}
+        <div className="flex shrink-0 items-center gap-3">
+          {status === "ready" && onAddManually !== undefined && (
+            <button
+              type="button"
+              onClick={onAddManually}
+              className="rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              data-action="open-manual-add"
+            >
+              + Add Unit
+            </button>
+          )}
+          {status === "ready" && <ApprovalCounter approved={approved} />}
+        </div>
       </header>
 
       {status === "loading" && (
@@ -251,6 +289,15 @@ export default function UnitReviewView({
             ))}
           </ul>
         ))}
+
+      {manualAddOpen &&
+        onSubmitManualAdd !== undefined &&
+        onCloseManualAdd !== undefined && (
+          <ManualAddForm
+            onSubmit={onSubmitManualAdd}
+            onClose={onCloseManualAdd}
+          />
+        )}
     </section>
   );
 }

@@ -26,11 +26,15 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
 import {
+  manualInsert,
   setApproval,
   subscribeByOwner,
   updateFields,
 } from "../../services/experienceUnits.ts";
-import type { ApprovalState } from "../../services/experienceUnits-state.ts";
+import type {
+  ApprovalState,
+  ManualUnitInput,
+} from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import type { EditableUnitFields } from "./inlineEditState.ts";
@@ -41,6 +45,7 @@ export default function UnitReview(): ReactElement {
   const [status, setStatus] = useState<LoadState>("loading");
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
   const [error, setError] = useState<Error | null>(null);
+  const [manualAddOpen, setManualAddOpen] = useState(false);
   const { filters, setFilters, clearFilters } = useFilterState();
 
   const onSaveEdit = useCallback(
@@ -54,6 +59,24 @@ export default function UnitReview(): ReactElement {
       // reject and surfaces it as an inline error; the
       // subscription's next snapshot carries the written state.
       await updateFields(id, partial);
+    },
+    [],
+  );
+
+  const onAddManually = useCallback(() => setManualAddOpen(true), []);
+  const onCloseManualAdd = useCallback(() => setManualAddOpen(false), []);
+  const onSubmitManualAdd = useCallback(
+    async (input: ManualUnitInput) => {
+      // The service layer's manualInsert delegates to the pure
+      // `buildManualUnit` for stamping (source_type, evidence_type,
+      // confidence_score default, user_approved default,
+      // reembed_pending: true) — so this handler stays tiny. On
+      // success we close the modal; the subscription's next
+      // snapshot delivers the new Unit. On error the form
+      // surfaces the message inline; we leave the modal open so
+      // the user can adjust + retry.
+      await manualInsert(input);
+      setManualAddOpen(false);
     },
     [],
   );
@@ -118,6 +141,10 @@ export default function UnitReview(): ReactElement {
       onClearFilters={clearFilters}
       onSaveEdit={onSaveEdit}
       onSetApproval={onSetApproval}
+      onAddManually={onAddManually}
+      manualAddOpen={manualAddOpen}
+      onSubmitManualAdd={onSubmitManualAdd}
+      onCloseManualAdd={onCloseManualAdd}
     />
   );
 }
