@@ -170,17 +170,22 @@ export function parsePromptSections(
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
   let systemLine = -1;
   let userLine = -1;
-  let inFence = false;
+  // CommonMark-style fence tracking: fence opened by N backticks
+  // is only closed by a fence of N or more backticks. Tracks the
+  // opening length so nested fences (4-tick outer showing a 3-tick
+  // inner) work correctly — the inner 3-tick line doesn't close the
+  // outer 4-tick fence (Codex P2 round 4).
+  let fenceLen = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    // A line that starts with ``` (optional language tag) toggles
-    // the fence state. Trim trailing whitespace to tolerate
-    // "``` ts" and similar.
-    if (line.replace(/\s+$/, "").startsWith("```")) {
-      inFence = !inFence;
+    const fenceMatch = line.match(/^(`{3,})/);
+    if (fenceMatch) {
+      const n = fenceMatch[1]!.length;
+      if (fenceLen === 0) fenceLen = n; // opening
+      else if (n >= fenceLen) fenceLen = 0; // closing (matching or greater)
       continue;
     }
-    if (inFence) continue;
+    if (fenceLen > 0) continue;
     if (line === "## System" && systemLine < 0) systemLine = i;
     else if (line === "## User (few-shot)" && userLine < 0) userLine = i;
   }

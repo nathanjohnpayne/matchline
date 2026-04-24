@@ -89,6 +89,38 @@ describe("parsePromptSections", () => {
     expect(userFewShot).toBe("Real example here.");
   });
 
+  it("handles nested fences correctly (4-tick outer showing 3-tick inner)", () => {
+    // CommonMark rule: a fence opened with N backticks is only
+    // closed by a fence of N or more backticks. A 3-tick line
+    // inside a 4-tick outer fence does NOT close the outer. If we
+    // got this wrong, the `## System` lines inside the inner
+    // example would be mistaken for the real headings.
+    const raw = [
+      "# Preamble documenting the format",
+      "",
+      "````markdown",
+      "Here's what a prompt file looks like:",
+      "",
+      "```",
+      "## System",
+      "fake system",
+      "",
+      "## User (few-shot)",
+      "fake user",
+      "```",
+      "````",
+      "",
+      "## System",
+      "Real rules.",
+      "",
+      "## User (few-shot)",
+      "Real example.",
+    ].join("\n");
+    const { system, userFewShot } = parsePromptSections(raw);
+    expect(system).toBe("Real rules.");
+    expect(userFewShot).toBe("Real example.");
+  });
+
   it("ignores section headings inside fenced code blocks (Codex P2 fix)", () => {
     // A prompt author documenting the format with a fenced example
     // in the preamble must not trip the parser. Only real (non-
