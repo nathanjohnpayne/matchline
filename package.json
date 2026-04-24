@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run --passWithNoTests --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
     "test:watch": "vitest --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
-    "test:rules": "firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/**/*.integration.test.ts --exclude=.claude/**'",
+    "test:rules": "firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts --exclude=.claude/**'",
     "eval": "tsx tests/eval/run.ts"
   },
   "dependencies": {
@@ -26,6 +26,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.0",
+    "firebase-tools": "^15.15.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.21.0",
