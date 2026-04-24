@@ -48,14 +48,15 @@ export interface ReembedDeps {
   ) => Promise<number[]>;
   /**
    * Persist the new embedding AND clear `reembed_pending` — but
-   * only if the Unit's `normalized_summary` still matches the
-   * `embeddedText` we embedded from. Codex P1 on #91 caught a
-   * race: between the initial read and this write, a concurrent
-   * edit could flip `reembed_pending` back to `true` for new
-   * content; unconditionally clearing here would leave the Unit
-   * with a stale embedding and no pending flag to trigger
-   * repair. The default implementation uses a Firestore
-   * transaction to re-read before writing.
+   * only if (a) `owner_uid` still matches the caller AND (b) the
+   * Unit's `normalized_summary` still matches the `embeddedText`
+   * we embedded from. Codex P1 on #91 caught the content race;
+   * nathanpayne-codex Phase 4b caught that the ownership check
+   * also needs to re-run inside the transaction because the
+   * admin SDK bypasses rules and a tombstone-then-recreate-with-
+   * different-owner race could otherwise land our embedding on
+   * the wrong Unit. The default implementation uses a Firestore
+   * transaction.
    *
    * Returns the result of the CAS so tests can assert stale
    * writes were skipped.
@@ -64,6 +65,7 @@ export interface ReembedDeps {
     unitId: string,
     embedding: number[],
     embeddedText: string,
+    ctx: { readonly ownerUid: string },
   ) => Promise<PersistResult>;
 }
 
@@ -173,10 +175,14 @@ export async function reembedExperienceUnit(
   // same Unit later.
   const vector = await embedFn(input, { ownerUid: ctx.ownerUid });
 
-  // Pass `input` (the exact string we embedded from) to the
-  // persist step so it can detect concurrent edits and skip
-  // writing a stale embedding. See `persistEmbedding` docstring.
-  return persistEmbedding(ctx.unitId, vector, input);
+  // Pass `input` (the exact string we embedded from) AND the
+  // caller's uid to the persist step so it can (a) detect
+  // concurrent content edits and skip writing a stale embedding
+  // and (b) detect tombstone-then-recreate ownership drift.
+  // See `persistEmbedding` docstring.
+  return persistEmbedding(ctx.unitId, vector, input, {
+    ownerUid: ctx.ownerUid,
+  });
 }
 
 async function defaultGetUnit(
@@ -186,18 +192,33 @@ async function defaultGetUnit(
   return snap.exists ? (snap.data() as ExperienceUnit) : undefined;
 }
 
+/**
+ * The default persist uses an admin-SDK transaction, which
+ * bypasses `firestore.rules`. The ownership check in the main
+ * pipeline runs against the INITIAL read; by the time the
+ * transaction re-reads inside persist, the doc could have been
+ * deleted and recreated with a different owner (a tombstone-
+ * then-recreate race) or — in theory — had its `owner_uid`
+ * overwritten by some other admin path. The original caller's
+ * uid is threaded in so this re-read can verify ownership
+ * hasn't drifted before any write.
+ */
+interface PersistContext {
+  readonly ownerUid: string;
+}
+
 async function defaultPersistEmbedding(
   unitId: string,
   embedding: number[],
   embeddedText: string,
+  ctx: PersistContext,
 ): Promise<PersistResult> {
-  // Transactional compare-and-set: re-read the Unit, verify its
-  // trimmed `normalized_summary` still matches what we embedded
-  // from, then write the embedding + clear the flag. If the
-  // content changed between the initial read and now, skip the
-  // write entirely — the Unit already has `reembed_pending:
-  // true` for the NEW content, and the next trigger will embed
-  // that correctly. Codex P1 on #91.
+  // Transactional compare-and-set: re-read the Unit, verify
+  // ownership hasn't drifted AND the trimmed
+  // `normalized_summary` still matches what we embedded from,
+  // then write the embedding + clear the flag. If either check
+  // fails, skip the write entirely. Codex P1 on #91 (race) +
+  // nathanpayne-codex Phase 4b on #91 (owner_uid re-check).
   //
   // The write is still a single-doc `update()` inside the
   // transaction, so the embedding/flag pair stays atomic — no
@@ -211,6 +232,17 @@ async function defaultPersistEmbedding(
       return "skipped_stale";
     }
     const current = snap.data() as ExperienceUnit;
+
+    // Ownership re-check. The admin SDK bypasses rules, so we
+    // can't rely on the rules layer to reject a write to a doc
+    // whose owner drifted. A tombstone-then-recreate race with
+    // a different owner would otherwise land our embedding on
+    // the new owner's Unit, which is a privacy/integrity
+    // violation. Skip the write if ownership doesn't match.
+    if (current.owner_uid !== ctx.ownerUid) {
+      return "skipped_stale";
+    }
+
     const currentSummary =
       typeof current.normalized_summary === "string"
         ? current.normalized_summary.trim()

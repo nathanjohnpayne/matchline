@@ -53,7 +53,14 @@ describe("reembedExperienceUnit", () => {
     });
     const getUnit = vi.fn(async () => target);
     const embedFn = vi.fn(async () => [0.1, 0.2, 0.3]);
-    const persistEmbedding = vi.fn(async () => "wrote" as const);
+    const persistEmbedding = vi.fn<
+      (
+        unitId: string,
+        embedding: number[],
+        embeddedText: string,
+        ctx: { readonly ownerUid: string },
+      ) => Promise<"wrote" | "skipped_stale">
+    >(async () => "wrote" as const);
 
     const result = await reembedExperienceUnit(CTX, {
       getUnit,
@@ -70,11 +77,40 @@ describe("reembedExperienceUnit", () => {
     // Persist receives the embedded text so it can compare-and-
     // set against the current Unit's summary, skipping stale
     // writes (Codex P1 on #91).
+    // Persist receives: unitId, embedding, embeddedText, and the
+    // caller's ownerUid (for the tx owner_uid re-check that
+    // nathanpayne-codex Phase 4b caught).
     expect(persistEmbedding).toHaveBeenCalledWith(
       "unit-1",
       [0.1, 0.2, 0.3],
       "Shipped playback SDK across 40M CTVs.",
+      { ownerUid: "user-alice" },
     );
+  });
+
+  it("threads ownerUid through to persistEmbedding (for the transactional ownership re-check)", async () => {
+    // nathanpayne-codex Phase 4b on #91: the tx re-read must
+    // re-verify owner_uid before writing, because the admin SDK
+    // bypasses rules and a tombstone-then-recreate race could
+    // land our embedding on a different owner's Unit. Pin that
+    // the caller's uid is passed into persist — the transaction
+    // itself is exercised in the integration path.
+    const target = unit({ id: "unit-1", owner_uid: "user-alice" });
+    const persistEmbedding = vi.fn<
+      (
+        unitId: string,
+        embedding: number[],
+        embeddedText: string,
+        ctx: { readonly ownerUid: string },
+      ) => Promise<"wrote" | "skipped_stale">
+    >(async () => "wrote" as const);
+    await reembedExperienceUnit(CTX, {
+      getUnit: async () => target,
+      embed: async () => [0.0],
+      persistEmbedding,
+    });
+    const call = persistEmbedding.mock.calls[0]!;
+    expect(call[3]).toEqual({ ownerUid: "user-alice" });
   });
 
   it("returns 'skipped_stale' when the persist step detects a concurrent edit", async () => {
