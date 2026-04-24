@@ -28,6 +28,7 @@ import {
   decodeFromSearchParams,
   encodeToSearchParams,
   EMPTY_FILTER_STATE,
+  FILTER_SEARCH_PARAM_KEYS,
   type FilterState,
 } from "./filterState.ts";
 
@@ -57,13 +58,29 @@ export function useFilterState(): UseFilterStateResult {
       // ever gains a tab param or similar, the filter sync won't
       // clobber it).
       const merged = new URLSearchParams(searchParams);
-      for (const key of ["skills", "tools", "domains", "approval", "from", "to"]) {
+      // Clear every filter-owned key before re-appending, so a
+      // previously-active filter value that's now removed is
+      // actually removed from the URL. The key list comes from
+      // filterState.ts to stay in lockstep with the encode/decode
+      // helpers — a new axis added there updates here via this
+      // import (CodeRabbit nit on #88).
+      for (const key of FILTER_SEARCH_PARAM_KEYS) {
         merged.delete(key);
       }
       for (const [k, v] of encoded.entries()) {
-        merged.set(k, v);
+        // append (not set) because the filter encoding uses
+        // repeated same-key params for array fields
+        // (?skills=sql&skills=python) — see filterState.ts
+        // appendArray for rationale. Using set() here would
+        // collapse the array to its last value.
+        merged.append(k, v);
       }
-      setSearchParams(merged, { replace: true });
+      // No `replace: true` — each filter change becomes a
+      // distinct history entry so Back/Forward can step through
+      // filter combinations. Codex P2 on #88 caught the prior
+      // replace-on-every-change behavior, which undermined the
+      // "URL is source of truth" contract for navigation.
+      setSearchParams(merged);
     },
     [searchParams, setSearchParams],
   );

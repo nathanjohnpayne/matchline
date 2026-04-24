@@ -80,8 +80,9 @@ export function isFilterActive(state: FilterState): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Search-param keys. Centralized so tests and the hook can't drift
- * on casing. Kept short because URLs get ugly fast.
+ * Search-param keys. Centralized so tests, the hook, and external
+ * consumers can't drift on casing. Kept short because URLs get
+ * ugly fast.
  */
 const KEYS = {
   skills: "skills",
@@ -92,38 +93,77 @@ const KEYS = {
   dateTo: "to",
 } as const;
 
-function encodeArray(values: readonly string[]): string | null {
-  if (values.length === 0) return null;
-  // No explicit encoding needed — URLSearchParams handles
-  // percent-escaping of the whole value, including any commas
-  // inside the individual entries on decode. Empty entries are
-  // dropped so a stray trailing comma doesn't create `""` ids.
-  return values.join(",");
+/**
+ * The full list of search-param keys the filter owns. Exported so
+ * `useFilterState`'s "clear only filter-owned params" logic stays
+ * in lockstep — a future filter-axis addition that updates `KEYS`
+ * automatically updates the hook via this export. CodeRabbit nit
+ * on #88.
+ */
+export const FILTER_SEARCH_PARAM_KEYS: readonly string[] = Object.values(KEYS);
+
+/**
+ * Append each array value as a repeated same-key param. This is
+ * load-bearing over a comma-joined encoding: skill/tool/domain
+ * labels can legitimately contain commas (e.g. "Sales, Marketing"
+ * as a domain), and a comma-joined round-trip would silently
+ * split that into two filters on reload. URLSearchParams supports
+ * repeated keys natively — `.getAll(key)` on decode returns every
+ * occurrence.
+ *
+ * Codex P2 on #88 caught this. The fix preserves the pure contract:
+ * any string array value (including ones with commas) round-trips
+ * to the exact same array.
+ */
+function appendArray(
+  params: URLSearchParams,
+  key: string,
+  values: readonly string[],
+): void {
+  for (const v of values) {
+    const trimmed = v.trim();
+    if (trimmed.length === 0) continue;
+    params.append(key, trimmed);
+  }
 }
 
-function decodeArray(raw: string | null): string[] {
-  if (raw === null || raw.length === 0) return [];
-  return raw
-    .split(",")
+function decodeAllTrimmed(params: URLSearchParams, key: string): string[] {
+  return params
+    .getAll(key)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
 
 /**
+ * Read a scalar string param, returning `null` for both missing
+ * AND blank (whitespace-only) values. Load-bearing for date
+ * params — `?from=` with no value was previously decoding to `""`,
+ * which made `isFilterActive` return `true` and changed filtering
+ * behavior unexpectedly. CodeRabbit Major on #88.
+ */
+function decodeNullableParam(
+  params: URLSearchParams,
+  key: string,
+): string | null {
+  const raw = params.get(key);
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+/**
  * A full FilterState → URLSearchParams. Empty fields are OMITTED
  * from the result so a "no filter" state serializes to an empty
- * URL (clean default, no `?skills=&tools=&domains=` noise).
+ * URL (clean default). Array fields encode as repeated same-key
+ * params (`?skills=sql&skills=python`) rather than comma-joined —
+ * see `appendArray` for rationale.
  */
 export function encodeToSearchParams(state: FilterState): URLSearchParams {
   const params = new URLSearchParams();
-  const skills = encodeArray(state.skills);
-  if (skills !== null) params.set(KEYS.skills, skills);
-  const tools = encodeArray(state.tools);
-  if (tools !== null) params.set(KEYS.tools, tools);
-  const domains = encodeArray(state.domains);
-  if (domains !== null) params.set(KEYS.domains, domains);
-  const approval = encodeArray(state.approval);
-  if (approval !== null) params.set(KEYS.approval, approval);
+  appendArray(params, KEYS.skills, state.skills);
+  appendArray(params, KEYS.tools, state.tools);
+  appendArray(params, KEYS.domains, state.domains);
+  appendArray(params, KEYS.approval, state.approval);
   if (state.dateFrom !== null) params.set(KEYS.dateFrom, state.dateFrom);
   if (state.dateTo !== null) params.set(KEYS.dateTo, state.dateTo);
   return params;
@@ -136,18 +176,18 @@ export function encodeToSearchParams(state: FilterState): URLSearchParams {
  * links stable across minor schema drift.
  */
 export function decodeFromSearchParams(params: URLSearchParams): FilterState {
-  const approvalRaw = decodeArray(params.get(KEYS.approval));
+  const approvalRaw = decodeAllTrimmed(params, KEYS.approval);
   const approval: ApprovalFilterValue[] = approvalRaw.filter(
     (v): v is ApprovalFilterValue =>
       APPROVAL_FILTER_VALUES.includes(v as ApprovalFilterValue),
   );
   return {
-    skills: decodeArray(params.get(KEYS.skills)),
-    tools: decodeArray(params.get(KEYS.tools)),
-    domains: decodeArray(params.get(KEYS.domains)),
+    skills: decodeAllTrimmed(params, KEYS.skills),
+    tools: decodeAllTrimmed(params, KEYS.tools),
+    domains: decodeAllTrimmed(params, KEYS.domains),
     approval,
-    dateFrom: params.get(KEYS.dateFrom),
-    dateTo: params.get(KEYS.dateTo),
+    dateFrom: decodeNullableParam(params, KEYS.dateFrom),
+    dateTo: decodeNullableParam(params, KEYS.dateTo),
   };
 }
 

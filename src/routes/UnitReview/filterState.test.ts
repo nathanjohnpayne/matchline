@@ -81,11 +81,11 @@ describe("URL round-trip (encode ↔ decode)", () => {
 
   it("survives round-trip for values with spaces (form-encoded)", () => {
     // URLSearchParams is the transport — it form-encodes (space
-    // as `+`, comma as `%2C`). Pinning the round-trip rather than
-    // the specific encoding means a future swap in the encoding
-    // layer (e.g. to strict percent-encoding) stays green as long
-    // as decode still works. The risk this test catches is a
-    // lossy encode that can't be pasted back into a URL.
+    // as `+`). Pinning the round-trip rather than the specific
+    // encoding means a future swap in the encoding layer (e.g.
+    // to strict percent-encoding) stays green as long as decode
+    // still works. The risk this test catches is a lossy encode
+    // that can't be pasted back into a URL.
     const original = withFilter({
       domains: ["streaming video", "consumer web"],
     });
@@ -98,26 +98,95 @@ describe("URL round-trip (encode ↔ decode)", () => {
     expect(decoded.domains).toEqual(["streaming video", "consumer web"]);
   });
 
+  it("survives round-trip for values containing commas (regression: Codex P2 #88)", () => {
+    // The prior implementation used `values.join(",")` + `split(",")`
+    // which was lossy for any value containing a comma. Legit
+    // examples: "Sales, Marketing" as a domain, "PlayStation 4, 5"
+    // as a skill. The repeated-same-key encoding preserves commas
+    // verbatim. Pin so a future swap back to comma-joined fails
+    // loudly here instead of silently mangling user data.
+    const original = withFilter({
+      skills: ["PlayStation 4, 5", "sql"],
+      domains: ["Sales, Marketing", "streaming video"],
+    });
+    const encoded = encodeToSearchParams(original);
+    const decoded = decodeFromSearchParams(
+      new URLSearchParams(encoded.toString()),
+    );
+    expect(decoded.skills).toEqual(["PlayStation 4, 5", "sql"]);
+    expect(decoded.domains).toEqual(["Sales, Marketing", "streaming video"]);
+  });
+
+  it("array fields encode as repeated same-key params (?skills=sql&skills=python)", () => {
+    // Pin the wire format directly so a future maintainer who
+    // reads a URL and expects to see comma-joining knows the
+    // intent. The shape is load-bearing (see the commas
+    // regression test above) — not an arbitrary stylistic choice.
+    const encoded = encodeToSearchParams(
+      withFilter({ skills: ["sql", "python", "firebase"] }),
+    );
+    expect(encoded.getAll("skills")).toEqual(["sql", "python", "firebase"]);
+  });
+
   it("drops unknown approval values silently (minor-drift-safe)", () => {
     // A URL pasted from a future version with a new approval
     // category must decode to the known subset — not throw.
     // "rejected" is deliberately not part of this surface (rejected
     // has its own tab) so it's treated as "unknown" here.
-    const params = new URLSearchParams("approval=approved,rejected,unknown");
+    //
+    // Repeated-key encoding per #88 Codex P2 + CodeRabbit Major:
+    // ?approval=approved&approval=rejected&approval=unknown rather
+    // than comma-joined.
+    const params = new URLSearchParams(
+      "approval=approved&approval=rejected&approval=unknown",
+    );
     const state = decodeFromSearchParams(params);
     expect(state.approval).toEqual(["approved"]);
   });
 
-  it("ignores empty entries from split (`sql,,python` → [sql, python])", () => {
-    const params = new URLSearchParams("skills=sql,,python,");
+  it("ignores empty repeated-key entries (e.g. `?skills=sql&skills=&skills=python`)", () => {
+    // With the repeated-key encoding, the analogous edge case is
+    // a same-key param with an empty value. `decodeAllTrimmed`
+    // filters those out so a malformed URL doesn't produce `""`
+    // filter values.
+    const params = new URLSearchParams("skills=sql&skills=&skills=python");
     const state = decodeFromSearchParams(params);
     expect(state.skills).toEqual(["sql", "python"]);
   });
 
   it("trims whitespace in values (pasted URLs are messy)", () => {
-    const params = new URLSearchParams("skills=sql,%20python");
+    const params = new URLSearchParams("skills=sql&skills=%20python");
     const state = decodeFromSearchParams(params);
     expect(state.skills).toEqual(["sql", "python"]);
+  });
+
+  it("blank ?from= / ?to= params decode to null (CodeRabbit Major #88)", () => {
+    // Regression pin: `?from=` with no value was previously
+    // decoding to `""` (truthy), which made `isFilterActive`
+    // return true and made applyFilters treat the Unit as
+    // needing a date-window overlap with `""`. Defensive: both
+    // missing entirely and present-but-blank must map to null.
+    const blank = new URLSearchParams("from=&to=");
+    const decoded = decodeFromSearchParams(blank);
+    expect(decoded.dateFrom).toBeNull();
+    expect(decoded.dateTo).toBeNull();
+    expect(isFilterActive(decoded)).toBe(false);
+
+    // And the missing-entirely case still works (nothing changed)
+    const missing = new URLSearchParams("");
+    const decodedMissing = decodeFromSearchParams(missing);
+    expect(decodedMissing.dateFrom).toBeNull();
+    expect(decodedMissing.dateTo).toBeNull();
+  });
+
+  it("whitespace-only ?from=   normalizes to null", () => {
+    // Matching the trim behavior on array fields — a hand-typed
+    // URL with a whitespace value shouldn't quietly flip the
+    // filter into an active state.
+    const params = new URLSearchParams();
+    params.set("from", "   ");
+    const decoded = decodeFromSearchParams(params);
+    expect(decoded.dateFrom).toBeNull();
   });
 
   it("omits bound-is-null date params from the URL", () => {
