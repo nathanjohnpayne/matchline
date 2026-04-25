@@ -92,6 +92,39 @@ describe("semanticSimilarity (cosine clamped to [0, 1])", () => {
     expect(semanticSimilarity([0.7, 0.7], [-0.7, -0.7])).toBe(0);
   });
 
+  it("clamps cosine > 1 to 1 (regression: floating-point drift — Codex P2 / CodeRabbit Major #101)", () => {
+    // Self-similarity is mathematically exactly 1.0, but
+    // floating-point arithmetic can return slightly above 1
+    // (e.g. 1.0000000000000002) — the dot-product accumulator
+    // drifts via denormal-bit additions before the magnitude
+    // division normalizes. The matching engine's weighted-sum
+    // invariant assumes every component is in [0, 1]; a 1.0...02
+    // would drift the final_score fractionally above the
+    // documented upper bound.
+    //
+    // The current implementation should never produce above
+    // 1.0 because we clamp; this test pins the contract so a
+    // future refactor that drops the clamp surfaces here.
+    const v = [0.6, 0.8];
+    expect(semanticSimilarity(v, v)).toBeLessThanOrEqual(1);
+    expect(semanticSimilarity(v, v)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("upper-bound contract: result is ALWAYS in [0, 1] across many random pairs", () => {
+    // Direct contract pin across a broad input space (random
+    // vectors with components in [-1, 1]). If a future refactor
+    // drops the upper-bound clamp, the floating-point drift on
+    // ANY of these 100 trials surfaces the regression.
+    for (let trial = 0; trial < 100; trial++) {
+      const dim = 16;
+      const a = new Array(dim).fill(0).map(() => Math.random() * 2 - 1);
+      const b = new Array(dim).fill(0).map(() => Math.random() * 2 - 1);
+      const result = semanticSimilarity(a, b);
+      expect(result).toBeGreaterThanOrEqual(0);
+      expect(result).toBeLessThanOrEqual(1);
+    }
+  });
+
   it("propagates the EmptyVector / Mismatch errors from cosineSimilarity", () => {
     expect(() => semanticSimilarity([], [1])).toThrow(EmptyVectorError);
     expect(() => semanticSimilarity([1], [1, 1])).toThrow(

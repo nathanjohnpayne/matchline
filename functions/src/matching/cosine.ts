@@ -105,7 +105,23 @@ export function cosineSimilarity(a: number[], b: number[]): number {
  * this — keeping the range matched to every other scoring
  * component's documented [0, 1] is what makes the weighted-sum in
  * the PRD formula well-defined.
+ *
+ * BOTH bounds are clamped:
+ *
+ *   - **Lower** (negative → 0): vanishingly rare with OpenAI's
+ *     unit-normalized embeddings but possible with a future
+ *     provider, and required to keep the weighted-sum non-negative.
+ *   - **Upper** (> 1 → 1): floating-point arithmetic can produce
+ *     values like `1.0000000000000002` even for mathematically
+ *     identical vectors — the dot-product accumulator drifts via
+ *     denormal-bit additions before the magnitude division
+ *     normalizes. Without the upper clamp, downstream weighted
+ *     scores would drift fractionally above their documented
+ *     range. Codex P2 + CodeRabbit Major on #101 caught this.
  */
 export function semanticSimilarity(a: number[], b: number[]): number {
-  return Math.max(0, cosineSimilarity(a, b));
+  const cos = cosineSimilarity(a, b);
+  if (cos < 0) return 0;
+  if (cos > 1) return 1;
+  return cos;
 }
