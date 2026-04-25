@@ -438,4 +438,36 @@ describe("extractClaims", () => {
     expect(claims.map((c) => c.id)).toEqual(["c1", "c2", "c3"]);
     expect(new Set(generated).size).toBe(3);
   });
+
+  it("backs off (non-zero setTimeout delay) before retrying after a transport error", async () => {
+    // Pin: claim extraction fans out per-bullet via the
+    // orchestrator (#109) — without backoff a single 429 cascades
+    // fast. Helper at functions/src/llm/retry.ts.
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+      const { client } = mockClient([
+        new Error("ECONNRESET"),
+        mockMessage(VALID_RESPONSE),
+      ]);
+
+      const promise = extractClaims(
+        { text: "x", source_unit_ids: [] },
+        CTX,
+        { client, record, generateId: () => "c1" },
+      );
+
+      await vi.runAllTimersAsync();
+      const claims = await promise;
+
+      expect(claims.length).toBeGreaterThan(0);
+      const nonZeroDelays = setTimeoutSpy.mock.calls
+        .map((call) => Number(call[1]))
+        .filter((d) => Number.isFinite(d) && d > 0);
+      expect(nonZeroDelays.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

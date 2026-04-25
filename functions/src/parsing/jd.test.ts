@@ -216,4 +216,46 @@ describe("parseJobRequirements", () => {
 
     expect(reqs.every((r) => r.role_id === "role-xyz")).toBe(true);
   });
+
+  it("backs off (non-zero setTimeout delay) before retrying after a transport error", async () => {
+    // Pin: backoff is wired between transport-error retries. See
+    // functions/src/llm/retry.ts — shared schedule across the four
+    // LLM call sites, with longer waits on 429/503.
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+      const queue: (Anthropic.Messages.Message | Error)[] = [
+        new Error("ECONNRESET"),
+        mockMessage(VALID_RESPONSE),
+      ];
+      const client = {
+        messages: {
+          create: vi.fn(async () => {
+            const next = queue.shift();
+            if (!next) throw new Error("mock client: queue empty");
+            if (next instanceof Error) throw next;
+            return next;
+          }),
+        },
+      } as unknown as Anthropic;
+
+      const promise = parseJobRequirements("JD text", CTX, {
+        client,
+        record,
+        generateId: () => "id-stub",
+      });
+
+      await vi.runAllTimersAsync();
+      const reqs = await promise;
+
+      expect(reqs.length).toBeGreaterThan(0);
+      const nonZeroDelays = setTimeoutSpy.mock.calls
+        .map((call) => Number(call[1]))
+        .filter((d) => Number.isFinite(d) && d > 0);
+      expect(nonZeroDelays.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
