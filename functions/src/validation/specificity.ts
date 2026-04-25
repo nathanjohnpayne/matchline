@@ -83,25 +83,22 @@ export async function checkSpecificity(
 ): Promise<SpecificityResult> {
   const denyList = deps.denyList ?? SPECIFICITY_DENY_LIST;
 
-  // Layer 1: deterministic deny-list. Microseconds-fast, zero
-  // tokens. Returns the FIRST matching pattern; the rationale
-  // surfaces both the pattern and the curator's "why this is
-  // vague" explanation.
+  // Layer 1: deterministic deny-list as a HINT to the LLM, not
+  // a hard veto. Codex P1 round 1 on PR #113 caught the prior
+  // hard-veto behavior: "drove results — shipped a 30% revenue
+  // lift" trips the deny-list AND has concrete anchors, but the
+  // hard-veto branch returned specific=false without consulting
+  // the LLM. False-positive flag, blocked export until manual
+  // dismissal.
+  //
+  // New shape: deny-list match → run LLM fallback WITH the
+  // matched pattern as context. The LLM weighs the trope
+  // against the rest of the claim and decides. The result
+  // always carries matched_pattern when a deny-list hit
+  // occurred (so the orchestrator can surface both signals
+  // in the Application Editor flag detail).
   const denyHit = matchDenyList(claim.text, denyList);
-  if (denyHit !== null) {
-    const rationale = denyHit.suggested_specific
-      ? `${denyHit.reason} Consider: ${denyHit.suggested_specific}`
-      : denyHit.reason;
-    return {
-      specific: false,
-      rationale,
-      matched_pattern: denyHit.pattern,
-    };
-  }
-
-  // Layer 2: LLM fallback. Same retry + cost-tracking shape as
-  // the rest of the validation pipeline.
-  return runLlmFallback(claim, ctx, deps);
+  return runLlmFallback(claim, ctx, deps, denyHit);
 }
 
 /**
@@ -110,6 +107,13 @@ export async function checkSpecificity(
  * deny-list's curated priority — earlier-listed patterns win on
  * ties. SPECIFICITY_DENY_LIST is ordered roughly by frequency
  * of occurrence in PM resume tropes.
+ *
+ * Both sides are lowercased to ensure case-insensitive
+ * comparison. The production deny-list is curated to be all-
+ * lowercase (pinned by `denyList.test.ts`), but a deps-injected
+ * deny-list (used by tests + future custom callers) might
+ * contain mixed-case patterns. CodeRabbit Minor on PR #113
+ * caught the prior version that only lowercased the claim text.
  */
 function matchDenyList(
   claimText: string,
@@ -117,7 +121,7 @@ function matchDenyList(
 ): DenyListEntry | null {
   const lower = claimText.toLowerCase();
   for (const entry of denyList) {
-    if (lower.includes(entry.pattern)) return entry;
+    if (lower.includes(entry.pattern.toLowerCase())) return entry;
   }
   return null;
 }
@@ -126,6 +130,7 @@ async function runLlmFallback(
   claim: Claim,
   ctx: SpecificityContext,
   deps: SpecificityDeps,
+  denyHit: DenyListEntry | null,
 ): Promise<SpecificityResult> {
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
@@ -148,7 +153,15 @@ async function runLlmFallback(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
-    const userContent = `${prompt.userFewShot}\n\nClaim: ${JSON.stringify(claim.text)}`;
+    // Append the deny-list match as context when one occurred.
+    // The prompt's hard rule 5 ("don't be overly strict") and
+    // rules 3-4 (numbers/names usually specific; bare action
+    // verbs not) give the model the framework to decide. The
+    // hint flags the trope; the LLM weighs the rest.
+    const denyListContext = denyHit
+      ? `\n\nNote: this claim contains the phrase ${JSON.stringify(denyHit.pattern)}, which is on a curated list of vague PM tropes (${denyHit.reason}). Consider whether the rest of the claim contains specific anchors (numbers, named products, surfaces) that override the vagueness, or whether the trope is the substance of the claim.`
+      : "";
+    const userContent = `${prompt.userFewShot}\n\nClaim: ${JSON.stringify(claim.text)}${denyListContext}`;
 
     let response: Anthropic.Messages.Message;
     try {
@@ -211,7 +224,7 @@ async function runLlmFallback(
       continue;
     }
 
-    return finalizeResult(parsed.data);
+    return finalizeResult(parsed.data, denyHit);
   }
 
   throw new SpecificityCheckError(
@@ -220,12 +233,17 @@ async function runLlmFallback(
   );
 }
 
-function finalizeResult(raw: SpecificityResponseV1): SpecificityResult {
+function finalizeResult(
+  raw: SpecificityResponseV1,
+  denyHit: DenyListEntry | null,
+): SpecificityResult {
+  // matched_pattern surfaces when a deny-list hit occurred,
+  // regardless of the LLM's verdict. The orchestrator (#109)
+  // uses this to render both signals in the Application Editor
+  // flag detail: "trope detected, LLM decided X."
   return {
     specific: raw.specific,
     rationale: raw.rationale,
-    // matched_pattern intentionally absent — LLM-fallback
-    // results don't have a deny-list pattern. The orchestrator
-    // distinguishes deny-list vs. LLM by this field's presence.
+    ...(denyHit !== null && { matched_pattern: denyHit.pattern }),
   };
 }

@@ -95,71 +95,138 @@ function makeClaim(text: string): Claim {
 
 // -- Layer 1: deny-list ------------------------------------------------------
 
-describe("checkSpecificity: deny-list (deterministic layer)", () => {
-  it("EVERY deny-list entry triggers a specific=false result with no LLM call", async () => {
-    // Pin: the deny-list works deterministically for every
-    // curated entry. If a future deny-list addition is broken
-    // (e.g. wrong-case pattern, regex syntax in the substring
-    // by accident), this test fails.
-    const record = vi.fn<typeof RecordUsage>(async () => 0);
-    const { client, create } = mockClient([]);
+describe("checkSpecificity: deny-list as LLM hint (Codex P1 round 1 on #113)", () => {
+  // The deny-list is now a HINT to the LLM, not a hard veto.
+  // Every deny-list match produces an LLM call with the matched
+  // pattern as context; the LLM decides specific=true/false
+  // based on whether the rest of the claim has anchors that
+  // override the trope.
+  //
+  // The result.matched_pattern still surfaces when a deny-list
+  // hit occurred — the orchestrator uses it for the
+  // "trope detected, LLM decided X" UX.
+
+  it("EVERY deny-list entry triggers an LLM call with the matched pattern as context", async () => {
+    // Pin: deny-list match → LLM call. The matched_pattern is
+    // surfaced in the result so the orchestrator can display
+    // both signals.
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
 
     for (const entry of SPECIFICITY_DENY_LIST) {
-      // Wrap the deny-list pattern in a sentence to mimic real
-      // claim text (the matcher does substring containment).
+      const { client, create } = mockClient([
+        mockMessage({
+          specific: false,
+          rationale: "Vague — no concrete anchors override the trope.",
+        }),
+      ]);
       const claim = makeClaim(`The user ${entry.pattern} on the project.`);
       const result = await checkSpecificity(claim, CTX, { client, record });
 
       expect(result.specific).toBe(false);
       expect(result.matched_pattern).toBe(entry.pattern);
-      expect(result.rationale).toContain(entry.reason);
-    }
+      expect(create).toHaveBeenCalledTimes(1);
 
-    // Critical: the LLM was never called for any deny-list match.
-    expect(create).not.toHaveBeenCalled();
-    expect(record).not.toHaveBeenCalled();
+      // The LLM-call user content includes the deny-list hint.
+      const callArgs = create.mock.calls[0]![0] as {
+        messages: { content: string }[];
+      };
+      expect(callArgs.messages[0]!.content).toContain(
+        `contains the phrase ${JSON.stringify(entry.pattern)}`,
+      );
+    }
   });
 
-  it("matches case-insensitively (the deny-list is lowercase; claim text might not be)", async () => {
-    const record = vi.fn<typeof RecordUsage>(async () => 0);
-    const { client, create } = mockClient([]);
+  it("LLM can OVERRIDE a deny-list match: trope + concrete anchors → specific=true", async () => {
+    // The load-bearing fix for Codex P1 round 1. A claim like
+    // "drove results — shipped a 30% revenue lift" trips the
+    // deny-list AND has concrete anchors. The LLM gets the trope
+    // as a hint but sees the rest of the claim and rules
+    // specific=true.
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client } = mockClient([
+      mockMessage({
+        specific: true,
+        rationale:
+          "Despite the 'drove results' phrasing, the claim names a specific metric (30%) and a surface (revenue) — verifiable.",
+      }),
+    ]);
+
+    const result = await checkSpecificity(
+      makeClaim("The user drove results — shipped a 30% revenue lift."),
+      CTX,
+      { client, record },
+    );
+
+    // LLM overrode the trope.
+    expect(result.specific).toBe(true);
+    // matched_pattern STILL surfaces — the deny-list hit happened.
+    expect(result.matched_pattern).toBe("drove results");
+    // The rationale comes from the LLM, not the deny-list curator.
+    expect(result.rationale).toContain("30%");
+  });
+
+  it("matches case-insensitively (claim text might be uppercase)", async () => {
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client, create } = mockClient([
+      mockMessage({
+        specific: false,
+        rationale: "No concrete anchors override the trope.",
+      }),
+    ]);
     const claim = makeClaim(
       "The user COLLABORATED CROSS-FUNCTIONALLY across teams.",
     );
     const result = await checkSpecificity(claim, CTX, { client, record });
-    expect(result.specific).toBe(false);
     expect(result.matched_pattern).toBe("collaborated cross-functionally");
-    expect(create).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("returns the FIRST matching pattern when a claim contains multiple deny-list phrases", async () => {
-    // "drove results" appears earlier in the deny-list than
-    // "leveraged data"; the matcher returns the first hit.
-    const record = vi.fn<typeof RecordUsage>(async () => 0);
-    const { client, create } = mockClient([]);
+  it("returns the FIRST matching pattern (exact-pin) when a claim contains multiple deny-list phrases", async () => {
+    // CR Major on PR #113: pin the first-hit ordering EXACTLY,
+    // not "either is acceptable". The contract is
+    // "deny-list-order; earlier entries win". `drove results`
+    // appears at index 2 in SPECIFICITY_DENY_LIST; `leveraged
+    // data` appears at index 4. So `drove results` wins.
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client } = mockClient([
+      mockMessage({
+        specific: false,
+        rationale: "Vague — no anchors.",
+      }),
+    ]);
     const claim = makeClaim(
       "The user drove results and leveraged data on the migration.",
     );
     const result = await checkSpecificity(claim, CTX, { client, record });
 
-    expect(result.specific).toBe(false);
-    // Either "drove results" or "leveraged data" wins; the
-    // contract is "first hit by deny-list order" — pin both
-    // possible matches as acceptable so a future deny-list re-
-    // ordering doesn't accidentally break this.
-    expect(["drove results", "leveraged data"]).toContain(
-      result.matched_pattern,
-    );
-    expect(create).not.toHaveBeenCalled();
+    expect(result.matched_pattern).toBe("drove results");
   });
 
-  it("includes suggested_specific in the rationale when present", async () => {
-    const record = vi.fn<typeof RecordUsage>(async () => 0);
-    const { client } = mockClient([]);
-    const claim = makeClaim("The user drove results on the project.");
-    const result = await checkSpecificity(claim, CTX, { client, record });
+  it("normalizes a deps-injected deny-list with mixed-case patterns (CodeRabbit Minor on PR #113)", async () => {
+    // The matcher lowercases BOTH the claim text AND the
+    // deny-list entry's pattern. A custom deny-list passed via
+    // DI with mixed-case patterns still matches.
+    const customDenyList = [
+      { pattern: "Did STUFF", reason: "Way too vague." },
+    ];
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client } = mockClient([
+      mockMessage({
+        specific: false,
+        rationale: "No anchors.",
+      }),
+    ]);
 
-    expect(result.rationale).toContain("Consider:");
+    const result = await checkSpecificity(
+      makeClaim("The user did stuff on the team."),
+      CTX,
+      { client, record, denyList: customDenyList },
+    );
+
+    // The deny-list entry's pattern is preserved as-given (the
+    // matched_pattern field returns the curator's original
+    // casing); the comparison itself is case-insensitive.
+    expect(result.matched_pattern).toBe("Did STUFF");
   });
 
   it("accepts a custom deny-list via dep injection (testability pin)", async () => {
@@ -169,8 +236,13 @@ describe("checkSpecificity: deny-list (deterministic layer)", () => {
         reason: "Way too vague.",
       },
     ];
-    const record = vi.fn<typeof RecordUsage>(async () => 0);
-    const { client, create } = mockClient([]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client } = mockClient([
+      mockMessage({
+        specific: false,
+        rationale: "Vague.",
+      }),
+    ]);
 
     const result = await checkSpecificity(
       makeClaim("The user did stuff on the team."),
@@ -178,9 +250,7 @@ describe("checkSpecificity: deny-list (deterministic layer)", () => {
       { client, record, denyList: customDenyList },
     );
 
-    expect(result.specific).toBe(false);
     expect(result.matched_pattern).toBe("did stuff");
-    expect(create).not.toHaveBeenCalled();
   });
 });
 
