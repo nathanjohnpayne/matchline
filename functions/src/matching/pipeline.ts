@@ -123,15 +123,21 @@ export async function runMatchingPipeline(
   ]);
 
   const matches: UnitMatch[] = [];
+  // Track candidate-pair scoring outcomes so a wholesale-failure
+  // run (e.g. a bad deploy where score() throws on every pair)
+  // doesn't silently commit `[]` and wipe valid prior matches.
+  // CodeRabbit Critical #1 on PR #104.
+  let candidatePairs = 0;
+  let scoreFailures = 0;
   for (const unit of units) {
     if (unit.embedding === undefined || unit.embedding.length === 0) {
       // Skipped — missing embedding is an upstream bug. The
       // re-embed callable (#84) clears `reembed_pending` after
       // refilling the embedding; if that flag is set, the unit
       // shouldn't be in `listApprovedExperienceUnits` results at
-      // all. Logging at the pair level would explode under
-      // typical N×M; we instead surface in the callable's
-      // response payload.
+      // all (the default read filters reembed_pending units;
+      // CodeRabbit Major #2 on PR #104). Logging at the pair
+      // level would explode under typical N×M.
       continue;
     }
     for (const requirement of requirements) {
@@ -141,6 +147,7 @@ export async function runMatchingPipeline(
       ) {
         continue;
       }
+      candidatePairs += 1;
       let result: ScoreResult;
       try {
         result = score(unit, requirement, deps.asOf ? { asOf: deps.asOf } : undefined);
@@ -149,6 +156,7 @@ export async function runMatchingPipeline(
         // caught missing embeddings. If `score()` throws for
         // any other reason (corrupted input, etc.), skip the
         // pair rather than failing the whole run.
+        scoreFailures += 1;
         continue;
       }
       matches.push({
@@ -181,6 +189,27 @@ export async function runMatchingPipeline(
   // sufficient — ties don't need a secondary key for V1.
   matches.sort((a, b) => b.final_score - a.final_score);
 
+  // Wholesale-failure guard: if every candidate pair was
+  // attempted and every one threw, the empty match set isn't
+  // a real "no matches" — it's a scoring bug. Aborting before
+  // persistBatch protects prior valid matches from being
+  // wiped by a bad deploy. The "all-rejected" case (which
+  // legitimately produces zero candidate pairs because there
+  // are no units in `listApprovedExperienceUnits` results)
+  // is unaffected: candidatePairs === 0, so this guard is a
+  // no-op. CodeRabbit Critical #1 on PR #104.
+  if (
+    candidatePairs > 0 &&
+    matches.length === 0 &&
+    scoreFailures === candidatePairs
+  ) {
+    throw new Error(
+      `runMatchingPipeline: scoring threw on every candidate pair (${scoreFailures}/${candidatePairs}); ` +
+        "aborting persistBatch to avoid clearing prior valid matches. This is a scoring-code bug, " +
+        "not a normal-result-of-input.",
+    );
+  }
+
   // Persist even when matches is empty so a Role whose Units
   // were all rejected (and therefore filtered out of
   // `listApprovedExperienceUnits`) still has its prior matches
@@ -202,7 +231,25 @@ async function defaultListUnits(
     .where("owner_uid", "==", ctx.ownerUid)
     .where("user_approved", "==", true)
     .get();
-  return snap.docs.map((d) => d.data() as ExperienceUnit);
+  // Filter out units with `reembed_pending: true` — their stored
+  // embedding is invalid (set by an edit or manual insert; cleared
+  // by the reembed callable at #84 after the embedding is
+  // regenerated). Including them would feed a stale vector into
+  // semanticSimilarity. CodeRabbit Major #2 on PR #104.
+  //
+  // Done as an in-memory filter rather than a Firestore
+  // .where("reembed_pending", "==", false) for two reasons:
+  //   1. The field is OPTIONAL — a unit that's never been
+  //      re-embedded won't have it set, and Firestore's `==`
+  //      doesn't match missing fields, so a query filter would
+  //      drop fully-valid units. The negation (`!=`) requires a
+  //      separate index AND still has the missing-field problem.
+  //   2. V1 single-user data volume is small — the in-memory
+  //      filter cost is negligible vs. the additional index
+  //      complexity.
+  return snap.docs
+    .map((d) => d.data() as ExperienceUnit)
+    .filter((unit) => unit.reembed_pending !== true);
 }
 
 async function defaultListRequirements(
@@ -244,16 +291,22 @@ async function defaultListRequirements(
  * This avoids a chunked join through Requirements with
  * Firestore's 30-value `in`-clause limit.
  *
- * V1 scale (≤100 Units × ≤30 Requirements = ≤3,000 matches per
- * Role) is well under Firestore's 500-op transaction limit IF
- * we chunk. For the V1 expected band (10 Units × 20 Reqs = 200
- * matches), one transaction suffices. We cap at 200 ops per
- * transaction as a conservative ceiling — exceeding it throws
- * (loud failure) rather than silently splitting and losing the
- * atomic-replace property; chunked transactional replace lands
- * in #20.6 if real V1 usage hits that ceiling.
+ * V1 expected band: 10 Units × 20 Requirements = 200 matches
+ * per Role. The replace flow does N deletes + N writes, so the
+ * second-and-subsequent runs need 2× the per-run match count in
+ * ops. Firestore's actual transaction op limit is 500; we cap
+ * at 450 to leave headroom for the read query. Codex P1 on PR
+ * #104 caught a prior 200-op cap that would have made the
+ * second run on a 200-match Role fail (200 deletes + 200 writes
+ * = 400 ops) — exactly the path users hit when they edit a Unit
+ * and re-run matching.
+ *
+ * Exceeding 450 throws (loud failure) rather than silently
+ * splitting and losing the atomic-replace property; chunked
+ * transactional replace lands in #20.6 if real V1 usage hits
+ * that ceiling.
  */
-const FIRESTORE_TX_OP_LIMIT = 200;
+const FIRESTORE_TX_OP_LIMIT = 450;
 
 async function replaceMatchesForRole(
   ctx: RunMatchingContext,

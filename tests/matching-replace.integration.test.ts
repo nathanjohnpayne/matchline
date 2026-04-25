@@ -61,7 +61,15 @@ beforeAll(async () => {
         "`firebase emulators:exec` — FIRESTORE_EMULATOR_HOST not set.",
     );
   }
-  app = initializeApp({ projectId: PROJECT_ID }, "matching-replace-test");
+  // Initialize as the DEFAULT app (no second-arg name).
+  // `runMatchingPipeline` calls `getAdminDb()` which calls
+  // `getFirestore()` with no app arg — that resolves to the
+  // default app. A named app would leave the default unset and
+  // Firebase throws "default app does not exist." CodeRabbit
+  // Critical #3 on PR #104 caught this; the test ran fine in
+  // CR's static analysis but never actually ran locally because
+  // emulator-Java isn't installed.
+  app = initializeApp({ projectId: PROJECT_ID });
   db = getFirestore(app);
 });
 

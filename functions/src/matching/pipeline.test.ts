@@ -263,7 +263,86 @@ describe("runMatchingPipeline", () => {
     expect(score).not.toHaveBeenCalled();
   });
 
-  it("score throws → pair skipped; pipeline does NOT abort the whole run", async () => {
+  it("score throws on EVERY candidate pair → pipeline aborts, persistBatch NOT called (CodeRabbit Critical #1)", async () => {
+    // Wholesale-scoring-failure guard: if every candidate pair
+    // throws, the empty match set isn't a real "no matches" —
+    // it's a scoring bug. Aborting before persistBatch protects
+    // prior valid matches from being wiped by a bad deploy.
+    const score = vi.fn(() => {
+      throw new Error("synthetic universal scoring failure");
+    });
+    const persistBatch = vi.fn(async () => {});
+
+    await expect(
+      runMatchingPipeline(CTX, {
+        listUnits: async () => [makeUnit({ id: "u1" }), makeUnit({ id: "u2" })],
+        listRequirements: async () => [
+          makeRequirement({ id: "r1" }),
+          makeRequirement({ id: "r2" }),
+        ],
+        score,
+        persistBatch,
+      }),
+    ).rejects.toThrow(/scoring threw on every candidate pair/);
+
+    // Critical: persistBatch must NOT be called. If it were,
+    // we'd have wiped prior matches.
+    expect(persistBatch).not.toHaveBeenCalled();
+    // All 4 pairs were attempted before the wholesale-failure
+    // detection.
+    expect(score).toHaveBeenCalledTimes(4);
+  });
+
+  it("score throws on SOME pairs → those are skipped; persistBatch DOES run (partial-failure stays partial)", async () => {
+    // The wholesale-failure guard only fires if EVERY pair
+    // fails. A partial-failure run with some surviving matches
+    // still persists those matches.
+    const u1 = makeUnit({ id: "u1" });
+    const u2 = makeUnit({ id: "u2" });
+    const r = makeRequirement({ id: "r1" });
+
+    const score = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("synthetic score failure");
+      })
+      .mockImplementationOnce(() => makeScoreResult(0.7));
+
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(CTX, {
+      listUnits: async () => [u1, u2],
+      listRequirements: async () => [r],
+      score,
+      persistBatch,
+    });
+
+    // 1 match survived; pipeline does NOT throw.
+    expect(result).toHaveLength(1);
+    expect(result[0]!.experience_unit_id).toBe("u2");
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("zero candidate pairs (no embeddings on either side) → persistBatch DOES run; clearing stale rows is correct here", async () => {
+    // candidatePairs=0 case: no pair was even attempted, so
+    // there's no scoring-failure signal. This is the
+    // legitimate "all rejected" / "no embeddings yet" case
+    // and the empty-result clear semantics ARE correct.
+    const score = vi.fn();
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(CTX, {
+      listUnits: async () => [makeUnit({ embedding: undefined })],
+      listRequirements: async () => [makeRequirement({ embedding: undefined })],
+      score,
+      persistBatch,
+    });
+
+    expect(result).toEqual([]);
+    expect(score).not.toHaveBeenCalled();
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+    expect(persistBatch).toHaveBeenCalledWith(CTX, []);
+  });
+
+  it("score throws → pair skipped; pipeline does NOT abort the whole run (legacy partial-failure check)", async () => {
     // Defense-in-depth: if a single (unit, req) pair throws
     // (corrupt input, etc.), the surrounding pairs still
     // produce matches. This is the right call for V1 because
