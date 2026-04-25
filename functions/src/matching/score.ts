@@ -179,10 +179,59 @@ const SENIORITY_LADDER: readonly SeniorityLevel[] = [
   "director",
 ];
 
+/**
+ * Verb-style seniority signals that the extraction prompt
+ * (resume.v1.md) emits in `seniority_signals[]`. Real extracted
+ * Units use prose like "led", "owned", "drove" rather than
+ * ladder-noun terms like "senior" or "staff", so a strict
+ * ladder-only lookup would systematically zero the seniority
+ * dimension on every Unit. Codex P1 review on PR #103 caught
+ * this against runtime fixtures in resume.test.ts.
+ *
+ * Mapping rationale:
+ *   - led / owned / drove / managed / directed → senior. These
+ *     are PM/IC ownership verbs; a Unit that "led" or "owned"
+ *     a workstream attests to senior-level scope. Mid-IC work
+ *     is more often described in passive form ("contributed
+ *     to", "shipped"), which we don't map upward.
+ *   - architected → staff. Architecture work usually implies
+ *     staff+ scope.
+ *   - executive / vp / head / chief → director. Org-level
+ *     leadership verbs.
+ *
+ * Anything not in this table OR the ladder itself drops to
+ * `null` and gets handled by the unrecognized-signal fallback
+ * in `seniorityAlignment()` below (returns 0.5 — neutral —
+ * rather than 0, so a Unit that attests to *something* but in
+ * a vocabulary we haven't mapped doesn't get hard-zeroed).
+ *
+ * If the extraction prompt evolves to emit ladder terms
+ * directly, this table is forward-compatible — ladder lookups
+ * still work via the explicit-ladder branch in `seniorityIndex`.
+ */
+const SENIORITY_VERB_MAP: Readonly<Record<string, SeniorityLevel>> =
+  Object.freeze({
+    led: "senior",
+    owned: "senior",
+    drove: "senior",
+    managed: "senior",
+    directed: "senior",
+    architected: "staff",
+    executive: "director",
+    vp: "director",
+    head: "director",
+    chief: "director",
+  });
+
 function seniorityIndex(value: string): number | null {
   const key = normalizeKey(value);
-  const idx = SENIORITY_LADDER.indexOf(key as SeniorityLevel);
-  return idx === -1 ? null : idx;
+  // Explicit ladder term first — exact-match takes precedence.
+  const ladderIdx = SENIORITY_LADDER.indexOf(key as SeniorityLevel);
+  if (ladderIdx !== -1) return ladderIdx;
+  // Verb-style mapping fallback.
+  const mapped = SENIORITY_VERB_MAP[key];
+  if (mapped !== undefined) return SENIORITY_LADDER.indexOf(mapped);
+  return null;
 }
 
 /**
@@ -217,10 +266,22 @@ export function seniorityAlignment(
   if (requirement.seniority_level === undefined) return 1;
   const required = SENIORITY_LADDER.indexOf(requirement.seniority_level);
   if (required === -1) return 1; // unknown level on the requirement side → no constraint
+  // Two distinct cases for "unit yields no ladder-mapped signal":
+  //   1. unit.seniority_signals = [] — the Unit attests to no
+  //      level at all. Hard-zero (0): no evidence of meeting
+  //      the requirement's bar.
+  //   2. unit.seniority_signals = ["unmapped_term"] — the Unit
+  //      attests to *something*, but in vocabulary we can't
+  //      ladder-map. Neutral (0.5): treating an unrecognized
+  //      verb as a hard zero would systematically penalize
+  //      Units whose extraction prompt uses prose we haven't
+  //      mapped yet. The 0.5 is a "we don't know" default.
+  // Codex P1 review on PR #103 surfaced both cases.
+  if (unit.seniority_signals.length === 0) return 0;
   const unitLevels = unit.seniority_signals
     .map(seniorityIndex)
     .filter((v): v is number => v !== null);
-  if (unitLevels.length === 0) return 0; // requirement asks; unit signals nothing
+  if (unitLevels.length === 0) return 0.5;
   const best = Math.max(...unitLevels);
   const gap = Math.abs(best - required);
   if (gap === 0) return 1;
@@ -295,7 +356,12 @@ export function scopeAlignment(
  *
  * Inputs:
  *   - `unit.date_range.end` if present (explicit end of the
- *     experience), else `unit.date_range.start`.
+ *     experience). If `end` is missing, the role is treated as
+ *     **ongoing** — the effective end is `asOf` itself, so
+ *     ongoing roles score 1.0. Codex P1 review on PR #103
+ *     caught the prior fall-back-to-start behavior, which
+ *     systematically under-ranked current work (a 6-year
+ *     ongoing role would score ~0.42 instead of 1.0).
  *   - `asOf` defaults to `new Date()`; injected for
  *     deterministic tests.
  *
@@ -308,8 +374,8 @@ export function scopeAlignment(
  * the matching engine would otherwise heavily de-prioritize
  * against newer roles.
  *
- * If the Unit has no `date_range`, returns 0.5 (neutral) —
- * we have no signal in either direction.
+ * If the Unit has no `date_range` at all, returns 0.5 (neutral)
+ * — we have no signal in either direction.
  */
 const HALF_LIFE_YEARS = 5;
 const RECENCY_FLOOR = 0.1;
@@ -321,13 +387,25 @@ export function recency(
 ): number {
   const range = unit.date_range;
   if (range === undefined) return 0.5;
-  const referenceDateStr = range.end ?? range.start;
+  const asOf = options?.asOf ?? new Date();
+  // Missing `end` means "ongoing" — score as if the role ends
+  // at `asOf` (recency 1.0). Falling back to `start` would
+  // systematically penalize current work.
+  if (range.end === undefined) {
+    // Validate `start` is a real date. If it isn't, we have no
+    // anchor to confirm the Unit is well-formed → neutral 0.5.
+    if (typeof range.start !== "string" || range.start.length === 0) {
+      return 0.5;
+    }
+    if (Number.isNaN(new Date(range.start).getTime())) return 0.5;
+    return 1;
+  }
+  const referenceDateStr = range.end;
   if (typeof referenceDateStr !== "string" || referenceDateStr.length === 0) {
     return 0.5;
   }
   const referenceDate = new Date(referenceDateStr);
   if (Number.isNaN(referenceDate.getTime())) return 0.5;
-  const asOf = options?.asOf ?? new Date();
   const yearsAgo = Math.max(
     0,
     (asOf.getTime() - referenceDate.getTime()) / MS_PER_YEAR,

@@ -271,6 +271,66 @@ describe("seniorityAlignment", () => {
     const req = makeRequirement({ seniority_level: "senior" });
     expect(seniorityAlignment(unit, req)).toBe(0.5);
   });
+
+  // Codex P1 review on PR #103: the extraction prompt
+  // (resume.v1.md) emits verb-style signals like "led" and
+  // "owned". A strict ladder-only lookup hard-zeros every
+  // extracted Unit when a requirement sets seniority_level —
+  // a systematic bug. The next two tests pin the verb→ladder
+  // mapping so a regression to ladder-only would surface here.
+
+  it("maps the verb 'led' to senior (extraction-prompt vocabulary)", () => {
+    // resume.test.ts line 63 emits seniority_signals: ["led"]
+    // for a Disney+ playback Unit. Against a senior requirement
+    // this should be an exact match (1.0), not 0.
+    const unit = makeUnit({ seniority_signals: ["led"] });
+    const req = makeRequirement({ seniority_level: "senior" });
+    expect(seniorityAlignment(unit, req)).toBe(1);
+  });
+
+  it("maps the verb 'owned' to senior", () => {
+    const unit = makeUnit({ seniority_signals: ["owned"] });
+    const req = makeRequirement({ seniority_level: "senior" });
+    expect(seniorityAlignment(unit, req)).toBe(1);
+  });
+
+  it("maps 'architected' to staff", () => {
+    const unit = makeUnit({ seniority_signals: ["architected"] });
+    const req = makeRequirement({ seniority_level: "staff" });
+    expect(seniorityAlignment(unit, req)).toBe(1);
+  });
+
+  it("maps 'vp' / 'head' to director", () => {
+    const reqDirector = makeRequirement({ seniority_level: "director" });
+    expect(
+      seniorityAlignment(makeUnit({ seniority_signals: ["vp"] }), reqDirector),
+    ).toBe(1);
+    expect(
+      seniorityAlignment(
+        makeUnit({ seniority_signals: ["head"] }),
+        reqDirector,
+      ),
+    ).toBe(1);
+  });
+
+  it("returns 0.5 (neutral) when unit signals are ALL unrecognized (not 0)", () => {
+    // The unit attests to *something* but in vocabulary we can't
+    // ladder-map. Penalizing this with 0 (the prior behavior)
+    // would systematically zero out Units whose extraction
+    // prompt evolves to use new prose. Codex P1 fix.
+    const unit = makeUnit({ seniority_signals: ["totally novel verb xyz"] });
+    const req = makeRequirement({ seniority_level: "senior" });
+    expect(seniorityAlignment(unit, req)).toBe(0.5);
+  });
+
+  it("still returns 0 when unit.seniority_signals is empty (no signal at all)", () => {
+    // Distinct from the "all unrecognized" case above: an empty
+    // signals array means the Unit attests to no level. That's
+    // still a hard zero — no evidence of meeting the bar.
+    const unit = makeUnit({ seniority_signals: [] });
+    const req = makeRequirement({ seniority_level: "senior" });
+    expect(seniorityAlignment(unit, req)).toBe(0);
+  });
 });
 
 // -- scopeAlignment ---------------------------------------------------------
@@ -365,23 +425,37 @@ describe("recency", () => {
     expect(recency(makeUnit())).toBe(0.5);
   });
 
-  it("returns 0.5 (neutral) when date_range.end is missing AND date_range.start unparseable", () => {
-    // The ?? falls back to start; if start is also unparseable
-    // the Date parse fails and returns 0.5.
-    const unit = makeUnit({ date_range: { start: "not-a-date" } });
-    expect(recency(unit)).toBe(0.5);
+  // Codex P1 review on PR #103: missing date_range.end means
+  // the role is ONGOING, not "ended on the start date." The
+  // prior fallback-to-start behavior systematically under-
+  // ranked current work — a 6-year ongoing role scored ~0.42
+  // instead of 1.0. The next two tests pin the new behavior.
+
+  it("treats missing date_range.end as ongoing (recency = 1.0)", () => {
+    const asOf = new Date("2026-04-24T00:00:00.000Z");
+    const unitOngoing = makeUnit({ date_range: { start: "2020-01-01" } });
+    expect(recency(unitOngoing, { asOf })).toBe(1);
   });
 
-  it("falls back to date_range.start when end is missing", () => {
+  it("ongoing role with explicit end equal to asOf scores 1.0 (consistency check)", () => {
+    // Pin the equivalence: an ongoing role (no end) and an
+    // ended-today role behave identically.
     const asOf = new Date("2026-04-24T00:00:00.000Z");
-    const unitWithEnd = makeUnit({
-      date_range: { start: "2025-01-01", end: "2025-06-01" },
+    const ongoing = makeUnit({ date_range: { start: "2020-01-01" } });
+    const endedToday = makeUnit({
+      date_range: { start: "2020-01-01", end: "2026-04-24" },
     });
-    const unitWithoutEnd = makeUnit({ date_range: { start: "2025-06-01" } });
-    expect(recency(unitWithEnd, { asOf })).toBeCloseTo(
-      recency(unitWithoutEnd, { asOf }),
-      6,
+    expect(recency(ongoing, { asOf })).toBeCloseTo(
+      recency(endedToday, { asOf }),
+      9,
     );
+  });
+
+  it("returns 0.5 (neutral) when end is missing AND start is unparseable", () => {
+    // We can't even confirm the Unit is well-formed → neutral
+    // 0.5, same as missing date_range.
+    const unit = makeUnit({ date_range: { start: "not-a-date" } });
+    expect(recency(unit)).toBe(0.5);
   });
 
   it("monotonic: a more-recent Unit scores higher than an older Unit", () => {
