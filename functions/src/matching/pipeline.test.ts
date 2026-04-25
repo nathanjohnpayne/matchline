@@ -121,8 +121,16 @@ describe("runMatchingPipeline", () => {
       expect(m.owner_uid).toBe("user-alice");
       expect(m.role_id).toBe("role-1");
       expect(m.final_score).toBe(0.8);
-      expect(m.rationale).toBe("");
-      expect(m.surface_evidence).toBe("");
+      // Rationale + surface_evidence are populated by #100's
+      // deterministic generator (wired via the default
+      // `generateRationale` dep). Assert both non-empty rather
+      // than pinning specific prose — the rationale.test.ts
+      // surface owns that contract; here we just verify the
+      // wire-in copied BOTH fields onto the persisted record
+      // (a regression that wired only `rationale` would slip
+      // past a single-field check; CodeRabbit Minor on PR #105).
+      expect(m.rationale.length).toBeGreaterThan(0);
+      expect(m.surface_evidence.length).toBeGreaterThan(0);
       expect(m.approved_for_use).toBe(false);
       expect(m.user_rejected).toBe(false);
       expect(m.created_at).toBe("2026-04-25T00:00:00.000Z");
@@ -263,6 +271,67 @@ describe("runMatchingPipeline", () => {
     expect(score).not.toHaveBeenCalled();
   });
 
+  it("generateRationale throws on a pair → that pair is skipped; pipeline does NOT abort the run (Codex P1 + CR Major round 1 on #105)", async () => {
+    // Rationale-generation failures must be isolated per pair,
+    // same as score() failures. A bad input or injected-dep
+    // bug in generateRationale must not tear down the entire
+    // matching run for the role.
+    const u1 = makeUnit({ id: "u1" });
+    const u2 = makeUnit({ id: "u2" });
+    const r = makeRequirement({ id: "r1" });
+
+    let rationaleCallCount = 0;
+    const generateRationaleStub = vi.fn(() => {
+      rationaleCallCount += 1;
+      if (rationaleCallCount === 1) throw new Error("synthetic rationale failure");
+      return {
+        rationale: "ok",
+        surface_evidence: "ok",
+        driving_component: "semantic_similarity" as const,
+      };
+    });
+
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(CTX, {
+      listUnits: async () => [u1, u2],
+      listRequirements: async () => [r],
+      score: () => makeScoreResult(0.5),
+      generateRationale: generateRationaleStub,
+      persistBatch,
+    });
+
+    // The first pair (u1, r1) is skipped because rationale
+    // generation threw. The second pair (u2, r1) succeeds.
+    expect(result).toHaveLength(1);
+    expect(result[0]!.experience_unit_id).toBe("u2");
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("generateRationale throws on EVERY pair → wholesale-failure abort fires (no persistBatch)", async () => {
+    // Same shape as the wholesale-scoring-failure test below,
+    // but via generateRationale instead. Both code paths feed
+    // into the same scoreFailures counter inside the per-pair
+    // try/catch so the abort guard fires identically.
+    const generateRationaleStub = vi.fn(() => {
+      throw new Error("synthetic rationale failure on every pair");
+    });
+    const persistBatch = vi.fn(async () => {});
+
+    await expect(
+      runMatchingPipeline(CTX, {
+        listUnits: async () => [makeUnit({ id: "u1" }), makeUnit({ id: "u2" })],
+        listRequirements: async () => [makeRequirement({ id: "r1" })],
+        score: () => makeScoreResult(0.5),
+        generateRationale: generateRationaleStub,
+        persistBatch,
+      }),
+    ).rejects.toThrow(/scoring or rationale generation threw on every candidate pair/);
+
+    // Critical: persistBatch must NOT be called — prior matches
+    // protected.
+    expect(persistBatch).not.toHaveBeenCalled();
+  });
+
   it("score throws on EVERY candidate pair → pipeline aborts, persistBatch NOT called (CodeRabbit Critical #1)", async () => {
     // Wholesale-scoring-failure guard: if every candidate pair
     // throws, the empty match set isn't a real "no matches" —
@@ -283,7 +352,7 @@ describe("runMatchingPipeline", () => {
         score,
         persistBatch,
       }),
-    ).rejects.toThrow(/scoring threw on every candidate pair/);
+    ).rejects.toThrow(/scoring or rationale generation threw on every candidate pair/);
 
     // Critical: persistBatch must NOT be called. If it were,
     // we'd have wiped prior matches.

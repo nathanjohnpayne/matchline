@@ -42,6 +42,7 @@ import type {
   UnitMatch,
 } from "../types/capability.js";
 
+import { generateRationale as generateRationaleFn } from "./rationale.js";
 import {
   score as scoreFn,
   type ScoreResult,
@@ -89,6 +90,13 @@ export interface MatchingDeps {
    * `score()` from #97.
    */
   readonly score?: typeof scoreFn;
+  /**
+   * Rationale generator — injectable for tests. Default is the
+   * deterministic template-driven generator from #100. A future
+   * LLM-driven follow-up swaps this dep without changing the
+   * pipeline shape.
+   */
+  readonly generateRationale?: typeof generateRationaleFn;
   /** Injectable for deterministic ids in tests. */
   readonly generateId?: () => string;
   /** Injectable clock for deterministic timestamps in tests. */
@@ -114,6 +122,7 @@ export async function runMatchingPipeline(
   const listRequirements = deps.listRequirements ?? defaultListRequirements;
   const persistBatch = deps.persistBatch ?? replaceMatchesForRole;
   const score = deps.score ?? scoreFn;
+  const generateRationale = deps.generateRationale ?? generateRationaleFn;
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date().toISOString());
 
@@ -149,13 +158,28 @@ export async function runMatchingPipeline(
       }
       candidatePairs += 1;
       let result: ScoreResult;
+      let rationaleResult: ReturnType<typeof generateRationaleFn>;
       try {
         result = score(unit, requirement, deps.asOf ? { asOf: deps.asOf } : undefined);
+        // Rationale generation is inside the same try/catch as
+        // scoring: a bad Unit/Requirement payload or an
+        // injected-dep failure in generateRationale must NOT
+        // tear down the entire matching run for the role.
+        // Treated identically to a score() failure — one bad
+        // pair surfaces in the Gaps view (#21) instead of
+        // wiping the match graph. Codex P1 + CodeRabbit Major
+        // on PR #105.
+        rationaleResult = generateRationale({
+          components: result.components,
+          unit,
+          requirement,
+        });
       } catch {
         // Defense-in-depth: the pre-filter above should have
-        // caught missing embeddings. If `score()` throws for
-        // any other reason (corrupted input, etc.), skip the
-        // pair rather than failing the whole run.
+        // caught missing embeddings. If score() OR
+        // generateRationale throws for any other reason
+        // (corrupted input, etc.), skip the pair rather than
+        // failing the whole run.
         scoreFailures += 1;
         continue;
       }
@@ -171,12 +195,11 @@ export async function runMatchingPipeline(
         semantic_score: result.semantic_score,
         rule_score: result.rule_score,
         final_score: result.final_score,
-        // Rationale string is populated by #100; the V1
-        // matching engine emits empty strings here. The
-        // Matches tab (#21) renders "no rationale yet" until
-        // the rationale generator lands.
-        rationale: "",
-        surface_evidence: "",
+        // Rationale + surface_evidence populated by #100's
+        // deterministic generator. Cached on the doc so the
+        // Matches tab (#21) doesn't re-render compute.
+        rationale: rationaleResult.rationale,
+        surface_evidence: rationaleResult.surface_evidence,
         approved_for_use: false,
         user_rejected: false,
         created_at: now(),
@@ -204,9 +227,9 @@ export async function runMatchingPipeline(
     scoreFailures === candidatePairs
   ) {
     throw new Error(
-      `runMatchingPipeline: scoring threw on every candidate pair (${scoreFailures}/${candidatePairs}); ` +
-        "aborting persistBatch to avoid clearing prior valid matches. This is a scoring-code bug, " +
-        "not a normal-result-of-input.",
+      `runMatchingPipeline: scoring or rationale generation threw on every candidate pair ` +
+        `(${scoreFailures}/${candidatePairs}); aborting persistBatch to avoid clearing ` +
+        "prior valid matches. This is a scoring/rationale-code bug, not a normal-result-of-input.",
     );
   }
 
