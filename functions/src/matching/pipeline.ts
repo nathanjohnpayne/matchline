@@ -227,9 +227,9 @@ export async function runMatchingPipeline(
     scoreFailures === candidatePairs
   ) {
     throw new Error(
-      `runMatchingPipeline: scoring threw on every candidate pair (${scoreFailures}/${candidatePairs}); ` +
-        "aborting persistBatch to avoid clearing prior valid matches. This is a scoring-code bug, " +
-        "not a normal-result-of-input.",
+      `runMatchingPipeline: scoring or rationale generation threw on every candidate pair ` +
+        `(${scoreFailures}/${candidatePairs}); aborting persistBatch to avoid clearing ` +
+        "prior valid matches. This is a scoring/rationale-code bug, not a normal-result-of-input.",
     );
   }
 

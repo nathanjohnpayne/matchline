@@ -174,8 +174,12 @@ describe("generateRationale: semantic_similarity template", () => {
 
   it("truncates long summaries to 200 chars in the displayed prose, but keeps full text in surface_evidence", () => {
     // Pin the truncation contract: rationale gets a truncated
-    // display string; surface_evidence keeps the full text so
-    // the Matches tab (#21) can show the full claim on hover.
+    // display string at exactly 200 chars (199 chars + ellipsis);
+    // surface_evidence keeps the full text so the Matches tab
+    // (#21) can show the full claim on hover. CodeRabbit Minor
+    // on round 2 of PR #105 caught the prior version that only
+    // asserted "< 500" — would have shipped green if a refactor
+    // moved the boundary to 300.
     const longSummary = "x".repeat(500);
     const input = makeInput({
       components: makeComponents({ semantic_similarity: 1 }),
@@ -191,9 +195,16 @@ describe("generateRationale: semantic_similarity template", () => {
     const result = generateRationale(input);
     expect(result.surface_evidence).toBe(longSummary);
     expect(result.surface_evidence.length).toBe(500);
-    // Rationale is bounded; ellipsis indicates truncation.
-    expect(result.rationale.length).toBeLessThan(500);
-    expect(result.rationale).toContain("…");
+    // Pin the EXACT truncation: 199 x's + ellipsis = 200 chars
+    // for the unit-summary slot. The rationale also embeds the
+    // requirement summary (which is short here, ~5 chars), so
+    // we substring-search for the exact truncated block rather
+    // than asserting overall string length.
+    const expectedTruncatedUnit = "x".repeat(199) + "…";
+    expect(result.rationale).toContain(expectedTruncatedUnit);
+    // Sanity: ellipsis present, no 200-x run that would mean
+    // no truncation happened.
+    expect(result.rationale).not.toContain("x".repeat(200));
   });
 });
 

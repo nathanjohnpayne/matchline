@@ -121,12 +121,16 @@ describe("runMatchingPipeline", () => {
       expect(m.owner_uid).toBe("user-alice");
       expect(m.role_id).toBe("role-1");
       expect(m.final_score).toBe(0.8);
-      // Rationale is populated by #100's deterministic
-      // generator (wired via the default `generateRationale`
-      // dep). Assert non-empty rather than pinning specific
-      // prose — the rationale.test.ts surface owns that
-      // contract; here we just verify the wire-in worked.
+      // Rationale + surface_evidence are populated by #100's
+      // deterministic generator (wired via the default
+      // `generateRationale` dep). Assert both non-empty rather
+      // than pinning specific prose — the rationale.test.ts
+      // surface owns that contract; here we just verify the
+      // wire-in copied BOTH fields onto the persisted record
+      // (a regression that wired only `rationale` would slip
+      // past a single-field check; CodeRabbit Minor on PR #105).
       expect(m.rationale.length).toBeGreaterThan(0);
+      expect(m.surface_evidence.length).toBeGreaterThan(0);
       expect(m.approved_for_use).toBe(false);
       expect(m.user_rejected).toBe(false);
       expect(m.created_at).toBe("2026-04-25T00:00:00.000Z");
@@ -321,7 +325,7 @@ describe("runMatchingPipeline", () => {
         generateRationale: generateRationaleStub,
         persistBatch,
       }),
-    ).rejects.toThrow(/scoring threw on every candidate pair/);
+    ).rejects.toThrow(/scoring or rationale generation threw on every candidate pair/);
 
     // Critical: persistBatch must NOT be called — prior matches
     // protected.
@@ -348,7 +352,7 @@ describe("runMatchingPipeline", () => {
         score,
         persistBatch,
       }),
-    ).rejects.toThrow(/scoring threw on every candidate pair/);
+    ).rejects.toThrow(/scoring or rationale generation threw on every candidate pair/);
 
     // Critical: persistBatch must NOT be called. If it were,
     // we'd have wiped prior matches.
