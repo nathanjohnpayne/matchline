@@ -27,3 +27,16 @@ export class ClaimExtractionError extends Error {
     this.failures = failures;
   }
 }
+
+export class TraceabilityCheckError extends Error {
+  readonly failures: readonly ValidationAttemptFailure[];
+
+  constructor(
+    message: string,
+    failures: readonly ValidationAttemptFailure[],
+  ) {
+    super(message);
+    this.name = "TraceabilityCheckError";
+    this.failures = failures;
+  }
+}
