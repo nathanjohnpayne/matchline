@@ -97,11 +97,16 @@ function loadSeedFile(filename: string): readonly OntologyEntry[] {
     );
   }
   // Validate shape — every entry must have a non-empty canonical
-  // string and a synonyms array (which may be empty).
+  // string (after trim — whitespace-only normalizes to an empty
+  // lookup key, making the entry silently unmatchable; Codex P2
+  // round 4 on #102) and a synonyms array (which may be empty).
   for (const entry of parsed.entries) {
-    if (typeof entry.canonical !== "string" || entry.canonical.length === 0) {
+    if (
+      typeof entry.canonical !== "string" ||
+      normalizeKey(entry.canonical).length === 0
+    ) {
       throw new Error(
-        `Ontology seed ${filename}: entry missing canonical string`,
+        `Ontology seed ${filename}: entry has empty or whitespace-only canonical (raw=${JSON.stringify(entry.canonical)})`,
       );
     }
     if (!Array.isArray(entry.synonyms)) {

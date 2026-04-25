@@ -36,7 +36,14 @@ VIOLATIONS=0
 # 1. No other file may DEFINE a normalizeSkill / normalizeTool /
 #    normalizeDomain function. The single definition is in
 #    functions/src/matching/normalize.ts.
-DEF_PATTERN='(function|const|export)\s+(normalize(Skill|Tool|Domain))\b'
+#
+# Pattern covers every JS/TS declaration form: function /
+# const / let / var / class. Codex P2 round 4 on #102 caught
+# that the prior pattern missed `let` (and would also have
+# missed `var` and `class`); a drift attempt using any of those
+# could silently slip past. The `\bexport\s+` prefix is
+# optional — every named declaration form follows it.
+DEF_PATTERN='(\bexport\s+)?(function|const|let|var|class)\s+(normalize(Skill|Tool|Domain))\b'
 DEF_HITS=$(grep -rEn "$DEF_PATTERN" \
   --include='*.ts' --include='*.tsx' \
   --exclude-dir=node_modules \
