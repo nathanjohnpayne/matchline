@@ -408,6 +408,67 @@ describe("checkTraceability", () => {
     );
   });
 
+  it("formats Units with seniority_signals + scope_signals in the prompt content (Codex P2 round 1 on #111)", async () => {
+    // The prompt's hard rule 3 references seniority_signals for
+    // role-level fact checking. A prior version of formatUnit
+    // omitted these fields, leaving the rule unable to fire.
+    // Codex caught the inconsistency.
+    const richUnit = makeUnit({
+      id: "unit-rich",
+      seniority_signals: ["led", "owned"],
+      scope_signals: ["5M users", "$10M budget"],
+    });
+    const { client, create } = mockClient([
+      mockMessage({
+        supports: true,
+        supporting_unit_id: "unit-rich",
+        rationale: "Unit role-level signals back the claim.",
+      }),
+    ]);
+
+    await checkTraceability(CLAIM, [richUnit], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+    });
+
+    const callArgs = create.mock.calls[0]![0] as {
+      messages: { content: string }[];
+    };
+    const content = callArgs.messages[0]!.content;
+    expect(content).toContain('seniority_signals: ["led", "owned"]');
+    expect(content).toContain('scope_signals: ["5M users", "$10M budget"]');
+  });
+
+  it("omits seniority_signals + scope_signals from prompt content when empty (token-cost optimization)", async () => {
+    // Pin the inverse: when a Unit has no role-level or scope
+    // signals, the formatter doesn't emit empty arrays. Most
+    // Units won't have both; keeping the format tight matters
+    // at scale.
+    const sparseUnit = makeUnit({
+      id: "unit-sparse",
+      seniority_signals: [],
+      scope_signals: [],
+    });
+    const { client, create } = mockClient([
+      mockMessage({
+        supports: false,
+        rationale: "No support found.",
+      }),
+    ]);
+
+    await checkTraceability(CLAIM, [sparseUnit], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+    });
+
+    const callArgs = create.mock.calls[0]![0] as {
+      messages: { content: string }[];
+    };
+    const content = callArgs.messages[0]!.content;
+    expect(content).not.toContain("seniority_signals:");
+    expect(content).not.toContain("scope_signals:");
+  });
+
   it("handles a Unit with no metrics gracefully", async () => {
     const noMetrics = makeUnit({ id: "unit-no-metrics", metrics: [] });
     const { client, create } = mockClient([

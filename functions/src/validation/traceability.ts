@@ -240,11 +240,21 @@ function buildUserContent(
 }
 
 function formatUnit(unit: ExperienceUnit): string {
-  // Deterministic, prompt-friendly formatting. Including only
-  // the fields the prompt's hard rules reference (raw_text,
-  // normalized_summary, metrics) — adding more would burn tokens
-  // for no gain. The Unit `id` is critical because the model's
-  // response uses it as `supporting_unit_id`.
+  // Deterministic, prompt-friendly formatting. Includes every
+  // field the prompt's hard rules reference:
+  //   - raw_text + normalized_summary (rules 1, 2, 5, 6)
+  //   - metrics (rule 1: "Numeric facts (percentages, counts,
+  //     durations) DO need to match within reasonable rounding")
+  //   - seniority_signals (rule 3: "role-level fact (lead, owner,
+  //     principal) and no Unit's seniority_signals or prose backs
+  //     that level → false") — Codex P2 round 1 on PR #111 caught
+  //     a prior version that omitted this field, leaving the
+  //     prompt rule unable to fire.
+  //   - scope_signals (rule 3 by analogy: scope claims need their
+  //     scope context, same shape as seniority).
+  // The Unit `id` is critical — the model's response uses it as
+  // `supporting_unit_id`, and the value-level guard in
+  // `finalizeResult` checks set membership.
   const metricsBlock =
     unit.metrics && unit.metrics.length > 0
       ? unit.metrics
@@ -254,12 +264,27 @@ function formatUnit(unit: ExperienceUnit): string {
           )
           .join(",\n")
       : "  (no metrics)";
-  return [
+  const lines: string[] = [
     `[Unit ${unit.id}]`,
     `raw_text: "${unit.raw_text}"`,
     `normalized_summary: "${unit.normalized_summary}"`,
     `metrics: [`,
     metricsBlock,
     `]`,
-  ].join("\n");
+  ];
+  // Seniority + scope are emitted only when non-empty — the
+  // prompt's rule 3 only needs them for role-level / scope
+  // claims, and most Units won't have both. Keeping the format
+  // tight reduces token cost on the common case.
+  if (unit.seniority_signals && unit.seniority_signals.length > 0) {
+    lines.push(
+      `seniority_signals: [${unit.seniority_signals.map((s) => `"${s}"`).join(", ")}]`,
+    );
+  }
+  if (unit.scope_signals && unit.scope_signals.length > 0) {
+    lines.push(
+      `scope_signals: [${unit.scope_signals.map((s) => `"${s}"`).join(", ")}]`,
+    );
+  }
+  return lines.join("\n");
 }
