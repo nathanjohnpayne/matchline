@@ -308,14 +308,20 @@ describe("extractClaims", () => {
     expect(callArgs.messages[0]!.content).toContain("Led migration.");
   });
 
-  it("default generateId produces STABLE ids: re-extracting the same bullet → identical claim ids (CR Major round 1 on #110)", async () => {
-    // Pin: the default id generator is content-based (SHA-256
-    // of bulletId::claimText). Two extractions of the same
-    // bullet that yield the same claim texts produce identical
-    // claim ids. This is the load-bearing contract for
-    // downstream traceability/specificity flag records — they
-    // key on (asset_id, bullet_id, claim_id) and would churn on
-    // every re-validation if ids were random.
+  it("default generateId produces STABLE ids when the LLM emits claims in the same order (CR Major round 1 on #110)", async () => {
+    // Pin: the default id generator is content+index-based
+    // (SHA-256 of bulletId::index::claimText). Two extractions
+    // of the same bullet that yield the same claim texts in the
+    // same order produce identical claim ids — the cross-run
+    // stability we want for re-validation.
+    //
+    // The index dependency means a re-ordered LLM emission
+    // produces different ids; this is a deliberate trade-off
+    // (Codex P1 round 2 on #110) — within-bullet uniqueness is
+    // load-bearing, cross-run stability under re-ordering is
+    // nice-to-have. The orchestrator (#109) handles re-validation
+    // by replacing the flag set wholesale, mirroring the
+    // replace-by-(role,owner) pattern from #99.
     const record = vi.fn<typeof RecordUsage>(async () => 0.001);
     const { client: client1 } = mockClient([mockMessage(VALID_RESPONSE)]);
     const { client: client2 } = mockClient([mockMessage(VALID_RESPONSE)]);
@@ -342,6 +348,40 @@ describe("extractClaims", () => {
     for (const c of claims1) {
       expect(c.id).toMatch(/^[0-9a-f]{24}$/);
     }
+  });
+
+  it("default generateId yields UNIQUE ids when the LLM emits duplicate claim text within one bullet (Codex P1 round 2 on #110)", async () => {
+    // Within-bullet uniqueness is load-bearing for the
+    // flag-record key contract (downstream traceability +
+    // specificity records key on (asset_id, bullet_id, claim_id)).
+    // Codex round 2 reproduced a regression where the prior
+    // `(bulletId, claimText)`-only hash collapsed duplicate-text
+    // claims into one id — the second claim's flag would clobber
+    // the first's. This test pins the fix: the index in the
+    // hash guarantees within-bullet uniqueness even on identical
+    // claim text.
+    const dupResponse = {
+      claims: [
+        { text: "The user collaborated cross-functionally.", raw_span: "Collaborated" },
+        { text: "The user collaborated cross-functionally.", raw_span: "cross-functionally" },
+      ],
+    };
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client } = mockClient([mockMessage(dupResponse)]);
+
+    // No generateId override → uses the production default.
+    const claims = await extractClaims(
+      { text: "Collaborated cross-functionally.", source_unit_ids: [] },
+      CTX,
+      { client, record },
+    );
+
+    expect(claims).toHaveLength(2);
+    // Both claims have the same text, but they MUST have
+    // different ids — that's the uniqueness contract.
+    expect(claims[0]!.text).toBe(claims[1]!.text);
+    expect(claims[0]!.id).not.toBe(claims[1]!.id);
+    expect(new Set(claims.map((c) => c.id)).size).toBe(2);
   });
 
   it("default generateId differs across bullets even with identical claim text (bulletId is the discriminator)", async () => {

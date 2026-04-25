@@ -67,21 +67,45 @@ export interface ClaimExtractionDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
   /**
-   * Generate a stable claim id given the parent bulletId and the
-   * claim's text. The default is a SHA-256-based content hash
-   * (`${bulletId}::${claimText}` → 24-char hex prefix), so re-
-   * extracting an unchanged bullet yields identical claim ids
-   * across runs — important because downstream traceability +
-   * specificity flag records key on `(asset_id, bullet_id,
-   * claim_id)`. A `randomUUID()` default would churn those
-   * records on every re-validation; CodeRabbit Major on PR #110
-   * caught the regression risk.
+   * Generate a stable claim id given the parent bulletId, the
+   * claim's index within the bullet (0-based, in LLM emission
+   * order), and the claim's text. The default is a SHA-256-based
+   * content hash (`${bulletId}::${index}::${claimText}` →
+   * 24-char hex prefix).
+   *
+   * Why include the index:
+   *   - Within-bullet uniqueness is load-bearing — downstream
+   *     traceability + specificity flag records key on
+   *     `(asset_id, bullet_id, claim_id)`. If the LLM emits
+   *     duplicate claim text within one bullet (rare but real),
+   *     a content-hash without the index produces identical
+   *     ids and one claim's flag clobbers the other. Codex P1
+   *     round 2 on PR #110 caught the regression: a mocked
+   *     two-claim response with same text yielded `unique_ids 1
+   *     claims 2`.
+   *   - Tradeoff: ids are NOT stable across LLM re-orderings.
+   *     If the model emits claims in a different order between
+   *     runs (e.g. "led migration" first one run, second the
+   *     next), the same claim gets a different id. We accept
+   *     this — uniqueness within a bullet is the harder
+   *     constraint to recover from than churn across re-runs.
+   *     The orchestrator (#109) handles re-validation by
+   *     replacing the flag set wholesale, mirroring the
+   *     replace-by-(role,owner) pattern from #99.
+   *
+   * Initial CR Major round 1 caught the `randomUUID()` default
+   * (no stability at all). This index-aware default trades the
+   * weaker stability guarantee for the stronger uniqueness one.
    *
    * Tests can inject a deterministic generator (e.g. a counter)
-   * by providing this dep — mirrors the override pattern already
-   * used elsewhere in the codebase.
+   * by providing this dep — mirrors the override pattern
+   * already used elsewhere in the codebase.
    */
-  readonly generateId?: (bulletId: string, claimText: string) => string;
+  readonly generateId?: (
+    bulletId: string,
+    index: number,
+    claimText: string,
+  ) => string;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -216,21 +240,24 @@ function buildUserContent(
 function stampServerFields(
   response: ClaimExtractionResponseV1,
   ctx: ClaimExtractionContext,
-  generateId: (bulletId: string, claimText: string) => string,
+  generateId: (bulletId: string, index: number, claimText: string) => string,
 ): Claim[] {
-  return response.claims.map((raw) => stampOne(raw, ctx, generateId));
+  return response.claims.map((raw, index) =>
+    stampOne(raw, index, ctx, generateId),
+  );
 }
 
 function stampOne(
   raw: ClaimItemV1,
+  index: number,
   ctx: ClaimExtractionContext,
-  generateId: (bulletId: string, claimText: string) => string,
+  generateId: (bulletId: string, index: number, claimText: string) => string,
 ): Claim {
   // Firestore rejects undefined — only include raw_span when
   // present. Same conditional-spread pattern as
   // parsing/jd.ts::stampOne.
   return {
-    id: generateId(ctx.bulletId, raw.text),
+    id: generateId(ctx.bulletId, index, raw.text),
     bullet_id: ctx.bulletId,
     text: raw.text,
     ...(raw.raw_span !== undefined && { raw_span: raw.raw_span }),
@@ -238,10 +265,15 @@ function stampOne(
 }
 
 /**
- * Default stable id generator. SHA-256 of `${bulletId}::${claimText}`,
- * 24-char hex prefix. Stable across runs for the same (bullet,
- * claim text) pair → re-extracting an unchanged bullet yields
- * identical claim ids → downstream flag records don't churn.
+ * Default stable id generator. SHA-256 of
+ * `${bulletId}::${index}::${claimText}`, 24-char hex prefix.
+ *
+ * Index ensures within-bullet uniqueness even when the LLM
+ * emits duplicate claim text — Codex P1 round 2 on PR #110
+ * caught the prior `(bulletId, claimText)`-only hash collapsing
+ * duplicate-text claims into one id. Within-bullet uniqueness
+ * is load-bearing for the flag-record key contract; we trade
+ * cross-run stability under LLM re-ordering to get it.
  *
  * 24 chars of hex = 96 bits of collision space. With ~5 claims
  * per bullet × ~50 bullets per asset × ~100 assets = 25K claims
@@ -254,9 +286,13 @@ function stampOne(
  * UUIDs (the canonical bulletId source) or English prose (the
  * canonical claimText source).
  */
-function defaultGenerateId(bulletId: string, claimText: string): string {
+function defaultGenerateId(
+  bulletId: string,
+  index: number,
+  claimText: string,
+): string {
   return createHash("sha256")
-    .update(`${bulletId}::${claimText}`)
+    .update(`${bulletId}::${index}::${claimText}`)
     .digest("hex")
     .slice(0, 24);
 }
