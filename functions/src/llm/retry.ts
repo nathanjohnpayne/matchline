@@ -17,11 +17,18 @@
  * just slows the happy retry without addressing any server-side
  * pressure.
  *
- * 429 / 503 detection: Anthropic SDK exposes `err.status` on
- * `APIError`. When the status is 429 (rate-limited) or 503 (server
- * overload), both the base delay and cap are doubled — the
- * server-side window is real, so we sit out longer. Other transport
- * errors (ECONNRESET, ETIMEDOUT, etc.) use the shorter schedule.
+ * "Slow down" status detection: Anthropic SDK exposes `err.status`
+ * on `APIError`. When the status indicates the server is rate-
+ * limiting us or is overloaded — `429`, `502`, `503`, `504`, or
+ * Anthropic's documented `529 "Overloaded"` — both the base delay
+ * and the cap are doubled. Other transport errors (ECONNRESET,
+ * ETIMEDOUT, raw network failures) use the shorter schedule.
+ *
+ * Note: `Retry-After` and `anthropic-ratelimit-*-reset` response
+ * headers are NOT consulted yet. A 30s reset window can blow our
+ * 3-attempt budget waiting <16s and then throw. Tracked as a
+ * post-merge follow-up; this helper produces a strictly better
+ * baseline than the previous zero-delay retry either way.
  */
 
 const BASE_MS = 500;
@@ -31,6 +38,17 @@ const RATE_LIMIT_CAP_MS = 10000;
 const JITTER_MS = 250;
 
 /**
+ * HTTP statuses where the server (or an upstream proxy) is asking
+ * us to slow down. Anthropic-specific: `529` is their documented
+ * "Overloaded" code. The proxy codes `502` / `504` are included
+ * because they're functionally equivalent to "service is sick,
+ * back off" — distinct from a flat-out network failure.
+ */
+const SLOW_DOWN_STATUSES: ReadonlySet<number> = new Set([
+  429, 502, 503, 504, 529,
+]);
+
+/**
  * Compute the backoff in milliseconds for a given retry attempt and
  * the error that triggered it.
  *
@@ -38,18 +56,18 @@ const JITTER_MS = 250;
  * — 500ms, 1s, 2s, 4s, 5s (capped), with up to 250ms uniform jitter
  * to spread out simultaneous burst clients.
  *
- * Schedule (status 429 or 503): `min(1000 * 2^attempt, 10000) +
- * jitter` — doubled base and cap. The server has explicitly told us
- * to slow down; honor it.
+ * Schedule ("slow down" statuses 429/502/503/504/529):
+ * `min(1000 * 2^attempt, 10000) + jitter` — doubled base and cap.
+ * The server has explicitly told us to slow down; honor it.
  *
  * Returns a non-negative integer. `attempt` is clamped to ≥0 so a
  * bad caller doesn't produce `2^negative` weirdness.
  */
 export function transportBackoffMs(attempt: number, err?: unknown): number {
   const status = extractStatus(err);
-  const isRateLimited = status === 429 || status === 503;
-  const baseMs = isRateLimited ? RATE_LIMIT_BASE_MS : BASE_MS;
-  const capMs = isRateLimited ? RATE_LIMIT_CAP_MS : CAP_MS;
+  const slowDown = status !== undefined && SLOW_DOWN_STATUSES.has(status);
+  const baseMs = slowDown ? RATE_LIMIT_BASE_MS : BASE_MS;
+  const capMs = slowDown ? RATE_LIMIT_CAP_MS : CAP_MS;
   const safeAttempt = Math.max(0, Math.floor(attempt));
   const exponential = Math.min(baseMs * 2 ** safeAttempt, capMs);
   const jitter = Math.floor(Math.random() * JITTER_MS);

@@ -42,8 +42,21 @@ describe("transportBackoffMs", () => {
     expect(transportBackoffMs(20, { status: 503 })).toBe(10000);
   });
 
+  it("doubles base and cap for upstream-proxy slow-down (502, 504)", () => {
+    expect(transportBackoffMs(0, { status: 502 })).toBe(1000);
+    expect(transportBackoffMs(0, { status: 504 })).toBe(1000);
+  });
+
+  it("doubles base and cap for Anthropic's documented 529 \"Overloaded\"", () => {
+    // 529 is Anthropic-specific (not a standard HTTP status). Listed
+    // in their error-handling docs alongside 429 — applying the
+    // same slow-down schedule.
+    expect(transportBackoffMs(0, { status: 529 })).toBe(1000);
+    expect(transportBackoffMs(20, { status: 529 })).toBe(10000);
+  });
+
   it("treats plain Error instances (ECONNRESET etc.) as default schedule", () => {
-    // No `.status` field — falls through the rate-limit detection.
+    // No `.status` field — falls through the slow-down detection.
     expect(transportBackoffMs(0, new Error("ECONNRESET"))).toBe(500);
     expect(transportBackoffMs(1, new Error("ETIMEDOUT"))).toBe(1000);
   });
@@ -53,11 +66,14 @@ describe("transportBackoffMs", () => {
     expect(transportBackoffMs(0, { status: null })).toBe(500);
   });
 
-  it("ignores non-rate-limit numeric statuses (e.g. 500)", () => {
-    // 500 Internal Server Error is treated as default — the API may
-    // be flaky but isn't explicitly asking us to back off harder.
+  it("ignores non-slow-down numeric statuses (4xx caller errors, 500)", () => {
+    // 400 / 401 are caller-bug responses — exponential retry won't
+    // help, but if a caller passes one through, default schedule is
+    // the safer fallback. 500 is generic "something went wrong"
+    // without a slow-down semantic.
+    expect(transportBackoffMs(0, { status: 400 })).toBe(500);
+    expect(transportBackoffMs(0, { status: 401 })).toBe(500);
     expect(transportBackoffMs(0, { status: 500 })).toBe(500);
-    expect(transportBackoffMs(0, { status: 502 })).toBe(500);
   });
 
   it("clamps negative attempt to 0 (defensive — caller bug shouldn't crash)", () => {
