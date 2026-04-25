@@ -121,8 +121,12 @@ describe("runMatchingPipeline", () => {
       expect(m.owner_uid).toBe("user-alice");
       expect(m.role_id).toBe("role-1");
       expect(m.final_score).toBe(0.8);
-      expect(m.rationale).toBe("");
-      expect(m.surface_evidence).toBe("");
+      // Rationale is populated by #100's deterministic
+      // generator (wired via the default `generateRationale`
+      // dep). Assert non-empty rather than pinning specific
+      // prose — the rationale.test.ts surface owns that
+      // contract; here we just verify the wire-in worked.
+      expect(m.rationale.length).toBeGreaterThan(0);
       expect(m.approved_for_use).toBe(false);
       expect(m.user_rejected).toBe(false);
       expect(m.created_at).toBe("2026-04-25T00:00:00.000Z");

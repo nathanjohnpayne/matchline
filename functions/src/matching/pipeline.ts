@@ -42,6 +42,7 @@ import type {
   UnitMatch,
 } from "../types/capability.js";
 
+import { generateRationale as generateRationaleFn } from "./rationale.js";
 import {
   score as scoreFn,
   type ScoreResult,
@@ -89,6 +90,13 @@ export interface MatchingDeps {
    * `score()` from #97.
    */
   readonly score?: typeof scoreFn;
+  /**
+   * Rationale generator — injectable for tests. Default is the
+   * deterministic template-driven generator from #100. A future
+   * LLM-driven follow-up swaps this dep without changing the
+   * pipeline shape.
+   */
+  readonly generateRationale?: typeof generateRationaleFn;
   /** Injectable for deterministic ids in tests. */
   readonly generateId?: () => string;
   /** Injectable clock for deterministic timestamps in tests. */
@@ -114,6 +122,7 @@ export async function runMatchingPipeline(
   const listRequirements = deps.listRequirements ?? defaultListRequirements;
   const persistBatch = deps.persistBatch ?? replaceMatchesForRole;
   const score = deps.score ?? scoreFn;
+  const generateRationale = deps.generateRationale ?? generateRationaleFn;
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date().toISOString());
 
@@ -159,6 +168,11 @@ export async function runMatchingPipeline(
         scoreFailures += 1;
         continue;
       }
+      const rationaleResult = generateRationale({
+        components: result.components,
+        unit,
+        requirement,
+      });
       matches.push({
         id: generateId(),
         owner_uid: ctx.ownerUid,
@@ -171,12 +185,11 @@ export async function runMatchingPipeline(
         semantic_score: result.semantic_score,
         rule_score: result.rule_score,
         final_score: result.final_score,
-        // Rationale string is populated by #100; the V1
-        // matching engine emits empty strings here. The
-        // Matches tab (#21) renders "no rationale yet" until
-        // the rationale generator lands.
-        rationale: "",
-        surface_evidence: "",
+        // Rationale + surface_evidence populated by #100's
+        // deterministic generator. Cached on the doc so the
+        // Matches tab (#21) doesn't re-render compute.
+        rationale: rationaleResult.rationale,
+        surface_evidence: rationaleResult.surface_evidence,
         approved_for_use: false,
         user_rejected: false,
         created_at: now(),
