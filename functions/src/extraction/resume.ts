@@ -27,6 +27,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage } from "../llm/cost.js";
+import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   ExtractionResponseV1Schema,
   type ExtractionResponseV1,
@@ -129,7 +130,13 @@ export async function extractFromResume(
         message: err instanceof Error ? err.message : String(err),
       });
       // Transport errors still incur a token cost in rare cases; no
-      // usage object to record. Continue to retry.
+      // usage object to record. Sleep with exponential backoff +
+      // jitter (longer for 429/503) before retrying so a rate-limit
+      // window isn't compounded by a 3× rapid burst — see
+      // functions/src/llm/retry.ts.
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await sleep(transportBackoffMs(attempt, err));
+      }
       continue;
     }
 

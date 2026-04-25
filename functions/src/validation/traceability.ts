@@ -33,6 +33,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage } from "../llm/cost.js";
+import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   TraceabilityResponseV1Schema,
   type TraceabilityResponseV1,
@@ -145,6 +146,14 @@ export async function checkTraceability(
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
       });
+      // Exponential backoff + jitter on transport errors only.
+      // The orchestrator (#109) calls checkTraceability per-claim,
+      // so an asset with N claims fans out N×3 attempts; without
+      // backoff a single 429 quickly cascades into a window-spanning
+      // burst. See functions/src/llm/retry.ts.
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await sleep(transportBackoffMs(attempt, err));
+      }
       continue;
     }
 

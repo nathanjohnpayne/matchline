@@ -279,4 +279,53 @@ describe("extractFromResume", () => {
     // to meter; no token counts available for a transport failure).
     expect(record).toHaveBeenCalledTimes(0);
   });
+
+  it("backs off (non-zero setTimeout delay) before retrying after a transport error", async () => {
+    // Pin: a transport error must not retry immediately. Without
+    // backoff, a 429 produces 3 rapid retries that compound the
+    // server's rate-limit window (CodeRabbit on PR #111). The
+    // helper lives in functions/src/llm/retry.ts and is shared
+    // across all four LLM call sites.
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+      const queue: (Anthropic.Messages.Message | Error)[] = [
+        new Error("ECONNRESET"),
+        mockMessage(VALID_RESPONSE),
+      ];
+      const client = {
+        messages: {
+          create: vi.fn(async () => {
+            const next = queue.shift();
+            if (!next) throw new Error("mock client: queue empty");
+            if (next instanceof Error) throw next;
+            return next;
+          }),
+        },
+      } as unknown as Anthropic;
+
+      const promise = extractFromResume(
+        "Resume text",
+        { ownerUid: "user-alice" },
+        { client, record, generateId: () => "id-1" },
+      );
+
+      // Drain pending timers (the backoff sleep) + microtasks.
+      await vi.runAllTimersAsync();
+      const units = await promise;
+
+      expect(units).toHaveLength(1);
+      // At least one setTimeout call with a non-zero delay — that's
+      // the backoff sleep between attempt 0 (transport error) and
+      // attempt 1 (success). Filter for numeric delays only;
+      // setTimeout can also be called by other infrastructure.
+      const nonZeroDelays = setTimeoutSpy.mock.calls
+        .map((call) => Number(call[1]))
+        .filter((d) => Number.isFinite(d) && d > 0);
+      expect(nonZeroDelays.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -31,6 +31,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage } from "../llm/cost.js";
+import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   ClaimExtractionResponseV1Schema,
   type ClaimExtractionResponseV1,
@@ -180,6 +181,15 @@ export async function extractClaims(
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
       });
+      // Exponential backoff + jitter on transport errors only;
+      // schema/no-tool-use failures stay zero-delay. Particularly
+      // load-bearing here because the orchestrator (#109) fans
+      // claim extraction across every bullet of an asset — a 429
+      // without backoff compounds fast. See
+      // functions/src/llm/retry.ts.
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await sleep(transportBackoffMs(attempt, err));
+      }
       continue;
     }
 

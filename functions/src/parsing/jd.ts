@@ -21,6 +21,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage } from "../llm/cost.js";
+import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   JdParsingResponseV1Schema,
   type JdParsingResponseV1,
@@ -106,6 +107,13 @@ export async function parseJobRequirements(
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
       });
+      // Exponential backoff + jitter on transport errors only;
+      // schema/no-tool-use failures stay zero-delay (those are
+      // content failures the model can fix on the next attempt).
+      // See functions/src/llm/retry.ts for the schedule.
+      if (attempt < MAX_ATTEMPTS - 1) {
+        await sleep(transportBackoffMs(attempt, err));
+      }
       continue;
     }
 

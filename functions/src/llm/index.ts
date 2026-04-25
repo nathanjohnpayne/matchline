@@ -11,3 +11,4 @@ export {
   type LlmCallDoc,
 } from "./cost.js";
 export { RATES, rateFor, type ModelRate } from "./rates.js";
+export { transportBackoffMs, sleep } from "./retry.js";

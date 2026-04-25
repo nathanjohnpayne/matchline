@@ -576,4 +576,39 @@ describe("checkTraceability", () => {
     };
     expect(callArgs.messages[0]!.content).toContain("(no metrics)");
   });
+
+  it("backs off (non-zero setTimeout delay) before retrying after a transport error", async () => {
+    // Pin: traceability fans out per-claim via the orchestrator
+    // (#109) — N claims × 3 retry attempts means a single 429
+    // without backoff cascades into a window-spanning burst.
+    // Helper at functions/src/llm/retry.ts.
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+      const { client } = mockClient([
+        new Error("ECONNRESET"),
+        mockMessage({
+          supports: false,
+          rationale: "No support found.",
+        }),
+      ]);
+
+      const promise = checkTraceability(CLAIM, [makeUnit()], CTX, {
+        client,
+        record,
+      });
+
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result.supports).toBe(false);
+      const nonZeroDelays = setTimeoutSpy.mock.calls
+        .map((call) => Number(call[1]))
+        .filter((d) => Number.isFinite(d) && d > 0);
+      expect(nonZeroDelays.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
