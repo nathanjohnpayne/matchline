@@ -28,13 +28,12 @@
  *     correctly clear-and-replace + scope by owner?
  */
 
-import { initializeApp, deleteApp, type App } from "firebase-admin/app";
-import {
-  Firestore,
-  getFirestore,
-} from "firebase-admin/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import {
+  getAdminDb,
+  initializeAdminAppForTests,
+} from "../functions/src/firestore/admin.ts";
 import { runMatchingPipeline } from "../functions/src/matching/pipeline.ts";
 import type {
   ExperienceUnit,
@@ -47,35 +46,37 @@ const PROJECT_ID = "matchline-matching-replace-test";
 const ALICE = "user-alice";
 const BOB = "user-bob";
 
-let app: App;
-let db: Firestore;
+// Both the test seed code AND `runMatchingPipeline` (via
+// `getAdminDb()`) must use the SAME `firebase-admin` module
+// instance — otherwise the default-app registries diverge and
+// `getFirestore()` throws "default app does not exist." Codex
+// P1 round 2 on PR #104 caught a prior version that imported
+// `firebase-admin/app` directly from the test file, which
+// resolves to root `node_modules` (a separate copy from
+// `functions/node_modules`). Routing init + db access through
+// `functions/src/firestore/admin.ts` forces the
+// functions-package module instance on both sides.
 
 beforeAll(async () => {
-  // Point firebase-admin at the emulator. `firebase emulators:exec`
-  // sets FIRESTORE_EMULATOR_HOST automatically; if a developer runs
-  // this file directly without the harness, the test fails fast at
-  // the first read.
   if (!process.env.FIRESTORE_EMULATOR_HOST) {
     throw new Error(
       "matching-replace.integration.test.ts must run under " +
         "`firebase emulators:exec` — FIRESTORE_EMULATOR_HOST not set.",
     );
   }
-  // Initialize as the DEFAULT app (no second-arg name).
-  // `runMatchingPipeline` calls `getAdminDb()` which calls
-  // `getFirestore()` with no app arg — that resolves to the
-  // default app. A named app would leave the default unset and
-  // Firebase throws "default app does not exist." CodeRabbit
-  // Critical #3 on PR #104 caught this; the test ran fine in
-  // CR's static analysis but never actually ran locally because
-  // emulator-Java isn't installed.
-  app = initializeApp({ projectId: PROJECT_ID });
-  db = getFirestore(app);
+  initializeAdminAppForTests(PROJECT_ID);
 });
 
 afterAll(async () => {
-  await deleteApp(app);
+  // Intentionally no `deleteApp` — the firebase-admin module
+  // instance is process-scoped (functions-package singleton) and
+  // a sibling test suite running in the same process could
+  // legitimately re-use it. The emulator is wiped by
+  // `beforeEach` between tests; the in-memory app handle costs
+  // nothing.
 });
+
+const db = (): ReturnType<typeof getAdminDb> => getAdminDb();
 
 beforeEach(async () => {
   // Wipe all four collections we touch.
@@ -85,8 +86,8 @@ beforeEach(async () => {
     "jobRequirementUnits",
     "unitMatches",
   ]) {
-    const snap = await db.collection(col).get();
-    const batch = db.batch();
+    const snap = await db().collection(col).get();
+    const batch = db().batch();
     snap.docs.forEach((d) => batch.delete(d.ref));
     if (snap.docs.length > 0) await batch.commit();
   }
@@ -95,7 +96,7 @@ beforeEach(async () => {
 // -- Seed helpers -----------------------------------------------------------
 
 async function seedRole(id: string, ownerUid: string): Promise<void> {
-  await db
+  await db()
     .collection("roles")
     .doc(id)
     .set({ id, owner_uid: ownerUid });
@@ -156,9 +157,9 @@ function makeRequirement(
 }
 
 async function seedUnits(units: readonly ExperienceUnit[]): Promise<void> {
-  const batch = db.batch();
+  const batch = db().batch();
   for (const u of units) {
-    batch.set(db.collection("experienceUnits").doc(u.id), u);
+    batch.set(db().collection("experienceUnits").doc(u.id), u);
   }
   await batch.commit();
 }
@@ -166,17 +167,17 @@ async function seedUnits(units: readonly ExperienceUnit[]): Promise<void> {
 async function seedRequirements(
   reqs: readonly JobRequirementUnit[],
 ): Promise<void> {
-  const batch = db.batch();
+  const batch = db().batch();
   for (const r of reqs) {
-    batch.set(db.collection("jobRequirementUnits").doc(r.id), r);
+    batch.set(db().collection("jobRequirementUnits").doc(r.id), r);
   }
   await batch.commit();
 }
 
 async function seedMatches(matches: readonly UnitMatch[]): Promise<void> {
-  const batch = db.batch();
+  const batch = db().batch();
   for (const m of matches) {
-    batch.set(db.collection("unitMatches").doc(m.id), m);
+    batch.set(db().collection("unitMatches").doc(m.id), m);
   }
   await batch.commit();
 }
@@ -228,7 +229,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     expect(result).toHaveLength(2);
 
     // Read back via the canonical (owner, role) query.
-    const snap = await db
+    const snap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-1")
@@ -265,7 +266,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
 
     // Firestore now contains exactly the second-run match —
     // not a union of first + second.
-    const snap = await db
+    const snap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-1")
@@ -273,7 +274,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     expect(snap.docs).toHaveLength(1);
     expect(snap.docs[0]!.id).toBe(second[0]!.id);
     // The first run's match doc is gone.
-    const firstDocSnap = await db
+    const firstDocSnap = await db()
       .collection("unitMatches")
       .doc(firstMatchId)
       .get();
@@ -297,7 +298,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     expect(result).toEqual([]);
 
     // Stale matches are gone.
-    const snap = await db
+    const snap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-1")
@@ -330,7 +331,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     );
 
     // Bob's matches must be untouched.
-    const bobSnap = await db
+    const bobSnap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", BOB)
       .where("role_id", "==", "role-shared")
@@ -341,13 +342,13 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     ]);
 
     // Alice's prior matches are gone (replaced by the fresh run).
-    const aliceM1 = await db.collection("unitMatches").doc("alice-m1").get();
-    const aliceM2 = await db.collection("unitMatches").doc("alice-m2").get();
+    const aliceM1 = await db().collection("unitMatches").doc("alice-m1").get();
+    const aliceM2 = await db().collection("unitMatches").doc("alice-m2").get();
     expect(aliceM1.exists).toBe(false);
     expect(aliceM2.exists).toBe(false);
 
     // Alice has fresh match(es) — the count == 1*1 = 1.
-    const aliceSnap = await db
+    const aliceSnap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-shared")
@@ -374,7 +375,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     );
 
     // role-B matches untouched.
-    const bSnap = await db
+    const bSnap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-B")
@@ -411,7 +412,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
       { score },
     );
 
-    const snap = await db
+    const snap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-1")
