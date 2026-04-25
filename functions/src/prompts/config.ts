@@ -23,6 +23,7 @@ export const PROMPT_CONFIG = {
   validation: {
     claimExtraction: "v1",
     traceability: "v1",
+    specificity: "v1",
   },
   // Future stages (matching, generation, traceability,
   // specificity) land their first prompts alongside their

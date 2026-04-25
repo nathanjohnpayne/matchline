@@ -40,3 +40,16 @@ export class TraceabilityCheckError extends Error {
     this.failures = failures;
   }
 }
+
+export class SpecificityCheckError extends Error {
+  readonly failures: readonly ValidationAttemptFailure[];
+
+  constructor(
+    message: string,
+    failures: readonly ValidationAttemptFailure[],
+  ) {
+    super(message);
+    this.name = "SpecificityCheckError";
+    this.failures = failures;
+  }
+}
