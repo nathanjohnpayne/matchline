@@ -328,6 +328,31 @@ describe("checkSpecificity: LLM fallback", () => {
     );
   });
 
+  it("recordUsage rejection is swallowed; the LLM verdict still ships (CodeRabbit on #113)", async () => {
+    // Pin: cost telemetry is observability infrastructure. A
+    // Firestore 503 (or any other recordUsage failure) must NOT
+    // discard an otherwise-successful specificity verdict. The
+    // try/catch around `await record(...)` enforces this.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const { client } = mockClient([
+      mockMessage({
+        specific: true,
+        rationale: "Verifiable claim.",
+      }),
+    ]);
+
+    const result = await checkSpecificity(
+      makeClaim("The user shipped a feature on PS4."),
+      CTX,
+      { client, record },
+    );
+
+    expect(result.specific).toBe(true);
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it("retries on schema error and succeeds on the second attempt", async () => {
     const malformed = { bogus: "shape" };
     const valid = {
