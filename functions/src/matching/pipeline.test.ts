@@ -267,6 +267,67 @@ describe("runMatchingPipeline", () => {
     expect(score).not.toHaveBeenCalled();
   });
 
+  it("generateRationale throws on a pair → that pair is skipped; pipeline does NOT abort the run (Codex P1 + CR Major round 1 on #105)", async () => {
+    // Rationale-generation failures must be isolated per pair,
+    // same as score() failures. A bad input or injected-dep
+    // bug in generateRationale must not tear down the entire
+    // matching run for the role.
+    const u1 = makeUnit({ id: "u1" });
+    const u2 = makeUnit({ id: "u2" });
+    const r = makeRequirement({ id: "r1" });
+
+    let rationaleCallCount = 0;
+    const generateRationaleStub = vi.fn(() => {
+      rationaleCallCount += 1;
+      if (rationaleCallCount === 1) throw new Error("synthetic rationale failure");
+      return {
+        rationale: "ok",
+        surface_evidence: "ok",
+        driving_component: "semantic_similarity" as const,
+      };
+    });
+
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(CTX, {
+      listUnits: async () => [u1, u2],
+      listRequirements: async () => [r],
+      score: () => makeScoreResult(0.5),
+      generateRationale: generateRationaleStub,
+      persistBatch,
+    });
+
+    // The first pair (u1, r1) is skipped because rationale
+    // generation threw. The second pair (u2, r1) succeeds.
+    expect(result).toHaveLength(1);
+    expect(result[0]!.experience_unit_id).toBe("u2");
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("generateRationale throws on EVERY pair → wholesale-failure abort fires (no persistBatch)", async () => {
+    // Same shape as the wholesale-scoring-failure test below,
+    // but via generateRationale instead. Both code paths feed
+    // into the same scoreFailures counter inside the per-pair
+    // try/catch so the abort guard fires identically.
+    const generateRationaleStub = vi.fn(() => {
+      throw new Error("synthetic rationale failure on every pair");
+    });
+    const persistBatch = vi.fn(async () => {});
+
+    await expect(
+      runMatchingPipeline(CTX, {
+        listUnits: async () => [makeUnit({ id: "u1" }), makeUnit({ id: "u2" })],
+        listRequirements: async () => [makeRequirement({ id: "r1" })],
+        score: () => makeScoreResult(0.5),
+        generateRationale: generateRationaleStub,
+        persistBatch,
+      }),
+    ).rejects.toThrow(/scoring threw on every candidate pair/);
+
+    // Critical: persistBatch must NOT be called — prior matches
+    // protected.
+    expect(persistBatch).not.toHaveBeenCalled();
+  });
+
   it("score throws on EVERY candidate pair → pipeline aborts, persistBatch NOT called (CodeRabbit Critical #1)", async () => {
     // Wholesale-scoring-failure guard: if every candidate pair
     // throws, the empty match set isn't a real "no matches" —

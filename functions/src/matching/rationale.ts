@@ -23,6 +23,7 @@
 
 import {
   normalizeDomain,
+  normalizeKey,
   normalizeSkill,
   normalizeTool,
 } from "./normalize.js";
@@ -157,10 +158,12 @@ function skillTemplate(
   if (overlap.length === 0) {
     // Defensive fallback: skill_overlap drove the score but no
     // canonical overlap is computable (e.g. raw terms that
-    // didn't normalize). Surface the Unit's skill list as
-    // evidence rather than fabricate.
+    // didn't normalize). Don't claim "shared X" without an X
+    // — and don't lie that overlap exists. Codex P2 + CodeRabbit
+    // on PR #105 caught the prior misleading prose.
     return {
-      rationale: "Matched on skill overlap.",
+      rationale:
+        "Matched on skill axis (no canonical overlap; raw skills surfaced).",
       surface_evidence: input.unit.skills.join(", "),
       driving_component: driving,
     };
@@ -183,7 +186,8 @@ function toolTemplate(
   );
   if (overlap.length === 0) {
     return {
-      rationale: "Matched on tool overlap.",
+      rationale:
+        "Matched on tool axis (no canonical overlap; raw tools surfaced).",
       surface_evidence: input.unit.tools.join(", "),
       driving_component: driving,
     };
@@ -206,7 +210,8 @@ function domainTemplate(
   );
   if (overlap.length === 0) {
     return {
-      rationale: "Matched on domain overlap.",
+      rationale:
+        "Matched on domain axis (no canonical overlap; raw domains surfaced).",
       surface_evidence: input.unit.domains.join(", "),
       driving_component: driving,
     };
@@ -222,37 +227,86 @@ function seniorityTemplate(
   input: RationaleInput,
   driving: keyof ScoreComponents,
 ): RationaleResult {
-  const required = input.requirement.seniority_level ?? "unspecified";
-  const signals = input.unit.seniority_signals.length > 0
-    ? input.unit.seniority_signals.join(", ")
-    : "none recorded";
+  const required = input.requirement.seniority_level;
+  const hasSignals = input.unit.seniority_signals.length > 0;
+  const signals = hasSignals ? input.unit.seniority_signals.join(", ") : "";
+  // surface_evidence stays user-derived: empty string when the
+  // unit has no seniority signals, NOT a fabricated "none
+  // recorded". CodeRabbit Minor on PR #105 caught the
+  // fabrication. The rationale prose can describe absence
+  // without fabricating it onto surface_evidence.
+  const rationale = hasSignals
+    ? `Matched on seniority alignment: Unit signals "${signals}"${
+        required ? ` against required level "${required}".` : "."
+      }`
+    : `Matched on seniority alignment${
+        required ? ` against required level "${required}"` : ""
+      } (no explicit signals on Unit).`;
   return {
-    rationale: `Matched on seniority alignment: Unit signals "${signals}" against required level "${required}".`,
+    rationale,
     surface_evidence: signals,
     driving_component: driving,
   };
+}
+
+/**
+ * Match the canonical-form scope overlap that scopeAlignment
+ * uses in score.ts. CodeRabbit Major on PR #105: the prior
+ * template emitted EVERY unit.scope_signals entry — including
+ * ones that didn't actually match the requirement — which
+ * over-claimed the match and surfaced unsupporting evidence on
+ * the Matches tab. The new logic keeps only signals whose
+ * normalize-key collides with a requirement keyword.
+ *
+ * Returns the signals in their original (raw) form so the
+ * surface_evidence remains user-controlled phrasing rather
+ * than the lossy normalize-key form ("$5m p l" etc.).
+ */
+function scopeOverlap(
+  unitSignals: readonly string[],
+  requirementKeywords: readonly string[],
+): string[] {
+  // Build a set of normalize-key forms from the requirement side.
+  const reqKeys = new Set<string>();
+  for (const k of requirementKeywords) {
+    const norm = normalizeKey(k);
+    if (norm.length > 0) reqKeys.add(norm);
+  }
+  if (reqKeys.size === 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const sig of unitSignals) {
+    const norm = normalizeKey(sig);
+    if (norm.length > 0 && reqKeys.has(norm) && !seen.has(norm)) {
+      seen.add(norm);
+      out.push(sig);
+    }
+  }
+  return out;
 }
 
 function scopeTemplate(
   input: RationaleInput,
   driving: keyof ScoreComponents,
 ): RationaleResult {
-  // For scope, the overlap is computed on raw normalize-key
-  // strings (no scope ontology yet — see scopeAlignment in
-  // score.ts). Here we surface the unit-side scope signals
-  // verbatim because the canonical-form lookup that score.ts
-  // does isn't reversible to a human-readable label.
-  const signals = input.unit.scope_signals;
-  if (signals.length === 0) {
+  const overlap = scopeOverlap(
+    input.unit.scope_signals,
+    input.requirement.keywords,
+  );
+  if (overlap.length === 0) {
+    // Component drove the score but no canonical overlap
+    // computes — same defensive shape as skill/tool/domain.
+    // surface_evidence stays empty rather than fabricating.
     return {
-      rationale: "Matched on scope alignment.",
+      rationale:
+        "Matched on scope axis (no canonical overlap with requirement).",
       surface_evidence: "",
       driving_component: driving,
     };
   }
   return {
-    rationale: `Matched on scope alignment: ${formatList(signals)}.`,
-    surface_evidence: signals.join(", "),
+    rationale: `Matched on scope alignment: ${formatList(overlap)}.`,
+    surface_evidence: overlap.join(", "),
     driving_component: driving,
   };
 }
@@ -262,9 +316,18 @@ function recencyTemplate(
   driving: keyof ScoreComponents,
 ): RationaleResult {
   const range = input.unit.date_range;
-  const evidence = range
-    ? `${range.start}${range.end ? ` to ${range.end}` : " (ongoing)"}`
-    : "no date recorded";
+  if (!range || typeof range.start !== "string" || range.start.length === 0) {
+    // No date_range to point at. surface_evidence stays empty
+    // rather than fabricating "no date recorded" (CodeRabbit
+    // Minor on PR #105). The rationale prose acknowledges the
+    // absence without claiming a date.
+    return {
+      rationale: "Matched on recency axis (no date range on Unit).",
+      surface_evidence: "",
+      driving_component: driving,
+    };
+  }
+  const evidence = `${range.start}${range.end ? ` to ${range.end}` : " (ongoing)"}`;
   return {
     rationale: `Recent: Unit dates within the relevant window (${evidence}).`,
     surface_evidence: evidence,

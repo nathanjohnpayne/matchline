@@ -385,26 +385,41 @@ describe("generateRationale: driving_component selection (largest weighted contr
     expect(result.driving_component).toBe("tool_overlap");
   });
 
-  it("tie-breaker pin: all-tied components pick semantic_similarity (top of order)", () => {
-    // All seven components at the same value. The tie-breaker
-    // order's first entry (semantic_similarity) wins.
+  it("tie-breaker pin: when semantic and domain contributions are exactly equal, semantic wins (earlier in order)", () => {
+    // Construct an exact-tie between semantic and domain.
+    // Floating-point safe choice (both sides hit 0.15 exactly):
+    //   semantic = 0.5 × 0.30 = 0.15
+    //   domain   = 1.0 × 0.15 = 0.15
+    // Tied. Tie-breaker order says semantic_similarity (earlier)
+    // wins. Codex/CodeRabbit on PR #105 caught the prior version
+    // of this test that didn't actually create a tie (the
+    // skill case used 1.5 × 0.20 which is 0.30000000000000004
+    // due to floating-point, not an exact tie); this rewrite
+    // uses values whose products are bit-exact.
     const input = makeInput({
-      components: {
+      components: makeComponents({
         semantic_similarity: 0.5,
-        skill_overlap: 1,
-        domain_overlap: 1,
-        tool_overlap: 1,
-        seniority_alignment: 1,
-        scope_alignment: 1,
-        recency: 1,
+        domain_overlap: 1.0,
+      }),
+      unit: {
+        normalized_summary: "x",
+        skills: [],
+        tools: [],
+        domains: ["streaming video"],
+        seniority_signals: [],
+        scope_signals: [],
+      },
+      requirement: {
+        normalized_requirement: "y",
+        category: "domain",
+        keywords: [],
+        tools: [],
+        domains: ["streaming video"],
       },
     });
-    // Contributions:
-    //   semantic: 0.5 × 0.30 = 0.15  ← winner
-    //   skill:    1   × 0.20 = 0.20  ← actually wins
-    // Wait — the test as written doesn't actually create a tie.
-    // Re-checking the assertion: skill wins by weighted product.
-    expect(generateRationale(input).driving_component).toBe("skill_overlap");
+    expect(generateRationale(input).driving_component).toBe(
+      "semantic_similarity",
+    );
   });
 
   it("tie-breaker pin: identical scope and recency contributions pick scope (earlier in order)", () => {
@@ -492,6 +507,157 @@ describe("generateRationale: zero-fabrication invariant", () => {
 });
 
 // -- Edge cases -------------------------------------------------------------
+
+// -- Round-1 fix pins (Codex/CodeRabbit on PR #105) -------------------------
+
+describe("generateRationale: empty-data fallback honesty (round 1)", () => {
+  it("seniority with no unit signals: surface_evidence is empty (NOT 'none recorded')", () => {
+    // Codex P2 / CodeRabbit on PR #105 caught a prior version
+    // that wrote "none recorded" into surface_evidence — a
+    // fabricated string violating the zero-fab claim. Fix:
+    // surface_evidence is the empty string when there's no real
+    // signal; rationale prose can describe absence without
+    // fabricating onto surface_evidence.
+    const input = makeInput({
+      components: makeComponents({ seniority_alignment: 1 }),
+      unit: {
+        normalized_summary: "x",
+        skills: [],
+        tools: [],
+        domains: [],
+        seniority_signals: [],
+        scope_signals: [],
+      },
+      requirement: {
+        normalized_requirement: "y",
+        category: "experience_level",
+        keywords: [],
+        tools: [],
+        domains: [],
+        seniority_level: "senior",
+      },
+    });
+    const result = generateRationale(input);
+    expect(result.driving_component).toBe("seniority_alignment");
+    expect(result.surface_evidence).toBe("");
+    // Rationale acknowledges absence without fabricating.
+    expect(result.rationale).toContain("no explicit signals");
+  });
+
+  it("recency with no date_range: surface_evidence is empty (NOT 'no date recorded')", () => {
+    const input = makeInput({
+      components: makeComponents({ recency: 1 }),
+      unit: {
+        normalized_summary: "x",
+        skills: [],
+        tools: [],
+        domains: [],
+        seniority_signals: [],
+        scope_signals: [],
+        // date_range intentionally omitted
+      },
+    });
+    const result = generateRationale(input);
+    expect(result.driving_component).toBe("recency");
+    expect(result.surface_evidence).toBe("");
+    expect(result.rationale).toContain("no date range");
+  });
+
+  it("skill template with no canonical overlap: rationale does NOT claim 'shared <skills>'", () => {
+    // Codex P2 on PR #105 caught the prior version that emitted
+    // "Matched on skill overlap." with empty surface_evidence —
+    // misleading because it claimed an overlap with no
+    // supporting evidence.
+    const input = makeInput({
+      components: makeComponents({ skill_overlap: 1 }),
+      unit: {
+        normalized_summary: "x",
+        skills: ["totally-novel-skill-xyz"],
+        tools: [],
+        domains: [],
+        seniority_signals: [],
+        scope_signals: [],
+      },
+      requirement: {
+        normalized_requirement: "y",
+        category: "skill",
+        keywords: ["another-novel-skill"],
+        tools: [],
+        domains: [],
+      },
+    });
+    const result = generateRationale(input);
+    // The new rationale acknowledges no canonical overlap was
+    // found — doesn't claim "shared X" without an X.
+    expect(result.rationale).not.toMatch(/shared/);
+    expect(result.rationale).toContain("no canonical overlap");
+    // surface_evidence still traces to user-controlled input.
+    expect(result.surface_evidence).toBe("totally-novel-skill-xyz");
+  });
+});
+
+describe("generateRationale: scope-overlap precision (CodeRabbit Major round 1)", () => {
+  it("only surfaces scope signals that actually match the requirement (not all unit signals)", () => {
+    // Prior version emitted EVERY unit.scope_signals entry —
+    // including ones that didn't match the requirement —
+    // over-claiming the match. CodeRabbit Major on PR #105.
+    // Now scope_overlap computes the canonical overlap and
+    // surfaces only the matching signals.
+    const input = makeInput({
+      components: makeComponents({ scope_alignment: 1 }),
+      unit: {
+        normalized_summary: "x",
+        skills: [],
+        tools: [],
+        domains: [],
+        seniority_signals: [],
+        // Unit has 3 scope signals; only ONE matches the requirement.
+        scope_signals: ["5M users", "$10M budget", "team of 20"],
+      },
+      requirement: {
+        normalized_requirement: "y",
+        category: "scope",
+        keywords: ["5M users"],
+        tools: [],
+        domains: [],
+      },
+    });
+    const result = generateRationale(input);
+    expect(result.driving_component).toBe("scope_alignment");
+    // Only "5M users" surfaces — NOT "$10M budget" or "team of 20".
+    expect(result.surface_evidence).toBe("5M users");
+    expect(result.rationale).toContain("5M users");
+    expect(result.rationale).not.toContain("$10M budget");
+    expect(result.rationale).not.toContain("team of 20");
+  });
+
+  it("scope template with no canonical overlap: rationale doesn't claim alignment", () => {
+    // Component drove the score (in practice this shouldn't
+    // happen — score.ts would return 0 with no overlap — but
+    // we cover the defensive branch).
+    const input = makeInput({
+      components: makeComponents({ scope_alignment: 1 }),
+      unit: {
+        normalized_summary: "x",
+        skills: [],
+        tools: [],
+        domains: [],
+        seniority_signals: [],
+        scope_signals: ["alpha"],
+      },
+      requirement: {
+        normalized_requirement: "y",
+        category: "scope",
+        keywords: ["beta"],
+        tools: [],
+        domains: [],
+      },
+    });
+    const result = generateRationale(input);
+    expect(result.surface_evidence).toBe("");
+    expect(result.rationale).toContain("no canonical overlap");
+  });
+});
 
 describe("generateRationale: edge cases", () => {
   it("all-zero components: still picks semantic_similarity (tie-breaker default)", () => {

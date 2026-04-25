@@ -158,21 +158,31 @@ export async function runMatchingPipeline(
       }
       candidatePairs += 1;
       let result: ScoreResult;
+      let rationaleResult: ReturnType<typeof generateRationaleFn>;
       try {
         result = score(unit, requirement, deps.asOf ? { asOf: deps.asOf } : undefined);
+        // Rationale generation is inside the same try/catch as
+        // scoring: a bad Unit/Requirement payload or an
+        // injected-dep failure in generateRationale must NOT
+        // tear down the entire matching run for the role.
+        // Treated identically to a score() failure — one bad
+        // pair surfaces in the Gaps view (#21) instead of
+        // wiping the match graph. Codex P1 + CodeRabbit Major
+        // on PR #105.
+        rationaleResult = generateRationale({
+          components: result.components,
+          unit,
+          requirement,
+        });
       } catch {
         // Defense-in-depth: the pre-filter above should have
-        // caught missing embeddings. If `score()` throws for
-        // any other reason (corrupted input, etc.), skip the
-        // pair rather than failing the whole run.
+        // caught missing embeddings. If score() OR
+        // generateRationale throws for any other reason
+        // (corrupted input, etc.), skip the pair rather than
+        // failing the whole run.
         scoreFailures += 1;
         continue;
       }
-      const rationaleResult = generateRationale({
-        components: result.components,
-        unit,
-        requirement,
-      });
       matches.push({
         id: generateId(),
         owner_uid: ctx.ownerUid,
