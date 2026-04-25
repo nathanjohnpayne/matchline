@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# check_no_other_skill_normalization
+#
+# Enforces the single-source-of-truth invariant for the
+# matching engine's canonical-vocabulary normalization: only
+# `functions/src/matching/normalize.ts` may map raw skill /
+# tool / domain strings to canonical forms (#96, parent #20).
+#
+# Risk #8 in the plan's risk register: ontology drift between
+# extraction and matching collapses match quality. Routing every
+# normalization call through the single module keeps the
+# canonical sets in lockstep across the pipeline.
+#
+# Failure modes this catches:
+#   - A new module hand-rolling its own normalizeSkill /
+#     normalizeTool / normalizeDomain function (drift risk).
+#   - An LLM-driven normalization call (e.g. asking Claude
+#     "give me the canonical form of X") that bypasses the seed.
+#   - A direct import of the seed JSON files outside the
+#     normalize.ts module (defeats the cache + index discipline).
+#
+# Allowed:
+#   - normalize.ts itself.
+#   - normalize.test.ts (test file).
+#   - Issue / PR / commit messages that mention these terms.
+#   - This very script.
+#
+# Exit 0 = pass. Exit 1 = found a violation.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+
+VIOLATIONS=0
+
+# 1. No other file may DEFINE a normalizeSkill / normalizeTool /
+#    normalizeDomain function. The single definition is in
+#    functions/src/matching/normalize.ts.
+#
+# Pattern covers every JS/TS declaration form: function /
+# const / let / var / class. Codex P2 round 4 on #102 caught
+# that the prior pattern missed `let` (and would also have
+# missed `var` and `class`); a drift attempt using any of those
+# could silently slip past. The `\bexport\s+` prefix is
+# optional — every named declaration form follows it.
+DEF_PATTERN='(\bexport\s+)?(function|const|let|var|class)\s+(normalize(Skill|Tool|Domain))\b'
+DEF_HITS=$(grep -rEn "$DEF_PATTERN" \
+  --include='*.ts' --include='*.tsx' \
+  --exclude-dir=node_modules \
+  --exclude-dir=lib \
+  --exclude-dir=dist \
+  --exclude-dir=.git \
+  --exclude-dir=.claude \
+  src functions/src 2>/dev/null \
+  | grep -v '^functions/src/matching/normalize\.ts:' \
+  | grep -v '^functions/src/matching/normalize\.test\.ts:' \
+  || true)
+
+if [[ -n "$DEF_HITS" ]]; then
+  echo "check_no_other_skill_normalization: FAIL"
+  echo "  Multiple normalize{Skill,Tool,Domain} definitions found."
+  echo "  Single source of truth: functions/src/matching/normalize.ts"
+  echo "$DEF_HITS" | sed 's/^/    /'
+  VIOLATIONS=$((VIOLATIONS + 1))
+fi
+
+# 2. No file outside normalize.ts may directly read the seed
+#    JSON files — that defeats the cache and risks drift if a
+#    caller pre-parses the data with different semantics.
+SEED_PATTERN='(skills|tools|domains)\.seed\.json'
+SEED_HITS=$(grep -rEn "$SEED_PATTERN" \
+  --include='*.ts' --include='*.tsx' \
+  --exclude-dir=node_modules \
+  --exclude-dir=lib \
+  --exclude-dir=dist \
+  --exclude-dir=.git \
+  --exclude-dir=.claude \
+  src functions/src 2>/dev/null \
+  | grep -v '^functions/src/matching/normalize\.ts:' \
+  | grep -v '^functions/src/matching/normalize\.test\.ts:' \
+  || true)
+
+if [[ -n "$SEED_HITS" ]]; then
+  echo "check_no_other_skill_normalization: FAIL"
+  echo "  Direct seed-JSON imports found outside normalize.ts."
+  echo "  All ontology access must route through loadOntology() / normalizeSkill() / etc."
+  echo "$SEED_HITS" | sed 's/^/    /'
+  VIOLATIONS=$((VIOLATIONS + 1))
+fi
+
+if [[ $VIOLATIONS -gt 0 ]]; then
+  exit 1
+fi
+
+echo "check_no_other_skill_normalization: PASS"
