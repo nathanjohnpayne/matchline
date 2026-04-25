@@ -33,6 +33,10 @@ function mockMessage(
     id: "msg_test",
     type: "message",
     role: "assistant",
+    // Loosely mirrors `modelFor("validation")`. Pin via the
+    // production-config import would couple unit tests to the
+    // config module; instead we keep this string aligned by
+    // inspection (CodeRabbit Trivial on PR #110).
     model: "claude-sonnet-4-6",
     content: [
       {
@@ -56,6 +60,10 @@ function mockTextOnlyMessage(
     id: "msg_test",
     type: "message",
     role: "assistant",
+    // Loosely mirrors `modelFor("validation")`. Pin via the
+    // production-config import would couple unit tests to the
+    // config module; instead we keep this string aligned by
+    // inspection (CodeRabbit Trivial on PR #110).
     model: "claude-sonnet-4-6",
     content: [{ type: "text", text }],
     stop_reason: "end_turn",

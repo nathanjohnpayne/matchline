@@ -38,7 +38,7 @@ Do not return `id` or `bullet_id` — those are server-stamped downstream.
 
 Example input:
 
-```
+```text
 Bullet: "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox (reduced memory footprint 30%, shipped to 5M DAU)."
 ```
 
@@ -75,7 +75,7 @@ A second example showing a vague bullet (the validator will catch
 the specificity problem downstream — your job here is just to
 emit the claim, not to grade it):
 
-```
+```text
 Bullet: "Collaborated cross-functionally to drive results."
 ```
 
