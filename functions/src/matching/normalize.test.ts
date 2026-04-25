@@ -36,8 +36,8 @@ describe("loadOntology", () => {
 
   it("canonical entries are unique within each category", () => {
     // Catch a curator typo where two entries claim the same
-    // canonical form. Synonyms can collide cross-entry (first-
-    // write-wins per `buildIndex`), but canonicals must not.
+    // canonical form. Synonyms must also not collide cross-entry
+    // — that's the next test.
     const data = loadOntology();
     for (const [name, category] of [
       ["skills", data.skills],
@@ -53,6 +53,94 @@ describe("loadOntology", () => {
           );
         }
         seen.add(key);
+      }
+    }
+  });
+
+  it("synonyms do not collide across entries within a category (Codex P2 #102 regression pin)", () => {
+    // The original bug: `skills.seed.json` had `incident response`
+    // listed as a synonym of BOTH `on-call` AND
+    // `incident management`. The buildIndex first-write-wins rule
+    // meant `normalizeSkill("incident response")` always returned
+    // `on-call`, making the `incident management` synonym dead
+    // code. Curator fix removed the duplicate; this test catches
+    // any future repeat.
+    //
+    // The matching keys here use the same normalization the index
+    // uses (lowercase + trim + punctuation-fold) so a curator
+    // can't sneak a "duplicate" past via a casing or punctuation
+    // tweak that the runtime would still treat as identical.
+    const data = loadOntology();
+    const normalizeKey = (s: string): string =>
+      s
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/[‘’]/g, "'")
+        .replace(/[“”]/g, '"')
+        .replace(/[–—]/g, "-");
+
+    for (const [name, category] of [
+      ["skills", data.skills],
+      ["tools", data.tools],
+      ["domains", data.domains],
+    ] as const) {
+      // Map every synonym key → list of canonicals that claim it.
+      const claims = new Map<string, string[]>();
+      for (const entry of category) {
+        for (const syn of entry.synonyms) {
+          const key = normalizeKey(syn);
+          const existing = claims.get(key) ?? [];
+          existing.push(entry.canonical);
+          claims.set(key, existing);
+        }
+      }
+      const collisions: string[] = [];
+      for (const [key, canonicals] of claims.entries()) {
+        if (canonicals.length > 1) {
+          collisions.push(
+            `  "${key}" claimed by: ${canonicals.join(", ")}`,
+          );
+        }
+      }
+      if (collisions.length > 0) {
+        throw new Error(
+          `${name}.seed.json: synonym collisions detected (first-write-wins masks the later entry):\n${collisions.join("\n")}`,
+        );
+      }
+    }
+  });
+
+  it("a synonym never duplicates a canonical from a DIFFERENT entry (cross-entry shadow)", () => {
+    // Adjacent issue: a synonym on entry A that is the canonical
+    // form of entry B silently shadows B (first-write-wins again).
+    // Pin so a curator who adds e.g. `synonym: "agile"` to a
+    // different entry can't accidentally hide the dedicated
+    // `canonical: "agile"` entry.
+    const data = loadOntology();
+    const normalizeKey = (s: string): string =>
+      s.toLowerCase().trim().replace(/\s+/g, " ");
+
+    for (const [name, category] of [
+      ["skills", data.skills],
+      ["tools", data.tools],
+      ["domains", data.domains],
+    ] as const) {
+      const canonicalKeys = new Set(
+        category.map((e) => normalizeKey(e.canonical)),
+      );
+      for (const entry of category) {
+        for (const syn of entry.synonyms) {
+          const synKey = normalizeKey(syn);
+          if (
+            canonicalKeys.has(synKey) &&
+            normalizeKey(entry.canonical) !== synKey
+          ) {
+            throw new Error(
+              `${name}.seed.json: "${entry.canonical}" lists "${syn}" as a synonym, but that string is also canonical for a different entry — first-write-wins would shadow the other entry.`,
+            );
+          }
+        }
       }
     }
   });
