@@ -212,7 +212,7 @@ function finalizeResult(
       return {
         supports: false,
         rationale:
-          `Model emitted supporting_unit_id="${raw.supporting_unit_id}" which is not in the candidate set; ` +
+          `Model emitted supporting_unit_id=${JSON.stringify(raw.supporting_unit_id)} which is not in the candidate set; ` +
           `treating as unsupported. Original rationale: ${raw.rationale}`,
       };
     }
@@ -236,7 +236,29 @@ function buildUserContent(
   candidateUnits: readonly ExperienceUnit[],
 ): string {
   const unitsBlock = candidateUnits.map(formatUnit).join("\n\n");
-  return `${userFewShot}\n\nClaim: "${claim.text}"\n\nCandidate Experience Units:\n\n${unitsBlock}`;
+  return `${userFewShot}\n\nClaim: ${quote(claim.text)}\n\nCandidate Experience Units:\n\n${unitsBlock}`;
+}
+
+/**
+ * Safely embed an arbitrary user-controlled string as a quoted
+ * literal in the prompt body. `JSON.stringify` escapes embedded
+ * `"`, backslashes, newlines, and control chars — the same shape
+ * the few-shot examples already use.
+ *
+ * Codex P1 round 2 on PR #111: the prior version interpolated raw
+ * strings inside `"..."` quotes, so any `"` inside the input
+ * (legitimate — e.g. a quoted project name, a metric claim with
+ * a quoted phrase) broke the format. A claim text `The user led
+ * "Project Alpha"` would render as `Claim: "The user led "Project
+ * Alpha"."` — malformed, and the prompt-friendly structure the
+ * downstream model depends on was lost.
+ *
+ * `JSON.stringify` for short strings is identical to a hand-
+ * written escape function but is part of the runtime, well-
+ * tested, and unambiguous to readers.
+ */
+function quote(value: string): string {
+  return JSON.stringify(value);
 }
 
 function formatUnit(unit: ExperienceUnit): string {
@@ -255,19 +277,20 @@ function formatUnit(unit: ExperienceUnit): string {
   // The Unit `id` is critical — the model's response uses it as
   // `supporting_unit_id`, and the value-level guard in
   // `finalizeResult` checks set membership.
+  //
+  // Every embedded string is run through `quote()` (= JSON.stringify)
+  // so embedded `"`, `\\`, newlines, etc. don't break the format.
+  // Codex P1 round 2 on PR #111.
   const metricsBlock =
     unit.metrics && unit.metrics.length > 0
       ? unit.metrics
-          .map(
-            (m) =>
-              `  { claim: "${m.claim}"${m.value !== undefined ? `, value: ${m.value}` : ""}${m.unit !== undefined ? `, unit: "${m.unit}"` : ""}${m.direction !== undefined ? `, direction: "${m.direction}"` : ""} }`,
-          )
+          .map((m) => formatMetric(m))
           .join(",\n")
       : "  (no metrics)";
   const lines: string[] = [
     `[Unit ${unit.id}]`,
-    `raw_text: "${unit.raw_text}"`,
-    `normalized_summary: "${unit.normalized_summary}"`,
+    `raw_text: ${quote(unit.raw_text)}`,
+    `normalized_summary: ${quote(unit.normalized_summary)}`,
     `metrics: [`,
     metricsBlock,
     `]`,
@@ -278,13 +301,21 @@ function formatUnit(unit: ExperienceUnit): string {
   // tight reduces token cost on the common case.
   if (unit.seniority_signals && unit.seniority_signals.length > 0) {
     lines.push(
-      `seniority_signals: [${unit.seniority_signals.map((s) => `"${s}"`).join(", ")}]`,
+      `seniority_signals: [${unit.seniority_signals.map(quote).join(", ")}]`,
     );
   }
   if (unit.scope_signals && unit.scope_signals.length > 0) {
     lines.push(
-      `scope_signals: [${unit.scope_signals.map((s) => `"${s}"`).join(", ")}]`,
+      `scope_signals: [${unit.scope_signals.map(quote).join(", ")}]`,
     );
   }
   return lines.join("\n");
+}
+
+function formatMetric(m: ExperienceUnit["metrics"][number]): string {
+  const parts: string[] = [`claim: ${quote(m.claim)}`];
+  if (m.value !== undefined) parts.push(`value: ${m.value}`);
+  if (m.unit !== undefined) parts.push(`unit: ${quote(m.unit)}`);
+  if (m.direction !== undefined) parts.push(`direction: ${quote(m.direction)}`);
+  return `  { ${parts.join(", ")} }`;
 }

@@ -469,6 +469,94 @@ describe("checkTraceability", () => {
     expect(content).not.toContain("scope_signals:");
   });
 
+  it("escapes user-controlled strings containing quotes / backslashes / newlines (Codex P1 round 2 on #111)", async () => {
+    // Codex P1 round 2 reproduced a serializer break: any
+    // user-controlled string containing `"` (legitimate — quoted
+    // project names, metric phrases, signal terms) corrupted the
+    // prompt body. A claim text `The user led "Project Alpha"`
+    // rendered as `Claim: "The user led "Project Alpha"."` —
+    // malformed JSON-ish, broke the deterministic shape the
+    // model depends on.
+    //
+    // Fix: every embedded user string is JSON.stringify()-quoted,
+    // which escapes embedded `"`, `\`, newlines, and control
+    // chars. This test pins the shape end-to-end across all the
+    // formatter's exposure surfaces:
+    //   1. claim.text in buildUserContent
+    //   2. unit.raw_text + normalized_summary
+    //   3. metric claim/unit/direction strings
+    //   4. seniority_signals + scope_signals strings
+    const quotedClaim: Claim = {
+      id: "claim-q",
+      bullet_id: "bullet-1",
+      text: 'The user led "Project Alpha" with a 30% gain.',
+    };
+    const quotedUnit = makeUnit({
+      id: "unit-quoted",
+      raw_text: 'Worked on "Project Alpha" — backslash \\ and "embedded quotes".',
+      normalized_summary: 'Owned "Project Alpha" memory work.',
+      seniority_signals: ['"lead"', "owned"],
+      scope_signals: ['team of "5"'],
+      metrics: [
+        {
+          claim: 'Reduced "memory footprint" 30%',
+          value: 30,
+          unit: '%',
+          direction: 'down',
+          confidence: 'high',
+        },
+      ],
+    });
+    const { client, create } = mockClient([
+      mockMessage({
+        supports: true,
+        supporting_unit_id: "unit-quoted",
+        rationale: "Unit metric matches the claim.",
+      }),
+    ]);
+
+    await checkTraceability(quotedClaim, [quotedUnit], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+    });
+
+    const callArgs = create.mock.calls[0]![0] as {
+      messages: { content: string }[];
+    };
+    const content = callArgs.messages[0]!.content;
+
+    // Every embedded `"` from user input is escaped as `\"` in
+    // the rendered string. The prior bug rendered them as raw
+    // `"` and broke the format.
+    //
+    // 1. Claim text — embedded quotes are escaped, so the
+    //    overall structure stays well-formed.
+    expect(content).toContain(
+      'Claim: "The user led \\"Project Alpha\\" with a 30% gain."',
+    );
+    // 2. Unit raw_text — backslash escapes too (`\\` → `\\\\`).
+    expect(content).toContain(
+      'raw_text: "Worked on \\"Project Alpha\\" — backslash \\\\ and \\"embedded quotes\\"."',
+    );
+    // 3. Unit normalized_summary — same shape.
+    expect(content).toContain(
+      'normalized_summary: "Owned \\"Project Alpha\\" memory work."',
+    );
+    // 4. Metric strings — claim has embedded quotes; the JSON-
+    //    style metric block escapes them.
+    expect(content).toContain('claim: "Reduced \\"memory footprint\\" 30%"');
+    // 5. Signal arrays — each entry quote-escaped independently.
+    expect(content).toContain('seniority_signals: ["\\"lead\\"", "owned"]');
+    expect(content).toContain('scope_signals: ["team of \\"5\\""]');
+
+    // Sanity: the un-escaped sequence (raw `"Project Alpha"`
+    // appearing inside another `"..."` quote with no escape) is
+    // NOT present anywhere in the body — that was the broken
+    // shape Codex reproduced.
+    expect(content).not.toContain('Claim: "The user led "Project');
+    expect(content).not.toContain('raw_text: "Worked on "Project');
+  });
+
   it("handles a Unit with no metrics gracefully", async () => {
     const noMetrics = makeUnit({ id: "unit-no-metrics", metrics: [] });
     const { client, create } = mockClient([
