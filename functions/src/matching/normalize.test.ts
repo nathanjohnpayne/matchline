@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   loadOntology,
   normalizeDomain,
+  normalizeKey,
   normalizeSkill,
   normalizeTool,
   resetOntologyCache,
@@ -66,19 +67,11 @@ describe("loadOntology", () => {
     // code. Curator fix removed the duplicate; this test catches
     // any future repeat.
     //
-    // The matching keys here use the same normalization the index
-    // uses (lowercase + trim + punctuation-fold) so a curator
-    // can't sneak a "duplicate" past via a casing or punctuation
-    // tweak that the runtime would still treat as identical.
+    // The matching keys here use the EXACT runtime normalizer
+    // imported from normalize.ts — no inline copy, so a curator
+    // can't sneak a "duplicate" past via a punctuation tweak
+    // that the runtime would still treat as identical.
     const data = loadOntology();
-    const normalizeKey = (s: string): string =>
-      s
-        .toLowerCase()
-        .trim()
-        .replace(/\s+/g, " ")
-        .replace(/[‘’]/g, "'")
-        .replace(/[“”]/g, '"')
-        .replace(/[–—]/g, "-");
 
     for (const [name, category] of [
       ["skills", data.skills],
@@ -117,9 +110,14 @@ describe("loadOntology", () => {
     // Pin so a curator who adds e.g. `synonym: "agile"` to a
     // different entry can't accidentally hide the dedicated
     // `canonical: "agile"` entry.
+    //
+    // Uses the EXACT runtime normalizer (curly-quote + en/em-dash
+    // fold included) imported from normalize.ts — no inline copy,
+    // so a punctuation-variant cross-shadow can't slip past the
+    // test while still colliding at runtime. Codex P3 round 2
+    // on #102 caught the prior weaker inline normalizer here;
+    // the fix exports `normalizeKey` and reuses it directly.
     const data = loadOntology();
-    const normalizeKey = (s: string): string =>
-      s.toLowerCase().trim().replace(/\s+/g, " ");
 
     for (const [name, category] of [
       ["skills", data.skills],

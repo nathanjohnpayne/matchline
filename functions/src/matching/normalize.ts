@@ -60,8 +60,15 @@ function ontologyDir(): string {
  * Normalize a raw input string before matching: lowercase, trim,
  * collapse internal whitespace, and replace common typographic
  * punctuation variants with their ASCII equivalents.
+ *
+ * Exported so the seed-validation tests in normalize.test.ts
+ * use the EXACT same key derivation as the runtime index. The
+ * earlier version of those tests inlined a weaker normalizer
+ * (no quote/dash folding), which let punctuation-variant
+ * collisions slip past while still colliding at runtime —
+ * Codex P3 round 2 on #102.
  */
-function normalizeKey(raw: string): string {
+export function normalizeKey(raw: string): string {
   return raw
     .toLowerCase()
     .trim()
