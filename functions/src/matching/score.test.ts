@@ -547,14 +547,32 @@ describe("score (master composer)", () => {
       keywords: ["product strategy"],
       embedding: [1, 0, 0],
     });
-    const fullConfidence = score({ ...base, confidence_score: 1 }, req);
-    const halfConfidence = score({ ...base, confidence_score: 0.5 }, req);
+    // Pass asOf to both calls so recency() doesn't read wall-
+    // clock time. Without asOf, the two score() calls happen
+    // at slightly different `new Date()` values; the recency
+    // component drifts between them and rule_score loses its
+    // exact equality. The flake reproduced on slow CI runners
+    // (PR #104 round 2 unit + build job) but not on faster
+    // local runs. nathanpayne-codex flagged in the round 2
+    // review notes.
+    const asOf = new Date("2026-04-25T00:00:00.000Z");
+    const fullConfidence = score(
+      { ...base, confidence_score: 1 },
+      req,
+      { asOf },
+    );
+    const halfConfidence = score(
+      { ...base, confidence_score: 0.5 },
+      req,
+      { asOf },
+    );
     expect(halfConfidence.final_score).toBeCloseTo(
       fullConfidence.final_score / 2,
       9,
     );
     // rule_score is unaffected by confidence (the multiplier is
-    // applied only to final_score).
+    // applied only to final_score). Now exact-equal because
+    // both calls ran with the same asOf.
     expect(halfConfidence.rule_score).toBe(fullConfidence.rule_score);
   });
 
