@@ -587,8 +587,21 @@ describe("score (master composer)", () => {
   it("no component is identically zero on a representative match (component-coverage pin)", () => {
     // Issue acceptance: "every weight contributes a non-zero
     // value to at least one match." This test pins a single
-    // realistic match where every component scores > 0,
+    // realistic match where EVERY component scores > 0,
     // demonstrating that no scorer is structurally degenerate.
+    //
+    // Note on the requirement.category choice: skill_overlap
+    // compares unit.skills against req.keywords, and req.keywords
+    // is the parser's per-category keyword bucket — so on a
+    // scope-category requirement the keywords are scope-flavored
+    // ("40M users") and unit.skills won't match them. To pin
+    // every component > 0 we use a multi-requirement-style
+    // construction: scope_signals on the unit + scope-category
+    // keywords on the req drive scope_alignment, and we add a
+    // matching skill to both sides for skill_overlap. This
+    // doesn't faithfully model the JD parser's per-requirement
+    // categorization (in real usage one Requirement has one
+    // category) — it's a synthetic component-coverage pin.
     const unit = makeUnit({
       skills: ["product strategy"],
       tools: ["jira"],
@@ -600,7 +613,7 @@ describe("score (master composer)", () => {
     });
     const req = makeRequirement({
       category: "scope",
-      keywords: ["40M users"],
+      keywords: ["40M users", "product strategy"],
       tools: ["jira"],
       domains: ["streaming video"],
       seniority_level: "senior",
@@ -611,7 +624,7 @@ describe("score (master composer)", () => {
     });
     // Every component scored above zero on this pair.
     expect(result.components.semantic_similarity).toBeGreaterThan(0);
-    expect(result.components.skill_overlap).toBe(0); // intentional: skill_overlap on category=scope req
+    expect(result.components.skill_overlap).toBeGreaterThan(0);
     expect(result.components.domain_overlap).toBeGreaterThan(0);
     expect(result.components.tool_overlap).toBeGreaterThan(0);
     expect(result.components.seniority_alignment).toBeGreaterThan(0);

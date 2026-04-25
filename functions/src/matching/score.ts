@@ -254,6 +254,18 @@ export function seniorityAlignment(
  * future contributor sees the deviation from the PRD's
  * "penalty function" framing.
  */
+/**
+ * Wrap `normalizeKey` to match the `jaccard()` helper's
+ * "normalizer returns string | null" contract: empty/whitespace
+ * inputs collapse to null and get filtered out by `canonicalize`,
+ * preserving the both-empty → 1.0 / one-empty → 0.0 semantics
+ * the helper enforces.
+ */
+function normalizeScopeKey(raw: string): string | null {
+  const key = normalizeKey(raw);
+  return key.length === 0 ? null : key;
+}
+
 export function scopeAlignment(
   unit: ExperienceUnit,
   requirement: JobRequirementUnit,
@@ -265,18 +277,13 @@ export function scopeAlignment(
   // scope, so we treat it as no-constraint (return 1.0).
   if (requirement.category !== "scope") return 1;
   // Compare unit.scope_signals against the requirement's
-  // keywords (the parser's scope-category bucket). Use
-  // normalizeKey for both sides — no scope ontology yet.
-  const aSet = new Set(unit.scope_signals.map(normalizeKey));
-  aSet.delete("");
-  const bSet = new Set(requirement.keywords.map(normalizeKey));
-  bSet.delete("");
-  if (aSet.size === 0 && bSet.size === 0) return 1;
-  if (aSet.size === 0 || bSet.size === 0) return 0;
-  let intersection = 0;
-  for (const v of aSet) if (bSet.has(v)) intersection += 1;
-  const union = aSet.size + bSet.size - intersection;
-  return intersection / union;
+  // keywords (the parser's scope-category bucket). Re-uses the
+  // same `jaccard()` helper as the skill/tool/domain dimensions
+  // so empty-set semantics are guaranteed identical (CodeRabbit
+  // PR #103). Until a scope ontology lands, normalize via raw
+  // `normalizeKey` (no synonym table yet) — wrapping it to
+  // satisfy the helper's null-or-string contract.
+  return jaccard(unit.scope_signals, requirement.keywords, normalizeScopeKey);
 }
 
 // -- Recency ----------------------------------------------------------------
