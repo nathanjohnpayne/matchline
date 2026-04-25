@@ -289,6 +289,32 @@ describe("checkTraceability", () => {
     );
   });
 
+  it("recordUsage rejection is swallowed; the LLM verdict still ships (CodeRabbit on #113)", async () => {
+    // Pin: cost telemetry is observability infrastructure. A
+    // Firestore 503 (or any other recordUsage failure) must NOT
+    // discard an otherwise-successful traceability verdict. The
+    // try/catch around `await record(...)` enforces this.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const { client } = mockClient([
+      mockMessage({
+        supports: true,
+        supporting_unit_id: "unit-a",
+        rationale: "Unit metric matches.",
+      }),
+    ]);
+
+    const result = await checkTraceability(CLAIM, [makeUnit()], CTX, {
+      client,
+      record,
+    });
+
+    expect(result.supports).toBe(true);
+    expect(result.supporting_unit_id).toBe("unit-a");
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it("retries on schema error and succeeds on the second attempt", async () => {
     // First response fails the refine() (supports=true with no
     // id). Second response is valid.

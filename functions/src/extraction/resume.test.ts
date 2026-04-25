@@ -112,6 +112,32 @@ describe("extractFromResume", () => {
     );
   });
 
+  it("recordUsage rejection is swallowed; the LLM result still ships (CodeRabbit on #113)", async () => {
+    // Pin: cost telemetry is observability infrastructure. A
+    // Firestore 503 (or any other recordUsage failure) must NOT
+    // discard an otherwise-successful extraction. The try/catch
+    // around `await record(...)` enforces this.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    const units = await extractFromResume(
+      "Resume text here",
+      { ownerUid: "user-alice" },
+      {
+        client,
+        record,
+        generateId: () => "id-1",
+        now: () => new Date("2026-04-24T00:00:00Z"),
+      },
+    );
+
+    expect(units).toHaveLength(1);
+    expect(units[0]!.id).toBe("id-1");
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it("retries once on schema failure and succeeds on the second attempt", async () => {
     const malformed = { units: [{ wrong_shape: true }] };
     const record = vi.fn<typeof RecordUsage>(async () => 0.01);

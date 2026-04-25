@@ -108,6 +108,26 @@ describe("parseJobRequirements", () => {
     );
   });
 
+  it("recordUsage rejection is swallowed; the LLM result still ships (CodeRabbit on #113)", async () => {
+    // Pin: cost telemetry is observability infrastructure. A
+    // Firestore 503 (or any other recordUsage failure) must NOT
+    // discard an otherwise-successful parse. The try/catch around
+    // `await record(...)` enforces this.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    const reqs = await parseJobRequirements("JD text", CTX, {
+      client,
+      record,
+      generateId: () => "id-stub",
+    });
+
+    expect(reqs).toHaveLength(2);
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it("retries once on schema failure and succeeds on the second attempt", async () => {
     const malformed = { requirements: [{ wrong_shape: true }] };
     const record = vi.fn<typeof RecordUsage>(async () => 0.005);

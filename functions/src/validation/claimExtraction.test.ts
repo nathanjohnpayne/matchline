@@ -164,6 +164,26 @@ describe("extractClaims", () => {
     );
   });
 
+  it("recordUsage rejection is swallowed; the LLM verdict still ships (CodeRabbit on #113)", async () => {
+    // Pin: cost telemetry is observability infrastructure. A
+    // Firestore 503 (or any other recordUsage failure) must NOT
+    // discard an otherwise-successful claim extraction. The
+    // try/catch around `await record(...)` enforces this.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const { client } = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    const claims = await extractClaims(
+      { text: "Led migration.", source_unit_ids: [] },
+      CTX,
+      { client, record, generateId: () => "c1" },
+    );
+
+    expect(claims).toHaveLength(3);
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
   it("retries once on schema failure and succeeds on the second attempt", async () => {
     // Malformed first attempt: wrong shape (claims is an object, not array).
     const malformed = { claims: { wrong_shape: true } };
