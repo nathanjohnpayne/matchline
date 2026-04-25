@@ -24,3 +24,10 @@ export { parseJobRequirementsCallable as parseJobRequirements } from "./callable
  * insert. Atomic embed-and-clear.
  */
 export { reembedExperienceUnitCallable as reembedExperienceUnit } from "./callables/reembedExperienceUnit.js";
+
+/**
+ * Phase 1: score every approved ExperienceUnit against every
+ * JobRequirementUnit under a Role; atomically replace the
+ * persisted UnitMatch set. Step 3 of the core loop.
+ */
+export { runMatchingCallable as runMatching } from "./callables/runMatching.js";

@@ -1,4 +1,15 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "_comment": "Powers listMatchesByRole + subscribeMatchesByRole (sub-issue #99 of #20). The Matches tab (#21) renders matches scoped to the current Role, ordered by final_score desc. Composite on (owner_uid, role_id, final_score desc). owner_uid is part of every match query for cross-tenant safety; role_id is the per-Role scope; final_score desc is the rank order shown to the user. Without this index, Firestore rejects the orderBy + multiple where clauses combination.",
+      "collectionGroup": "unitMatches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "owner_uid", "order": "ASCENDING" },
+        { "fieldPath": "role_id", "order": "ASCENDING" },
+        { "fieldPath": "final_score", "order": "DESCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

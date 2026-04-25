@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run --passWithNoTests --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
     "test:watch": "vitest --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
-    "test:rules": "firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts --exclude=.claude/**'",
+    "test:rules": "firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts tests/matching-replace.integration.test.ts --exclude=.claude/**'",
     "eval": "tsx tests/eval/run.ts"
   },
   "dependencies": {
