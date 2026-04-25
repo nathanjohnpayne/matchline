@@ -152,6 +152,20 @@ export interface UnitMatch {
   owner_uid: UUID;
   experience_unit_id: UUID;
   job_requirement_unit_id: UUID;
+  /**
+   * Denormalized from `jobRequirementUnits.role_id` — the
+   * canonical relationship is Match → Requirement → Role, but
+   * the Matches tab (#21) reads matches scoped by Role and
+   * the matching pipeline (#99) atomic-replaces by Role. A
+   * direct `where("role_id", "==", roleId)` is dramatically
+   * simpler than chunked join-via-Requirements with
+   * Firestore's `in`-clause limit. The pipeline owns the
+   * write side; readers must NEVER mutate role_id directly
+   * (re-running matching is the only way it changes, since
+   * a Requirement's role_id can't change either — Requirements
+   * are scoped at parse time).
+   */
+  role_id: UUID;
 
   semantic_score: number;
   rule_score: number;

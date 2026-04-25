@@ -141,3 +141,32 @@ export interface ExperienceUnit {
   created_at: ISOTimestamp;
   updated_at: ISOTimestamp;
 }
+
+/**
+ * Server-side mirror of UnitMatch. See `src/types/capability.ts`
+ * for the canonical type. The matching pipeline (#99) writes
+ * this; the Matches tab (#21) reads it.
+ *
+ * `role_id` is denormalized from the Match's Requirement so the
+ * Matches-tab + pipeline-replace queries can scope by Role
+ * without joining through Requirements.
+ */
+export interface UnitMatch {
+  id: UUID;
+  owner_uid: UUID;
+  experience_unit_id: UUID;
+  job_requirement_unit_id: UUID;
+  role_id: UUID;
+
+  semantic_score: number;
+  rule_score: number;
+  final_score: number;
+
+  rationale: string;
+  surface_evidence: string;
+
+  approved_for_use: boolean;
+  user_rejected: boolean;
+
+  created_at: ISOTimestamp;
+}
