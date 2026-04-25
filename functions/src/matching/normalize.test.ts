@@ -232,6 +232,36 @@ describe("normalizeSkill", () => {
     );
   });
 
+  it("folds separator characters so node.js / node js / node-js all match the same canonical (regression: nathanpayne-codex Phase 4b r2 on #102)", () => {
+    // Canonical is "node.js"; the fold treats `.` / `/` / `-` /
+    // `_` as equivalent to space, so any of these inputs
+    // canonicalizes correctly. Without the fold, a JD that
+    // says "Node.js" and a resume that says "node js" would
+    // hit different keys and miss canonicalization.
+    expect(normalizeTool("node.js")).toBe("node.js");
+    expect(normalizeTool("node js")).toBe("node.js");
+    expect(normalizeTool("node-js")).toBe("node.js");
+    expect(normalizeTool("Node.js")).toBe("node.js");
+    expect(normalizeTool("NODE JS")).toBe("node.js");
+  });
+
+  it("folds separators across the other reviewer-flagged cases", () => {
+    // The other 4 specific cases the Phase 4b reviewer pinned:
+    expect(normalizeTool("video js")).toBe("video.js");
+    expect(normalizeTool("video.js")).toBe("video.js");
+
+    expect(normalizeTool("monday com")).toBe("monday");
+    expect(normalizeTool("monday.com")).toBe("monday");
+
+    expect(normalizeSkill("a b testing")).toBe("a/b testing");
+    expect(normalizeSkill("a/b testing")).toBe("a/b testing");
+    expect(normalizeSkill("a-b testing")).toBe("a/b testing");
+
+    expect(normalizeDomain("b2b-saas")).toBe("b2b saas");
+    expect(normalizeDomain("b2b saas")).toBe("b2b saas");
+    expect(normalizeDomain("b2b.saas")).toBe("b2b saas");
+  });
+
   it("returns null for unrecognized inputs", () => {
     expect(normalizeSkill("widget herding")).toBeNull();
     expect(normalizeSkill("nonexistent skill xyz123")).toBeNull();

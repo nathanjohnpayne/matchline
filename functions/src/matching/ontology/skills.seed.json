@@ -100,7 +100,7 @@
     { "canonical": "deprecation", "synonyms": ["sunsetting", "feature deprecation", "deprecation planning"] },
     { "canonical": "migration planning", "synonyms": ["migration", "system migration", "platform migration"] },
     { "canonical": "0-to-1 product", "synonyms": ["0 to 1", "zero to one", "new product launch", "greenfield"] },
-    { "canonical": "scaling product", "synonyms": ["1 to n", "1-to-n", "growth scaling", "scaling pm"] },
+    { "canonical": "scaling product", "synonyms": ["1 to n", "growth scaling", "scaling pm"] },
     { "canonical": "discovery", "synonyms": ["product discovery", "opportunity discovery", "exploratory pm"] },
     { "canonical": "qualitative research", "synonyms": ["qual research", "qualitative methods"] },
     { "canonical": "quantitative analysis", "synonyms": ["quant analysis", "quantitative methods", "data analysis"] },

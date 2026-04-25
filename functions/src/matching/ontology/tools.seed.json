@@ -2,7 +2,7 @@
   "_comment": "Canonical tool ontology for the matching engine (#96). Same shape as skills.seed.json. ~80 entries covering: PM tooling (Jira, Linear, Notion), analytics (Amplitude, Looker, BigQuery), design (Figma, Sketch), comms (Slack, Notion, Confluence), CTV/streaming-specific (HLS, DASH, Roku SDK), AI (Claude, OpenAI, Anthropic), data infra (dbt, Snowflake), and runtime/protocol terms that show up alongside skills (FFmpeg, etc.).",
   "entries": [
     { "canonical": "jira", "synonyms": ["atlassian jira", "jira tickets"] },
-    { "canonical": "linear", "synonyms": ["linear app", "linear.app"] },
+    { "canonical": "linear", "synonyms": ["linear app"] },
     { "canonical": "notion", "synonyms": ["notion docs", "notion workspace"] },
     { "canonical": "confluence", "synonyms": ["atlassian confluence"] },
     { "canonical": "asana", "synonyms": ["asana tasks"] },
@@ -60,7 +60,7 @@
     { "canonical": "pendo", "synonyms": ["pendo.io"] },
     { "canonical": "appcues", "synonyms": ["app cues"] },
     { "canonical": "hls", "synonyms": ["http live streaming"] },
-    { "canonical": "dash", "synonyms": ["mpeg-dash", "mpeg dash"] },
+    { "canonical": "dash", "synonyms": ["mpeg-dash"] },
     { "canonical": "cmaf", "synonyms": ["common media application format"] },
     { "canonical": "widevine", "synonyms": ["widevine drm"] },
     { "canonical": "playready", "synonyms": ["microsoft playready"] },

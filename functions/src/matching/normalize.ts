@@ -57,27 +57,47 @@ function ontologyDir(): string {
 }
 
 /**
- * Normalize a raw input string before matching: lowercase, trim,
- * collapse internal whitespace, and replace common typographic
- * punctuation variants with their ASCII equivalents.
+ * Normalize a raw input string before matching. Steps in order:
  *
- * Exported so the seed-validation tests in normalize.test.ts
- * use the EXACT same key derivation as the runtime index. The
- * earlier version of those tests inlined a weaker normalizer
- * (no quote/dash folding), which let punctuation-variant
- * collisions slip past while still colliding at runtime —
- * Codex P3 round 2 on #102.
+ *   1. Lowercase + trim.
+ *   2. Curly quotes → straight ASCII quotes.
+ *   3. En-dash / em-dash → ASCII hyphen.
+ *   4. Common separators (`.`, `/`, `\`, `-`, `_`) → space. This
+ *      is what makes "node.js" / "node js" / "node-js" all
+ *      canonicalize to the same key, "monday.com" / "monday com"
+ *      collapse, "a/b testing" / "a b testing" match, etc.
+ *      nathanpayne-codex Phase 4b on #102 caught the absence —
+ *      without the fold, JD-side and resume-side terms with
+ *      different separator conventions miss canonicalization
+ *      and under-score in the Jaccard path.
+ *   5. Collapse all whitespace (post-separator-fold) to single
+ *      spaces, then re-trim — separator folds at the start/end
+ *      of a token leave stray whitespace that the final trim
+ *      cleans up.
+ *
+ * Exported so the seed-validation tests use the EXACT same key
+ * derivation as the runtime index — Codex P3 r2/r3 on #102
+ * caught the prior drift between weaker test-side normalizers
+ * and the runtime.
  */
 export function normalizeKey(raw: string): string {
   return raw
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, " ")
     // Curly quotes → straight
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
     // En-dash, em-dash → hyphen
-    .replace(/[–—]/g, "-");
+    .replace(/[–—]/g, "-")
+    // Common separators → space. Treats "." / "/" / "\" / "-" /
+    // "_" as equivalent to space so terms with different
+    // separator conventions (node.js vs node-js vs node js) all
+    // collapse to the same key.
+    .replace(/[./\\\-_]/g, " ")
+    // Collapse runs of whitespace, including any introduced by
+    // the separator fold above.
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 let cachedData: OntologyData | undefined;
