@@ -43,11 +43,17 @@ describe("ClaimExtractionResponseV1Schema", () => {
     expect(parsed).toEqual(KNOWN_GOOD);
   });
 
-  it("accepts an empty claims array (the LLM might emit zero claims for non-fact prose)", () => {
-    // Discourse markers like "As part of this work" produce zero
-    // claims — that's a legitimate output from the prompt.
+  it("rejects an empty claims array (silent-skip prevention)", () => {
+    // Codex P1 + CodeRabbit Major on PR #110: an LLM response
+    // with zero claims for a non-empty bullet is silent-skip
+    // territory — the validator can only check what it's given,
+    // and the bullet bypasses validation entirely. The fix:
+    // schema requires .min(1), so a zero-claim emission triggers
+    // a retry, not silent success. The orchestrator (#109) is
+    // responsible for not invoking this stage on bullets that
+    // legitimately have zero fact-bearing content.
     const result = ClaimExtractionResponseV1Schema.safeParse({ claims: [] });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("rejects a server-stamped field (strict schema)", () => {

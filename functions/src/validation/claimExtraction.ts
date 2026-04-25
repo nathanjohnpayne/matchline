@@ -25,7 +25,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 import { anthropic } from "../llm/anthropic.js";
@@ -66,7 +66,22 @@ export interface Claim {
 export interface ClaimExtractionDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
-  readonly generateId?: () => string;
+  /**
+   * Generate a stable claim id given the parent bulletId and the
+   * claim's text. The default is a SHA-256-based content hash
+   * (`${bulletId}::${claimText}` → 24-char hex prefix), so re-
+   * extracting an unchanged bullet yields identical claim ids
+   * across runs — important because downstream traceability +
+   * specificity flag records key on `(asset_id, bullet_id,
+   * claim_id)`. A `randomUUID()` default would churn those
+   * records on every re-validation; CodeRabbit Major on PR #110
+   * caught the regression risk.
+   *
+   * Tests can inject a deterministic generator (e.g. a counter)
+   * by providing this dep — mirrors the override pattern already
+   * used elsewhere in the codebase.
+   */
+  readonly generateId?: (bulletId: string, claimText: string) => string;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -85,7 +100,7 @@ export async function extractClaims(
 ): Promise<Claim[]> {
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
-  const generateId = deps.generateId ?? randomUUID;
+  const generateId = deps.generateId ?? defaultGenerateId;
 
   if (typeof bullet.text !== "string" || bullet.text.trim().length === 0) {
     // Empty input is a caller bug, not an LLM failure. Throw
@@ -201,7 +216,7 @@ function buildUserContent(
 function stampServerFields(
   response: ClaimExtractionResponseV1,
   ctx: ClaimExtractionContext,
-  generateId: () => string,
+  generateId: (bulletId: string, claimText: string) => string,
 ): Claim[] {
   return response.claims.map((raw) => stampOne(raw, ctx, generateId));
 }
@@ -209,15 +224,39 @@ function stampServerFields(
 function stampOne(
   raw: ClaimItemV1,
   ctx: ClaimExtractionContext,
-  generateId: () => string,
+  generateId: (bulletId: string, claimText: string) => string,
 ): Claim {
   // Firestore rejects undefined — only include raw_span when
   // present. Same conditional-spread pattern as
   // parsing/jd.ts::stampOne.
   return {
-    id: generateId(),
+    id: generateId(ctx.bulletId, raw.text),
     bullet_id: ctx.bulletId,
     text: raw.text,
     ...(raw.raw_span !== undefined && { raw_span: raw.raw_span }),
   };
+}
+
+/**
+ * Default stable id generator. SHA-256 of `${bulletId}::${claimText}`,
+ * 24-char hex prefix. Stable across runs for the same (bullet,
+ * claim text) pair → re-extracting an unchanged bullet yields
+ * identical claim ids → downstream flag records don't churn.
+ *
+ * 24 chars of hex = 96 bits of collision space. With ~5 claims
+ * per bullet × ~50 bullets per asset × ~100 assets = 25K claims
+ * total in V1 expected use. The birthday-bound collision
+ * probability at this scale is ~10^-21 — well below any
+ * operational concern.
+ *
+ * The `::` separator avoids ambiguity if a bulletId or claimText
+ * contains a colon. The double-colon isn't otherwise present in
+ * UUIDs (the canonical bulletId source) or English prose (the
+ * canonical claimText source).
+ */
+function defaultGenerateId(bulletId: string, claimText: string): string {
+  return createHash("sha256")
+    .update(`${bulletId}::${claimText}`)
+    .digest("hex")
+    .slice(0, 24);
 }

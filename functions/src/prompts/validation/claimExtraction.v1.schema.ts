@@ -48,7 +48,19 @@ export const ClaimItemV1Schema = z
 
 export const ClaimExtractionResponseV1Schema = z
   .object({
-    claims: z.array(ClaimItemV1Schema),
+    /**
+     * At least one claim required. Every generated bullet that
+     * reaches this stage has fact-bearing content (the generator
+     * doesn't emit pure-discourse bullets); zero claims = the
+     * model didn't follow the prompt's "cover everything" rule
+     * and the bullet would silently bypass the validator.
+     * Codex P1 + CodeRabbit Major on PR #110.
+     *
+     * If a bullet legitimately has zero fact-bearing claims, the
+     * caller (#109 orchestrator) is responsible for not invoking
+     * this stage on it.
+     */
+    claims: z.array(ClaimItemV1Schema).min(1),
   })
   .strict();
 

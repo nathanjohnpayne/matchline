@@ -300,6 +300,69 @@ describe("extractClaims", () => {
     expect(callArgs.messages[0]!.content).toContain("Led migration.");
   });
 
+  it("default generateId produces STABLE ids: re-extracting the same bullet → identical claim ids (CR Major round 1 on #110)", async () => {
+    // Pin: the default id generator is content-based (SHA-256
+    // of bulletId::claimText). Two extractions of the same
+    // bullet that yield the same claim texts produce identical
+    // claim ids. This is the load-bearing contract for
+    // downstream traceability/specificity flag records — they
+    // key on (asset_id, bullet_id, claim_id) and would churn on
+    // every re-validation if ids were random.
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client: client1 } = mockClient([mockMessage(VALID_RESPONSE)]);
+    const { client: client2 } = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    // Two extraction calls — NO generateId override → uses the
+    // production default (content-hash). Same bullet, same ctx
+    // → same ids expected.
+    const claims1 = await extractClaims(
+      { text: "x", source_unit_ids: [] },
+      CTX,
+      { client: client1, record },
+    );
+    const claims2 = await extractClaims(
+      { text: "x", source_unit_ids: [] },
+      CTX,
+      { client: client2, record },
+    );
+
+    expect(claims1.map((c) => c.id)).toEqual(claims2.map((c) => c.id));
+    // And: each claim's id is unique within the bullet (no
+    // collisions across the 3 distinct claim texts).
+    expect(new Set(claims1.map((c) => c.id)).size).toBe(3);
+    // Sanity: ids are 24-char hex (the hash prefix).
+    for (const c of claims1) {
+      expect(c.id).toMatch(/^[0-9a-f]{24}$/);
+    }
+  });
+
+  it("default generateId differs across bullets even with identical claim text (bulletId is the discriminator)", async () => {
+    // Pin: two different bullets that happen to yield identical
+    // claim texts produce DIFFERENT claim ids (because the hash
+    // includes bulletId). Without this property, claims that
+    // happen to share text across bullets would clobber each
+    // other in the flag-record store.
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const oneClaim = {
+      claims: [{ text: "The user did a thing." }],
+    };
+    const { client: c1 } = mockClient([mockMessage(oneClaim)]);
+    const { client: c2 } = mockClient([mockMessage(oneClaim)]);
+
+    const fromBulletA = await extractClaims(
+      { text: "x", source_unit_ids: [] },
+      { ...CTX, bulletId: "bullet-A" },
+      { client: c1, record },
+    );
+    const fromBulletB = await extractClaims(
+      { text: "x", source_unit_ids: [] },
+      { ...CTX, bulletId: "bullet-B" },
+      { client: c2, record },
+    );
+
+    expect(fromBulletA[0]!.id).not.toBe(fromBulletB[0]!.id);
+  });
+
   it("server-stamps a fresh id per claim using the injected generateId", async () => {
     // Pin: each claim gets a UNIQUE id from generateId(), called
     // once per claim. A regression that reused one id across

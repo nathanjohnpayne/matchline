@@ -26,7 +26,7 @@ Hard rules:
 
 5. **`text` is the claim, not a quote.** Phrase the claim as a clean declarative statement ("The user achieved a 30% memory reduction"), not as a verbatim copy of the bullet. The `raw_span` field is for the verbatim quote when one applies.
 
-6. **`raw_span` only when a single span backs the claim.** If a claim summarizes the whole bullet, leave `raw_span` empty. If a claim is supported by a specific phrase ("reducing memory 30%"), include that phrase as `raw_span`. Don't fabricate spans that aren't in the bullet.
+6. **`raw_span` only when a single span backs the claim.** If a claim summarizes the whole bullet, **omit** `raw_span` from the JSON object entirely — do NOT include it as `""`. The schema rejects empty strings; only omission is valid. If a claim is supported by a specific phrase ("reducing memory 30%"), include that phrase as `raw_span`. Don't fabricate spans that aren't in the bullet.
 
 7. **Subject is the user (implicit).** Resume bullets are first-person; the implicit subject is "the candidate." Phrase your claims with that subject — "The user led..." or "The candidate achieved..." Picking a consistent subject across the output keeps the downstream checker focused on what the bullet asserts about the person, not about the company or the project as an abstraction.
 
