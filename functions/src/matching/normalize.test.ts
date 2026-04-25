@@ -37,8 +37,12 @@ describe("loadOntology", () => {
 
   it("canonical entries are unique within each category", () => {
     // Catch a curator typo where two entries claim the same
-    // canonical form. Synonyms must also not collide cross-entry
-    // — that's the next test.
+    // canonical form. Uses the runtime `normalizeKey` (not just
+    // toLowerCase) so two canonicals that differ only by
+    // punctuation/spacing can't pass this test while still
+    // colliding in `buildIndex` at runtime. Codex P3 round 3
+    // on #102 — same drift surface as the synonym-collision
+    // tests, fixed the same way (share normalizeKey).
     const data = loadOntology();
     for (const [name, category] of [
       ["skills", data.skills],
@@ -47,10 +51,10 @@ describe("loadOntology", () => {
     ] as const) {
       const seen = new Set<string>();
       for (const entry of category) {
-        const key = entry.canonical.toLowerCase();
+        const key = normalizeKey(entry.canonical);
         if (seen.has(key)) {
           throw new Error(
-            `${name}.seed.json: duplicate canonical "${entry.canonical}"`,
+            `${name}.seed.json: duplicate canonical "${entry.canonical}" (runtime-collision normalized form: "${key}")`,
           );
         }
         seen.add(key);
@@ -245,11 +249,13 @@ describe("category isolation", () => {
     // current ontologies don't have overlap by design, but
     // pin that the lookups stay scoped to their own category.
     const data = loadOntology();
+    // Use the runtime normalizer everywhere — same drift fix
+    // as the canonical-uniqueness and synonym-collision tests.
     const skillCanonicals = new Set(
-      data.skills.map((e) => e.canonical.toLowerCase()),
+      data.skills.map((e) => normalizeKey(e.canonical)),
     );
     const toolCanonicals = new Set(
-      data.tools.map((e) => e.canonical.toLowerCase()),
+      data.tools.map((e) => normalizeKey(e.canonical)),
     );
     // For every skill canonical, normalizeTool should return
     // null UNLESS the term legitimately appears in tools too
