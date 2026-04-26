@@ -25,4 +25,28 @@ export function openai(): OpenAI {
   return client;
 }
 
+/**
+ * CLI-only OpenAI client. Reads `OPENAI_API_KEY` from
+ * `process.env` directly, bypassing `defineSecret` (which
+ * only resolves inside the Cloud Functions runtime).
+ *
+ * Mirror of `anthropicForCli` — see that docstring for the
+ * full rationale. Used by the eval harness to embed Units +
+ * Requirements in-memory before running the matching
+ * pipeline.
+ *
+ * Throws synchronously if `OPENAI_API_KEY` is missing.
+ */
+export function openaiForCli(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "openaiForCli: OPENAI_API_KEY is not set. " +
+        "Export it in your shell before running the CLI: " +
+        "`export OPENAI_API_KEY=$(op read 'op://...')` or similar.",
+    );
+  }
+  return new OpenAI({ apiKey });
+}
+
 export { openaiKey };

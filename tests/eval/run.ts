@@ -18,8 +18,14 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  anthropicForCli,
+} from "../../functions/src/llm/anthropic.ts";
+import { openaiForCli } from "../../functions/src/llm/openai.ts";
+
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
+import { runForFixture, type RunForFixtureResult } from "./runForFixture.js";
 
 type Mode = "smoke" | "full";
 
@@ -74,23 +80,62 @@ async function main(): Promise<number> {
   const resumeFixtures = listFixtures(join(fixturesDir, "resumes"), ".txt");
   const jdFixtures = listFixtures(join(fixturesDir, "jds"), ".txt");
 
-  // Phase 0 stub: no actual extraction/matching runs yet. The harness
-  // reports "scaffolding live, no content" when fixtures are empty
-  // and lists any that exist without scoring them. Phase 1 (#25)
-  // wires real extraction + scoring.
-  const fixtureResults: FixtureResult[] = [];
-  const selected =
-    mode === "smoke" ? resumeFixtures.slice(0, 1) : resumeFixtures;
+  // #136: real extraction/parsing/matching runs when both
+  // ANTHROPIC_API_KEY and OPENAI_API_KEY are present in the
+  // environment. Without keys, fall back to the previous
+  // "fixtures listed, not scored" stub so CI's non-blocking
+  // smoke run still produces a report shape.
+  const haveKeys =
+    typeof process.env.ANTHROPIC_API_KEY === "string" &&
+    process.env.ANTHROPIC_API_KEY.length > 0 &&
+    typeof process.env.OPENAI_API_KEY === "string" &&
+    process.env.OPENAI_API_KEY.length > 0;
 
-  for (const f of selected) {
-    fixtureResults.push({
-      id: f,
-      extractionAccuracy: null,
-      matchAccuracy: null,
-      latencyMs: null,
-      costUsd: null,
-      notes: "Phase 0 stub — scoring pending #25",
-    });
+  const selectedResumes =
+    mode === "smoke" ? resumeFixtures.slice(0, 1) : resumeFixtures;
+  const selectedJds = mode === "smoke" ? jdFixtures.slice(0, 1) : jdFixtures;
+
+  // Build (resume, jd) pairs. Smoke = single pair for fast
+  // feedback; full = cross product for the corpus run.
+  const pairs: Array<{ resume: string; jd: string }> = [];
+  for (const r of selectedResumes) {
+    for (const j of selectedJds) {
+      pairs.push({ resume: r, jd: j });
+    }
+  }
+
+  const fixtureResults: FixtureResult[] = [];
+  if (haveKeys && pairs.length > 0) {
+    const anthropicClient = anthropicForCli();
+    const openaiClient = openaiForCli();
+    for (const pair of pairs) {
+      // Strip `.txt` from the fixture filename to get the
+      // fixture id (resumes/jds are always `<id>.txt`).
+      const resumeFixtureId = pair.resume.replace(/\.txt$/, "");
+      const jdFixtureId = pair.jd.replace(/\.txt$/, "");
+      const result = await runForFixture(
+        { resumeFixtureId, jdFixtureId },
+        { anthropicClient, openaiClient },
+      );
+      fixtureResults.push(toFixtureResult(result));
+    }
+  } else {
+    // No API keys (or no JD fixtures yet) — list each
+    // resume fixture without scoring. Same shape as the
+    // pre-#136 Phase 0 stub.
+    const stubReason = haveKeys
+      ? "no JD fixtures available — extraction + matching needs at least one (resume, JD) pair"
+      : "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running for real scoring";
+    for (const r of selectedResumes) {
+      fixtureResults.push({
+        id: r,
+        extractionAccuracy: null,
+        matchAccuracy: null,
+        latencyMs: null,
+        costUsd: null,
+        notes: stubReason,
+      });
+    }
   }
 
   // Projection guard: even with no real LLM calls today, the harness
@@ -105,7 +150,7 @@ async function main(): Promise<number> {
   // A prior `Math.max(selectedJdCount, 1)` defaulted the multiplier
   // to 1 and falsely projected N×1 flows on a resumes-only corpus
   // (blocker from nathanpayne-codex on #55).
-  const flowCount = computeFlowCount(mode, selected.length, jdFixtures.length);
+  const flowCount = computeFlowCount(mode, selectedResumes.length, jdFixtures.length);
   const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
@@ -132,6 +177,36 @@ async function main(): Promise<number> {
   );
 
   return 0;
+}
+
+/**
+ * Convert a per-fixture orchestration result into the
+ * report-layer FixtureResult shape. Failed runs (`ok=false`)
+ * still produce a result — the error is surfaced in `notes`
+ * and accuracies are 0 so the corpus mean reflects the
+ * failure (intentional: the gate should fail when fixtures
+ * fail, not silently skip them).
+ */
+function toFixtureResult(r: RunForFixtureResult): FixtureResult {
+  const id = `${r.resumeFixtureId}__${r.jdFixtureId}`;
+  if (!r.ok) {
+    return {
+      id,
+      extractionAccuracy: 0,
+      matchAccuracy: 0,
+      latencyMs: r.latencyMs,
+      costUsd: null,
+      notes: `failed: ${r.error ?? "unknown error"}`,
+    };
+  }
+  return {
+    id,
+    extractionAccuracy: r.extractionAccuracy,
+    matchAccuracy: r.matchAccuracy,
+    latencyMs: r.latencyMs,
+    costUsd: r.costUsd,
+    notes: `extracted=${r.extractedUnitCount} reqs=${r.parsedRequirementCount} matches=${r.matchCount}`,
+  };
 }
 
 function buildReport(
