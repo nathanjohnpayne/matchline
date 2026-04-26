@@ -177,6 +177,17 @@ export async function runGenerationPipeline(
   // #123 (advisory finding round 1).
   const operationStart = Date.now();
 
+  // Cumulative token + cost counters across ALL attempts. The
+  // returned values reflect the full cost of the operation, not
+  // just the final successful LLM call — a fabricated-id retry
+  // burns real tokens that the caller's per-application budget
+  // tracker (#26 cost telemetry) needs to see. Same shape fix
+  // as the latency split above; CodeRabbit caught the symmetric
+  // gap on PR #123 (advisory finding round 2).
+  let cumulativeInputTokens = 0;
+  let cumulativeOutputTokens = 0;
+  let cumulativeCostUsd = 0;
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Per-attempt timing for telemetry recordUsage — we want
     // each LLM call's latency reported separately to the cost
@@ -217,6 +228,17 @@ export async function runGenerationPipeline(
     }
 
     const attemptLatencyMs = Date.now() - attemptStart;
+
+    // Accumulate immediately on a successful LLM round-trip,
+    // BEFORE any of the schema / fabricated-id / no-tool-use
+    // continues below. Tokens are billed even when the response
+    // fails our gates and we retry.
+    cumulativeInputTokens += response.usage.input_tokens;
+    cumulativeOutputTokens += response.usage.output_tokens;
+    cumulativeCostUsd += estimateCostUsd(
+      response.usage.input_tokens,
+      response.usage.output_tokens,
+    );
 
     // recordUsage is non-fatal — telemetry outages shouldn't
     // block generation. Mirror of #118's pattern.
@@ -273,17 +295,16 @@ export async function runGenerationPipeline(
       continue;
     }
 
-    // All gates passed. Stamp ids and return.
+    // All gates passed. Stamp ids and return cumulative cost +
+    // tokens (total spend across all attempts), with total
+    // elapsed time. The caller's per-application budget tracker
+    // sees the true cost of a successful generation, including
+    // any preceding failed attempts that still burned tokens.
     return {
       content: stampIds(parsed.data, generateId),
-      cost_usd: estimateCostUsd(
-        response.usage.input_tokens,
-        response.usage.output_tokens,
-      ),
-      input_tokens: response.usage.input_tokens,
-      output_tokens: response.usage.output_tokens,
-      // Total operation latency, not just the last attempt.
-      // Includes any preceding failed attempts + their backoffs.
+      cost_usd: cumulativeCostUsd,
+      input_tokens: cumulativeInputTokens,
+      output_tokens: cumulativeOutputTokens,
       latency_ms: Date.now() - operationStart,
     };
   }

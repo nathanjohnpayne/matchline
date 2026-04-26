@@ -363,6 +363,42 @@ describe("runGenerationPipeline", () => {
     expect(record).toHaveBeenCalledTimes(2);
   });
 
+  it("CUMULATIVE TOKENS + COST (CodeRabbit r2 advisory): retry burns real tokens; returned values reflect TOTAL spend, not just the final attempt", async () => {
+    // Pins the bug CodeRabbit caught on the 4a72fd0 round:
+    // returning only `response.usage` from the final successful
+    // attempt makes failed-then-retried calls look free in the
+    // caller's per-application budget tracker. The pipeline now
+    // accumulates tokens + cost across ALL attempts (whether
+    // they pass schema/cross-validation or not).
+    const fabricated = {
+      summary: { text: "x", source_unit_ids: ["u-fab"] },
+      bullets: [],
+      skills: [],
+    };
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([
+      mockMessage(fabricated, { input_tokens: 1000, output_tokens: 500 }),
+      mockMessage(VALID_RESPONSE, { input_tokens: 700, output_tokens: 200 }),
+    ]);
+
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record,
+      loadInputs: async () => makeInputs(["u1"]),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.input_tokens).toBe(1700); // 1000 + 700
+    expect(result.output_tokens).toBe(700); // 500 + 200
+    // estimateCostUsd uses Haiku pricing
+    // ($0.25/MTok input, $1.25/MTok output): cumulative >
+    // single-attempt cost.
+    const singleAttemptCost = (700 * 0.25 + 200 * 1.25) / 1_000_000;
+    expect(result.cost_usd).toBeGreaterThan(singleAttemptCost);
+  });
+
   it("CROSS-VALIDATION exhaustion: 3 fabricated-id responses → GenerationError with value_error failures", async () => {
     const fabricated = {
       summary: { text: "x", source_unit_ids: ["u-fab"] },
