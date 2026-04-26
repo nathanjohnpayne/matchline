@@ -45,9 +45,9 @@ import {
   getRole,
 } from "../../services/roles.ts";
 import {
-  setMatchApproval,
-  setMatchRejection,
+  setMatchApprovalState,
   subscribeMatchesByRole,
+  type MatchApprovalState,
 } from "../../services/matches.ts";
 import type {
   ExperienceUnit,
@@ -70,33 +70,24 @@ export default function RoleDetail(): ReactElement {
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
 
-  // Approve / Reject handlers (#130). Fire-and-forget the
-  // service write — the Firestore subscription's next
-  // snapshot delivers the new state. If the write fails
-  // (rules deny, transport), the snapshot is unchanged so
-  // the optimistic UI naturally reverts. Errors are
-  // swallowed here to avoid unhandled-promise warnings;
-  // the rules layer's permission check is the security
-  // gate, not the client error path. Future enhancement:
-  // surface a toast on rejection (deferred to Phase 2 UX).
-  const onApproveToggle = useCallback(
-    (matchId: string, nextApproved: boolean) => {
-      void setMatchApproval(matchId, { approved_for_use: nextApproved })
-        .catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.warn("setMatchApproval failed", err);
-        });
-    },
-    [],
-  );
-
-  const onRejectToggle = useCallback(
-    (matchId: string, nextRejected: boolean) => {
-      void setMatchRejection(matchId, { user_rejected: nextRejected })
-        .catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.warn("setMatchRejection failed", err);
-        });
+  // Single-setter approval handler (#130 + cursor #133 r1).
+  // Each click produces ONE `setMatchApprovalState` write,
+  // not a pair. Per-doc per-client Firestore write ordering
+  // guarantees the LAST submitted write wins
+  // deterministically — no out-of-order race across
+  // offline resync, multi-tab, or rapid double-clicks.
+  //
+  // Fire-and-forget: the Firestore subscription's next
+  // snapshot delivers the resolved state; failed writes
+  // (rules deny, transport down) are logged but not
+  // surfaced. Phase 2 UX adds toast notifications;
+  // deferred per #21 spec.
+  const onApprovalStateChange = useCallback(
+    (matchId: string, state: MatchApprovalState) => {
+      void setMatchApprovalState(matchId, state).catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn("setMatchApprovalState failed", err);
+      });
     },
     [],
   );
@@ -224,8 +215,7 @@ export default function RoleDetail(): ReactElement {
       error={error}
       activeTab={activeTab}
       onTabChange={onTabChange}
-      onApproveToggle={onApproveToggle}
-      onRejectToggle={onRejectToggle}
+      onApprovalStateChange={onApprovalStateChange}
     />
   );
 }

@@ -4,8 +4,20 @@
  *
  * "Unmet must-have" = a Requirement where:
  *   - `must_have: true`, AND
- *   - no `UnitMatch` for the Requirement has `final_score
- *     >= GAP_THRESHOLD` (default 0.4 per parent #21 spec)
+ *   - no `UnitMatch` for the Requirement is BOTH
+ *     - non-rejected (`user_rejected: false`), AND
+ *     - has `final_score >= GAP_THRESHOLD` (default 0.4
+ *       per parent #21 spec)
+ *
+ * **Rejected matches do NOT count as satisfying.**
+ * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
+ * gap: a user-rejected high-score match was still
+ * satisfying `computeGaps`'s threshold check, so a
+ * Requirement looked "covered" even after the user
+ * explicitly rejected the only match that covered it.
+ * Same shape as the matching pipeline's filter at #82
+ * (`tests/rejected-exclusion.integration.test.ts`) — a
+ * rejected match is dead to downstream readers.
  *
  * Why a 0.4 threshold:
  *   - The matching pipeline (#100) calibrated the score
@@ -22,12 +34,7 @@
  * are the things you'd need to address before this
  * Application is defensible."
  *
- * Output ordering: input order is preserved (the helper
- * `sortRequirementsForDisplay` in
- * `groupMatchesByRequirement.ts` is the canonical sort,
- * and the container passes Requirements in already-sorted
- * order to the Matches tab; gaps render in the same
- * priority order).
+ * Output ordering: input order is preserved.
  */
 
 import type {
@@ -43,11 +50,13 @@ export function computeGaps(
   threshold: number = GAP_THRESHOLD,
 ): readonly JobRequirementUnit[] {
   // Index matches by requirement id with their max
-  // final_score. We only need the BEST match per
-  // Requirement to know whether it qualifies — no need to
-  // walk all matches per check.
+  // final_score AMONG NON-REJECTED matches. Rejected
+  // matches don't count toward satisfying the Requirement
+  // — same semantics as the matching pipeline's filter at
+  // #82.
   const bestScoreByReq = new Map<string, number>();
   for (const m of matches) {
+    if (m.user_rejected) continue;
     const prev = bestScoreByReq.get(m.job_requirement_unit_id);
     if (prev === undefined || m.final_score > prev) {
       bestScoreByReq.set(m.job_requirement_unit_id, m.final_score);

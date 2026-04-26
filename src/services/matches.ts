@@ -106,91 +106,79 @@ export async function upsertMatch(
 }
 
 /**
- * Toggle a UnitMatch's `approved_for_use` flag. The
- * Matches tab (#21 / sub-issue #129) wires this to the
- * Approve button; the generation pipeline (#120 +
- * #121) reads `approved_for_use === true` as the gate
- * for which Units flow into the LLM prompt.
+ * The user's review state for a UnitMatch. Three values
+ * encode the full state space of the `(approved_for_use,
+ * user_rejected)` flag pair:
  *
- * **Mutual exclusion with `user_rejected` is enforced
- * here.** Approving a previously-rejected match (or a
- * match that the matching pipeline at #82 already filtered
- * via `user_rejected`) MUST clear the rejection flag —
- * otherwise the match could land in `{ approved_for_use:
- * true, user_rejected: true }`, which is nonsensical:
- * generation would consume it but the next matching run
- * would silently filter the underlying Unit pair.
- * cursor CHANGES_REQUESTED round 2 on PR #132 caught the
- * gap — the prior version wrote only `approved_for_use`,
- * leaving the stale rejection in place.
+ *   - `approved`  → `{ approved_for_use: true,  user_rejected: false }`
+ *   - `rejected`  → `{ approved_for_use: false, user_rejected: true  }`
+ *   - `none`      → `{ approved_for_use: false, user_rejected: false }`
  *
- * Symmetric clearing on the un-approve side: setting
- * `approved_for_use: false` does NOT touch `user_rejected`
- * (un-approving is "withdraw approval," not "reject" —
- * those are different user intents). Use `setMatchRejection`
- * (sub-issue #130) for the explicit rejection path.
- *
- * `updateDoc` is preferred over `setDoc(..., { merge: true
- * })` because a future field on `UnitMatch` doesn't have to
- * be defaulted in this call site.
- *
- * Owner check happens at the rules layer, not here. The
- * client-side guard would be a confused-deputy attack
- * surface (an attacker who can write the doc has already
- * bypassed it). `getOwnerUidOrThrow` is in the audit log
- * but not the gate.
+ * The contradictory `{ approved_for_use: true, user_rejected:
+ * true }` shape is structurally unrepresentable in this enum;
+ * `setMatchApprovalState` is the single write surface, so
+ * it can't be produced by callers either.
  */
-export async function setMatchApproval(
-  matchId: string,
-  approval: { approved_for_use: boolean },
-): Promise<void> {
-  // When approving (true), also clear any stale rejection
-  // flag. When un-approving (false), only flip
-  // approved_for_use; un-approving is not the same user
-  // intent as rejecting.
-  const update: Pick<UnitMatch, "approved_for_use"> &
-    Partial<Pick<UnitMatch, "user_rejected">> = approval.approved_for_use
-    ? { approved_for_use: true, user_rejected: false }
-    : { approved_for_use: false };
-  await updateDoc(ref(matchId), update);
+export type MatchApprovalState = "approved" | "rejected" | "none";
+
+/**
+ * Compute the canonical user-action state from the persisted
+ * flag pair. The persisted shape can in theory drift if a
+ * future schema change skips this service; this function
+ * defaults a `(true, true)` shape to "rejected" because the
+ * matching pipeline (#82) filters rejected matches out, so
+ * preferring the more conservative interpretation matches
+ * the zero-fab discipline.
+ */
+export function approvalStateOf(
+  match: Pick<UnitMatch, "approved_for_use" | "user_rejected">,
+): MatchApprovalState {
+  if (match.user_rejected) return "rejected";
+  if (match.approved_for_use) return "approved";
+  return "none";
 }
 
 /**
- * Toggle a UnitMatch's `user_rejected` flag. The Matches tab
- * (#21 / sub-issue #130) wires this to the Reject button;
- * the matching pipeline (#82 / `tests/rejected-exclusion.
- * integration.test.ts`) filters `user_rejected: true`
- * matches OUT of the input set on re-run, which propagates
- * to generation as "the underlying Unit pair has nothing
- * to ground on for this Requirement."
+ * Atomically set a UnitMatch's user-review state. The
+ * Matches tab (#21 / sub-issues #129 + #130) wires this to
+ * both the Approve and Reject buttons via a single call:
+ * the UI layer computes the next `MatchApprovalState` from
+ * the click + current state, then issues ONE write.
  *
- * **Symmetric mutual exclusion with `approved_for_use`,
- * mirroring `setMatchApproval`.** Rejecting a previously-
- * approved match MUST clear the approval flag — otherwise
- * the match could land in `{ approved_for_use: true,
- * user_rejected: true }`, which generation would consume
- * (it gates on `approved_for_use === true`) but the next
- * matching run would drop. cursor's #132 r2 catch named
- * this surface; the symmetric write here closes the same
- * gap on the rejection side.
+ * **Why one setter, not two.** The prior shape used separate
+ * `setMatchApproval` and `setMatchRejection`. Each was atomic
+ * per-call (writing both flags consistently), but rapid
+ * back-to-back clicks could issue two pending writes whose
+ * server-application order isn't airtight across offline
+ * resync, multi-tab scenarios, or other Firestore corner
+ * cases. CodeRabbit on PR #133 caught the race; the
+ * single-setter shape eliminates it because each click
+ * produces exactly one `updateDoc`. Per-doc per-client write
+ * ordering means the LAST submitted write wins
+ * deterministically.
  *
- * Un-rejecting (`user_rejected: false`) does NOT touch
- * `approved_for_use` — un-reject is "withdraw rejection,"
- * not "approve." If the user wants the match approved
- * after un-rejecting, that's a separate `setMatchApproval`
- * click.
+ * **Why the enum, not booleans.** A boolean pair has 4 states
+ * but only 3 are valid (`(true, true)` is contradictory).
+ * The enum makes the invalid state unrepresentable at the
+ * type level; future callers (batch import, CLI, etc.) can't
+ * accidentally produce it.
+ *
+ * Generation (#120 + #121) gates on `approved_for_use ===
+ * true`; matching (#82) filters `user_rejected === true` OUT
+ * on re-run. Both consume the persisted flags, not this
+ * enum directly — the enum is the WRITE-side abstraction.
+ *
+ * Owner check happens at the rules layer, not here.
  */
-export async function setMatchRejection(
+export async function setMatchApprovalState(
   matchId: string,
-  rejection: { user_rejected: boolean },
+  state: MatchApprovalState,
 ): Promise<void> {
-  // When rejecting (true), also clear any stale approval
-  // flag. When un-rejecting (false), only flip
-  // user_rejected; un-rejecting is not the same user
-  // intent as approving.
-  const update: Pick<UnitMatch, "user_rejected"> &
-    Partial<Pick<UnitMatch, "approved_for_use">> = rejection.user_rejected
-    ? { user_rejected: true, approved_for_use: false }
-    : { user_rejected: false };
+  const update: Pick<UnitMatch, "approved_for_use" | "user_rejected"> =
+    state === "approved"
+      ? { approved_for_use: true, user_rejected: false }
+      : state === "rejected"
+        ? { approved_for_use: false, user_rejected: true }
+        : { approved_for_use: false, user_rejected: false };
   await updateDoc(ref(matchId), update);
 }

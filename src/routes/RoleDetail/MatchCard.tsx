@@ -11,63 +11,76 @@
  *     where it does.
  *   - The `surface_evidence` — the specific piece of
  *     ground-truth content from the Unit being matched.
- *   - Approve / Reject buttons. State is derived from
- *     `match.approved_for_use` + `match.user_rejected`:
- *       both false → "Approve" + "Reject" both clickable
- *       approved_for_use:true → "Approved ✓" (clickable to revert)
- *       user_rejected:true → "Rejected ✗" (clickable to revert)
- *     Mutual exclusion is ENFORCED at the service layer
- *     (`setMatchApproval` / `setMatchRejection` clear the
- *     other flag); the UI just exposes the right click
- *     surface for each state.
+ *   - Approve / Reject buttons. Visual state is derived
+ *     via `approvalStateOf(match)`:
+ *       "none"      → "Approve" + "Reject" both clickable
+ *       "approved"  → "Approved ✓" (clickable to revert)
+ *       "rejected"  → "Rejected ✗" (clickable to revert)
  *
- * Click semantics:
- *   - `onApproveToggle(matchId, nextApproved)` — passes the
- *     intended next state. The container resolves to the
- *     service write and Firestore subscription delivers
- *     the new snapshot.
- *   - `onRejectToggle(matchId, nextRejected)` — symmetric.
- *
- * Optimism: the container fires the write but doesn't lock
- * the UI; the snapshot's next delivery resolves the visible
- * state. If the write fails, the snapshot reverts. This
- * matches the UnitReview pattern at #86.
+ * Click semantics (single-setter, #133 r1):
+ *   - Each click computes the NEXT `MatchApprovalState`
+ *     locally and calls `onApprovalStateChange(matchId,
+ *     nextState)` once. The container issues exactly one
+ *     `updateDoc` per click; per-doc per-client Firestore
+ *     write ordering means the LAST submitted write wins
+ *     deterministically — no out-of-order race across
+ *     offline resync, multi-tab, or rapid double-clicks.
+ *   - Approve button: toggles between "approved" and
+ *     "none" (revert).
+ *   - Reject button: toggles between "rejected" and
+ *     "none" (revert).
+ *   - Mutual exclusion is structural in the enum:
+ *     "approved" and "rejected" are distinct values.
+ *     Clicking Approve on a rejected match goes to
+ *     "approved" directly; the persisted flag pair
+ *     becomes `{ approved_for_use: true, user_rejected:
+ *     false }` atomically.
  */
 
 import type { ReactElement } from "react";
 
 import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
+import {
+  approvalStateOf,
+  type MatchApprovalState,
+} from "../../services/matches.ts";
 
 export interface MatchCardProps {
   readonly match: UnitMatch;
   readonly unit: ExperienceUnit | null;
-  readonly onApproveToggle: (
+  readonly onApprovalStateChange: (
     matchId: string,
-    nextApproved: boolean,
-  ) => void;
-  readonly onRejectToggle: (
-    matchId: string,
-    nextRejected: boolean,
+    state: MatchApprovalState,
   ) => void;
 }
 
 export default function MatchCard({
   match,
   unit,
-  onApproveToggle,
-  onRejectToggle,
+  onApprovalStateChange,
 }: MatchCardProps): ReactElement {
   // 0-100 with 1 decimal — readable score, not a precision
   // signal. Score breakdown for the curious lives in #131's
   // tooltip.
   const score100 = (match.final_score * 100).toFixed(1);
+  const state = approvalStateOf(match);
+
+  const onClickApprove = () => {
+    // Approve toggles between "approved" and "none." If the
+    // match was previously "rejected", a single click flips
+    // straight to "approved" (mutual exclusion via the enum,
+    // not a two-step revert).
+    onApprovalStateChange(match.id, state === "approved" ? "none" : "approved");
+  };
+  const onClickReject = () => {
+    onApprovalStateChange(match.id, state === "rejected" ? "none" : "rejected");
+  };
 
   return (
     <article
       className="rounded-md border border-zinc-200 dark:border-zinc-800 p-3 space-y-2 bg-white dark:bg-zinc-900"
       data-testid="match-card"
-      data-approved={match.approved_for_use}
-      data-rejected={match.user_rejected}
+      data-approval-state={state}
     >
       <header className="flex items-start justify-between gap-3">
         <h4 className="text-sm font-medium leading-5 text-zinc-900 dark:text-zinc-100 flex-1">
@@ -98,31 +111,31 @@ export default function MatchCard({
       <footer className="flex items-center gap-2 pt-1">
         <button
           type="button"
-          onClick={() => onApproveToggle(match.id, !match.approved_for_use)}
-          aria-pressed={match.approved_for_use}
+          onClick={onClickApprove}
+          aria-pressed={state === "approved"}
           data-testid="match-approve-button"
           className={
             "rounded px-2 py-1 text-xs font-medium transition-colors " +
-            (match.approved_for_use
+            (state === "approved"
               ? "bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
               : "border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800")
           }
         >
-          {match.approved_for_use ? "Approved ✓" : "Approve"}
+          {state === "approved" ? "Approved ✓" : "Approve"}
         </button>
         <button
           type="button"
-          onClick={() => onRejectToggle(match.id, !match.user_rejected)}
-          aria-pressed={match.user_rejected}
+          onClick={onClickReject}
+          aria-pressed={state === "rejected"}
           data-testid="match-reject-button"
           className={
             "rounded px-2 py-1 text-xs font-medium transition-colors " +
-            (match.user_rejected
+            (state === "rejected"
               ? "bg-rose-600 text-white hover:bg-rose-700 dark:bg-rose-700 dark:hover:bg-rose-600"
               : "border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800")
           }
         >
-          {match.user_rejected ? "Rejected ✗" : "Reject"}
+          {state === "rejected" ? "Rejected ✗" : "Reject"}
         </button>
       </footer>
     </article>

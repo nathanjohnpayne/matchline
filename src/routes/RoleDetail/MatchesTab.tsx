@@ -20,6 +20,7 @@ import type { ExperienceUnit, JobRequirementUnit } from "../../types/capability.
 import GapsView from "./GapsView.tsx";
 import MatchCard from "./MatchCard.tsx";
 import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
+import type { MatchApprovalState } from "../../services/matches.ts";
 
 export interface MatchesTabProps {
   readonly groups: readonly RequirementWithMatches[];
@@ -31,14 +32,14 @@ export interface MatchesTabProps {
    * subscription so we don't fetch one-Unit-per-Match.
    */
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
-  /** Approve/Reject handlers wired by the container (#130). */
-  readonly onApproveToggle: (
+  /**
+   * Approval-state handler (#130 + cursor #133 r1). Single
+   * setter; MatchCard computes the next state locally and
+   * passes it up.
+   */
+  readonly onApprovalStateChange: (
     matchId: string,
-    nextApproved: boolean,
-  ) => void;
-  readonly onRejectToggle: (
-    matchId: string,
-    nextRejected: boolean,
+    state: MatchApprovalState,
   ) => void;
 }
 
@@ -46,8 +47,7 @@ export default function MatchesTab({
   groups,
   gaps,
   unitsById,
-  onApproveToggle,
-  onRejectToggle,
+  onApprovalStateChange,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -108,8 +108,7 @@ export default function MatchesTab({
                   <MatchCard
                     match={match}
                     unit={unitsById.get(match.experience_unit_id) ?? null}
-                    onApproveToggle={onApproveToggle}
-                    onRejectToggle={onRejectToggle}
+                    onApprovalStateChange={onApprovalStateChange}
                   />
                 </li>
               ))}

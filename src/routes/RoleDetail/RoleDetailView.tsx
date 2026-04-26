@@ -25,6 +25,7 @@ import MatchesTab from "./MatchesTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
+import type { MatchApprovalState } from "../../services/matches.ts";
 
 /**
  * Subscription load state for the Role doc + per-tab data.
@@ -46,14 +47,16 @@ export interface RoleDetailViewProps {
   readonly error: Error | null;
   readonly activeTab: Tab;
   readonly onTabChange: (tab: Tab) => void;
-  /** #130 — passed through to MatchCard buttons. */
-  readonly onApproveToggle: (
+  /**
+   * Single-setter approval handler (#130 + cursor #133 r1).
+   * MatchCard computes the next `MatchApprovalState` from
+   * the click + the match's current state, then passes it
+   * up. Container issues ONE atomic write per call — no
+   * dual-write race.
+   */
+  readonly onApprovalStateChange: (
     matchId: string,
-    nextApproved: boolean,
-  ) => void;
-  readonly onRejectToggle: (
-    matchId: string,
-    nextRejected: boolean,
+    state: MatchApprovalState,
   ) => void;
 }
 
@@ -72,8 +75,7 @@ export default function RoleDetailView({
   error,
   activeTab,
   onTabChange,
-  onApproveToggle,
-  onRejectToggle,
+  onApprovalStateChange,
 }: RoleDetailViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -177,8 +179,7 @@ export default function RoleDetailView({
             groups={groups}
             gaps={gaps}
             unitsById={unitsById}
-            onApproveToggle={onApproveToggle}
-            onRejectToggle={onRejectToggle}
+            onApprovalStateChange={onApprovalStateChange}
           />
         )}
         {activeTab === "applications" && (

@@ -105,7 +105,7 @@ function makeUnit(id: string, summary: string): ExperienceUnit {
 }
 
 const NOOP = (): void => {};
-const NOOP_TOGGLE = (): void => {};
+const NOOP_STATE_CHANGE = (): void => {};
 
 describe("RoleDetailView", () => {
   it("LOADING: renders a loading placeholder before the first snapshot", () => {
@@ -119,8 +119,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-loading\"");
@@ -138,8 +137,7 @@ describe("RoleDetailView", () => {
         error={new Error("permission-denied")}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-error\"");
@@ -157,8 +155,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-not-found\"");
@@ -176,8 +173,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("Director of Platform");
@@ -208,8 +204,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"matches-tab\"");
@@ -239,8 +234,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("Req r-empty");
@@ -262,8 +256,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("Unit no longer available");
@@ -281,8 +274,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("must-have");
@@ -301,8 +293,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="requirements"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"requirements-tab-placeholder\"");
@@ -320,8 +311,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="applications"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("data-testid=\"applications-tab-placeholder\"");
@@ -338,8 +328,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain('role="tablist"');
@@ -368,8 +357,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain('data-testid="match-approve-button"');
@@ -401,12 +389,11 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("Approved ✓");
-    expect(html).toContain("data-approved=\"true\"");
+    expect(html).toContain('data-approval-state="approved"');
   });
 
   it("BUTTONS: rejected match renders 'Rejected ✗' with aria-pressed=true on the Reject button", () => {
@@ -429,12 +416,11 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain("Rejected ✗");
-    expect(html).toContain("data-rejected=\"true\"");
+    expect(html).toContain('data-approval-state="rejected"');
   });
 
   it("GAPS VIEW: renders the empty/affirmative state when every must-have has a qualifying match", () => {
@@ -452,8 +438,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain('data-testid="gaps-view-empty"');
@@ -482,8 +467,7 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
-        onApproveToggle={NOOP_TOGGLE}
-        onRejectToggle={NOOP_TOGGLE}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
       />,
     );
     expect(html).toContain('data-testid="gaps-view"');

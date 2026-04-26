@@ -154,4 +154,61 @@ describe("computeGaps", () => {
     ];
     expect(computeGaps(reqs, matches)).toEqual([]);
   });
+
+  // -- cursor #133 r1: rejected matches don't satisfy ----------------------
+
+  it("REJECTED FILTER (cursor #133 r1): a rejected high-score match does NOT satisfy a must-have", () => {
+    // The load-bearing pin. Without this filter, a user
+    // who rejects the ONLY qualifying match for a must-
+    // have Requirement would see the Requirement marked
+    // satisfied — the opposite of the spec's "honest
+    // gaps" promise.
+    const reqs = [makeReq("r-mh")];
+    const matches = [
+      // Score 0.85 — would otherwise satisfy the 0.4 threshold.
+      // Rejected by the user → must NOT count.
+      {
+        ...makeMatch("m-rejected-high", "r-mh", 0.85),
+        user_rejected: true,
+      },
+    ];
+    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+  });
+
+  it("REJECTED FILTER: when ALL matches for a must-have are rejected, the Requirement IS a gap", () => {
+    const reqs = [makeReq("r-mh")];
+    const matches = [
+      { ...makeMatch("m1", "r-mh", 0.9), user_rejected: true },
+      { ...makeMatch("m2", "r-mh", 0.7), user_rejected: true },
+      { ...makeMatch("m3", "r-mh", 0.5), user_rejected: true },
+    ];
+    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+  });
+
+  it("REJECTED FILTER: a non-rejected match still satisfies even when there are also rejected matches", () => {
+    // The user might reject some and keep others; the
+    // Requirement is still satisfied as long as ONE
+    // non-rejected match clears the threshold.
+    const reqs = [makeReq("r-mh")];
+    const matches = [
+      { ...makeMatch("m-rejected", "r-mh", 0.95), user_rejected: true },
+      makeMatch("m-good", "r-mh", 0.55), // not rejected, above threshold
+    ];
+    expect(computeGaps(reqs, matches)).toEqual([]);
+  });
+
+  it("REJECTED FILTER: an approved-but-low-scoring match doesn't override threshold (approval is not a gap-clearer)", () => {
+    // Approval gates GENERATION (#120/#121) but doesn't
+    // affect gap computation — score thresholds are the
+    // gap signal. A low-score approved match still leaves
+    // the Requirement under-grounded.
+    const reqs = [makeReq("r-mh")];
+    const matches = [
+      {
+        ...makeMatch("m-low-approved", "r-mh", 0.2),
+        approved_for_use: true,
+      },
+    ];
+    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+  });
 });
