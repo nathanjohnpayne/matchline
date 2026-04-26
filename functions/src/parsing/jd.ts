@@ -134,10 +134,14 @@ export async function parseJobRequirements(
         ownerUid: ctx.ownerUid,
       });
     } catch (err) {
+      // ownerUid intentionally omitted from the log payload —
+      // matches the redaction shape `cost.ts` already uses on its
+      // own internal failure paths so logs don't widen PII exposure
+      // for an observability-only failure path. CodeRabbit Major on
+      // PR #116.
       logger.warn("parsing.jd: recordUsage failed (non-fatal)", {
         stage: "requirement_parsing",
         model,
-        ownerUid: ctx.ownerUid,
         error: err instanceof Error ? err.message : String(err),
       });
     }

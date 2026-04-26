@@ -210,10 +210,14 @@ export async function extractClaims(
         ownerUid: ctx.ownerUid,
       });
     } catch (err) {
+      // ownerUid intentionally omitted from the log payload —
+      // matches the redaction shape `cost.ts` already uses on its
+      // own internal failure paths so logs don't widen PII exposure
+      // for an observability-only failure path. CodeRabbit Major on
+      // PR #116.
       logger.warn("validation.claimExtraction: recordUsage failed (non-fatal)", {
         stage: "validation",
         model,
-        ownerUid: ctx.ownerUid,
         error: err instanceof Error ? err.message : String(err),
       });
     }
