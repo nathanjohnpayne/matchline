@@ -169,8 +169,19 @@ export async function runGenerationPipeline(
   const eligibleInputs: GenerationInputs = { ...inputs, units: eligibleUnits };
   const failures: GenerationAttemptFailure[] = [];
 
+  // Total elapsed time for the whole operation (including
+  // retries + transport backoff). The returned `latency_ms`
+  // reflects this so the caller's p95 SLA tracking sees true
+  // end-to-end time, not just the last successful LLM call.
+  // CodeRabbit caught the prior reset-per-attempt bug on PR
+  // #123 (advisory finding round 1).
+  const operationStart = Date.now();
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const start = Date.now();
+    // Per-attempt timing for telemetry recordUsage — we want
+    // each LLM call's latency reported separately to the cost
+    // tracker for accurate provider-side benchmarking.
+    const attemptStart = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = buildUserContent(prompt.userFewShot, eligibleInputs);
 
@@ -205,7 +216,7 @@ export async function runGenerationPipeline(
       continue;
     }
 
-    const latencyMs = Date.now() - start;
+    const attemptLatencyMs = Date.now() - attemptStart;
 
     // recordUsage is non-fatal — telemetry outages shouldn't
     // block generation. Mirror of #118's pattern.
@@ -216,7 +227,7 @@ export async function runGenerationPipeline(
         model,
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
-        latencyMs,
+        latencyMs: attemptLatencyMs,
         ownerUid: ctx.ownerUid,
       });
     } catch (err) {
@@ -271,7 +282,9 @@ export async function runGenerationPipeline(
       ),
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,
-      latency_ms: latencyMs,
+      // Total operation latency, not just the last attempt.
+      // Includes any preceding failed attempts + their backoffs.
+      latency_ms: Date.now() - operationStart,
     };
   }
 
@@ -357,7 +370,14 @@ function buildUserContent(
     "",
     unitsBlock,
     "",
-    `Target Role: ${quote(inputs.role.title)} at ${quote(inputs.role.company_id)}`,
+    // `Role.company_id` is a UUID, not a display name — the
+    // human-readable Company name lives on the Company doc and
+    // isn't loaded here in V1. Emit only the title; the LLM
+    // grounds from Units (where employer info lives implicitly
+    // in `raw_text`). CodeRabbit caught this leak on PR #123
+    // (advisory finding round 1). Phase 2 follow-up: load
+    // Company doc + pass its `name` field.
+    `Target Role: ${quote(inputs.role.title)}`,
     "Role Requirements:",
     reqsBlock,
   ].join("\n");
