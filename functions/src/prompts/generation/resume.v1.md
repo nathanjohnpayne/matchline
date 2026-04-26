@@ -43,18 +43,23 @@ Example input:
 Approved Experience Units:
 
 [Unit u-disney]
+employer: "Disney+"
+title: "Senior PM"
+date_range: { start: "2018-01-01", end: "2024-12-31" }
 raw_text: "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox; reduced memory footprint 30%, shipped to 5M DAU."
 skills: ["cross-platform playback", "memory optimization"]
 domains: ["streaming video infrastructure"]
 
 [Unit u-edx]
+employer: "Disney+"
+title: "Senior PM"
+date_range: { start: "2018-01-01", end: "2024-12-31" }
 raw_text: "Owned device certification pipeline for smart TVs (Samsung, LG)."
 skills: ["device certification"]
 domains: ["streaming video infrastructure"]
 
 Target Role: Senior PM, Video Infrastructure at FAANG-X
 Role Requirements:
-- 7+ years PM experience
 - Streaming video domain
 - Connected-TV platforms
 - Device certification
@@ -65,7 +70,7 @@ Example tool call:
 ```json
 {
   "summary": {
-    "text": "Senior product manager with 7+ years shipping streaming-video infrastructure across connected-TV platforms. Led 64-bit NCP migration on Disney+ playback (30% memory reduction at 5M DAU) and owned smart-TV device certification across Samsung and LG.",
+    "text": "Product manager shipping streaming-video infrastructure across connected-TV platforms. Led 64-bit NCP migration on Disney+ playback (30% memory reduction at 5M DAU) and owned smart-TV device certification across Samsung and LG.",
     "source_unit_ids": ["u-disney", "u-edx"]
   },
   "experience": [
@@ -93,5 +98,9 @@ Example tool call:
   ]
 }
 ```
+
+Notes for the model on the example:
+- The summary contains NO claims that aren't in a Unit. "7+ years" was removed from a prior version — that figure was a Role Requirement, not a Unit fact, and including it would have violated rule 1.
+- Section `title`, `company`, and `date_range` come from the linked Units' metadata, NOT from the Role Requirements. The pipeline (#120) cross-validates these fields against the source Units; emitting fabricated employer/title/date values triggers a retry.
 
 The real input follows.

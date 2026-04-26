@@ -28,14 +28,41 @@ import { z } from "zod";
  * (#107) operates on this contract. An item with empty
  * source_unit_ids is a structural fabrication that bypasses
  * traceability — schema rejects to force a retry.
+ *
+ * `text.min(1)` is deliberately permissive: legitimate skills
+ * are sometimes ≤2 chars ("AI", "ML", "Go", "C#"). Codex P2
+ * round 1 on PR #122 caught a prior `min(3)` that excluded
+ * these. The prompt's hard rule 8 ("tight prose") + the
+ * specificity check in validation (#108) catch genuinely-junk
+ * emissions; the schema doesn't need to gate length here.
  */
 export const GenerationItemV1Schema = z
   .object({
-    text: z.string().min(3).max(2000),
+    text: z.string().min(1).max(2000),
     source_unit_ids: z.array(z.string().min(1)).min(1),
   })
   .strict();
 
+/**
+ * An experience section: title + company + date_range +
+ * bullets.
+ *
+ * `title`, `company`, and `date_range` are NOT carried with
+ * `source_unit_ids` at the schema level — by intent. They're
+ * structural metadata about the section grouping (Disney+ from
+ * 2018–2024 as the bucket containing the bullets). The PIPELINE
+ * (#120) cross-validates these fields against the linked Units'
+ * `employer` / `title` / `date_range` and rejects any section
+ * whose metadata doesn't match a real Unit's. This separation
+ * keeps the schema's job clean (shape) while the value-level
+ * grounding (do these strings match real Unit fields?) lives
+ * with the loaded-Unit context the schema doesn't have.
+ *
+ * Codex P1 round 1 on PR #122 surfaced this gap — a fabricated
+ * employer would otherwise ship via passed validation since the
+ * validator only iterates summary/bullets/skills/education.
+ * Documented here + enforced at the pipeline.
+ */
 export const GenerationExperienceSectionV1Schema = z
   .object({
     title: z.string().min(1).max(200),

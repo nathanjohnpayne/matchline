@@ -184,9 +184,24 @@ describe("ResumeGenerationResponseV1Schema", () => {
 
   // -- Length bounds + missing fields --------------------------------------
 
-  it("rejects text shorter than 3 chars", () => {
+  it("accepts short legitimate skill text (≥1 char) — Codex P2 round 1 on PR #122", () => {
+    // "AI", "ML", "Go", "C#" are real skills the model should
+    // be able to emit. The prior min(3) rejected them. The
+    // prompt's "tight prose" rule + the specificity validator
+    // catch genuine junk; the schema doesn't need a length
+    // gate beyond non-empty.
+    for (const skill of ["AI", "ML", "Go", "C#", "QA"]) {
+      const result = GenerationItemV1Schema.safeParse({
+        text: skill,
+        source_unit_ids: ["u-1"],
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects empty text (the only length floor remaining)", () => {
     const result = GenerationItemV1Schema.safeParse({
-      text: "ok",
+      text: "",
       source_unit_ids: ["u-1"],
     });
     expect(result.success).toBe(false);
