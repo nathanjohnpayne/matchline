@@ -10,7 +10,19 @@
 
 export interface ExtractionAttemptFailure {
   readonly attempt: number;
-  readonly kind: "no_tool_use" | "schema_error" | "transport_error";
+  readonly kind:
+    | "no_tool_use"
+    | "schema_error"
+    | "transport_error"
+    /**
+     * Anthropic returned `stop_reason: "max_tokens"` — the model
+     * hit the output-token budget mid-tool-call and the
+     * `tool_use.input` came back truncated (typically `{}`). Without
+     * this kind, the downstream Zod parse fails with a misleading
+     * "units: required" error that obscures the real cause and
+     * burns the retry budget on a problem retries can't fix.
+     */
+    | "max_tokens_exceeded";
   readonly message: string;
   /** Populated for schema_error; Zod's formatted issues. */
   readonly zodIssues?: readonly unknown[];

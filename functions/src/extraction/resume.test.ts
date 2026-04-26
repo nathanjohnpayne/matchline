@@ -241,6 +241,59 @@ describe("extractFromResume", () => {
     }
   });
 
+  it("surfaces stop_reason: max_tokens as a max_tokens_exceeded failure (not a misleading schema_error)", async () => {
+    // Reproduces the regression observed when running the eval
+    // harness against Nathan's real resume: the prior 4096-token
+    // budget hit the cap mid-tool-call, the SDK returned
+    // `stop_reason: "max_tokens"` with `tool_use.input = {}`, and
+    // the Zod parse bounced through all 3 retries with a
+    // misleading "units: required" schema error. The new code path
+    // catches the truncation explicitly so debug runs see the
+    // real cause.
+    const truncated = {
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "claude-sonnet-4-6",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_test",
+          name: "record_experience_units",
+          // The wire shape we observed: empty input because
+          // serialization was cut mid-stream.
+          input: {},
+        },
+      ],
+      stop_reason: "max_tokens",
+      stop_sequence: null,
+      usage: { input_tokens: 4702, output_tokens: 4096 },
+    } as unknown as Anthropic.Messages.Message;
+    // Three identical truncations → ExtractionError with three
+    // max_tokens_exceeded failures. Retries can't fix truncation.
+    const client = mockClient([truncated, truncated, truncated]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+
+    await expect(
+      extractFromResume(
+        "Resume",
+        { ownerUid: "user-alice" },
+        { client, record },
+      ),
+    ).rejects.toMatchObject({
+      name: "ExtractionError",
+      failures: [
+        { attempt: 0, kind: "max_tokens_exceeded" },
+        { attempt: 1, kind: "max_tokens_exceeded" },
+        { attempt: 2, kind: "max_tokens_exceeded" },
+      ],
+    });
+    // recordUsage still fires per attempt because tokens were
+    // actually billed (output_tokens: 4096 each time). Cost
+    // accounting must not undercount truncated retries.
+    expect(record).toHaveBeenCalledTimes(3);
+  });
+
   it("retries on missing tool_use (response has only text blocks)", async () => {
     const noToolUse = {
       id: "msg_test",

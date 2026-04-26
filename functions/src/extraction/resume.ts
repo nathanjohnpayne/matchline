@@ -61,6 +61,27 @@ const MAX_ATTEMPTS = 3;
 const TOOL_NAME = "record_experience_units";
 
 /**
+ * Output-token budget per attempt. Real resumes (Nathan's 9k-char
+ * fixture: 8 roles × ~3 Units each = ~24 Units) serialize to
+ * ~10-12k output tokens once each Unit's full schema is populated
+ * (raw_text + normalized_summary + skills/tools/domains arrays +
+ * metrics + signals). The previous `4096` ceiling silently
+ * truncated mid-tool — the API returned `stop_reason: max_tokens`
+ * and an empty `tool_use.input`, which the Zod validator then
+ * read as `units: undefined` and bounced through all 3 attempts.
+ *
+ * `16_384` (4× the prior value) gives generous headroom for the
+ * worst observed real-resume (Nathan's) and stays well inside
+ * Sonnet 4.6's 64,000-token output ceiling. Cost impact is bounded
+ * because billing is per-token-actually-emitted, not per-budget.
+ *
+ * Tracked at #145 (eval harness can't run end-to-end at the prior
+ * cap). Same fix applied to `parsing/jd.ts` because long JDs hit
+ * the same wall.
+ */
+const MAX_OUTPUT_TOKENS = 16_384;
+
+/**
  * Retry reminders appended to the system prompt on successive
  * attempts. Index i is appended on attempt (i+1), so attempt 0 gets
  * the original prompt unmodified.
@@ -109,7 +130,7 @@ export async function extractFromResume(
       // includes Stream<RawMessageStreamEvent>).
       response = await client.messages.create({
         model,
-        max_tokens: 4096,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -167,6 +188,27 @@ export async function extractFromResume(
         model,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // `stop_reason: "max_tokens"` means the model hit the budget
+    // mid-tool-call and the `tool_use.input` is truncated (we've
+    // observed `{}` in the wild on Nathan's resume at the prior
+    // 4096 cap). Surface this as its own failure kind so debug
+    // runs don't waste cycles chasing a misleading "units required"
+    // schema error. Retries can't fix the truncation — bumping
+    // MAX_OUTPUT_TOKENS is the only fix — but we still record all
+    // 3 attempts so the cost accounting is honest.
+    if (response.stop_reason === "max_tokens") {
+      failures.push({
+        attempt,
+        kind: "max_tokens_exceeded",
+        message:
+          `Anthropic returned stop_reason: "max_tokens" — the model hit the ` +
+          `${MAX_OUTPUT_TOKENS}-token output budget mid-tool-call and the ` +
+          `tool_use.input was truncated. Retries cannot recover; raise ` +
+          `MAX_OUTPUT_TOKENS in extraction/resume.ts.`,
+      });
+      continue;
     }
 
     const toolUse = response.content.find(
