@@ -20,6 +20,7 @@ import type { JobRequirementUnit, UnitMatch } from "../../types/capability.ts";
 import {
   TOP_K,
   groupMatchesByRequirement,
+  sortRequirementsForDisplay,
 } from "./groupMatchesByRequirement.ts";
 
 const ALICE = "user-alice";
@@ -69,12 +70,90 @@ function makeMatch(
   };
 }
 
+describe("sortRequirementsForDisplay (cursor #132 r1)", () => {
+  // Pinned ordering rule: must_have desc, priority
+  // (high>medium>low) desc within each must_have band, then
+  // id asc as tie-break.
+
+  it("must_have:true rows come before must_have:false", () => {
+    const reqs = [
+      makeReq("r-not-mh", { must_have: false, priority: "high" }),
+      makeReq("r-mh", { must_have: true, priority: "low" }),
+    ];
+    expect(sortRequirementsForDisplay(reqs).map((r) => r.id)).toEqual([
+      "r-mh",
+      "r-not-mh",
+    ]);
+  });
+
+  it("within a must_have band, priority high > medium > low", () => {
+    const reqs = [
+      makeReq("r-low", { must_have: true, priority: "low" }),
+      makeReq("r-high", { must_have: true, priority: "high" }),
+      makeReq("r-medium", { must_have: true, priority: "medium" }),
+    ];
+    expect(sortRequirementsForDisplay(reqs).map((r) => r.id)).toEqual([
+      "r-high",
+      "r-medium",
+      "r-low",
+    ]);
+  });
+
+  it("ties on (must_have, priority) break by id asc", () => {
+    const reqs = [
+      makeReq("r-zebra", { must_have: true, priority: "high" }),
+      makeReq("r-apple", { must_have: true, priority: "high" }),
+      makeReq("r-mango", { must_have: true, priority: "high" }),
+    ];
+    expect(sortRequirementsForDisplay(reqs).map((r) => r.id)).toEqual([
+      "r-apple",
+      "r-mango",
+      "r-zebra",
+    ]);
+  });
+
+  it("composite case: must_have-high > must_have-low > nice-high > nice-low", () => {
+    const reqs = [
+      makeReq("r-nice-high", { must_have: false, priority: "high" }),
+      makeReq("r-mh-low", { must_have: true, priority: "low" }),
+      makeReq("r-nice-low", { must_have: false, priority: "low" }),
+      makeReq("r-mh-high", { must_have: true, priority: "high" }),
+    ];
+    expect(sortRequirementsForDisplay(reqs).map((r) => r.id)).toEqual([
+      "r-mh-high",
+      "r-mh-low",
+      "r-nice-high",
+      "r-nice-low",
+    ]);
+  });
+
+  it("does not mutate the input array", () => {
+    const reqs = [
+      makeReq("r-second", { must_have: false, priority: "high" }),
+      makeReq("r-first", { must_have: true, priority: "high" }),
+    ];
+    const inputIds = reqs.map((r) => r.id);
+    sortRequirementsForDisplay(reqs);
+    expect(reqs.map((r) => r.id)).toEqual(inputIds);
+  });
+});
+
 describe("groupMatchesByRequirement", () => {
-  it("returns one row per Requirement preserving input order", () => {
-    const reqs = [makeReq("r1"), makeReq("r2"), makeReq("r3")];
+  it("returns one row per Requirement, deterministically ordered (cursor #132 r1)", () => {
+    // Input order is intentionally NOT the desired display
+    // order — the helper must enforce the priority sort.
+    const reqs = [
+      makeReq("r-c", { must_have: false, priority: "low" }),
+      makeReq("r-a", { must_have: true, priority: "high" }),
+      makeReq("r-b", { must_have: true, priority: "medium" }),
+    ];
     const result = groupMatchesByRequirement(reqs, []);
     expect(result).toHaveLength(3);
-    expect(result.map((r) => r.requirement.id)).toEqual(["r1", "r2", "r3"]);
+    expect(result.map((r) => r.requirement.id)).toEqual([
+      "r-a", // must_have + high
+      "r-b", // must_have + medium
+      "r-c", // not-must_have + low
+    ]);
     // Empty matches per Requirement — NOT dropped.
     expect(result.every((r) => r.matches.length === 0)).toBe(true);
   });
