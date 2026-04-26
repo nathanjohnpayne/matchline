@@ -187,7 +187,7 @@ async function main(): Promise<number> {
  * failure (intentional: the gate should fail when fixtures
  * fail, not silently skip them).
  */
-function toFixtureResult(r: RunForFixtureResult): FixtureResult {
+export function toFixtureResult(r: RunForFixtureResult): FixtureResult {
   const id = `${r.resumeFixtureId}__${r.jdFixtureId}`;
   if (!r.ok) {
     return {
@@ -195,8 +195,16 @@ function toFixtureResult(r: RunForFixtureResult): FixtureResult {
       extractionAccuracy: 0,
       matchAccuracy: 0,
       latencyMs: r.latencyMs,
-      costUsd: null,
-      notes: `failed: ${r.error ?? "unknown error"}`,
+      // Surface the PARTIAL cost the orchestrator
+      // accumulated before throwing. Earlier API calls
+      // billed real tokens; zeroing them out of the CLI
+      // report would hide spend during flaky runs and
+      // break the aggregate-total contract. cursor #139
+      // r3 caught the prior `costUsd: null` shape after
+      // the orchestrator-level fix had already preserved
+      // the partial total.
+      costUsd: r.costUsd,
+      notes: `failed (cost=$${r.costUsd.toFixed(4)}): ${r.error ?? "unknown error"}`,
     };
   }
   return {
