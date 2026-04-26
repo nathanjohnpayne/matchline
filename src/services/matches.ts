@@ -164,9 +164,16 @@ export function approvalStateOf(
  * accidentally produce it.
  *
  * Generation (#120 + #121) gates on `approved_for_use ===
- * true`; matching (#82) filters `user_rejected === true` OUT
- * on re-run. Both consume the persisted flags, not this
- * enum directly — the enum is the WRITE-side abstraction.
+ * true`. The matching pipeline's `replaceMatchesForRole`
+ * (cursor #133 r2) carries `user_rejected` AND
+ * `approved_for_use` forward across rerun by reading the
+ * existing match for each (Unit, Requirement) pair before
+ * the clear-and-replace, so the user's review state is
+ * durable. Note: the `rejected-exclusion` integration test
+ * at #82 covers rejected EXPERIENCE UNITS (`user_approved:
+ * false`), NOT rejected MATCHES — the rejected-Match
+ * carry-forward is pinned by `tests/matching-replace.
+ * integration.test.ts` (added in #133 r2).
  *
  * Owner check happens at the rules layer, not here.
  */

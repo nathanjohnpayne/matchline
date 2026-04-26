@@ -15,9 +15,10 @@
  * satisfying `computeGaps`'s threshold check, so a
  * Requirement looked "covered" even after the user
  * explicitly rejected the only match that covered it.
- * Same shape as the matching pipeline's filter at #82
- * (`tests/rejected-exclusion.integration.test.ts`) — a
- * rejected match is dead to downstream readers.
+ * The matching pipeline's carry-forward shape (cursor
+ * #133 r2; `replaceMatchesForRole` preserves
+ * `user_rejected` across rerun) makes the rejection
+ * durable; this filter ensures the gaps view honors it.
  *
  * Why a 0.4 threshold:
  *   - The matching pipeline (#100) calibrated the score

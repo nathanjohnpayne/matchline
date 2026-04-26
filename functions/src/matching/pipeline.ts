@@ -80,11 +80,25 @@ export interface MatchingDeps {
    * Persist. MUST perform a clear-and-replace keyed on
    * `(ownerUid, roleId)`, even when `matches.length === 0` so a
    * re-run that yields zero matches still wipes stale rows.
+   *
+   * MAY return the AS-PERSISTED matches — for the default
+   * impl this is `matches` with prior user-action flags
+   * carried forward (see `replaceMatchesForRole`'s
+   * carry-forward block, cursor #133 r2). The orchestrator
+   * surfaces this as its return value so callers see the
+   * persisted shape, not the pre-merge candidate shape.
+   *
+   * If a test mock returns `void`, the orchestrator falls
+   * back to the input `matches` array. This keeps existing
+   * test mocks (`vi.fn(async () => {})`) working without
+   * a forced refactor — they exercise the
+   * pre-carry-forward shape, which is fine for testing
+   * the orchestrator's pre-persist contract.
    */
   readonly persistBatch?: (
     ctx: RunMatchingContext,
     matches: readonly UnitMatch[],
-  ) => Promise<void>;
+  ) => Promise<readonly UnitMatch[] | void>;
   /**
    * Score function — injectable for tests. Default is the pure
    * `score()` from #97.
@@ -117,7 +131,7 @@ export interface MatchingDeps {
 export async function runMatchingPipeline(
   ctx: RunMatchingContext,
   deps: MatchingDeps = {},
-): Promise<UnitMatch[]> {
+): Promise<readonly UnitMatch[]> {
   const listUnits = deps.listUnits ?? defaultListUnits;
   const listRequirements = deps.listRequirements ?? defaultListRequirements;
   const persistBatch = deps.persistBatch ?? replaceMatchesForRole;
@@ -238,9 +252,12 @@ export async function runMatchingPipeline(
   // `listApprovedExperienceUnits`) still has its prior matches
   // cleared. Without this, the Matches tab would show stale
   // entries pointing at rejected Units.
-  await persistBatch(ctx, matches);
-
-  return matches;
+  // The default `replaceMatchesForRole` returns the
+  // carry-forward-merged matches; test mocks may return
+  // void, in which case fall back to the input shape (no
+  // merge to surface).
+  const persisted = await persistBatch(ctx, matches);
+  return persisted ?? matches;
 }
 
 // -- Default implementations ------------------------------------------------
@@ -334,7 +351,7 @@ const FIRESTORE_TX_OP_LIMIT = 450;
 async function replaceMatchesForRole(
   ctx: RunMatchingContext,
   matches: readonly UnitMatch[],
-): Promise<void> {
+): Promise<readonly UnitMatch[]> {
   const { roleId, ownerUid } = ctx;
 
   const allMatchOwner = matches.every(
@@ -349,6 +366,9 @@ async function replaceMatchesForRole(
   }
 
   const db = getAdminDb();
+  // Closure variable so the merged shape escapes the
+  // transaction's scope and we can return it to the caller.
+  let merged: readonly UnitMatch[] = matches;
 
   await db.runTransaction(async (tx) => {
     // Find every existing match for (owner, role). The
@@ -363,6 +383,62 @@ async function replaceMatchesForRole(
       .where("owner_uid", "==", ownerUid)
       .where("role_id", "==", roleId);
     const existing = await tx.get(existingQuery);
+
+    // Build a map of prior user-action flags by (Unit,
+    // Requirement) pair so we can carry them forward across
+    // the clear-and-replace. Without this, a user who
+    // approves or rejects a specific match would see their
+    // decision wiped on every rerun — a real bug cursor
+    // CHANGES_REQUESTED round 2 on PR #133 caught after my
+    // round-1 reply incorrectly cited the rejected-Unit
+    // exclusion test (#82) as covering rejected Matches
+    // (it doesn't).
+    //
+    // Carry forward BOTH flags symmetrically: if the user
+    // approved a (Unit, Requirement) pair before, the new
+    // match for the same pair stays approved; if they
+    // rejected it, the new match stays rejected.
+    //
+    // Edge: if a previously rejected pair has NO new match
+    // (e.g. embeddings changed and the pair didn't surface),
+    // the pair simply disappears — the rejection is moot.
+    // Edge: a (true, true) drift in stored data (shouldn't
+    // happen via the unified `setMatchApprovalState` setter
+    // but a manual write or migration could in principle
+    // produce it) carries forward both flags as-is; the
+    // read-side `approvalStateOf` defaults the contradictory
+    // shape to "rejected."
+    const priorFlagsByPair = new Map<
+      string,
+      { approved_for_use: boolean; user_rejected: boolean }
+    >();
+    for (const doc of existing.docs) {
+      const m = doc.data() as UnitMatch;
+      // Only carry forward if at least one flag is non-default.
+      // Defaults `false/false` means the user never touched the
+      // match; no signal to preserve.
+      if (m.approved_for_use || m.user_rejected) {
+        const key = `${m.experience_unit_id}::${m.job_requirement_unit_id}`;
+        priorFlagsByPair.set(key, {
+          approved_for_use: m.approved_for_use,
+          user_rejected: m.user_rejected,
+        });
+      }
+    }
+
+    // Apply prior flags onto the incoming matches BEFORE the
+    // tx writes go out. Pure spread; doesn't mutate the
+    // input array. Capture in the outer closure so we can
+    // return the merged shape to the orchestrator (cursor
+    // #133 r2: callers expect the returned matches to
+    // reflect the persisted state, including flag
+    // carry-forward).
+    const matchesWithFlags: UnitMatch[] = matches.map((m) => {
+      const key = `${m.experience_unit_id}::${m.job_requirement_unit_id}`;
+      const prior = priorFlagsByPair.get(key);
+      return prior !== undefined ? { ...m, ...prior } : m;
+    });
+    merged = matchesWithFlags;
 
     // Short-circuit empty no-op transaction (same shape as JD
     // pipeline's writeRequirementsAsBatch).
@@ -380,10 +456,12 @@ async function replaceMatchesForRole(
     for (const doc of existing.docs) {
       tx.delete(doc.ref);
     }
-    for (const m of matches) {
+    for (const m of matchesWithFlags) {
       tx.set(db.collection(COLLECTION).doc(m.id), m);
     }
   });
+
+  return merged;
 }
 
 // Re-exported for tests + the callable. Default values are wired
