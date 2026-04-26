@@ -131,7 +131,7 @@ describe("extractRetryAfterMs", () => {
     expect(extractRetryAfterMs(err, NOW)).toBe(45_000);
   });
 
-  it("falls through to anthropic-ratelimit-tokens-reset when both prior headers absent", () => {
+  it("falls through to anthropic-ratelimit-tokens-reset when retry-after + requests-reset absent", () => {
     const err = {
       status: 429,
       headers: {
@@ -139,6 +139,46 @@ describe("extractRetryAfterMs", () => {
       },
     };
     expect(extractRetryAfterMs(err, NOW)).toBe(15_000);
+  });
+
+  it("Codex P2 on #144: takes the max across requests-reset + tokens-reset when both present", () => {
+    // Independent windows — retrying before the later resets just
+    // burns the next attempt on another 429. The 60s tokens-reset
+    // dominates the 20s requests-reset.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "2026-04-26T20:00:20Z",
+        "anthropic-ratelimit-tokens-reset": "2026-04-26T20:01:00Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(60_000);
+  });
+
+  it("Codex P2 on #144: max-across still works when one of the two is malformed", () => {
+    // requests-reset is garbage, tokens-reset is valid — should
+    // return the tokens-reset value, not null.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "definitely not iso",
+        "anthropic-ratelimit-tokens-reset": "2026-04-26T20:00:25Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(25_000);
+  });
+
+  it("Codex P2 on #144: max-across drops past-timestamps but keeps the future one", () => {
+    // requests-reset is in the past (clock skew / stale error),
+    // tokens-reset is in the future. Past is dropped; future wins.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "2026-04-26T19:59:00Z",
+        "anthropic-ratelimit-tokens-reset": "2026-04-26T20:00:30Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(30_000);
   });
 
   it("prefers retry-after over the anthropic-ratelimit-* fallbacks", () => {
@@ -287,6 +327,18 @@ describe("transportBackoffMs (header-aware, #114)", () => {
     const err = { status: 429, headers: { "retry-after": "30" } };
     // 30_000 + floor(0.5 * 250) = 30_125
     expect(transportBackoffMs(0, err)).toBe(30_125);
+  });
+
+  it("CR Critical on #144: clamps to int32 ceiling so setTimeout doesn't coerce to 1ms", () => {
+    // RFC 7231 allows a far-future HTTP-date — without the clamp,
+    // setTimeout silently coerces values > 2^31-1 down to 1ms,
+    // turning a "wait 100 years" hint into a tight retry storm.
+    // 100 years out → ~3.15e12 ms, well past the int32 ceiling.
+    const err = {
+      status: 429,
+      headers: { "retry-after": "Mon, 26 Apr 2126 20:00:00 GMT" },
+    };
+    expect(transportBackoffMs(0, err)).toBe(2_147_483_647);
   });
 });
 

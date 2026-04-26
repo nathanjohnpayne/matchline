@@ -42,6 +42,18 @@ const RATE_LIMIT_CAP_MS = 10000;
 const JITTER_MS = 250;
 
 /**
+ * Node's `setTimeout` clamps delays larger than the int32 ceiling
+ * (2,147,483,647 ms — about 24.85 days) down to **1 ms**, which
+ * triggers an immediate retry instead of the long backoff the
+ * caller asked for. CodeRabbit Critical on PR #144: a malicious
+ * or buggy `retry-after: <distant-future-HTTP-date>` header could
+ * weaponize that quirk into a tight retry loop, exactly the burst
+ * we're trying to dampen. Cap header-elevated delays here so the
+ * helper never returns more than `setTimeout` can faithfully honor.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
  * HTTP statuses where the server (or an upstream proxy) is asking
  * us to slow down. Anthropic-specific: `529` is their documented
  * "Overloaded" code. The proxy codes `502` / `504` are included
@@ -85,10 +97,12 @@ export function transportBackoffMs(attempt: number, err?: unknown): number {
   const jitter = Math.floor(Math.random() * JITTER_MS);
   // Server-supplied hint elevates the delay; jitter still applies
   // on top so two burst clients with the same hint don't retry on
-  // the same millisecond.
+  // the same millisecond. Cap the final value at `MAX_TIMER_DELAY_MS`
+  // so a header-supplied far-future timestamp can't get clamped by
+  // `setTimeout` to 1 ms and trigger a tight retry storm.
   const headerHint = extractRetryAfterMs(err);
   const elevated = Math.max(exponential, headerHint ?? 0);
-  return elevated + jitter;
+  return Math.min(elevated + jitter, MAX_TIMER_DELAY_MS);
 }
 
 /**
@@ -114,17 +128,22 @@ function extractStatus(err: unknown): number | undefined {
  * when no usable header is present so the caller can silently fall
  * through to the exponential schedule.
  *
- * Header preference, per the Anthropic error-handling docs:
- * 1. `retry-after` — RFC 7231 §7.1.3: integer delta-seconds OR
- *    RFC 1123 HTTP-date.
- * 2. `anthropic-ratelimit-requests-reset` — ISO 8601 timestamp.
- * 3. `anthropic-ratelimit-tokens-reset` — ISO 8601 timestamp.
+ * Header strategy:
  *
- * The first parseable header wins; later headers are not summed
- * (Anthropic returns the same reset window across both, so the
- * first hit is canonical). Negative deltas (header timestamp in
- * the past — clock skew or stale cached error) are dropped to
- * `null` so the exponential schedule doesn't get pinned at 0.
+ * 1. **`retry-after`** — RFC 7231 §7.1.3 (integer delta-seconds OR
+ *    RFC 1123 HTTP-date). Anthropic returns this on `429`. When
+ *    parseable, this is the canonical hint and wins outright.
+ * 2. **`anthropic-ratelimit-requests-reset` +
+ *    `anthropic-ratelimit-tokens-reset`** — ISO 8601 timestamps.
+ *    Anthropic exposes these separately because the request-rate
+ *    and token-rate windows can reset at *different* times. When
+ *    both are present, take the **max** — retrying before the
+ *    later one resets just burns the next attempt on another 429.
+ *    Codex P2 on PR #144.
+ *
+ * Negative deltas (header timestamp in the past — clock skew or
+ * stale cached error) are dropped so the exponential schedule
+ * doesn't get pinned at 0.
  *
  * Both upper- and lower-case header keys are accepted because the
  * Anthropic SDK and Node `fetch` differ on canonicalization, and
@@ -141,26 +160,30 @@ export function extractRetryAfterMs(
   const headers = extractHeaders(err);
   if (!headers) return null;
 
-  // 1. `retry-after`: delta-seconds OR HTTP-date.
+  // 1. `retry-after`: delta-seconds OR HTTP-date. Canonical hint —
+  // when parseable it wins outright.
   const retryAfter = headers["retry-after"];
   if (typeof retryAfter === "string" && retryAfter.length > 0) {
     const ms = parseRetryAfter(retryAfter, now);
     if (ms !== null && ms >= 0) return ms;
   }
 
-  // 2. `anthropic-ratelimit-requests-reset`: ISO 8601 timestamp.
-  const reqReset = headers["anthropic-ratelimit-requests-reset"];
-  if (typeof reqReset === "string" && reqReset.length > 0) {
-    const ms = parseIsoOffsetMs(reqReset, now);
-    if (ms !== null && ms >= 0) return ms;
+  // 2. Fall back to anthropic-ratelimit-{requests,tokens}-reset.
+  // The two windows reset independently — take the max of any
+  // parseable values so we wait long enough that BOTH limits
+  // have reset before retrying. Codex P2 on PR #144.
+  const candidates: number[] = [];
+  for (const key of [
+    "anthropic-ratelimit-requests-reset",
+    "anthropic-ratelimit-tokens-reset",
+  ] as const) {
+    const value = headers[key];
+    if (typeof value === "string" && value.length > 0) {
+      const ms = parseIsoOffsetMs(value, now);
+      if (ms !== null && ms >= 0) candidates.push(ms);
+    }
   }
-
-  // 3. `anthropic-ratelimit-tokens-reset`: ISO 8601 timestamp.
-  const tokReset = headers["anthropic-ratelimit-tokens-reset"];
-  if (typeof tokReset === "string" && tokReset.length > 0) {
-    const ms = parseIsoOffsetMs(tokReset, now);
-    if (ms !== null && ms >= 0) return ms;
-  }
+  if (candidates.length > 0) return Math.max(...candidates);
 
   return null;
 }
