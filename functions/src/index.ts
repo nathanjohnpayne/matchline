@@ -31,3 +31,11 @@ export { reembedExperienceUnitCallable as reembedExperienceUnit } from "./callab
  * persisted UnitMatch set. Step 3 of the core loop.
  */
 export { runMatchingCallable as runMatching } from "./callables/runMatching.js";
+
+/**
+ * Phase 1: extract claims from an Application's generated asset;
+ * check each claim for traceability + specificity; persist the
+ * flag set + validation_status on the asset. Step 4 of the
+ * core loop. Export blocked while validation_status === "failed".
+ */
+export { validateAssetCallable as validateAsset } from "./callables/validateAsset.js";
