@@ -21,6 +21,7 @@ import {
   validateAsset as runValidateAsset,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
+  ValidateAssetStale,
 } from "../validation/validate.js";
 
 interface ValidateAssetData {
@@ -43,31 +44,21 @@ export const validateAssetCallable = onCall(
     const data = request.data as ValidateAssetData;
     const rawApplicationId = data?.applicationId;
     const rawAssetId = data?.assetId;
-    if (
-      typeof rawApplicationId !== "string" ||
-      rawApplicationId.trim().length === 0
-    ) {
-      throw new HttpsError(
-        "invalid-argument",
-        "validateAsset expects { applicationId: string, assetId: string } with non-empty applicationId.",
-      );
-    }
-    if (typeof rawAssetId !== "string" || rawAssetId.trim().length === 0) {
-      throw new HttpsError(
-        "invalid-argument",
-        "validateAsset expects { applicationId: string, assetId: string } with non-empty assetId.",
-      );
-    }
+    const applicationId = validateId("applicationId", rawApplicationId);
+    const assetId = validateId("assetId", rawAssetId);
 
     const ctx = {
       ownerUid: request.auth.uid,
-      applicationId: rawApplicationId.trim(),
-      assetId: rawAssetId.trim(),
+      applicationId,
+      assetId,
     };
 
     try {
       const result = await runValidateAsset(ctx);
-      return result;
+      // Strip `content_snapshot` — it's an internal
+      // TOCTOU-detection field, not part of the public response.
+      const { content_snapshot: _snapshot, ...publicResult } = result;
+      return publicResult;
     } catch (err) {
       if (err instanceof ValidateAssetNotFound) {
         // Anti-enumeration: same `permission-denied` shape as
@@ -86,7 +77,42 @@ export const validateAssetCallable = onCall(
           "Asset has no generated content yet; run generation before validation.",
         );
       }
+      if (err instanceof ValidateAssetStale) {
+        // The orchestrator detected a TOCTOU edit (asset content
+        // changed during validation). Surface to the caller so
+        // the editor can re-trigger validation against the
+        // fresh content. CodeRabbit Major round 1 on PR #117.
+        throw new HttpsError(
+          "aborted",
+          "Asset content changed during validation; re-run validateAsset.",
+        );
+      }
       throw err;
     }
   },
 );
+
+/**
+ * Validate one of the callable's id args. Rejects empty/
+ * whitespace inputs AND inputs containing `/` (Firestore
+ * accepts `/` in ids but interprets them as sub-collection
+ * boundaries — passing one would either fail downstream in a
+ * confusing way OR, worse, navigate to an unintended path).
+ * CodeRabbit Major round 1 on PR #117.
+ */
+function validateId(name: string, value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new HttpsError(
+      "invalid-argument",
+      `validateAsset expects { applicationId: string, assetId: string } with non-empty ${name}.`,
+    );
+  }
+  const trimmed = value.trim();
+  if (trimmed.includes("/")) {
+    throw new HttpsError(
+      "invalid-argument",
+      `validateAsset.${name} must not contain "/" (Firestore path delimiter).`,
+    );
+  }
+  return trimmed;
+}

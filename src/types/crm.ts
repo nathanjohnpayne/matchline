@@ -94,8 +94,22 @@ export interface GeneratedExperienceSection {
   bullets: GeneratedBullet[];
 }
 
+/**
+ * The asset's summary section. Same shape as a bullet (id +
+ * text + source_unit_ids) so the validation orchestrator (#109)
+ * can validate it through the same per-bullet pipeline. Codex
+ * P1 round 1 on PR #117 caught a prior version where `summary`
+ * was a plain string and bypassed validation entirely — a
+ * fabricated summary claim could ship unchecked.
+ */
+export interface GeneratedSummary {
+  id: UUID;
+  text: string;
+  source_unit_ids: UUID[];
+}
+
 export interface GeneratedAssetContent {
-  summary: string;
+  summary: GeneratedSummary;
   experience: GeneratedExperienceSection[];
   skills: string[];
   education?: string[];

@@ -68,6 +68,19 @@ export interface ValidateAssetResult {
   readonly status: ValidationStatus;
   readonly flags: readonly ValidationFlag[];
   readonly validated_at: string;
+  /**
+   * JSON-string snapshot of `content` at validation time. Used
+   * by the persist transaction to detect TOCTOU edits — if the
+   * asset's `generated_content` changes between loadAsset and
+   * persistFlags, the persist throws `ValidateAssetStale` so
+   * the orchestrator can be re-run against fresh content.
+   * CodeRabbit Major round 1 on PR #117.
+   *
+   * Internal field — the callable strips it before returning
+   * to the client. Exported for testability of the persist
+   * path.
+   */
+  readonly content_snapshot: string;
 }
 
 export interface ValidationDeps {
@@ -109,11 +122,27 @@ export async function validateAsset(
 
   const { content } = await loadAsset(ctx);
 
+  // Validate every fact-bearing piece of the asset, NOT just
+  // the experience bullets. Codex P1 round 1 on PR #117 caught
+  // a prior version that iterated only `content.experience[*]
+  // .bullets` — claims in `content.summary` (and any future
+  // non-bullet fields) bypassed validation entirely. Treating
+  // the summary as a synthetic bullet (same shape: id + text +
+  // source_unit_ids) gives the per-bullet pipeline below
+  // uniform handling.
+  const allBullets: GeneratedBullet[] = [
+    {
+      id: content.summary.id,
+      text: content.summary.text,
+      source_unit_ids: content.summary.source_unit_ids,
+    },
+    ...content.experience.flatMap((s) => s.bullets),
+  ];
+
   // Collect every Unit id referenced across the asset's bullets,
   // then load Units once. The orchestrator's outer loop runs at
   // bullet granularity; loading per-bullet would re-fetch the
   // same Units repeatedly when bullets share source_unit_ids.
-  const allBullets = content.experience.flatMap((s) => s.bullets);
   const allUnitIds = unique(allBullets.flatMap((b) => b.source_unit_ids));
   const units = await loadUnits(allUnitIds, ctx.ownerUid);
   const unitsById = new Map(units.map((u) => [u.id, u]));
@@ -140,6 +169,7 @@ export async function validateAsset(
     status,
     flags,
     validated_at: now(),
+    content_snapshot: JSON.stringify(content),
   };
 
   await persistFlags(ctx, result);
@@ -366,9 +396,19 @@ async function defaultLoadUnits(
   const out: ExperienceUnit[] = [];
   for (let i = 0; i < unitIds.length; i += FIRESTORE_IN_LIMIT) {
     const chunk = unitIds.slice(i, i + FIRESTORE_IN_LIMIT);
+    // Filter to APPROVED units only. Codex P1 round 1 on PR
+    // #117 caught a prior version that returned any
+    // owner-scoped Unit, including rejected/pending/flagged
+    // ones. The same load-bearing zero-fab invariant from #82
+    // applies here: validation must NEVER consult Units the
+    // user hasn't approved as evidence — even if the generator
+    // happened to ground a bullet on one (which it shouldn't,
+    // but defense in depth). Mirrors `approvedUnitsQueryConstraints()`
+    // from src/services/experienceUnits.ts.
     const snap = await db
       .collection(UNITS_COLLECTION)
       .where("owner_uid", "==", ownerUid)
+      .where("user_approved", "==", true)
       .where("id", "in", chunk)
       .get();
     out.push(...(snap.docs.map((d) => d.data()) as ExperienceUnit[]));
@@ -398,7 +438,42 @@ async function defaultPersistFlags(
         `Application ${ctx.applicationId} not found during persist.`,
       );
     }
-    const updatedAssets = (app.generated_assets ?? []).map((a) =>
+    const assets = app.generated_assets ?? [];
+    const target = assets.find((a) => a.id === ctx.assetId);
+    // Fail fast if the asset is gone — a deletion between load
+    // and persist would otherwise let the transaction commit
+    // a no-op `.map()` over an array missing the asset, and
+    // validateAsset would return success having updated nothing.
+    // CodeRabbit Critical round 1 on PR #117.
+    if (!target) {
+      throw new ValidateAssetNotFound(
+        `Asset ${ctx.assetId} not found on application ${ctx.applicationId} during persist (deleted between load and persist?).`,
+      );
+    }
+    // TOCTOU stale-write guard. The validation result was
+    // computed against `content` snapshotted at loadAsset
+    // time. If the asset's `generated_content` has changed
+    // since then (the user edited a bullet, the orchestrator
+    // re-generated, etc.), persisting these flags would mark
+    // the asset "passed" against content that no longer
+    // exists. Throw `ValidateAssetStale` instead so the caller
+    // (and the editor surface) can re-trigger validation
+    // against the new content. CodeRabbit Major round 1 on
+    // PR #117.
+    //
+    // The hash comparison is JSON-string equality on
+    // generated_content. Cheap relative to an LLM call; tight
+    // enough that a single character change in any bullet
+    // triggers stale.
+    if (
+      JSON.stringify(target.generated_content) !==
+      result.content_snapshot
+    ) {
+      throw new ValidateAssetStale(
+        `Asset ${ctx.assetId} content changed during validation; flags discarded. Re-run validateAsset.`,
+      );
+    }
+    const updatedAssets = assets.map((a) =>
       a.id === ctx.assetId
         ? {
             ...a,
@@ -425,5 +500,21 @@ export class ValidateAssetMissingContent extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ValidateAssetMissingContent";
+  }
+}
+
+/**
+ * Thrown when the asset's `generated_content` changed between
+ * the validation orchestrator's load and persist phases. The
+ * persist transaction detects this by comparing a JSON-string
+ * snapshot of the content. The caller's right move is to
+ * re-run validateAsset against the fresh content.
+ *
+ * CodeRabbit Major round 1 on PR #117 — TOCTOU defense.
+ */
+export class ValidateAssetStale extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ValidateAssetStale";
   }
 }

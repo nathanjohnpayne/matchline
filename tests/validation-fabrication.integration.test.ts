@@ -163,7 +163,11 @@ describe("validateAsset — Firestore integration", () => {
     // its source. The orchestrator must flag this.
     await seedUnit("u1", ALICE, "Worked on Disney+ playback memory.");
     const asset = makeAsset("asset-1", "app-1", ALICE, {
-      summary: "PM at Disney.",
+      summary: {
+        id: "summary-1",
+        text: "",
+        source_unit_ids: [],
+      },
       experience: [
         {
           title: "PM",
@@ -225,7 +229,7 @@ describe("validateAsset — Firestore integration", () => {
   it("CLEAN: every claim traces + is specific → status=passed, all flags traced", async () => {
     await seedUnit("u1", ALICE, "Reduced Disney+ playback memory 30%.");
     const asset = makeAsset("asset-1", "app-1", ALICE, {
-      summary: "Memory work.",
+      summary: { id: "summary-1", text: "Memory work.", source_unit_ids: [] },
       experience: [
         {
           title: "PM",
@@ -287,7 +291,7 @@ describe("validateAsset — Firestore integration", () => {
     // union.
     await seedUnit("u1", ALICE, "Reduced Disney+ playback memory 30%.");
     const initialAsset = makeAsset("asset-1", "app-1", ALICE, {
-      summary: "Memory work.",
+      summary: { id: "summary-1", text: "Memory work.", source_unit_ids: [] },
       experience: [
         {
           title: "PM",
@@ -368,7 +372,7 @@ describe("validateAsset — Firestore integration", () => {
   it("CROSS-TENANT: Bob's call against Alice's applicationId throws ValidateAssetNotFound (anti-enumeration)", async () => {
     await seedUnit("u1", ALICE, "Alice's work.");
     const asset = makeAsset("asset-1", "app-1", ALICE, {
-      summary: "Alice's resume.",
+      summary: { id: "summary-1", text: "Alice's resume.", source_unit_ids: [] },
       experience: [],
       skills: [],
     });

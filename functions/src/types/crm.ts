@@ -27,8 +27,14 @@ export interface GeneratedExperienceSection {
   bullets: GeneratedBullet[];
 }
 
+export interface GeneratedSummary {
+  id: UUID;
+  text: string;
+  source_unit_ids: UUID[];
+}
+
 export interface GeneratedAssetContent {
-  summary: string;
+  summary: GeneratedSummary;
   experience: GeneratedExperienceSection[];
   skills: string[];
   education?: string[];

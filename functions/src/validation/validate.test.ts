@@ -14,6 +14,7 @@ import {
   validateAsset,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
+  ValidateAssetStale,
   type ValidateAssetContext,
 } from "./validate.ts";
 
@@ -67,9 +68,18 @@ function makeBullet(
 
 function makeContent(
   bullets: Array<ReturnType<typeof makeBullet>>,
+  summaryOverride?: { id?: string; text?: string; source_unit_ids?: string[] },
 ): GeneratedAssetContent {
   return {
-    summary: "Summary",
+    summary: {
+      id: summaryOverride?.id ?? "summary-1",
+      // Default summary is empty so the orchestrator's empty-
+      // bullet skip path skips it (no extra LLM calls in tests
+      // that don't care about summary). Tests that exercise
+      // summary validation pass an explicit summaryOverride.
+      text: summaryOverride?.text ?? "",
+      source_unit_ids: summaryOverride?.source_unit_ids ?? [],
+    },
     experience: [
       {
         title: "Senior PM",
@@ -501,6 +511,127 @@ describe("validateAsset orchestrator", () => {
     // auto-regen contract).
     expect(extractClaims).toHaveBeenCalledTimes(1);
     expect(checkTraceability).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates the SUMMARY as a synthetic bullet (Codex P1 round 1 on #117)", async () => {
+    // Codex caught a prior version that iterated only
+    // experience[*].bullets — claims in the summary bypassed
+    // validation. Now the orchestrator treats summary as a
+    // synthetic bullet (same shape: id + text +
+    // source_unit_ids) and runs the full per-bullet pipeline
+    // on it.
+    const content = makeContent(
+      [makeBullet("b1", "Real bullet.", ["u1"])],
+      {
+        id: "summary-1",
+        text: "Fabricated summary content about Netflix.",
+        source_unit_ids: ["u1"],
+      },
+    );
+
+    const checkTraceability = vi.fn(async (claim) => {
+      // Both the summary and the bullet get traceability
+      // checks. The summary's claim doesn't match the Disney
+      // Unit; we mock false.
+      if (claim.text.toLowerCase().includes("netflix")) {
+        return FAKE_TRACE_NO_SUPPORT;
+      }
+      return fakeTraceSupports("u1");
+    });
+    const persistFlags = vi.fn(async () => {});
+    let idCounter = 0;
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [
+        makeUnit("u1", { raw_text: "Disney+ work" }),
+      ],
+      extractClaims: async (bullet, ctx) => [
+        fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, bullet.text),
+      ],
+      checkTraceability,
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags,
+      generateId: () => `f${++idCounter}`,
+      now: () => "2026-04-26T00:00:00.000Z",
+    });
+
+    // Two flags: summary's untraceable + bullet's traced.
+    expect(result.flags).toHaveLength(2);
+    const summaryFlag = result.flags.find((f) => f.bullet_id === "summary-1");
+    expect(summaryFlag?.status).toBe("untraceable");
+    expect(result.status).toBe("failed");
+  });
+
+  it("skips empty summary text (no LLM call for an empty-content summary)", async () => {
+    const content = makeContent(
+      [makeBullet("b1", "Real bullet.", ["u1"])],
+      // Summary present but empty (the default in makeContent
+      // returns "" for text).
+    );
+
+    const extractClaims = vi.fn(async (_bullet, ctx) => [
+      fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, "x"),
+    ]);
+    await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [makeUnit("u1")],
+      extractClaims,
+      checkTraceability: async () => fakeTraceSupports("u1"),
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags: async () => {},
+    });
+
+    // Only the experience bullet got a claim-extraction call;
+    // the empty summary was skipped.
+    expect(extractClaims).toHaveBeenCalledTimes(1);
+  });
+
+  it("computes content_snapshot deterministically for TOCTOU detection", async () => {
+    // Pin: result.content_snapshot is a JSON-string of the
+    // loaded content. The persist transaction uses this to
+    // detect concurrent edits. Codex/CR Major round 1 on #117.
+    const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
+    const persistFlags = vi.fn(async () => {});
+
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [makeUnit("u1")],
+      extractClaims: async (b, ctx) => [
+        fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, "x"),
+      ],
+      checkTraceability: async () => fakeTraceSupports("u1"),
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags,
+    });
+
+    expect(result.content_snapshot).toBe(JSON.stringify(content));
+    // The persistFlags call gets the snapshot too — the
+    // production persist uses this to detect TOCTOU edits.
+    const persisted = persistFlags.mock.calls[0]![1];
+    expect(persisted.content_snapshot).toBe(JSON.stringify(content));
+  });
+
+  it("propagates ValidateAssetStale from persistFlags (TOCTOU stale-write defense)", async () => {
+    // The orchestrator surfaces ValidateAssetStale as-is so
+    // the callable can map it to an `aborted` HttpsError and
+    // the editor surface can re-trigger validation.
+    const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
+    await expect(
+      validateAsset(CTX, {
+        loadAsset: async () => ({ asset: makeAsset(content), content }),
+        loadUnits: async () => [makeUnit("u1")],
+        extractClaims: async (b, ctx) => [
+          fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, "x"),
+        ],
+        checkTraceability: async () => fakeTraceSupports("u1"),
+        checkSpecificity: async () => FAKE_SPEC_OK,
+        persistFlags: async () => {
+          throw new ValidateAssetStale(
+            "Asset asset-1 content changed during validation.",
+          );
+        },
+      }),
+    ).rejects.toBeInstanceOf(ValidateAssetStale);
   });
 
   it("flag id stamped from generateId; bullet_id propagated; claim_id from the input claim", async () => {
