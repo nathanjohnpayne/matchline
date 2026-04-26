@@ -1,9 +1,12 @@
 # Validation prompt — specificity.v1
 
 The LLM-driven specificity check (sub-issue #108 of #23). Runs
-only when the deterministic deny-list doesn't catch the claim.
-Strict binary verdict on whether the claim is specific enough
-that a fact-checker could verify it.
+on every claim. When a deterministic deny-list pattern matches,
+the matched phrase is appended to the prompt as context — a
+hint that the model can override if the rest of the claim has
+concrete anchors (numbers, named products, surfaces). Strict
+binary verdict on whether the claim is specific enough that a
+fact-checker could verify it.
 
 ## System
 
