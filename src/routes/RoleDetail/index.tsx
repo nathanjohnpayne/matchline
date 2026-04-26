@@ -59,6 +59,7 @@ import type {
 import type { Role } from "../../types/crm.ts";
 
 import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
+import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
@@ -76,6 +77,19 @@ export default function RoleDetail(): ReactElement {
   // doesn't re-fire the trigger and so the latest value is
   // always read inside async closures.
   const [computingMatches, setComputingMatches] = useState(false);
+  // Two-state gate (cursor #134 r1):
+  //   - `matchesFirstSnapshotReceived` flips on the first
+  //     real Matches snapshot delivery for the current Role.
+  //     Without this, the auto-trigger evaluates against
+  //     `matches.length === 0` while the subscription is
+  //     still in flight and would fire against a Role with
+  //     persisted matches that just haven't arrived yet.
+  //   - `triggeredRef` is the idempotency guard — flips on
+  //     either firing the trigger OR observing a non-empty
+  //     first matches snapshot. Both close the "fires once
+  //     per mount" window.
+  const [matchesFirstSnapshotReceived, setMatchesFirstSnapshotReceived] =
+    useState(false);
   const triggeredRef = useRef(false);
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
@@ -117,10 +131,14 @@ export default function RoleDetail(): ReactElement {
     setRequirements([]);
     setMatches([]);
     setError(null);
-    // Reset auto-trigger guard so a new Role gets its own
-    // first-empty-snapshot trigger evaluation.
+    // Reset auto-trigger guards so a new Role gets its own
+    // first-empty-snapshot trigger evaluation. Both the
+    // idempotency ref and the matches-first-snapshot gate
+    // reset (the latter so we re-await the new Role's
+    // first snapshot before evaluating).
     triggeredRef.current = false;
     setComputingMatches(false);
+    setMatchesFirstSnapshotReceived(false);
 
     // Stale-closure guard. If the user navigates to a new
     // roleId before the in-flight Role fetch resolves, we
@@ -176,6 +194,13 @@ export default function RoleDetail(): ReactElement {
           (next) => {
             if (!active) return;
             setMatches(next);
+            // Mark the matches subscription as "delivered
+            // at least once" so the auto-trigger gate
+            // (cursor #134 r1) treats matches.length=0 as
+            // a known-empty signal, not the initial-state
+            // default. Idempotent — calling setState with
+            // the same value is a React no-op.
+            setMatchesFirstSnapshotReceived(true);
           },
           (err) => {
             if (!active) return;
@@ -214,40 +239,46 @@ export default function RoleDetail(): ReactElement {
   // Auto-trigger matching when the user lands on a Role
   // that has Requirements but no matches yet (#131).
   //
-  // Gates:
-  //   - status must be "ready" (Role + Requirements
-  //     resolved; we know the Role exists).
-  //   - requirements.length > 0 (no point computing matches
-  //     against zero Requirements).
-  //   - matches.length === 0 (no existing matches; rerun
-  //     would just be a no-op).
-  //   - triggeredRef.current === false (idempotency: only
-  //     fire ONCE per Role mount; subsequent snapshots that
-  //     drop matches to zero — e.g. user rejected
-  //     everything — do NOT re-trigger).
+  // Gate logic lives in `shouldAutoTriggerMatching` (a pure
+  // helper, unit-tested) so the effect stays small and the
+  // decision is verifiable in isolation. cursor #134 r1's
+  // catch — that the prior effect could fire before the
+  // matches subscription delivered its first snapshot — is
+  // closed by the new `matchesFirstSnapshotReceived` gate.
   //
-  // Per spec: a second mount with already-populated matches
-  // does NOT re-trigger. We set `triggeredRef.current =
-  // true` after the first non-empty snapshot OR after we
-  // fire the trigger ourselves, so either path closes the
-  // window.
+  // Effect deps: every input the gate reads. The matches /
+  // requirements length deps re-evaluate the gate when
+  // either snapshot arrives.
   useEffect(() => {
-    if (status !== "ready" || roleId === undefined || roleId === "") return;
-    if (triggeredRef.current) return;
-    if (matches.length > 0) {
-      // First non-empty snapshot → don't trigger. Mark as
-      // handled so a future drop to zero doesn't fire.
+    if (roleId === undefined || roleId === "") return;
+    // Special-case: first non-empty matches snapshot needs
+    // to mark `triggeredRef = true` so a later drop to zero
+    // (e.g. user rejected everything and the pipeline rerun
+    // produced empty) doesn't re-fire. The pure gate's
+    // `matchCount > 0` short-circuit returns false for
+    // "don't fire," but it doesn't update the ref — that's
+    // the container's job.
+    if (
+      status === "ready" &&
+      matchesFirstSnapshotReceived &&
+      matches.length > 0 &&
+      !triggeredRef.current
+    ) {
       triggeredRef.current = true;
+    }
+
+    if (
+      !shouldAutoTriggerMatching({
+        status,
+        matchesFirstSnapshotReceived,
+        matchCount: matches.length,
+        requirementCount: requirements.length,
+        alreadyTriggered: triggeredRef.current,
+      })
+    ) {
       return;
     }
-    if (requirements.length === 0) {
-      // No Requirements → matching has nothing to score
-      // against. Don't trigger. Don't mark triggered yet —
-      // if Requirements arrive later (parsing pipeline runs
-      // on the same Role), we want to evaluate again.
-      return;
-    }
-    // First-empty-snapshot with Requirements → trigger.
+
     triggeredRef.current = true;
     setComputingMatches(true);
     void invokeRunMatching(roleId)
@@ -261,7 +292,13 @@ export default function RoleDetail(): ReactElement {
       .finally(() => {
         setComputingMatches(false);
       });
-  }, [status, roleId, matches.length, requirements.length]);
+  }, [
+    status,
+    roleId,
+    matchesFirstSnapshotReceived,
+    matches.length,
+    requirements.length,
+  ]);
 
   // Build the unit lookup once per units array. The matching
   // pipeline reads units owner-scoped and the Role's matches
