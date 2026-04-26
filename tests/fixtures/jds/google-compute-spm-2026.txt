@@ -1,0 +1,39 @@
+Senior Product Manager, Google Compute
+
+Google · Sunnyvale, CA, USA; Seattle, WA, USA · Advanced
+
+
+MINIMUM QUALIFICATIONS
+
+- Bachelor's degree or equivalent practical experience.
+- 8 years of experience in product management or related technical role.
+- 3 years of experience taking technical products from conception to launch (e.g., ideation to execution, end-to-end, 0 to 1, etc.).
+- 3 years of experience working with cloud, compute, SaaS, or enterprise technologies.
+
+
+PREFERRED QUALIFICATIONS
+
+- Experience driving product goal, go-to-market strategy, and design discussions.
+- Experience managing day-to-day technical and design direction.
+- Experience in compute architecture, data center infrastructure, CPU (x86/Arm) and I/O technologies, and operational aspects of cloud servers.
+- Experience bringing innovative, category-defining tech products to market and driving product goal and GTM strategy.
+- Understanding of locally attached storage systems (LSDD), performance needs, and workload requirements for enterprise applications like relational database management systems (e.g., SAP HANA, etc.).
+- Ability to communicate effectively and influence decisions cross-functionally and at all levels of an organization.
+
+
+ABOUT THE JOB
+
+As a Senior Product Manager, you will define the roadmap for the core infrastructure that powers Google Compute Engine (GCE), one of the world's largest compute fleets. You will bridge the gap between long-range hardware planning and high-impact go-to-market strategies that drive substantial business growth. This role is critical in helping global enterprises modernize their environments by delivering scalable, high-performance virtual machine (VM) solutions. By optimizing the underlying stack, you will directly influence the performance, efficiency, and flexibility that thousands of businesses rely on every day.
+
+You will build an enterprise-ready cloud platform and enable a global infrastructure that is both massive in scale and nimble enough to drive the latest innovations in AI, machine learning, and general-purpose compute. You will operate with a "Silicon-to-Software" mindset which means owning the entire lifecycle, from custom silicon and server configurations to the hypervisor and Guest OS to ensure our customers always have the most optimized environment possible.
+
+In this role, you will not only plan for the next generation of processors but also lead the GTM efforts that turn technical breakthroughs into successful business agreements. You will engage in compelling conversations with VPs at major partners and customers to solve their most complex technical issues.
+
+
+RESPONSIBILITIES
+
+- Define and drive the multi-year product roadmap for CPU and memory technologies, ensuring Google Compute Engine meets the performance and efficiency needs of modern workloads.
+- Lead the product lifecycle for compute-based virtual machines, from deep-range silicon feature planning through to broad market scaling and adoption.
+- Conduct business development strategy and go-to-market activities, building sales programs to secure business and market share for new infrastructure products.
+- Serve as a technical and business expert in customer-facing engagements, influencing executive stakeholders at major partner and customer organizations.
+- Collaborate with engineering, UX, marketing, and sales teams across all layers of the cloud stack to prioritize initiatives and maximize return on investment.

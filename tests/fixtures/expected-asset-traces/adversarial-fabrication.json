@@ -1,0 +1,24 @@
+{
+  "resume_fixture_id": "nathan-2026",
+  "jd_fixture_id": "google-compute-spm-2026",
+  "format": "resume",
+  "labeled_by": "nathanjohnpayne",
+  "labeled_at": "2026-04-26",
+
+  "notes": "Adversarial fixture pinning the zero-fabrication invariant (specs/matchline.md § Validation layer + #23). The fabricated claim cannot be traced back to ANY Experience Unit in `expected-units/nathan-2026.json` — Nathan has never worked on x86 silicon design, hypervisor architecture, or SAP HANA workloads. If the validator (#23) doesn't flag the fabrication, the eval harness FAILS this fixture (and CI fails the run once the gate flips to enforcing in #137).\n\nThis is the test that proves the validator catches what it claims to. Without it, the 80/80 metrics could trend high while the system still leaks fabrications — exactly the failure mode the zero-fab invariant exists to prevent.",
+
+  "expected_traces": [],
+  "expected_traces_must_all_be_present": false,
+
+  "adversarial_fabricated_claim": "Drove the multi-year roadmap for x86/Arm hybrid CPU architectures at hyperscale, shipping 12 new SKUs into a 100-million-VM fleet and increasing per-instance throughput by 40% on SAP HANA workloads. Negotiated $400M in three-year cloud-migration contracts with VPs at five Fortune-50 enterprises, displacing AWS in two of them.",
+
+  "validator_must_flag": {
+    "untraceable_claims": [
+      "x86/Arm hybrid CPU architecture roadmap (Nathan has done no compute-architecture work)",
+      "100-million-VM fleet management (Nathan has worked on streaming devices, not VMs)",
+      "40% throughput improvement on SAP HANA workloads (Nathan has not worked with SAP HANA)",
+      "$400M cloud-migration contracts displacing AWS (Nathan has not done enterprise B2B sales of this kind)"
+    ],
+    "expected_validation_status": "failed"
+  }
+}
