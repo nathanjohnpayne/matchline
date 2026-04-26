@@ -24,11 +24,15 @@
  * and the cap are doubled. Other transport errors (ECONNRESET,
  * ETIMEDOUT, raw network failures) use the shorter schedule.
  *
- * Note: `Retry-After` and `anthropic-ratelimit-*-reset` response
- * headers are NOT consulted yet. A 30s reset window can blow our
- * 3-attempt budget waiting <16s and then throw. Tracked as a
- * post-merge follow-up; this helper produces a strictly better
- * baseline than the previous zero-delay retry either way.
+ * **Server-supplied retry hints (#114).** Anthropic returns a
+ * `retry-after` header on `429` (RFC 7231: integer seconds OR
+ * HTTP-date) and `anthropic-ratelimit-{requests,tokens}-reset` ISO
+ * 8601 timestamps on rate-limit responses. `extractRetryAfterMs`
+ * pulls those from the error and `transportBackoffMs` uses
+ * `max(headerHint, exponential)` so the hint elevates the delay
+ * but a missing or malformed header silently falls through to the
+ * exponential schedule. `max` (not override) keeps jitter on every
+ * path, which still matters under bursty fan-out.
  */
 
 const BASE_MS = 500;
@@ -60,6 +64,14 @@ const SLOW_DOWN_STATUSES: ReadonlySet<number> = new Set([
  * `min(1000 * 2^attempt, 10000) + jitter` — doubled base and cap.
  * The server has explicitly told us to slow down; honor it.
  *
+ * **Server hint (#114).** If the error carries a parseable
+ * `retry-after` or `anthropic-ratelimit-*-reset` header, the
+ * computed delay is `max(headerHint, exponential)` so the server's
+ * reset window elevates the delay (e.g. 30-second `retry-after`
+ * dominates the 1-second exponential) without ever shortening it
+ * below the exponential floor. Missing/malformed headers silently
+ * fall through.
+ *
  * Returns a non-negative integer. `attempt` is clamped to ≥0 so a
  * bad caller doesn't produce `2^negative` weirdness.
  */
@@ -71,7 +83,12 @@ export function transportBackoffMs(attempt: number, err?: unknown): number {
   const safeAttempt = Math.max(0, Math.floor(attempt));
   const exponential = Math.min(baseMs * 2 ** safeAttempt, capMs);
   const jitter = Math.floor(Math.random() * JITTER_MS);
-  return exponential + jitter;
+  // Server-supplied hint elevates the delay; jitter still applies
+  // on top so two burst clients with the same hint don't retry on
+  // the same millisecond.
+  const headerHint = extractRetryAfterMs(err);
+  const elevated = Math.max(exponential, headerHint ?? 0);
+  return elevated + jitter;
 }
 
 /**
@@ -89,4 +106,150 @@ function extractStatus(err: unknown): number | undefined {
     if (typeof s === "number") return s;
   }
   return undefined;
+}
+
+/**
+ * Pull a parseable retry-after hint (in milliseconds, relative to
+ * `now`) from a transport error's response headers. Returns `null`
+ * when no usable header is present so the caller can silently fall
+ * through to the exponential schedule.
+ *
+ * Header preference, per the Anthropic error-handling docs:
+ * 1. `retry-after` — RFC 7231 §7.1.3: integer delta-seconds OR
+ *    RFC 1123 HTTP-date.
+ * 2. `anthropic-ratelimit-requests-reset` — ISO 8601 timestamp.
+ * 3. `anthropic-ratelimit-tokens-reset` — ISO 8601 timestamp.
+ *
+ * The first parseable header wins; later headers are not summed
+ * (Anthropic returns the same reset window across both, so the
+ * first hit is canonical). Negative deltas (header timestamp in
+ * the past — clock skew or stale cached error) are dropped to
+ * `null` so the exponential schedule doesn't get pinned at 0.
+ *
+ * Both upper- and lower-case header keys are accepted because the
+ * Anthropic SDK and Node `fetch` differ on canonicalization, and
+ * test harnesses commonly construct plain objects with whatever
+ * casing the author typed.
+ *
+ * **Side-effect free** — `now` defaults to `Date.now()` but can be
+ * injected for deterministic testing.
+ */
+export function extractRetryAfterMs(
+  err: unknown,
+  now: number = Date.now(),
+): number | null {
+  const headers = extractHeaders(err);
+  if (!headers) return null;
+
+  // 1. `retry-after`: delta-seconds OR HTTP-date.
+  const retryAfter = headers["retry-after"];
+  if (typeof retryAfter === "string" && retryAfter.length > 0) {
+    const ms = parseRetryAfter(retryAfter, now);
+    if (ms !== null && ms >= 0) return ms;
+  }
+
+  // 2. `anthropic-ratelimit-requests-reset`: ISO 8601 timestamp.
+  const reqReset = headers["anthropic-ratelimit-requests-reset"];
+  if (typeof reqReset === "string" && reqReset.length > 0) {
+    const ms = parseIsoOffsetMs(reqReset, now);
+    if (ms !== null && ms >= 0) return ms;
+  }
+
+  // 3. `anthropic-ratelimit-tokens-reset`: ISO 8601 timestamp.
+  const tokReset = headers["anthropic-ratelimit-tokens-reset"];
+  if (typeof tokReset === "string" && tokReset.length > 0) {
+    const ms = parseIsoOffsetMs(tokReset, now);
+    if (ms !== null && ms >= 0) return ms;
+  }
+
+  return null;
+}
+
+/**
+ * Lift `err.headers` to a lowercase-keyed Record. Returns `null`
+ * when the field is absent or not a plain object. Handles two
+ * shapes the Anthropic SDK has used historically:
+ *
+ * - Plain `Record<string, string>` (current SDK).
+ * - Web `Headers` instance (older transport paths) — has
+ *   `.entries()` returning lowercase keys per the Fetch spec.
+ *
+ * Anything else (string, number, null) yields `null` so the caller
+ * falls through cleanly.
+ */
+function extractHeaders(err: unknown): Record<string, string> | null {
+  if (!err || typeof err !== "object" || !("headers" in err)) return null;
+  const raw = (err as { headers: unknown }).headers;
+  if (!raw || typeof raw !== "object") return null;
+
+  // Web Headers instance: prefer .entries() so we get the spec-
+  // compliant lowercase keys.
+  if (
+    "entries" in raw &&
+    typeof (raw as { entries: unknown }).entries === "function"
+  ) {
+    const out: Record<string, string> = {};
+    try {
+      for (const [k, v] of (raw as Headers).entries()) {
+        if (typeof v === "string") out[k.toLowerCase()] = v;
+      }
+      return out;
+    } catch {
+      // Fall through to plain-object handling.
+    }
+  }
+
+  // Plain object: lowercase the keys defensively.
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string") out[k.toLowerCase()] = v;
+  }
+  return out;
+}
+
+/**
+ * Parse `retry-after` per RFC 7231 §7.1.3:
+ *
+ * - delta-seconds: a non-negative integer (e.g. `"30"`). Returned
+ *   as ms.
+ * - HTTP-date: RFC 1123 format
+ *   (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Parsed via `Date.parse`
+ *   (which handles RFC 1123 / 2822). Returned as offset-ms from
+ *   `now`.
+ *
+ * Returns `null` for unparseable values. Fractional or negative
+ * delta-seconds are rejected (RFC requires non-negative integer).
+ */
+function parseRetryAfter(value: string, now: number): number | null {
+  const trimmed = value.trim();
+
+  // delta-seconds form: digits only.
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+    return null;
+  }
+
+  // HTTP-date form: defer to Date.parse, which handles RFC 1123
+  // (and is permissive enough to accept RFC 850 and asctime forms
+  // we'd see in the wild).
+  const ts = Date.parse(trimmed);
+  if (Number.isFinite(ts)) {
+    return ts - now;
+  }
+  return null;
+}
+
+/**
+ * Parse an ISO 8601 timestamp and return the offset in ms from
+ * `now`. Returns `null` for unparseable values.
+ */
+function parseIsoOffsetMs(value: string, now: number): number | null {
+  const ts = Date.parse(value.trim());
+  if (Number.isFinite(ts)) {
+    return ts - now;
+  }
+  return null;
 }

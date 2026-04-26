@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sleep, transportBackoffMs } from "./retry.ts";
+import { extractRetryAfterMs, sleep, transportBackoffMs } from "./retry.ts";
 
 describe("transportBackoffMs", () => {
   beforeEach(() => {
@@ -89,6 +89,204 @@ describe("transportBackoffMs", () => {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThanOrEqual(5000 + 249);
     }
+  });
+});
+
+// -- #114: header-aware retry hints ---------------------------------------
+
+describe("extractRetryAfterMs", () => {
+  // Pin `now` so date-based assertions are deterministic.
+  // 2026-04-26T20:00:00Z — exactly the time the #114 fix was authored.
+  const NOW = Date.parse("2026-04-26T20:00:00Z");
+
+  it("returns null when the error has no headers", () => {
+    expect(extractRetryAfterMs(new Error("ECONNRESET"), NOW)).toBeNull();
+    expect(extractRetryAfterMs({ status: 429 }, NOW)).toBeNull();
+    expect(extractRetryAfterMs(undefined, NOW)).toBeNull();
+    expect(extractRetryAfterMs(null, NOW)).toBeNull();
+  });
+
+  it("parses retry-after as integer delta-seconds (RFC 7231)", () => {
+    const err = { status: 429, headers: { "retry-after": "30" } };
+    expect(extractRetryAfterMs(err, NOW)).toBe(30_000);
+  });
+
+  it("parses retry-after as HTTP-date and returns offset from now", () => {
+    // 90 seconds in the future.
+    const err = {
+      status: 429,
+      headers: { "retry-after": "Sun, 26 Apr 2026 20:01:30 GMT" },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(90_000);
+  });
+
+  it("falls through to anthropic-ratelimit-requests-reset (ISO 8601)", () => {
+    // 45 seconds in the future, retry-after absent.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "2026-04-26T20:00:45Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(45_000);
+  });
+
+  it("falls through to anthropic-ratelimit-tokens-reset when both prior headers absent", () => {
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-tokens-reset": "2026-04-26T20:00:15Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(15_000);
+  });
+
+  it("prefers retry-after over the anthropic-ratelimit-* fallbacks", () => {
+    const err = {
+      status: 429,
+      headers: {
+        "retry-after": "10",
+        "anthropic-ratelimit-requests-reset": "2026-04-26T20:01:00Z",
+        "anthropic-ratelimit-tokens-reset": "2026-04-26T20:02:00Z",
+      },
+    };
+    // retry-after wins → 10 seconds, not the longer reset windows.
+    expect(extractRetryAfterMs(err, NOW)).toBe(10_000);
+  });
+
+  it("normalizes header keys to lowercase (handles SDK + raw fetch differences)", () => {
+    const err = {
+      status: 429,
+      headers: { "Retry-After": "20" },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBe(20_000);
+  });
+
+  it("reads from a Web Headers instance via .entries()", () => {
+    const headers = new Headers();
+    headers.set("retry-after", "5");
+    const err = { status: 429, headers };
+    expect(extractRetryAfterMs(err, NOW)).toBe(5_000);
+  });
+
+  it("silently falls through when retry-after is malformed", () => {
+    // Not a number, not a date.
+    const err = {
+      status: 429,
+      headers: { "retry-after": "totally not a date" },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("rejects fractional delta-seconds (RFC requires integer)", () => {
+    const err = {
+      status: 429,
+      headers: { "retry-after": "1.5" },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("rejects negative deltas (header timestamp in the past)", () => {
+    // Past timestamp — clock skew or stale cached error. Fall
+    // through to exponential rather than pin at 0.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "2026-04-26T19:59:00Z",
+      },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("ignores empty-string header values", () => {
+    const err = {
+      status: 429,
+      headers: { "retry-after": "" },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("ignores non-string header values defensively", () => {
+    const err = {
+      status: 429,
+      headers: { "retry-after": 30 as unknown as string },
+    };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("falls through cleanly when headers field is null", () => {
+    const err = { status: 429, headers: null };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+
+  it("falls through cleanly when headers field is a non-object (string)", () => {
+    const err = { status: 429, headers: "x-rate-limit: 30" };
+    expect(extractRetryAfterMs(err, NOW)).toBeNull();
+  });
+});
+
+describe("transportBackoffMs (header-aware, #114)", () => {
+  const NOW = Date.parse("2026-04-26T20:00:00Z");
+
+  beforeEach(() => {
+    // Pin `Date.now` so our test errors with ISO-8601 reset
+    // headers produce deterministic offsets.
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    // Pin Math.random for jitter — tests assert exact equality
+    // against the elevated base, jitter contributes 0.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("elevates delay to the retry-after hint when it exceeds exponential", () => {
+    // Attempt 0 → exponential = 1000ms (slow-down base for 429).
+    // retry-after: 30 seconds → elevated to 30_000ms.
+    const err = { status: 429, headers: { "retry-after": "30" } };
+    expect(transportBackoffMs(0, err)).toBe(30_000);
+  });
+
+  it("keeps exponential when the retry-after hint is shorter", () => {
+    // Attempt 4 → exponential cap = 10_000ms.
+    // retry-after: 1 second → elevated stays at 10_000.
+    const err = { status: 429, headers: { "retry-after": "1" } };
+    expect(transportBackoffMs(4, err)).toBe(10_000);
+  });
+
+  it("regression: behavior identical to pre-#114 when no headers present", () => {
+    // The retry.test.ts `"doubles base and cap for 429"` block
+    // already asserts these exact values without headers. Re-
+    // pinning here so a future refactor that breaks the no-header
+    // path fails this file too.
+    expect(transportBackoffMs(0, { status: 429 })).toBe(1000);
+    expect(transportBackoffMs(2, { status: 429 })).toBe(4000);
+    expect(transportBackoffMs(20, { status: 429 })).toBe(10_000);
+  });
+
+  it("malformed retry-after silently falls through to exponential", () => {
+    // Garbage header → null hint → exponential (1000ms at attempt 0).
+    const err = { status: 429, headers: { "retry-after": "moments" } };
+    expect(transportBackoffMs(0, err)).toBe(1000);
+  });
+
+  it("honors anthropic-ratelimit-requests-reset on attempt 0", () => {
+    // 45-second reset window → elevated above the 1000ms exponential.
+    const err = {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-requests-reset": "2026-04-26T20:00:45Z",
+      },
+    };
+    expect(transportBackoffMs(0, err)).toBe(45_000);
+  });
+
+  it("jitter still applies on top of the elevated header hint", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const err = { status: 429, headers: { "retry-after": "30" } };
+    // 30_000 + floor(0.5 * 250) = 30_125
+    expect(transportBackoffMs(0, err)).toBe(30_125);
   });
 });
 
