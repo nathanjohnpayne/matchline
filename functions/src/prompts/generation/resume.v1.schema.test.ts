@@ -199,10 +199,30 @@ describe("ResumeGenerationResponseV1Schema", () => {
     }
   });
 
-  it("rejects empty text (the only length floor remaining)", () => {
+  it("rejects empty text (the length floor)", () => {
     const result = GenerationItemV1Schema.safeParse({
       text: "",
       source_unit_ids: ["u-1"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects whitespace-only text — CR Trivial round 2 on PR #122", () => {
+    // Zod's `.min(1)` accepts "   " (length 3). The schema's
+    // `.refine()` trims and rejects whitespace-only.
+    for (const ws of ["   ", "\t", "\n", " \t\n "]) {
+      const result = GenerationItemV1Schema.safeParse({
+        text: ws,
+        source_unit_ids: ["u-1"],
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("rejects whitespace-only source_unit_id strings", () => {
+    const result = GenerationItemV1Schema.safeParse({
+      text: "Some claim",
+      source_unit_ids: ["u-real", "   "],
     });
     expect(result.success).toBe(false);
   });

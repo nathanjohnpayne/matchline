@@ -38,8 +38,28 @@ import { z } from "zod";
  */
 export const GenerationItemV1Schema = z
   .object({
-    text: z.string().min(1).max(2000),
-    source_unit_ids: z.array(z.string().min(1)).min(1),
+    // `.min(1)` blocks empty strings; the `.refine` below blocks
+    // whitespace-only strings (which Zod's `.min` would otherwise
+    // accept — `"   ".length === 3`). CR Trivial round 2 on
+    // PR #122 caught the gap.
+    text: z
+      .string()
+      .min(1)
+      .max(2000)
+      .refine((v) => v.trim().length > 0, {
+        message: "text must contain at least one non-whitespace character",
+      }),
+    source_unit_ids: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((v) => v.trim().length > 0, {
+            message:
+              "source_unit_id must contain at least one non-whitespace character",
+          }),
+      )
+      .min(1),
   })
   .strict();
 
