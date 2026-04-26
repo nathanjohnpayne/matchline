@@ -2,8 +2,16 @@ Nathan Payne
 
 Senior Product Manager — Streaming Platforms, Developer Tools, AI-Augmented Product
 
-San Francisco, CA · hire@nathanpayne.com · (202) 253-7070
+San Francisco, CA · hire@example.com · (555) 010-0100
 nathanpayne.com · linkedin.com/in/nathanpayne · github.com/nathanjohnpayne
+
+[Note: contact email and phone above are placeholder values. The
+real values were redacted from this fixture before commit per
+cursor's review on PR #138 — direct contact info shouldn't live in
+a public-checked-in fixture even when it's the resume owner's own
+data. Public-facing identifiers like the website, LinkedIn, and
+GitHub URLs are kept since the matching pipeline doesn't read them
+and they are already on Nathan's public footprint.]
 
 
 SUMMARY

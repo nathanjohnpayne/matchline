@@ -3,8 +3,8 @@
   "jd_fixture_id": "google-compute-spm-2026",
   "labeled_by": "nathanjohnpayne",
   "labeled_at": "2026-04-26",
-  "k": 5,
-  "notes": "This is a deliberate stretch: Nathan's experience is streaming video infrastructure / device platform PM, the role is cloud compute infrastructure. The expected matches are HONEST — strong matches on transferable scope (0-to-1 launches, GTM, executive engagement, cross-functional leadership) and clear gaps on the cloud-compute-specific requirements (CPU/Arm architecture, hypervisor, LSDD/SAP HANA, multi-year silicon roadmap). The Gaps view (#130) should surface those. Stable mnemonic IDs match `expected-units/nathan-2026.json`'s `id` fields. Requirement IDs are labeler-assigned mnemonics; the harness wiring (#136) maps runtime IDs to these via content matching.\n\nFormat: `\"<unit_id>:<requirement_id>\"` per `expected-matches/README.md`'s composite-string contract — what `tests/eval/scoring.ts::topKOverlap` consumes.",
+  "k": 21,
+  "notes": "This is a deliberate stretch: Nathan's experience is streaming video infrastructure / device platform PM, the role is cloud compute infrastructure. The expected matches are HONEST — strong matches on transferable scope (0-to-1 launches, GTM, executive engagement, cross-functional leadership) and clear gaps on the cloud-compute-specific requirements (CPU/Arm architecture, hypervisor, LSDD/SAP HANA, multi-year silicon roadmap). The Gaps view (#130) should surface those. Stable mnemonic IDs match `expected-units/nathan-2026.json`'s `id` fields. Requirement IDs are labeler-assigned mnemonics; the harness wiring (#136) maps runtime IDs to these via content matching.\n\nFormat: `\"<unit_id>:<requirement_id>\"` per `expected-matches/README.md`'s composite-string contract — what `tests/eval/scoring.ts::topKOverlap` consumes.\n\n`k` is set to match `expected_top_matches.length` so the scorer's `hits / expected.length` ratio can mathematically reach the 0.80 gate. cursor #138 r1 caught the prior shape (k=5 with 22 expected matches) which capped achievable accuracy at 22.7% regardless of matching engine quality — making the fixture unscorable against the gate.",
 
   "expected_requirements": [
     {
@@ -123,8 +123,7 @@
     "u_dsot:r_3yr_zero_to_one",
     "u_dsot:r_3yr_cloud",
 
-    "u_partner_data:r_3yr_cloud",
-    "u_disney_plus_launch:r_3yr_cloud"
+    "u_partner_data:r_3yr_cloud"
   ],
 
   "expected_gaps": [
@@ -143,6 +142,13 @@
     {
       "requirement_id": "r_business_dev_strategy",
       "reason": "Nathan has GTM via Disney's first-party launches and partner integrations, but not 'sales programs to secure market share' — that's enterprise B2B sales, which Nathan hasn't owned."
+    }
+  ],
+
+  "downgraded_matches": [
+    {
+      "match_id": "u_disney_plus_launch:r_3yr_cloud",
+      "reason": "Removed in cursor #138 r1 review. Disney+ runs on cloud infrastructure (AWS/GCP), but Nathan was the device-side PM, not the cloud-infra PM. Calling Disney+ a 'cloud experience' Unit for this Requirement is the kind of stretch the fixture is supposed to avoid. Kept `u_partner_data:r_3yr_cloud` (Snowflake is enterprise+cloud+SaaS) and `u_dsot:r_3yr_cloud` (Firebase, role-based access — actual cloud-app product work)."
     }
   ]
 }
