@@ -1,7 +1,7 @@
 /**
- * Single UnitMatch card. Read-only render for sub-issue
- * #129. Approve / Reject buttons + sub-score breakdown
- * ship in #130 + #131 respectively.
+ * Single UnitMatch card. Shipped read-only in #129; this
+ * version adds Approve / Reject buttons (#130). Sub-score
+ * breakdown ships in #131.
  *
  * Renders:
  *   - The matched Unit's `normalized_summary` as the
@@ -11,36 +11,76 @@
  *     where it does.
  *   - The `surface_evidence` — the specific piece of
  *     ground-truth content from the Unit being matched.
+ *   - Approve / Reject buttons. Visual state is derived
+ *     via `approvalStateOf(match)`:
+ *       "none"      → "Approve" + "Reject" both clickable
+ *       "approved"  → "Approved ✓" (clickable to revert)
+ *       "rejected"  → "Rejected ✗" (clickable to revert)
  *
- * The Unit's `normalized_summary` lookup happens in the
- * parent (MatchesTab) via the unit-id → Unit map; this
- * component is purely presentational and receives the
- * pre-resolved Unit (or null if the unit was deleted
- * between the matching pipeline's persist and this read).
+ * Click semantics (single-setter, #133 r1):
+ *   - Each click computes the NEXT `MatchApprovalState`
+ *     locally and calls `onApprovalStateChange(matchId,
+ *     nextState)` once. The container issues exactly one
+ *     `updateDoc` per click; per-doc per-client Firestore
+ *     write ordering means the LAST submitted write wins
+ *     deterministically — no out-of-order race across
+ *     offline resync, multi-tab, or rapid double-clicks.
+ *   - Approve button: toggles between "approved" and
+ *     "none" (revert).
+ *   - Reject button: toggles between "rejected" and
+ *     "none" (revert).
+ *   - Mutual exclusion is structural in the enum:
+ *     "approved" and "rejected" are distinct values.
+ *     Clicking Approve on a rejected match goes to
+ *     "approved" directly; the persisted flag pair
+ *     becomes `{ approved_for_use: true, user_rejected:
+ *     false }` atomically.
  */
 
 import type { ReactElement } from "react";
 
 import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
+import {
+  approvalStateOf,
+  type MatchApprovalState,
+} from "../../services/matches.ts";
 
 export interface MatchCardProps {
   readonly match: UnitMatch;
   readonly unit: ExperienceUnit | null;
+  readonly onApprovalStateChange: (
+    matchId: string,
+    state: MatchApprovalState,
+  ) => void;
 }
 
 export default function MatchCard({
   match,
   unit,
+  onApprovalStateChange,
 }: MatchCardProps): ReactElement {
   // 0-100 with 1 decimal — readable score, not a precision
   // signal. Score breakdown for the curious lives in #131's
   // tooltip.
   const score100 = (match.final_score * 100).toFixed(1);
+  const state = approvalStateOf(match);
+
+  const onClickApprove = () => {
+    // Approve toggles between "approved" and "none." If the
+    // match was previously "rejected", a single click flips
+    // straight to "approved" (mutual exclusion via the enum,
+    // not a two-step revert).
+    onApprovalStateChange(match.id, state === "approved" ? "none" : "approved");
+  };
+  const onClickReject = () => {
+    onApprovalStateChange(match.id, state === "rejected" ? "none" : "rejected");
+  };
 
   return (
     <article
       className="rounded-md border border-zinc-200 dark:border-zinc-800 p-3 space-y-2 bg-white dark:bg-zinc-900"
       data-testid="match-card"
+      data-approval-state={state}
     >
       <header className="flex items-start justify-between gap-3">
         <h4 className="text-sm font-medium leading-5 text-zinc-900 dark:text-zinc-100 flex-1">
@@ -68,6 +108,36 @@ export default function MatchCard({
         <span className="font-medium">Evidence: </span>
         <q className="italic">{match.surface_evidence}</q>
       </p>
+      <footer className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onClickApprove}
+          aria-pressed={state === "approved"}
+          data-testid="match-approve-button"
+          className={
+            "rounded px-2 py-1 text-xs font-medium transition-colors " +
+            (state === "approved"
+              ? "bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+              : "border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800")
+          }
+        >
+          {state === "approved" ? "Approved ✓" : "Approve"}
+        </button>
+        <button
+          type="button"
+          onClick={onClickReject}
+          aria-pressed={state === "rejected"}
+          data-testid="match-reject-button"
+          className={
+            "rounded px-2 py-1 text-xs font-medium transition-colors " +
+            (state === "rejected"
+              ? "bg-rose-600 text-white hover:bg-rose-700 dark:bg-rose-700 dark:hover:bg-rose-600"
+              : "border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800")
+          }
+        >
+          {state === "rejected" ? "Rejected ✗" : "Reject"}
+        </button>
+      </footer>
     </article>
   );
 }

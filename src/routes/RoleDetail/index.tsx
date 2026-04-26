@@ -44,7 +44,11 @@ import {
   subscribeRequirementsForRole,
   getRole,
 } from "../../services/roles.ts";
-import { subscribeMatchesByRole } from "../../services/matches.ts";
+import {
+  setMatchApprovalState,
+  subscribeMatchesByRole,
+  type MatchApprovalState,
+} from "../../services/matches.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -65,6 +69,28 @@ export default function RoleDetail(): ReactElement {
   const [activeTab, setActiveTab] = useState<Tab>("matches");
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
+
+  // Single-setter approval handler (#130 + cursor #133 r1).
+  // Each click produces ONE `setMatchApprovalState` write,
+  // not a pair. Per-doc per-client Firestore write ordering
+  // guarantees the LAST submitted write wins
+  // deterministically — no out-of-order race across
+  // offline resync, multi-tab, or rapid double-clicks.
+  //
+  // Fire-and-forget: the Firestore subscription's next
+  // snapshot delivers the resolved state; failed writes
+  // (rules deny, transport down) are logged but not
+  // surfaced. Phase 2 UX adds toast notifications;
+  // deferred per #21 spec.
+  const onApprovalStateChange = useCallback(
+    (matchId: string, state: MatchApprovalState) => {
+      void setMatchApprovalState(matchId, state).catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn("setMatchApprovalState failed", err);
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (roleId === undefined || roleId === "") {
@@ -189,6 +215,7 @@ export default function RoleDetail(): ReactElement {
       error={error}
       activeTab={activeTab}
       onTabChange={onTabChange}
+      onApprovalStateChange={onApprovalStateChange}
     />
   );
 }

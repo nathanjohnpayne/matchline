@@ -421,4 +421,225 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     const scores = snap.docs.map((d) => (d.data() as UnitMatch).final_score);
     expect(scores).toEqual([0.9, 0.3]);
   });
+
+  // -- cursor #133 r2: user-action flag carry-forward ---------------------
+
+  it("CARRY-FORWARD (cursor #133 r2): a previously rejected (Unit, Requirement) pair stays rejected after rerun", async () => {
+    // Load-bearing pin. Without the carry-forward in
+    // replaceMatchesForRole, a user could reject a match,
+    // rerun matching, and the same Unit+Requirement pair
+    // would come back as a fresh non-rejected match —
+    // generation would consume it (gates on
+    // approved_for_use === false but doesn't filter on
+    // user_rejected) and the user's explicit "this doesn't
+    // apply" decision would be silently undone.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    // First run produces the initial match.
+    const first = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(first).toHaveLength(1);
+    const firstId = first[0]!.id;
+    // User rejects the match (simulates the Matches tab
+    // Reject click via the unified setMatchApprovalState
+    // setter).
+    await db().collection("unitMatches").doc(firstId).update({
+      user_rejected: true,
+      approved_for_use: false,
+    });
+
+    // Rerun matching. The new match for the same (u1, r1)
+    // pair should carry forward `user_rejected: true`.
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]!.user_rejected).toBe(true);
+    expect(second[0]!.approved_for_use).toBe(false);
+    // Persist read-back: the persisted state matches.
+    const snap = await db()
+      .collection("unitMatches")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", "role-1")
+      .get();
+    expect(snap.docs).toHaveLength(1);
+    const persisted = snap.docs[0]!.data() as UnitMatch;
+    expect(persisted.user_rejected).toBe(true);
+    expect(persisted.experience_unit_id).toBe("u1");
+    expect(persisted.job_requirement_unit_id).toBe("r1");
+  });
+
+  it("CARRY-FORWARD: a previously approved (Unit, Requirement) pair stays approved after rerun", async () => {
+    // Symmetric to the rejection carry-forward. Approval is
+    // load-bearing for generation (#120/#121 gate on
+    // `approved_for_use === true`); losing it on rerun
+    // would force the user to re-approve every time.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    const first = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    const firstId = first[0]!.id;
+    await db().collection("unitMatches").doc(firstId).update({
+      approved_for_use: true,
+      user_rejected: false,
+    });
+
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]!.approved_for_use).toBe(true);
+    expect(second[0]!.user_rejected).toBe(false);
+  });
+
+  it("CARRY-FORWARD: a (Unit, Requirement) pair the user never touched starts fresh (false/false) after rerun", async () => {
+    // Defensive pin: only PRIOR USER ACTIONS carry forward.
+    // A pair that the user never approved or rejected lands
+    // with the default `(false, false)` flags on each rerun
+    // — no stale state from the prior run leaks through.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    // First run — user never touches the match.
+    await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+
+    // Second run.
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]!.approved_for_use).toBe(false);
+    expect(second[0]!.user_rejected).toBe(false);
+  });
+
+  it("CARRY-FORWARD CANONICAL (cursor #133 r3): a stored (approved_for_use:true, user_rejected:true) shape canonicalizes to rejected on rerun — rejection wins, generation can't consume it", async () => {
+    // The contradictory shape is unrepresentable via the
+    // unified `setMatchApprovalState` setter (#133 r1), but
+    // a stale pre-unified-setter record or a manual
+    // Firestore write could leave it in storage. Without
+    // canonicalization on carry-forward, downstream readers
+    // disagree:
+    //   - UI's `approvalStateOf` defaults (true, true) to
+    //     "rejected" (conservative); computeGaps filters it.
+    //   - Generation gates on `approved_for_use === true`
+    //     and ignores `user_rejected`, so it WOULD consume
+    //     the match — the user's rejection silently lost.
+    //
+    // The fix: when carry-forward sees user_rejected:true,
+    // force approved_for_use:false. Once the user has
+    // rejected a pair, that decision wins at the storage
+    // layer until they explicitly un-reject. Rerun heals
+    // any drift.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    const first = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(first).toHaveLength(1);
+    const firstId = first[0]!.id;
+
+    // Force the contradictory shape directly into Firestore
+    // (bypassing the unified setter — simulating drift from
+    // a stale record / manual edit / migration).
+    await db().collection("unitMatches").doc(firstId).update({
+      approved_for_use: true,
+      user_rejected: true,
+    });
+
+    // Rerun. The carry-forward must canonicalize.
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]!.user_rejected).toBe(true);
+    // CRITICAL: approved_for_use canonicalized to false.
+    // Without this, generation (which gates on
+    // approved_for_use === true) would consume the match
+    // despite the user's rejection.
+    expect(second[0]!.approved_for_use).toBe(false);
+
+    // Persist read-back: the persisted state matches.
+    const snap = await db()
+      .collection("unitMatches")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", "role-1")
+      .get();
+    expect(snap.docs).toHaveLength(1);
+    const persisted = snap.docs[0]!.data() as UnitMatch;
+    expect(persisted.user_rejected).toBe(true);
+    expect(persisted.approved_for_use).toBe(false);
+  });
+
+  it("CARRY-FORWARD: granular per-pair tracking — rejecting one (u1, r1) pair does NOT affect (u1, r2) or (u2, r1)", async () => {
+    // Granularity pin. The carry-forward keys on the FULL
+    // (experience_unit_id, job_requirement_unit_id) pair,
+    // not on either component alone.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE), makeUnit("u2", ALICE)]);
+    await seedRequirements([
+      makeRequirement("r1", ALICE, "role-1"),
+      makeRequirement("r2", ALICE, "role-1"),
+    ]);
+
+    const first = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(first).toHaveLength(4); // 2 units × 2 reqs
+
+    // User rejects ONLY the (u1, r1) pair.
+    const target = first.find(
+      (m) =>
+        m.experience_unit_id === "u1" && m.job_requirement_unit_id === "r1",
+    );
+    expect(target).toBeDefined();
+    await db().collection("unitMatches").doc(target!.id).update({
+      user_rejected: true,
+      approved_for_use: false,
+    });
+
+    // Rerun.
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(4);
+
+    // The (u1, r1) pair carries the rejection forward.
+    const u1r1 = second.find(
+      (m) =>
+        m.experience_unit_id === "u1" && m.job_requirement_unit_id === "r1",
+    );
+    expect(u1r1?.user_rejected).toBe(true);
+
+    // Other pairs are untouched.
+    const others = second.filter(
+      (m) =>
+        !(m.experience_unit_id === "u1" && m.job_requirement_unit_id === "r1"),
+    );
+    expect(others).toHaveLength(3);
+    for (const m of others) {
+      expect(m.user_rejected).toBe(false);
+      expect(m.approved_for_use).toBe(false);
+    }
+  });
 });

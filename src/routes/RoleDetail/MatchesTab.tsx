@@ -15,24 +15,39 @@
 
 import type { ReactElement } from "react";
 
-import type { ExperienceUnit } from "../../types/capability.ts";
+import type { ExperienceUnit, JobRequirementUnit } from "../../types/capability.ts";
 
+import GapsView from "./GapsView.tsx";
 import MatchCard from "./MatchCard.tsx";
 import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
+import type { MatchApprovalState } from "../../services/matches.ts";
 
 export interface MatchesTabProps {
   readonly groups: readonly RequirementWithMatches[];
+  /** Pre-computed unmet must-haves (#130). */
+  readonly gaps: readonly JobRequirementUnit[];
   /**
    * Lookup map for pre-resolving each Match's source Unit
    * by id. The container builds this from a single Units
    * subscription so we don't fetch one-Unit-per-Match.
    */
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
+  /**
+   * Approval-state handler (#130 + cursor #133 r1). Single
+   * setter; MatchCard computes the next state locally and
+   * passes it up.
+   */
+  readonly onApprovalStateChange: (
+    matchId: string,
+    state: MatchApprovalState,
+  ) => void;
 }
 
 export default function MatchesTab({
   groups,
+  gaps,
   unitsById,
+  onApprovalStateChange,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -51,8 +66,10 @@ export default function MatchesTab({
   }
 
   return (
-    <ul className="space-y-4" data-testid="matches-tab">
-      {groups.map(({ requirement, matches }) => (
+    <div className="space-y-4" data-testid="matches-tab">
+      <GapsView gaps={gaps} />
+      <ul className="space-y-4">
+        {groups.map(({ requirement, matches }) => (
         <li
           key={requirement.id}
           className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4 bg-zinc-50 dark:bg-zinc-950"
@@ -91,13 +108,15 @@ export default function MatchesTab({
                   <MatchCard
                     match={match}
                     unit={unitsById.get(match.experience_unit_id) ?? null}
+                    onApprovalStateChange={onApprovalStateChange}
                   />
                 </li>
               ))}
             </ul>
           )}
         </li>
-      ))}
-    </ul>
+        ))}
+      </ul>
+    </div>
   );
 }

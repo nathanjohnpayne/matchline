@@ -212,3 +212,97 @@ for (const collection of COLLECTIONS) {
     });
   });
 }
+
+// -- unitMatches contradictory-shape guard (cursor #133 r4) --------------
+
+describe("rules: unitMatches contradictory-flag guard", () => {
+  // The unified `setMatchApprovalState` setter (cursor #133
+  // r1) and the matching pipeline's carry-forward
+  // canonicalization (cursor #133 r3) prevent the
+  // `(approved_for_use: true, user_rejected: true)` shape
+  // through the V1 write paths. Rules are the SECURITY
+  // boundary that catches everything else (admin SDK
+  // bypass-by-mistake, future code, generic upserts).
+  // Generation gates on `approved_for_use === true` and
+  // ignores `user_rejected` — a contradictory persisted
+  // pair would be silently consumed, violating the user's
+  // rejection intent.
+  //
+  // The other 3 valid flag pairs (false/false, true/false,
+  // false/true) must still be writable.
+
+  it("REJECTS create with (approved_for_use: true, user_rejected: true)", async () => {
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      setDoc(doc(ctx.firestore(), "unitMatches", "match-1"), {
+        owner_uid: OWNER_UID,
+        approved_for_use: true,
+        user_rejected: true,
+      }),
+    );
+  });
+
+  it("REJECTS update that produces (approved_for_use: true, user_rejected: true)", async () => {
+    // Seed a clean match, then try to update both flags to
+    // true atomically. Must fail.
+    await seedDoc("unitMatches", "match-1", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      setDoc(
+        doc(ctx.firestore(), "unitMatches", "match-1"),
+        {
+          owner_uid: OWNER_UID,
+          approved_for_use: true,
+          user_rejected: true,
+        },
+        { merge: true },
+      ),
+    );
+  });
+
+  it("ALLOWS create with each valid flag pair (false/false, true/false, false/true)", async () => {
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    const validPairs: ReadonlyArray<{
+      id: string;
+      approved_for_use: boolean;
+      user_rejected: boolean;
+    }> = [
+      { id: "m-none", approved_for_use: false, user_rejected: false },
+      { id: "m-approved", approved_for_use: true, user_rejected: false },
+      { id: "m-rejected", approved_for_use: false, user_rejected: true },
+    ];
+    for (const p of validPairs) {
+      await assertSucceeds(
+        setDoc(doc(ctx.firestore(), "unitMatches", p.id), {
+          owner_uid: OWNER_UID,
+          approved_for_use: p.approved_for_use,
+          user_rejected: p.user_rejected,
+        }),
+      );
+    }
+  });
+
+  it("REGRESSION: the rule does NOT reject other collections' writes that happen to have both fields true", async () => {
+    // Defensive pin: the guard's `collection != 'unitMatches'`
+    // short-circuit means any other collection's writes are
+    // unaffected. A doc in `experienceUnits` (or any
+    // non-unitMatches collection) with the same field
+    // names happening to both be true should still be
+    // allowed — rules can't false-positive on field-name
+    // collision across collections.
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertSucceeds(
+      setDoc(doc(ctx.firestore(), "experienceUnits", "u-mh"), {
+        owner_uid: OWNER_UID,
+        // These field names happen to overlap but this is a
+        // different collection — must be allowed.
+        approved_for_use: true,
+        user_rejected: true,
+      }),
+    );
+  });
+});

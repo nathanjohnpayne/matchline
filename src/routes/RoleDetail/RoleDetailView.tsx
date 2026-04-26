@@ -22,8 +22,10 @@ import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
 import type { Role } from "../../types/crm.ts";
 
 import MatchesTab from "./MatchesTab.tsx";
+import { computeGaps } from "./computeGaps.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
+import type { MatchApprovalState } from "../../services/matches.ts";
 
 /**
  * Subscription load state for the Role doc + per-tab data.
@@ -45,6 +47,17 @@ export interface RoleDetailViewProps {
   readonly error: Error | null;
   readonly activeTab: Tab;
   readonly onTabChange: (tab: Tab) => void;
+  /**
+   * Single-setter approval handler (#130 + cursor #133 r1).
+   * MatchCard computes the next `MatchApprovalState` from
+   * the click + the match's current state, then passes it
+   * up. Container issues ONE atomic write per call — no
+   * dual-write race.
+   */
+  readonly onApprovalStateChange: (
+    matchId: string,
+    state: MatchApprovalState,
+  ) => void;
 }
 
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -62,6 +75,7 @@ export default function RoleDetailView({
   error,
   activeTab,
   onTabChange,
+  onApprovalStateChange,
 }: RoleDetailViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -105,6 +119,7 @@ export default function RoleDetailView({
   }
 
   const groups = groupMatchesByRequirement(requirements, matches);
+  const gaps = computeGaps(requirements, matches);
 
   return (
     <section className="mx-auto max-w-6xl space-y-6">
@@ -160,7 +175,12 @@ export default function RoleDetailView({
           </p>
         )}
         {activeTab === "matches" && (
-          <MatchesTab groups={groups} unitsById={unitsById} />
+          <MatchesTab
+            groups={groups}
+            gaps={gaps}
+            unitsById={unitsById}
+            onApprovalStateChange={onApprovalStateChange}
+          />
         )}
         {activeTab === "applications" && (
           <p
