@@ -110,9 +110,212 @@ describe("loadExpectedUnits", () => {
       /normalized_summary/,
     );
   });
+
+  // -- cursor #139 r2 + CR Major: element-level typing --
+
+  it("THROWS on non-string element in `skills` (cursor #139 r2)", () => {
+    // Without element-level typing, a fixture like
+    // `skills: [42]` would slip through and crash later
+    // in `scoreUnitPair`'s `.toLowerCase()` call.
+    writeJson(join(fixturesDir, "expected-units", "alice.json"), {
+      fixture_id: "x",
+      expected_units: [
+        {
+          id: "u_a",
+          normalized_summary: "summary",
+          skills: ["valid", 42, "also-valid"],
+        },
+      ],
+    });
+    expect(() => loadExpectedUnits("alice", { fixturesDir })).toThrow(
+      /skills\[1\].*must be a string/,
+    );
+  });
+
+  it("THROWS on non-string element in `tools`", () => {
+    writeJson(join(fixturesDir, "expected-units", "alice.json"), {
+      fixture_id: "x",
+      expected_units: [
+        {
+          id: "u_a",
+          normalized_summary: "summary",
+          skills: [],
+          tools: [null],
+        },
+      ],
+    });
+    expect(() => loadExpectedUnits("alice", { fixturesDir })).toThrow(
+      /tools\[0\].*must be a string/,
+    );
+  });
+
+  it("THROWS on non-string element in `domains`", () => {
+    writeJson(join(fixturesDir, "expected-units", "alice.json"), {
+      fixture_id: "x",
+      expected_units: [
+        {
+          id: "u_a",
+          normalized_summary: "summary",
+          skills: [],
+          domains: [{ name: "object-not-string" }],
+        },
+      ],
+    });
+    expect(() => loadExpectedUnits("alice", { fixturesDir })).toThrow(
+      /domains\[0\].*must be a string/,
+    );
+  });
+
+  it("ACCEPTS optional `tools` / `domains` when undefined (back-compat)", () => {
+    writeJson(join(fixturesDir, "expected-units", "alice.json"), {
+      fixture_id: "x",
+      expected_units: [
+        { id: "u_a", normalized_summary: "summary", skills: [] },
+      ],
+    });
+    const file = loadExpectedUnits("alice", { fixturesDir });
+    expect(file.expected_units[0]!.tools).toBeUndefined();
+    expect(file.expected_units[0]!.domains).toBeUndefined();
+  });
 });
 
 // -- Matches loader -------------------------------------------------------
+
+describe("loadExpectedMatches — k integer-and-positive validation (cursor #139 r2 + CR Major)", () => {
+  it("ACCEPTS positive integer k", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1,
+        expected_top_matches: ["u_a:r_a"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    const file = loadExpectedMatches("alice", "role", { fixturesDir });
+    expect(file.k).toBe(1);
+  });
+
+  it("THROWS on fractional k (the prior `typeof k === number` check let 1.5 through)", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1.5,
+        expected_top_matches: ["u_a:r_a"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/positive integer/);
+  });
+
+  it("THROWS on NaN k (the prior `r.k < 1` check let NaN through because NaN < 1 is false)", () => {
+    // We can't write NaN via JSON, but can simulate by
+    // writing a non-numeric string that the loader treats
+    // as the wrong type. NaN would only realistically appear
+    // from a hand-mutated runtime object — Number.isInteger
+    // pinned the type defensively.
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: "not-a-number",
+        expected_top_matches: ["u_a:r_a"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/positive integer/);
+  });
+
+  it("THROWS on zero / negative k", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 0,
+        expected_top_matches: ["u_a:r_a"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/positive integer/);
+  });
+});
+
+describe("loadExpectedMatches — composite ID format (CR Major)", () => {
+  it("ACCEPTS valid '<u>:<r>' format", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1,
+        expected_top_matches: ["u_kepler:r_3yr_zero_to_one"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).not.toThrow();
+  });
+
+  it("THROWS on bare colon ':' (prior `entry.includes(':')` check let it through)", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1,
+        expected_top_matches: [":"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/exactly one colon/);
+  });
+
+  it("THROWS on missing right side 'u:'", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1,
+        expected_top_matches: ["u_a:"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/exactly one colon/);
+  });
+
+  it("THROWS on multiple colons 'u:r:extra'", () => {
+    writeJson(
+      join(fixturesDir, "expected-matches", "alice__role.json"),
+      {
+        resume_fixture_id: "alice",
+        jd_fixture_id: "role",
+        k: 1,
+        expected_top_matches: ["u_a:r_a:oops"],
+        expected_requirements: [validRequirement],
+      },
+    );
+    expect(() =>
+      loadExpectedMatches("alice", "role", { fixturesDir }),
+    ).toThrow(/exactly one colon/);
+  });
+});
 
 describe("loadExpectedMatches — k vs. expected_top_matches.length (cursor #138 r1)", () => {
   it("loads when k >= expected_top_matches.length", () => {

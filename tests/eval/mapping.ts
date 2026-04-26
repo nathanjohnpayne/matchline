@@ -157,7 +157,19 @@ export function mapUnitIds(
       }
     }
   }
-  scored.sort((x, y) => y.score - x.score || x.expectedIdx - y.expectedIdx);
+  // Three-key sort: score desc, then expectedIdx asc, then
+  // actualIdx asc. CR Major caught the prior shape where
+  // ties on (score, expectedIdx) fell back to V8's Array
+  // input order, which itself depends on extractor /
+  // parser output ordering — not stable across runs. The
+  // explicit actualIdx tiebreaker pins the eval result
+  // against ordering drift in upstream pipelines.
+  scored.sort(
+    (x, y) =>
+      y.score - x.score ||
+      x.expectedIdx - y.expectedIdx ||
+      x.actualIdx - y.actualIdx,
+  );
 
   const usedActual = new Set<number>();
   for (const pair of scored) {
@@ -201,7 +213,19 @@ export function mapRequirementIds(
       }
     }
   }
-  scored.sort((x, y) => y.score - x.score || x.expectedIdx - y.expectedIdx);
+  // Three-key sort: score desc, then expectedIdx asc, then
+  // actualIdx asc. CR Major caught the prior shape where
+  // ties on (score, expectedIdx) fell back to V8's Array
+  // input order, which itself depends on extractor /
+  // parser output ordering — not stable across runs. The
+  // explicit actualIdx tiebreaker pins the eval result
+  // against ordering drift in upstream pipelines.
+  scored.sort(
+    (x, y) =>
+      y.score - x.score ||
+      x.expectedIdx - y.expectedIdx ||
+      x.actualIdx - y.actualIdx,
+  );
   for (const pair of scored) {
     if (usedExpected.has(pair.expectedIdx)) continue;
     if (usedActual.has(pair.actualIdx)) continue;

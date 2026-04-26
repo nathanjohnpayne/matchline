@@ -40,7 +40,7 @@ once the corpus is large enough for stable percentiles.
 
 ## Layout
 
-```
+```text
 tests/eval/
 ├── run.ts             CLI entry point
 ├── runForFixture.ts   per-fixture orchestration (#136)
@@ -58,7 +58,7 @@ so cost tracking and model config flow through unchanged.
 
 ## Fixture layout
 
-```
+```text
 tests/fixtures/
 ├── resumes/             raw resume text, one file per fixture
 ├── jds/                 raw JD text, one file per fixture
@@ -81,7 +81,7 @@ populated in [#25](https://github.com/nathanjohnpayne/matchline/issues/25)
 
 ## Architecture (#136)
 
-```
+```text
 runForFixture(input, deps)
   ├─ loadResumeText             reads tests/fixtures/resumes/<id>.txt
   ├─ loadJdText                 reads tests/fixtures/jds/<id>.txt

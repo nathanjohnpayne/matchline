@@ -127,54 +127,13 @@ export async function runForFixture(
   deps: RunForFixtureDeps,
 ): Promise<RunForFixtureResult> {
   const start = Date.now();
-  try {
-    return await runForFixtureInner(input, deps, start);
-  } catch (err) {
-    return {
-      resumeFixtureId: input.resumeFixtureId,
-      jdFixtureId: input.jdFixtureId,
-      extractionAccuracy: 0,
-      matchAccuracy: 0,
-      latencyMs: Date.now() - start,
-      costUsd: 0,
-      extractedUnitCount: 0,
-      parsedRequirementCount: 0,
-      matchCount: 0,
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-async function runForFixtureInner(
-  input: RunForFixtureInput,
-  deps: RunForFixtureDeps,
-  start: number,
-): Promise<RunForFixtureResult> {
-  // 1. Load fixtures.
-  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
-  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
-  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
-    input.resumeFixtureId,
-    deps.fixturePaths,
-  );
-  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
-    input.resumeFixtureId,
-    input.jdFixtureId,
-    deps.fixturePaths,
-  );
-
-  // Closure-bound cost recorder. Each pipeline's `record`
-  // dep gets a function that:
-  //   1. Computes the per-call cost via the pure `priceFor`
-  //      (same pricing logic the production `recordUsage`
-  //      uses, just without the Firestore write).
-  //   2. Accumulates into `costAccum`.
-  //   3. Returns the per-call cost so the pipeline's own
-  //      cost-return contract is satisfied.
-  // No Firestore writes; the harness has no admin app
-  // initialized. cursor #139 r1's catch — the prior shape
-  // dropped costs on the floor.
+  // costAccum lives in the outer scope so partial cost
+  // accumulation from successful API calls surfaces even
+  // when a later step throws. CR Major #139 r2 caught the
+  // prior shape where the failure path zeroed cost — that
+  // hid real spend during flaky runs (e.g. transport
+  // failure mid-parse after extraction tokens were already
+  // billed).
   let costAccum = 0;
   const recordCost = async (usage: UsageRecord): Promise<number> => {
     let cost = 0;
@@ -190,6 +149,48 @@ async function runForFixtureInner(
     costAccum += cost;
     return cost;
   };
+
+  try {
+    return await runForFixtureInner(input, deps, start, recordCost, () => costAccum);
+  } catch (err) {
+    return {
+      resumeFixtureId: input.resumeFixtureId,
+      jdFixtureId: input.jdFixtureId,
+      extractionAccuracy: 0,
+      matchAccuracy: 0,
+      latencyMs: Date.now() - start,
+      // Partial cost is REAL — earlier API calls consumed
+      // real tokens before the throw. Surfacing 0 would
+      // hide spend during flaky runs.
+      costUsd: costAccum,
+      extractedUnitCount: 0,
+      parsedRequirementCount: 0,
+      matchCount: 0,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function runForFixtureInner(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  start: number,
+  recordCost: (usage: UsageRecord) => Promise<number>,
+  getCostAccum: () => number,
+): Promise<RunForFixtureResult> {
+  // 1. Load fixtures.
+  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
+  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
+  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
+    input.resumeFixtureId,
+    deps.fixturePaths,
+  );
+  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
+    input.resumeFixtureId,
+    input.jdFixtureId,
+    deps.fixturePaths,
+  );
 
   // 2. Extract Units (Anthropic).
   const extractedUnits = await extractFromResume(
@@ -282,7 +283,7 @@ async function runForFixtureInner(
     extractionAccuracy,
     matchAccuracy,
     latencyMs: Date.now() - start,
-    costUsd: costAccum,
+    costUsd: getCostAccum(),
     extractedUnitCount: embeddedUnits.length,
     parsedRequirementCount: embeddedReqs.length,
     matchCount: matches.length,

@@ -10,10 +10,13 @@
  *     matching produces composites that overlap with
  *     expected_top_matches, scorer returns a number > 0.
  *   - Failure capture: a thrown extraction error doesn't
- *     propagate; result.ok=false, result.error populated,
- *     accuracies clamped to 0.
- *   - Cost field is intentionally null (no per-fixture cost
- *     attribution at this layer; future enhancement).
+ *     propagate; result.ok=false, result.error populated
+ *     (string), accuracies clamped to 0. Partial cost is
+ *     SURFACED (cursor #139 r2 + CR Major: zeroing cost
+ *     on failure hides real spend during flaky runs).
+ *   - Cost is accumulated via the closure-bound `priceFor`
+ *     recorder (cursor #139 r1); the prior null-shape was
+ *     replaced — `costUsd` is now `number` always.
  *
  * The fixtures used are read from `tests/fixtures/` (the
  * real Nathan + Google pair). The test mocks return shapes
@@ -237,13 +240,96 @@ describe("runForFixture", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+    // Tighter than `toBeDefined()` — `null` would pass
+    // toBeDefined too. Force the failure path to populate
+    // a real string error message. (CR Minor on #139 r1.)
+    expect(typeof result.error).toBe("string");
+    expect((result.error as string).length).toBeGreaterThan(0);
     expect(result.extractionAccuracy).toBe(0);
     expect(result.matchAccuracy).toBe(0);
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-    // Failure path returns 0, not null — cost is a number
-    // post-#139 r1 (no LLM call made → 0 accumulated).
+    // Failure path: extraction was the FIRST API call and
+    // it threw immediately, so no tokens were consumed.
+    // Cost = 0 in this scenario. The under-reporting fix
+    // (cursor #139 r2 + CR Major) preserves PARTIAL cost
+    // when a later step throws — pinned by a separate
+    // test below.
     expect(result.costUsd).toBe(0);
+  });
+
+  it("PARTIAL COST ON FAILURE (cursor #139 r2 + CR Major): a throw AFTER successful API calls surfaces the real partial cost, not 0", async () => {
+    // The load-bearing pin. Extraction succeeds (consumes
+    // real tokens), then parsing throws. The prior shape
+    // zeroed cost on the failure path, hiding the spend.
+    // The fix lifts costAccum to outer scope so the catch
+    // sees the partial accumulation.
+    let call = 0;
+    const mixedAnthropic = {
+      messages: {
+        create: vi.fn(async () => {
+          call += 1;
+          if (call === 1) {
+            // First call (extraction) — succeeds with real tokens.
+            return {
+              id: "x",
+              type: "message",
+              role: "assistant",
+              model: "claude-haiku-4-5-20251001",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "x",
+                  name: "tool",
+                  input: {
+                    units: [
+                      {
+                        raw_text: "x",
+                        normalized_summary: "y",
+                        unit_type: "project",
+                        skills: [],
+                        tools: [],
+                        domains: [],
+                        seniority_signals: [],
+                        scope_signals: [],
+                        business_outcomes: [],
+                        metrics: [],
+                        evidence_type: "verified",
+                        confidence_score: 0.9,
+                      },
+                    ],
+                  },
+                },
+              ],
+              stop_reason: "tool_use",
+              stop_sequence: null,
+              // Real-looking token counts so priceFor produces non-zero.
+              usage: { input_tokens: 5000, output_tokens: 2000 },
+            };
+          }
+          // Second + third calls (parsing retries) — throw.
+          // The retry budget is 3, so we throw on every
+          // subsequent attempt to exhaust it.
+          throw new Error("Parsing transport error");
+        }),
+      },
+    } as unknown as Anthropic;
+
+    const result = await runForFixture(
+      {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      },
+      {
+        anthropicClient: mixedAnthropic,
+        openaiClient: makeMockOpenAi(),
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    // The load-bearing assertion: cost is NON-ZERO because
+    // extraction consumed real tokens before parsing threw.
+    // Without the partial-cost fix this would be 0.
+    expect(result.costUsd).toBeGreaterThan(0);
   });
 
   it("FIXTURE-NOT-FOUND: missing fixture id → result.ok=false with descriptive error", async () => {

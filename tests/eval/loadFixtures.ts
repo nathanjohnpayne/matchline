@@ -185,18 +185,60 @@ function validateExpectedUnit(
       );
     }
   }
-  if (!Array.isArray(r.skills)) {
-    throw new Error(`${filePath}.expected_units[${idx}]: missing array "skills".`);
-  }
+  // Array-AND-element typing per cursor #139 r2 + CR Major.
+  // Without this, `skills: [42]` would slip through the
+  // loader and crash later in `scoreUnitPair`'s
+  // `tokenJaccard(... .toLowerCase()...)`. The loader is
+  // the fail-loud boundary; element-level validation closes
+  // the silent-crash window.
+  const skills = validateStringArray(
+    r.skills,
+    `${filePath}.expected_units[${idx}].skills`,
+  );
+  const tools = r.tools === undefined
+    ? undefined
+    : validateStringArray(
+        r.tools,
+        `${filePath}.expected_units[${idx}].tools`,
+      );
+  const domains = r.domains === undefined
+    ? undefined
+    : validateStringArray(
+        r.domains,
+        `${filePath}.expected_units[${idx}].domains`,
+      );
   return {
     id: r.id as string,
     normalized_summary: r.normalized_summary as string,
-    skills: r.skills as readonly string[],
-    tools: Array.isArray(r.tools) ? (r.tools as readonly string[]) : undefined,
-    domains: Array.isArray(r.domains)
-      ? (r.domains as readonly string[])
-      : undefined,
+    skills,
+    tools,
+    domains,
   };
+}
+
+/**
+ * Validate that `raw` is an array AND every element is a
+ * string. Throws a descriptive error citing the first
+ * non-string element's index. cursor #139 r2 + CR Major:
+ * the loader is the fail-loud boundary; element-level
+ * typing closes the silent-crash window in scoring code
+ * that calls `.toLowerCase()` on the members.
+ */
+function validateStringArray(
+  raw: unknown,
+  pathDescription: string,
+): readonly string[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`${pathDescription}: must be an array.`);
+  }
+  for (let i = 0; i < raw.length; i++) {
+    if (typeof raw[i] !== "string") {
+      throw new Error(
+        `${pathDescription}[${i}]: must be a string, got ${typeof raw[i]}.`,
+      );
+    }
+  }
+  return raw as readonly string[];
 }
 
 function validateExpectedMatchesFile(
@@ -212,17 +254,31 @@ function validateExpectedMatchesFile(
       throw new Error(`${filePath}: missing string "${k}".`);
     }
   }
-  if (typeof r.k !== "number" || r.k < 1) {
-    throw new Error(`${filePath}: missing positive integer "k".`);
+  // cursor #139 r2 + CR Major: `Number.isInteger` rules
+  // out NaN, Infinity, AND fractional values. The prior
+  // `typeof r.k !== "number" || r.k < 1` accepted NaN
+  // (NaN < 1 is false) and 1.5 (passes both checks)
+  // despite the contract being positive integer.
+  if (!Number.isInteger(r.k) || (r.k as number) < 1) {
+    throw new Error(
+      `${filePath}: "k" must be a positive integer (got ${JSON.stringify(r.k)}).`,
+    );
   }
   if (!Array.isArray(r.expected_top_matches)) {
     throw new Error(`${filePath}: missing array "expected_top_matches".`);
   }
+  // CR Major: `entry.includes(":")` was too permissive —
+  // `":"`, `"u:"`, and `"u:r:extra"` all passed and would
+  // silently tank topKOverlap accuracy. Tighten to exactly
+  // one colon with non-empty parts on both sides.
+  const COMPOSITE_ID_PATTERN = /^[^:\s]+:[^:\s]+$/;
   const expected_top_matches = r.expected_top_matches.map(
     (entry, idx): string => {
-      if (typeof entry !== "string" || !entry.includes(":")) {
+      if (typeof entry !== "string" || !COMPOSITE_ID_PATTERN.test(entry)) {
         throw new Error(
-          `${filePath}.expected_top_matches[${idx}]: must be a "<unit_id>:<requirement_id>" string.`,
+          `${filePath}.expected_top_matches[${idx}]: must be a "<unit_id>:<requirement_id>" string ` +
+            `with exactly one colon and non-empty, non-whitespace parts on both sides ` +
+            `(got ${JSON.stringify(entry)}).`,
         );
       }
       return entry;

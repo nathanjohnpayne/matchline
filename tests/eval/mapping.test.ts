@@ -229,6 +229,28 @@ describe("mapUnitIds", () => {
     expect(map.get("uuid-weak")).toBe("unmapped_uuid-weak");
   });
 
+  it("DETERMINISTIC TIE-BREAK (cursor #139 r2 + CR Major): when two actuals tie on score AND expectedIdx, lower actualIdx wins", () => {
+    // Ties on (score, expectedIdx) previously fell back
+    // to V8's Array input order, which itself depends on
+    // the upstream extractor's Unit ordering. This pin
+    // makes the eval result stable across extractor
+    // ordering drift.
+    const expected = [
+      makeExpectedUnit("u_only", "Led launch", []),
+    ];
+    // Two actuals with identical normalized_summary and
+    // skills → identical scoreUnitPair output → tied on
+    // (score, expectedIdx). Greedy assignment must
+    // deterministically pick the lower actualIdx.
+    const actual = [
+      makeActualUnit("uuid-first", "Led launch", []),
+      makeActualUnit("uuid-second", "Led launch", []),
+    ];
+    const map = mapUnitIds(expected, actual);
+    expect(map.get("uuid-first")).toBe("u_only");
+    expect(map.get("uuid-second")).toBe("unmapped_uuid-second");
+  });
+
   it("threshold is overridable", () => {
     const expected = [
       makeExpectedUnit("u_a", "Aaaa bbbb", []),
