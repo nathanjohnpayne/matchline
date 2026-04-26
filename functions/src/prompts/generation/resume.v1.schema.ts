@@ -67,33 +67,51 @@ export const GenerationItemV1Schema = z
  * An experience section: title + company + date_range +
  * bullets.
  *
- * `title`, `company`, and `date_range` are NOT carried with
- * `source_unit_ids` at the schema level — by intent. They're
- * structural metadata about the section grouping (Disney+ from
- * 2018–2024 as the bucket containing the bullets). The PIPELINE
- * (#120) cross-validates these fields against the linked Units'
- * `employer` / `title` / `date_range` and rejects any section
- * whose metadata doesn't match a real Unit's. This separation
- * keeps the schema's job clean (shape) while the value-level
- * grounding (do these strings match real Unit fields?) lives
- * with the loaded-Unit context the schema doesn't have.
+ * **V1 SCOPE NOTE — section metadata is NOT validated against
+ * Unit content.** A prior version of this docstring promised
+ * pipeline-level cross-validation against `Unit.employer` /
+ * `Unit.title` / `Unit.date_range`, but the actual
+ * `ExperienceUnit` contract (`functions/src/types/capability.ts`)
+ * only has `date_range` — `employer` and `title` don't exist on
+ * Units in V1. cursor CHANGES_REQUESTED round 3 on PR #122
+ * caught the unfulfillable promise.
  *
- * Codex P1 round 1 on PR #122 surfaced this gap — a fabricated
- * employer would otherwise ship via passed validation since the
- * validator only iterates summary/bullets/skills/education.
- * Documented here + enforced at the pipeline.
+ * The honest contract for V1:
+ *   - `bullets` items carry `source_unit_ids[]` and ARE
+ *     validated through the per-claim pipeline (#23).
+ *   - `title`, `company`, `date_range` are LLM-emitted
+ *     free-form strings the validator does NOT check. The user
+ *     reviews + approves these in the Application Editor (#24).
+ *
+ * V2/Phase 2 addresses the gap: add `employer` + `title` fields
+ * to `ExperienceUnit` (with extraction prompt updates + schema
+ * tests), then promote section metadata to grounded items the
+ * validator iterates. Tracked separately; not in this PR's
+ * scope.
+ *
+ * Bullets array can be empty for an experience section the
+ * generator chose to acknowledge as a gap (per the prompt's
+ * hard rule 3: "acknowledge gaps; never invent").
+ *
+ * The whitespace-rejection refinement on title/company/
+ * date_range mirrors `GenerationItemV1Schema`'s contract — same
+ * .min(1) + non-whitespace combo. CR Trivial round 2 on PR #122
+ * (extended in round 3 to cover section metadata too).
  */
+const nonWhitespaceString = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((v) => v.trim().length > 0, {
+      message: "must contain at least one non-whitespace character",
+    });
+
 export const GenerationExperienceSectionV1Schema = z
   .object({
-    title: z.string().min(1).max(200),
-    company: z.string().min(1).max(200),
-    date_range: z.string().min(1).max(100).optional(),
-    /**
-     * Bullets array can be empty for an experience section the
-     * generator chose to acknowledge as a gap (per the prompt's
-     * hard rule 3: "acknowledge gaps; never invent"). The
-     * validator skips empty bullets — no claims to check.
-     */
+    title: nonWhitespaceString(200),
+    company: nonWhitespaceString(200),
+    date_range: nonWhitespaceString(100).optional(),
     bullets: z.array(GenerationItemV1Schema),
   })
   .strict();

@@ -159,6 +159,46 @@ describe("ResumeGenerationResponseV1Schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects whitespace-only section title/company/date_range — cursor round 3 on PR #122", () => {
+    // Mirror the GenerationItem whitespace-rejection. Section
+    // metadata uses the same .min(1) + non-whitespace refine.
+    const wsCases: Array<{ field: "title" | "company" | "date_range"; value: string }> = [
+      { field: "title", value: "   " },
+      { field: "company", value: "\t" },
+      { field: "date_range", value: "\n " },
+    ];
+    for (const { field, value } of wsCases) {
+      const section = {
+        title: "Senior PM",
+        company: "Disney+",
+        bullets: [],
+        [field]: value,
+      };
+      const result = ResumeGenerationResponseV1Schema.safeParse({
+        ...KNOWN_GOOD,
+        experience: [section],
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("accepts non-empty title/company even with leading/trailing whitespace (the trim is for the floor check, not the value)", () => {
+    // The .refine() trims for the empty-check; the persisted
+    // value retains the original whitespace. This is symmetric
+    // with how `text` works on items.
+    const result = ResumeGenerationResponseV1Schema.safeParse({
+      ...KNOWN_GOOD,
+      experience: [
+        {
+          title: "Senior PM ",
+          company: " Disney+",
+          bullets: [],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects unknown fields on the section (strict mode)", () => {
     const result = ResumeGenerationResponseV1Schema.safeParse({
       ...KNOWN_GOOD,
