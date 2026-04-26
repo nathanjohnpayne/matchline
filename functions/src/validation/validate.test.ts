@@ -466,6 +466,68 @@ describe("validateAsset orchestrator", () => {
     ).rejects.toBeInstanceOf(ValidateAssetNotFound);
   });
 
+  it("propagates ClaimExtractionError from extractClaims dep (callable maps to failed-precondition)", async () => {
+    // Pin: per-stage retry-budget-exhausted errors propagate
+    // unchanged from the orchestrator. The callable
+    // (functions/src/callables/validateAsset.ts) maps these
+    // to `failed-precondition` HttpsErrors with the per-
+    // attempt failures attached. cursor CHANGES_REQUESTED
+    // round 2 on #117.
+    const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
+    const { ClaimExtractionError } = await import("./errors.ts");
+    const err = new ClaimExtractionError("retries exhausted", [
+      { attempt: 0, kind: "schema_error", message: "shape mismatch" },
+    ]);
+    await expect(
+      validateAsset(CTX, {
+        loadAsset: async () => ({ asset: makeAsset(content), content }),
+        loadUnits: async () => [makeUnit("u1")],
+        extractClaims: async () => {
+          throw err;
+        },
+        checkTraceability: async () => fakeTraceSupports("u1"),
+        checkSpecificity: async () => FAKE_SPEC_OK,
+        persistFlags: async () => {},
+      }),
+    ).rejects.toBe(err);
+  });
+
+  it("propagates TraceabilityCheckError from checkTraceability dep", async () => {
+    const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
+    const { TraceabilityCheckError } = await import("./errors.ts");
+    const err = new TraceabilityCheckError("retries exhausted", []);
+    await expect(
+      validateAsset(CTX, {
+        loadAsset: async () => ({ asset: makeAsset(content), content }),
+        loadUnits: async () => [makeUnit("u1")],
+        extractClaims: async () => [fakeClaim("c1", "b1", "x")],
+        checkTraceability: async () => {
+          throw err;
+        },
+        checkSpecificity: async () => FAKE_SPEC_OK,
+        persistFlags: async () => {},
+      }),
+    ).rejects.toBe(err);
+  });
+
+  it("propagates SpecificityCheckError from checkSpecificity dep", async () => {
+    const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
+    const { SpecificityCheckError } = await import("./errors.ts");
+    const err = new SpecificityCheckError("retries exhausted", []);
+    await expect(
+      validateAsset(CTX, {
+        loadAsset: async () => ({ asset: makeAsset(content), content }),
+        loadUnits: async () => [makeUnit("u1")],
+        extractClaims: async () => [fakeClaim("c1", "b1", "x")],
+        checkTraceability: async () => fakeTraceSupports("u1"),
+        checkSpecificity: async () => {
+          throw err;
+        },
+        persistFlags: async () => {},
+      }),
+    ).rejects.toBe(err);
+  });
+
   it("propagates ValidateAssetMissingContent from loadAsset", async () => {
     await expect(
       validateAsset(CTX, {

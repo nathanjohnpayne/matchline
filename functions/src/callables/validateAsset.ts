@@ -18,6 +18,11 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { anthropicKey } from "../llm/anthropic.js";
 import {
+  ClaimExtractionError,
+  SpecificityCheckError,
+  TraceabilityCheckError,
+} from "../validation/errors.js";
+import {
   validateAsset as runValidateAsset,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
@@ -85,6 +90,35 @@ export const validateAssetCallable = onCall(
         throw new HttpsError(
           "aborted",
           "Asset content changed during validation; re-run validateAsset.",
+        );
+      }
+      // Per-stage retry-budget-exhausted errors. Each module
+      // throws its own error class after MAX_ATTEMPTS schema/
+      // transport failures (mirrors the JdParsingError pattern
+      // in parseJobRequirements). Surface as
+      // `failed-precondition` with the per-attempt failure
+      // detail attached so the editor surface (#24) can show
+      // which stage broke and which attempts saw which Zod
+      // issues. cursor CHANGES_REQUESTED round 2 on #117.
+      if (err instanceof ClaimExtractionError) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Claim extraction failed after retries; needs manual review.",
+          { failures: err.failures, stage: "claim_extraction" },
+        );
+      }
+      if (err instanceof TraceabilityCheckError) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Traceability check failed after retries; needs manual review.",
+          { failures: err.failures, stage: "traceability" },
+        );
+      }
+      if (err instanceof SpecificityCheckError) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Specificity check failed after retries; needs manual review.",
+          { failures: err.failures, stage: "specificity" },
         );
       }
       throw err;
