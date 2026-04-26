@@ -399,15 +399,24 @@ async function replaceMatchesForRole(
     // match for the same pair stays approved; if they
     // rejected it, the new match stays rejected.
     //
+    // **Canonicalize on carry-forward with rejection winning.**
+    // The unified `setMatchApprovalState` setter (cursor #133
+    // r1) makes `(true, true)` unrepresentable on the WRITE
+    // side, but a stale pre-unified-setter record OR a manual
+    // Firestore write could leave the contradictory shape in
+    // storage. cursor CHANGES_REQUESTED round 3 caught the
+    // remaining gap: without canonicalization, the persisted
+    // (true, true) survives carry-forward and downstream
+    // readers disagree — UI's `approvalStateOf` calls it
+    // "rejected" (conservative default; computeGaps filters
+    // it out) while generation gates only on
+    // `approved_for_use === true` and would CONSUME it. The
+    // canonical-on-carry-forward fix makes rejection durably
+    // win at the storage layer, so the rerun heals any drift.
+    //
     // Edge: if a previously rejected pair has NO new match
     // (e.g. embeddings changed and the pair didn't surface),
     // the pair simply disappears — the rejection is moot.
-    // Edge: a (true, true) drift in stored data (shouldn't
-    // happen via the unified `setMatchApprovalState` setter
-    // but a manual write or migration could in principle
-    // produce it) carries forward both flags as-is; the
-    // read-side `approvalStateOf` defaults the contradictory
-    // shape to "rejected."
     const priorFlagsByPair = new Map<
       string,
       { approved_for_use: boolean; user_rejected: boolean }
@@ -419,8 +428,14 @@ async function replaceMatchesForRole(
       // match; no signal to preserve.
       if (m.approved_for_use || m.user_rejected) {
         const key = `${m.experience_unit_id}::${m.job_requirement_unit_id}`;
+        // Canonicalize: if user_rejected is true, force
+        // approved_for_use to false. Same conservative
+        // interpretation as the read-side `approvalStateOf`
+        // (cursor #133 r1) — once the user has rejected a
+        // pair, that decision wins until they un-reject via
+        // the unified setter.
         priorFlagsByPair.set(key, {
-          approved_for_use: m.approved_for_use,
+          approved_for_use: m.user_rejected ? false : m.approved_for_use,
           user_rejected: m.user_rejected,
         });
       }

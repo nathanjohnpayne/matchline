@@ -527,6 +527,68 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     expect(second[0]!.user_rejected).toBe(false);
   });
 
+  it("CARRY-FORWARD CANONICAL (cursor #133 r3): a stored (approved_for_use:true, user_rejected:true) shape canonicalizes to rejected on rerun — rejection wins, generation can't consume it", async () => {
+    // The contradictory shape is unrepresentable via the
+    // unified `setMatchApprovalState` setter (#133 r1), but
+    // a stale pre-unified-setter record or a manual
+    // Firestore write could leave it in storage. Without
+    // canonicalization on carry-forward, downstream readers
+    // disagree:
+    //   - UI's `approvalStateOf` defaults (true, true) to
+    //     "rejected" (conservative); computeGaps filters it.
+    //   - Generation gates on `approved_for_use === true`
+    //     and ignores `user_rejected`, so it WOULD consume
+    //     the match — the user's rejection silently lost.
+    //
+    // The fix: when carry-forward sees user_rejected:true,
+    // force approved_for_use:false. Once the user has
+    // rejected a pair, that decision wins at the storage
+    // layer until they explicitly un-reject. Rerun heals
+    // any drift.
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    const first = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(first).toHaveLength(1);
+    const firstId = first[0]!.id;
+
+    // Force the contradictory shape directly into Firestore
+    // (bypassing the unified setter — simulating drift from
+    // a stale record / manual edit / migration).
+    await db().collection("unitMatches").doc(firstId).update({
+      approved_for_use: true,
+      user_rejected: true,
+    });
+
+    // Rerun. The carry-forward must canonicalize.
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]!.user_rejected).toBe(true);
+    // CRITICAL: approved_for_use canonicalized to false.
+    // Without this, generation (which gates on
+    // approved_for_use === true) would consume the match
+    // despite the user's rejection.
+    expect(second[0]!.approved_for_use).toBe(false);
+
+    // Persist read-back: the persisted state matches.
+    const snap = await db()
+      .collection("unitMatches")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", "role-1")
+      .get();
+    expect(snap.docs).toHaveLength(1);
+    const persisted = snap.docs[0]!.data() as UnitMatch;
+    expect(persisted.user_rejected).toBe(true);
+    expect(persisted.approved_for_use).toBe(false);
+  });
+
   it("CARRY-FORWARD: granular per-pair tracking — rejecting one (u1, r1) pair does NOT affect (u1, r2) or (u2, r1)", async () => {
     // Granularity pin. The carry-forward keys on the FULL
     // (experience_unit_id, job_requirement_unit_id) pair,
