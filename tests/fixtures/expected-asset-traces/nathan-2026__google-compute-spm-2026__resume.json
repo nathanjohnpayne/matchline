@@ -1,0 +1,43 @@
+{
+  "resume_fixture_id": "nathan-2026",
+  "jd_fixture_id": "google-compute-spm-2026",
+  "format": "resume",
+  "labeled_by": "nathanjohnpayne",
+  "labeled_at": "2026-04-26",
+
+  "notes": "Hand-curated sample claims that a faithful generated resume MIGHT include for this (resume, JD) pair. The validator's traceability check (#107) MUST trace each claim back to at least one approved Experience Unit. Stable mnemonic source_unit_ids match `expected-units/nathan-2026.json`'s `id` fields. The harness wiring (#136) is responsible for mapping runtime UUIDs to these mnemonic IDs.\n\nThis is NOT an exhaustive list of every claim a generation would produce — it's a representative sample the harness checks against. The fundamental contract (every emitted claim traces to a Unit) is enforced by the validator at runtime regardless of whether the claim appears here.",
+
+  "expected_traces": [
+    {
+      "claim_summary": "Led a ground-up platform launch — replaced an entire OS stack (Fire TV Android → native Linux), shipping on time across all three apps with zero engagement-metric impact",
+      "source_unit_ids": ["u_kepler"]
+    },
+    {
+      "claim_summary": "Brought a 0-to-1 consumer streaming product (Disney+) from concept to launch across multiple device platforms — fastest-growing streaming service of all time",
+      "source_unit_ids": ["u_disney_plus_launch", "u_playstation_proto"]
+    },
+    {
+      "claim_summary": "Owned a multi-version SDK release cadence (ADK), shipping major releases (4.0 GA) with hot-swappable players, encrypted audio, and observability platform migrations",
+      "source_unit_ids": ["u_adk_releases", "u_platform_health"]
+    },
+    {
+      "claim_summary": "Drove cross-tier data infrastructure transformation — replaced 40+ inconsistent partner spreadsheets with Snowflake + Looker, supporting executive legal compliance work across multiple international jurisdictions",
+      "source_unit_ids": ["u_partner_data"]
+    },
+    {
+      "claim_summary": "Adopted AI engineering tooling at team-and-policy scale — reduced PR cycle time from 7.4 to 4 days, beat 30% Q2 OKR target",
+      "source_unit_ids": ["u_ai_pr_review"]
+    },
+    {
+      "claim_summary": "Built developer governance infrastructure (Mergepath) deployed across 7 repositories — multi-identity code review, automated external review via GitHub App",
+      "source_unit_ids": ["u_mergepath"]
+    },
+    {
+      "claim_summary": "Designed enterprise-grade storage architecture supporting 180TB shared at 99.9% SLA across 100+ concurrent users",
+      "source_unit_ids": ["u_san"]
+    }
+  ],
+
+  "expected_traces_must_all_be_present": false,
+  "adversarial_fabricated_claim": null
+}

@@ -1,0 +1,111 @@
+Nathan Payne
+
+Senior Product Manager — Streaming Platforms, Developer Tools, AI-Augmented Product
+
+San Francisco, CA · hire@example.com · (555) 010-0100
+nathanpayne.com · linkedin.com/in/nathanpayne · github.com/nathanjohnpayne
+
+
+SUMMARY
+
+Senior product manager with ten years at Disney Streaming and BAMTECH building the platforms that run Disney+, Hulu, and ESPN across PlayStation, Xbox, Fire TV, Vega OS, set-top boxes, and smart TVs. I operate at the seam between Disney and its partners — where a codec mismatch or certification gap compounds into real support burden at scale — and I treat operational ambiguity as a product problem. Outside Disney, I'm a PM who learned to use AI coding agents to ship real products, and then built and wrote about the enforcement infrastructure that makes multi-agent development actually work.
+
+
+EXPERIENCE
+
+Senior Product Manager — Disney Entertainment & ESPN Technology
+Native Client Platform (NCP) & ADK · San Francisco · 2021 – 2026
+
+Product lead for the SDK layer that runs Disney+, Hulu, and ESPN on partner devices. Scope spans device certification, partner integrations, platform observability, release engineering, and cross-program alignment with player, engineering, and TPM teams.
+
+- Led Amazon Kepler launch — ground-up rewrite replacing Fire TV's Android stack with a native Linux-based OS. Ported all three NCP apps, hit the September 2025 announcement, shipped on-time in October with zero negative impact to engagement metrics. Fire TV is Disney's fourth-largest living room platform (~18M monthly active devices).
+- Shipped multiple ADK versions adding live video playback, ad playback, and advanced video and audio format support — most recently ADK 4.0 GA (March 2026) with a DMP hot-swappable player, text-to-speech, encrypted audio, and a Sentry to DataDog migration. Owned scope tradeoffs, partner communication, and certification gate decisions across releases.
+- Introduced AI-powered PR review to the NCPF App Foundations squad. Reduced median PR cycle time from 7.4 days to 4 — beating the 30% Q2 OKR target. Policy is now AI review plus 2 human reviewers, moving toward AI plus 1 human.
+- Rebuilt partner device data infrastructure. Designed a two-tier ADK4 partner questionnaire (qualification plus certification), moved device certification data into Partner Portal with Snowflake backend and Looker dashboards, and replaced a workflow of 40+ inconsistent spreadsheets with structured, queryable records. Forcing function was a German HEVC patent enforcement action that exposed critical gaps in pulling partner device data on demand; the same infrastructure now supports AV1/HEVC legal compliance work across Germany and Brazil.
+- Ran NCP plus ADK platform health reporting across Conviva, Sentry, and Datadog. Weekly exec-format narration, Q2/Q3 KPI tracking (FPS, Glimpse attribution, DataDog migration, AI PR cycle time), and automation to port Sentry dashboards to Datadog ahead of the July 2026 cutover.
+- Led NCPv3 — JavaScript/React support on NCP devices enabling the mature BBD application to run on PlayStation, Xbox, Vega OS, STBs, and smart TVs without a separate Rust implementation. Drafted the CER; weathered a proposed Galileo pivot that was later reversed.
+
+Senior Technical Project Manager, Lead — Disney Streaming
+Living Room Devices Team · San Francisco · 2018 – 2021
+
+Led front-end engineering teams that built and launched Disney+, the fastest-growing streaming service of all time.
+
+- Brought Disney+ from concept to launch on multiple connected devices, working across Engineering, Design, and Product.
+- Led PlayStation prototyping that produced the first-to-launch living room experience.
+- Rebuilt the Disney+ app for MVPD set-top boxes — recreating the full experience on low-powered operator devices.
+- Led Hulu through PlayStation 5 launch.
+
+Technical Project Manager — BAMTECH Media / MLB Advanced Media (acquired by Disney 2017)
+Connected Devices Team · San Francisco · 2016 – 2018
+
+Managed development of OTT apps for Roku, Chromecast, PlayStation, and Xbox across MLBAM's platforms and partners (MLB.com, HBO, Fox Sports, Eurosport, MLS, NHL). Full lifecycle responsibility: iteration management, development resource coordination, feature scheduling, QA, and deployment.
+
+Director of Information Technology — AJ+
+San Francisco · 2013 – 2016
+
+Oversaw Broadcast Engineering, Media Operations, and IT for the launch of a 24/7 digital news operation and the AJ+ millennial-focused social video app. Built live OTT streaming solution (Level 3, Adobe Primetime DRM, Brightcove), streamlined online video publishing to Adobe CQ CMS, syndicated to YouTube and Comcast Xfinity, and renegotiated vendor contracts to capture $335K in annual savings.
+
+Senior Systems Architect — Current TV
+San Francisco · 2012 – 2013
+
+Built innovative technology solutions for Current TV's pivot from user-generated content to prime-time network news. Developed ingest and playout solutions, a cross-show digital library system, and a live tweet moderation and on-air display system for election-night coverage. Launched Say Anything with Joy Behar and The War Room with Jennifer Granholm within 30 days of acquisition.
+
+Systems Architect / Support Roles — CNN (Turner Broadcasting)
+Washington, DC Bureau · 2002 – 2012
+
+Streamlined CNN flagship bureau technology operations through automation and system upgrades; managed $2M capital budgets per project against a $60M operating budget.
+
+- Conceptualized and led development of the CNN Magic Wall — the multi-touch interactive collaboration platform used on-air for historical and real-time news data.
+- Built the mobile video system for the $3M Election Express bus, a key component of the 2008 YouTube debate.
+- Constructed virtual studios in Chicago and Phoenix with 36 HD camera feeds and computational rendering clusters to beam live 3D holograms of remote reporters.
+- Designed and implemented SAN supporting 180TB of shared storage at 99.9% SLA for 100+ concurrent users.
+- Built CNN's first in-house non-linear editing and playout studio (25 Final Cut Pro bays, StorNext SAN), rolled out to LA and London and the CNN standard for ten years.
+
+
+SIDE PROJECTS
+
+Mergepath — Agent governance infrastructure
+Bash · Python · GitHub Actions · 1Password · Claude Code · Codex · Cursor
+
+A deterministic repository standard that keeps humans and AI coding agents aligned through canonical documentation, binding CI constraints, multi-identity code review, and automated external review via the OpenAI Codex GitHub App. Mergepath is the enforcement layer underneath every other project on this site — the reason "built with AI agents" comes with a governance trail instead of just a vibe. Currently deployed across seven repositories.
+
+Override — Broadway financial operating system
+Next.js · TypeScript · Firebase · Vitest
+
+A production financial platform for Broadway productions: capitalization, investor returns, waterfall modeling, and recoup scenarios. Handles theatrical financing mechanics including recoup-first vs. share-from-dollar-one structures, running royalty offsets, and GP fees.
+
+Device Source of Truth — Partner device intelligence platform
+React · TypeScript · Vite · Firebase · Vitest
+
+A single web application for understanding partner device hardware, DRM, codec support, and operational readiness across Disney+, Hulu, and ESPN. Consolidates what was previously 40+ inconsistent questionnaire versions into structured, queryable records with role-based access and domain-restricted auth.
+
+Swipe Watch — Content discovery prototype
+Vanilla JavaScript · Firebase Hosting
+
+A swipe-based discovery experiment for Disney+ and Hulu, built to test whether a faster, more active taste-signal loop would improve the recommendation experience. Demoed to Disney's EVP of Product as an interaction-design hypothesis test.
+
+Friends & Family Billing — Shared-bill coordination
+React · TypeScript · Firebase
+
+Cloud-synced shared-bill coordination for families and friend groups. Turns monthly and annual recurring costs into clear annual invoices, payment tracking, and shareable summaries.
+
+
+WRITING
+
+The AI-Augmented PM — nathanpayne.com/blog
+
+Writing about what happens when product managers actually use AI to ship — the leverage, the loops, and the limits.
+
+- "Agent Approval Workflow and the Genesis of Mergepath" (April 2026) — A 16-minute essay on the enforcement infrastructure that makes multi-agent development actually work. Traces the architecture of Mergepath from the first observation that agents skip self-review through to the automated Codex-in-GitHub external review loop.
+- "Six PRs, One Bug: What AI Agents Actually Get Wrong" (April 2026) — A case study using a real twenty-hour debugging session across six failed PRs. Argues that AI agents are very good at making local progress inside the wrong model, and that the difference between six failed fixes and one successful one is not a smarter agent but a different supervision structure.
+
+
+EDUCATION
+
+B.S., Management Information Systems & Decision Sciences
+George Mason University · Fairfax, VA · 2002
+
+Continuing Education
+- Building and Scaling Subscription Businesses (BUS 78) — Stanford Continuing Studies, 2021
+- Advanced Certified ScrumMaster (A-CSM) — LeadingAgile, 2016
+- Principles & Qualities of Genuine Leadership — Turner Professional Development Center, 2012

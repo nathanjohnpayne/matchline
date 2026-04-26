@@ -1,0 +1,250 @@
+{
+  "fixture_id": "nathan-2026",
+  "labeled_by": "nathanjohnpayne",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated from Nathan's 2026 resume. One ExpectedUnit per fact-bearing bullet across the EXPERIENCE + SIDE PROJECTS sections. The `id` field on each entry is a stable mnemonic the labeler controls — the runtime extraction will assign random UUIDs, and the harness wiring (#136) is responsible for mapping by content (normalized_summary + skills overlap) so the cross-reference into `expected-matches/` works against random runtime IDs. The `id` here is purely a labeler-side aid for the cross-file referencing in expected-matches/expected-asset-traces.",
+  "expected_units": [
+    {
+      "id": "u_kepler",
+      "normalized_summary": "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack with native Linux-based OS",
+      "skills": [
+        "platform launch",
+        "partner integration",
+        "device certification",
+        "cross-team leadership",
+        "release engineering"
+      ],
+      "tools": ["NCP", "Fire TV", "Kepler", "Linux"],
+      "domains": ["streaming video infrastructure", "connected devices"]
+    },
+    {
+      "id": "u_adk_releases",
+      "normalized_summary": "Shipped multiple ADK versions including ADK 4.0 GA with hot-swappable player, text-to-speech, encrypted audio, and Sentry to DataDog migration",
+      "skills": [
+        "release management",
+        "scope tradeoffs",
+        "partner communication",
+        "certification gate decisions"
+      ],
+      "tools": ["ADK", "Sentry", "DataDog", "DMP"],
+      "domains": ["streaming video infrastructure", "platform observability"]
+    },
+    {
+      "id": "u_ai_pr_review",
+      "normalized_summary": "Introduced AI-powered PR review reducing median PR cycle time from 7.4 to 4 days, beating the 30% Q2 OKR target",
+      "skills": [
+        "engineering productivity",
+        "AI tooling adoption",
+        "OKR ownership",
+        "process change"
+      ],
+      "tools": ["GitHub", "AI code review"],
+      "domains": ["developer tools", "AI-augmented engineering"]
+    },
+    {
+      "id": "u_partner_data",
+      "normalized_summary": "Rebuilt partner device data infrastructure with two-tier ADK4 questionnaire, Snowflake backend, Looker dashboards — replacing 40+ inconsistent spreadsheets",
+      "skills": [
+        "data infrastructure",
+        "schema design",
+        "operational tooling",
+        "compliance"
+      ],
+      "tools": ["Snowflake", "Looker", "Partner Portal"],
+      "domains": ["device certification", "partner operations", "legal compliance"]
+    },
+    {
+      "id": "u_platform_health",
+      "normalized_summary": "Ran NCP and ADK platform health reporting across Conviva, Sentry, Datadog with weekly exec narration and Sentry-to-DataDog cutover automation",
+      "skills": [
+        "platform observability",
+        "executive reporting",
+        "KPI tracking",
+        "cross-tool migration"
+      ],
+      "tools": ["Conviva", "Sentry", "DataDog"],
+      "domains": ["streaming video infrastructure", "platform observability"]
+    },
+    {
+      "id": "u_ncp_v3",
+      "normalized_summary": "Led NCPv3 — JavaScript/React support on NCP devices enabling BBD app on PlayStation, Xbox, Vega OS, STBs, smart TVs without separate Rust implementation",
+      "skills": [
+        "technical strategy",
+        "platform architecture",
+        "engineering team leadership"
+      ],
+      "tools": ["JavaScript", "React", "NCP", "PlayStation", "Xbox"],
+      "domains": ["streaming video infrastructure", "connected devices"]
+    },
+    {
+      "id": "u_disney_plus_launch",
+      "normalized_summary": "Brought Disney+ from concept to launch on multiple connected devices — fastest-growing streaming service of all time",
+      "skills": [
+        "0-to-1 product launch",
+        "cross-functional leadership",
+        "front-end engineering team management"
+      ],
+      "tools": ["Disney+"],
+      "domains": ["streaming video infrastructure", "consumer launch"]
+    },
+    {
+      "id": "u_playstation_proto",
+      "normalized_summary": "Led PlayStation prototyping for Disney+ that produced the first-to-launch living room experience",
+      "skills": ["prototyping", "platform launch", "product validation"],
+      "tools": ["PlayStation", "Disney+"],
+      "domains": ["streaming video infrastructure", "console platforms"]
+    },
+    {
+      "id": "u_mvpd_rebuild",
+      "normalized_summary": "Rebuilt Disney+ app for MVPD set-top boxes recreating the full experience on low-powered operator devices",
+      "skills": [
+        "performance engineering leadership",
+        "constrained-platform product design"
+      ],
+      "tools": ["Disney+", "MVPD set-top boxes"],
+      "domains": ["streaming video infrastructure", "operator devices"]
+    },
+    {
+      "id": "u_hulu_ps5",
+      "normalized_summary": "Led Hulu through PlayStation 5 launch",
+      "skills": ["platform launch", "partner integration"],
+      "tools": ["Hulu", "PlayStation 5"],
+      "domains": ["streaming video infrastructure", "console platforms"]
+    },
+    {
+      "id": "u_bamtech_ott",
+      "normalized_summary": "Managed development of OTT apps for Roku, Chromecast, PlayStation, Xbox across MLBAM platforms (MLB.com, HBO, Fox Sports, Eurosport, MLS, NHL)",
+      "skills": [
+        "technical project management",
+        "lifecycle management",
+        "QA",
+        "deployment coordination"
+      ],
+      "tools": ["Roku", "Chromecast", "PlayStation", "Xbox"],
+      "domains": ["streaming video infrastructure", "OTT applications"]
+    },
+    {
+      "id": "u_ajplus",
+      "normalized_summary": "Oversaw Broadcast Engineering, Media Operations, and IT for AJ+ launch — built live OTT streaming with Level 3, Adobe Primetime DRM, Brightcove; renegotiated vendor contracts capturing $335K annual savings",
+      "skills": [
+        "operations leadership",
+        "vendor management",
+        "cost optimization",
+        "live streaming infrastructure"
+      ],
+      "tools": ["Adobe Primetime DRM", "Brightcove", "Adobe CQ CMS", "Level 3"],
+      "domains": ["streaming video infrastructure", "broadcast operations"]
+    },
+    {
+      "id": "u_currenttv",
+      "normalized_summary": "Built Current TV ingest, playout, cross-show digital library, and live tweet moderation systems for election-night coverage; launched two shows within 30 days of acquisition",
+      "skills": [
+        "systems architecture",
+        "rapid product launch",
+        "broadcast tech"
+      ],
+      "tools": ["broadcast playout systems"],
+      "domains": ["broadcast operations", "live news"]
+    },
+    {
+      "id": "u_magic_wall",
+      "normalized_summary": "Conceptualized and led development of CNN Magic Wall — multi-touch interactive collaboration platform used on-air for historical and real-time news data",
+      "skills": [
+        "product conception",
+        "interactive systems design",
+        "broadcast tech innovation"
+      ],
+      "tools": ["multi-touch hardware"],
+      "domains": ["broadcast operations", "live news"]
+    },
+    {
+      "id": "u_election_express",
+      "normalized_summary": "Built mobile video system for $3M Election Express bus, key component of 2008 YouTube debate",
+      "skills": [
+        "mobile video systems",
+        "live event production",
+        "capital budget management"
+      ],
+      "tools": ["mobile video transmission"],
+      "domains": ["broadcast operations", "live news"]
+    },
+    {
+      "id": "u_holograms",
+      "normalized_summary": "Constructed virtual studios in Chicago and Phoenix with 36 HD camera feeds and computational rendering clusters to beam live 3D holograms of remote reporters",
+      "skills": [
+        "broadcast systems engineering",
+        "virtual production",
+        "computational video"
+      ],
+      "tools": ["HD broadcast cameras", "rendering clusters"],
+      "domains": ["broadcast operations", "live news"]
+    },
+    {
+      "id": "u_san",
+      "normalized_summary": "Designed and implemented SAN supporting 180TB shared storage at 99.9% SLA for 100+ concurrent users",
+      "skills": [
+        "storage systems",
+        "SLA-driven infrastructure",
+        "capacity planning"
+      ],
+      "tools": ["SAN", "shared storage"],
+      "domains": ["enterprise storage", "broadcast operations"]
+    },
+    {
+      "id": "u_nle",
+      "normalized_summary": "Built CNN's first in-house non-linear editing and playout studio (25 Final Cut Pro bays, StorNext SAN), rolled out to LA and London — became CNN standard for ten years",
+      "skills": [
+        "production systems",
+        "platform standardization",
+        "multi-site rollout"
+      ],
+      "tools": ["Final Cut Pro", "StorNext SAN"],
+      "domains": ["broadcast operations", "post-production"]
+    },
+    {
+      "id": "u_mergepath",
+      "normalized_summary": "Built Mergepath — agent governance infrastructure with multi-identity code review and automated external review via OpenAI Codex GitHub App, deployed across 7 repositories",
+      "skills": [
+        "AI agent governance",
+        "CI infrastructure",
+        "multi-repo standards",
+        "0-to-1 product"
+      ],
+      "tools": ["GitHub Actions", "OpenAI Codex", "1Password", "bash", "Python"],
+      "domains": ["developer tools", "AI-augmented engineering"]
+    },
+    {
+      "id": "u_override",
+      "normalized_summary": "Built Override — production financial platform for Broadway productions: capitalization, investor returns, waterfall modeling, recoup scenarios",
+      "skills": [
+        "financial modeling",
+        "0-to-1 product",
+        "domain-specific software"
+      ],
+      "tools": ["Next.js", "TypeScript", "Firebase"],
+      "domains": ["theatrical finance", "investor tooling"]
+    },
+    {
+      "id": "u_dsot",
+      "normalized_summary": "Built Device Source of Truth — single web app for partner device hardware, DRM, codec support, operational readiness across Disney+, Hulu, ESPN",
+      "skills": [
+        "data consolidation",
+        "role-based access design",
+        "0-to-1 product"
+      ],
+      "tools": ["React", "TypeScript", "Vite", "Firebase"],
+      "domains": ["device certification", "partner operations"]
+    },
+    {
+      "id": "u_swipe_watch",
+      "normalized_summary": "Built Swipe Watch — swipe-based discovery experiment for Disney+ and Hulu, demoed to Disney's EVP of Product",
+      "skills": [
+        "interaction design",
+        "rapid prototyping",
+        "executive demo"
+      ],
+      "tools": ["JavaScript", "Firebase Hosting"],
+      "domains": ["streaming video infrastructure", "content discovery"]
+    }
+  ]
+}

@@ -1,0 +1,158 @@
+{
+  "resume_fixture_id": "nathan-2026",
+  "jd_fixture_id": "google-compute-spm-2026",
+  "labeled_by": "nathanjohnpayne",
+  "labeled_at": "2026-04-26",
+  "k": 24,
+  "notes": "Deliberate stretch: streaming-video-infra PM applying to cloud-compute-infra role. Expected matches reflect transferable scope (0-to-1, GTM, executive engagement, cross-functional, category-defining); expected gaps reflect cloud-compute-specific requirements (CPU/Arm, hypervisor, LSDD/SAP HANA, multi-year silicon roadmap, B2B sales). See `expected-matches/README.md` for the stable-id contract, `k` sizing rule, and optional-section conventions used here.",
+
+  "expected_requirements": [
+    {
+      "id": "r_8yr_pm",
+      "text": "8 years of experience in product management or related technical role",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_3yr_zero_to_one",
+      "text": "3 years of experience taking technical products from conception to launch (e.g., ideation to execution, end-to-end, 0 to 1)",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_3yr_cloud",
+      "text": "3 years of experience working with cloud, compute, SaaS, or enterprise technologies",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_gtm_strategy",
+      "text": "Driving product goal, go-to-market strategy, and design discussions",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_technical_design_direction",
+      "text": "Managing day-to-day technical and design direction",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_compute_arch",
+      "text": "Compute architecture, data center infrastructure, CPU (x86/Arm) and I/O technologies, operational aspects of cloud servers",
+      "must_have": false,
+      "category": "domain"
+    },
+    {
+      "id": "r_category_defining",
+      "text": "Bringing innovative, category-defining tech products to market",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_storage_systems",
+      "text": "Locally attached storage systems (LSDD), enterprise applications like SAP HANA",
+      "must_have": false,
+      "category": "domain"
+    },
+    {
+      "id": "r_cross_functional_influence",
+      "text": "Communicate effectively and influence decisions cross-functionally and at all levels",
+      "must_have": false,
+      "category": "soft_skill"
+    },
+    {
+      "id": "r_multi_year_roadmap",
+      "text": "Define and drive multi-year roadmap for CPU and memory technologies for Google Compute Engine",
+      "must_have": false,
+      "category": "scope"
+    },
+    {
+      "id": "r_vm_lifecycle",
+      "text": "Lead product lifecycle for compute-based virtual machines, deep-range silicon feature planning through to broad market scaling",
+      "must_have": false,
+      "category": "domain"
+    },
+    {
+      "id": "r_business_dev_strategy",
+      "text": "Conduct business development strategy and GTM activities, build sales programs to secure business and market share",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_executive_engagement",
+      "text": "Customer-facing engagements, influence executive stakeholders at major partner and customer organizations",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_cross_functional_collab",
+      "text": "Collaborate with engineering, UX, marketing, and sales teams across all layers of the cloud stack",
+      "must_have": false,
+      "category": "soft_skill"
+    }
+  ],
+
+  "expected_top_matches": [
+    "u_kepler:r_3yr_zero_to_one",
+    "u_kepler:r_executive_engagement",
+    "u_kepler:r_cross_functional_collab",
+    "u_kepler:r_gtm_strategy",
+    "u_kepler:r_technical_design_direction",
+
+    "u_disney_plus_launch:r_3yr_zero_to_one",
+    "u_disney_plus_launch:r_category_defining",
+    "u_disney_plus_launch:r_cross_functional_collab",
+
+    "u_ncp_v3:r_3yr_zero_to_one",
+    "u_ncp_v3:r_technical_design_direction",
+
+    "u_partner_data:r_executive_engagement",
+    "u_partner_data:r_cross_functional_influence",
+
+    "u_adk_releases:r_technical_design_direction",
+    "u_adk_releases:r_multi_year_roadmap",
+
+    "u_mergepath:r_3yr_zero_to_one",
+    "u_mergepath:r_category_defining",
+
+    "u_swipe_watch:r_executive_engagement",
+
+    "u_override:r_3yr_zero_to_one",
+
+    "u_dsot:r_3yr_zero_to_one",
+    "u_dsot:r_3yr_cloud",
+
+    "u_partner_data:r_3yr_cloud",
+
+    "u_kepler:r_8yr_pm",
+    "u_disney_plus_launch:r_8yr_pm",
+    "u_bamtech_ott:r_8yr_pm"
+  ],
+
+  "expected_gaps": [
+    {
+      "requirement_id": "r_compute_arch",
+      "reason": "Nathan has done NO compute architecture / x86 / Arm / hypervisor / I/O subsystem work. Strong honest gap. Real prep would be reading deeply on GCE's underlying stack."
+    },
+    {
+      "requirement_id": "r_storage_systems",
+      "reason": "Nathan has SAN + StorNext + 180TB shared storage from CNN, but those are broadcast-storage workloads — not LSDD or SAP HANA / RDBMS-class enterprise storage. Different problem."
+    },
+    {
+      "requirement_id": "r_vm_lifecycle",
+      "reason": "Nathan has device + SDK lifecycle (NCP, ADK, Kepler) — not VM lifecycle from silicon planning through market scaling. Adjacent but not equivalent."
+    },
+    {
+      "requirement_id": "r_business_dev_strategy",
+      "reason": "Nathan has GTM via Disney's first-party launches and partner integrations, but not 'sales programs to secure market share' — that's enterprise B2B sales, which Nathan hasn't owned."
+    }
+  ],
+
+  "downgraded_matches": [
+    {
+      "match_id": "u_disney_plus_launch:r_3yr_cloud",
+      "reason": "Removed in cursor #138 r1 review. Disney+ runs on cloud infrastructure (AWS/GCP), but Nathan was the device-side PM, not the cloud-infra PM. Calling Disney+ a 'cloud experience' Unit for this Requirement is the kind of stretch the fixture is supposed to avoid. Kept `u_partner_data:r_3yr_cloud` (Snowflake is enterprise+cloud+SaaS) and `u_dsot:r_3yr_cloud` (Firebase, role-based access — actual cloud-app product work)."
+    }
+  ]
+}
