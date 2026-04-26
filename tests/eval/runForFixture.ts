@@ -24,15 +24,14 @@
  * in `runForFixture.test.ts`.
  */
 
-import type Anthropic from "@anthropic-ai/sdk";
-import type OpenAI from "openai";
-
 import { extractFromResume } from "../../functions/src/extraction/resume.ts";
+import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
 import {
   priceFor,
   type UsageRecord,
 } from "../../functions/src/llm/cost.ts";
 import { embedMany } from "../../functions/src/llm/embeddings.ts";
+import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 import { runMatchingPipeline } from "../../functions/src/matching/pipeline.ts";
 import { parseJobRequirements } from "../../functions/src/parsing/jd.ts";
 import type {

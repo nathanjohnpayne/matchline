@@ -50,3 +50,12 @@ export function openaiForCli(): OpenAI {
 }
 
 export { openaiKey };
+
+/**
+ * Re-export the OpenAI class type for tooling (eval harness,
+ * tests) that lives outside `functions/` and therefore can't
+ * resolve `openai` from its own node_modules. Importing
+ * from this module routes resolution through `functions/`'s
+ * own dependency tree, where the SDK is installed.
+ */
+export type { default as OpenAIClient } from "openai";

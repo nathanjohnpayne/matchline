@@ -26,7 +26,6 @@ import {
   compositeIdsFromMatches,
   mapRequirementIds,
   mapUnitIds,
-  scoreRequirementPair,
   scoreUnitPair,
   tokenJaccard,
   tokenize,

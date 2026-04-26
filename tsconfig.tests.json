@@ -1,0 +1,33 @@
+{
+  // tsconfig for the top-level `tests/` directory: integration
+  // tests, eval harness, and fixture-shape validation.
+  //
+  // **Why this exists** (#128): the Codex P2 catch on PR #124
+  // surfaced a fixture-shape drift (non-canonical
+  // JobRequirementUnit fields in an integration-test seed)
+  // that compiled cleanly because `tests/` was outside the
+  // typecheck. Fixtures-as-code lose their fail-loud
+  // boundary if the code doesn't typecheck.
+  //
+  // **Scope.** `tests/**/*.ts(x)` only. `functions/src/**/*.ts`
+  // is typechecked transitively via the test files' imports
+  // (TypeScript walks the dep graph from each `include`
+  // entry point). Test files inside the functions package
+  // (`functions/src/**/*.test.ts`) stay excluded — they
+  // have their own pre-existing test patterns that don't
+  // satisfy strict typecheck and are out of scope for this
+  // ticket. A separate follow-up could tighten those.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "composite": false,
+    "types": ["node", "vitest/globals", "vite/client"]
+  },
+  "include": [
+    "tests/**/*.ts",
+    "tests/**/*.tsx"
+  ],
+  "exclude": [
+    "tests/fixtures/**/*",
+    "node_modules"
+  ]
+}
