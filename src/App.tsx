@@ -12,14 +12,38 @@ import RoleDetail from "./routes/RoleDetail/index.tsx";
 import SignIn from "./routes/SignIn.tsx";
 import UnitReview from "./routes/UnitReview/index.tsx";
 
+/**
+ * True iff the dev-only debug routes (e.g. PDF prototype)
+ * should be registered. Vite's `import.meta.env.DEV` is
+ * true under `npm run dev` and statically false in
+ * production builds — the false branch tree-shakes
+ * entirely from the production bundle.
+ *
+ * cursor #140 r1: the prior shape registered debug routes
+ * in production, exposing the route surface to any
+ * authenticated user who guessed the URL.
+ *
+ * Exported for `App.test.tsx` to verify the gate's
+ * behavior. The actual bundle-time value is what matters
+ * — this export is just the runtime mirror.
+ */
+export const DEBUG_ROUTES_ENABLED: boolean = import.meta.env.DEV;
+
 // Lazy-load the PDF prototype route: `@react-pdf/renderer`
 // is ~1.5MB minified and only used by the debug surface
-// (#50 / `/debug/pdf-prototype`). Without lazy loading,
-// the main bundle balloons from ~700KB to ~2.3MB for a
-// hidden route normal users never visit.
-const PdfPrototype = lazy(
-  () => import("./routes/debug/PdfPrototype.tsx"),
-);
+// (#50 / `/debug/pdf-prototype`).
+//
+// The lazy import is itself gated on DEBUG_ROUTES_ENABLED.
+// Under production, Vite's static replacement of
+// `import.meta.env.DEV` collapses this to
+// `const PdfPrototype = null;` and tree-shakes the
+// `import("./routes/debug/PdfPrototype.tsx")` reference,
+// so the 1.5MB chunk isn't even emitted into dist/.
+// Under `npm run dev` the lazy import is active and the
+// chunk loads on first navigation.
+const PdfPrototype = DEBUG_ROUTES_ENABLED
+  ? lazy(() => import("./routes/debug/PdfPrototype.tsx"))
+  : null;
 
 const navItems = [
   { to: "/onboarding", label: "Onboarding" },
@@ -109,26 +133,33 @@ export default function App() {
           <Route path="/pipeline" element={<Pipeline />} />
           {/*
             Hidden debug route per #50 — PDF rendering
-            prototype. NOT linked from the main nav. Reachable
-            by typing /debug/pdf-prototype in the URL bar.
-            Renders Nathan's sample resume content through
-            @react-pdf/renderer for fidelity evaluation
-            before Phase 2's full export pipeline (#33).
+            prototype. NOT linked from the main nav.
+            DEV-ONLY: gated on `import.meta.env.DEV` so it
+            only registers under `npm run dev`, never in
+            production builds. cursor #140 r1 caught the
+            prior shape (registered in production for any
+            authenticated user). The Vite production build
+            tree-shakes the false branch entirely.
+            Production navigation to /debug/pdf-prototype
+            falls through to the catch-all redirect to
+            /units.
           */}
-          <Route
-            path="/debug/pdf-prototype"
-            element={
-              <Suspense
-                fallback={
-                  <p className="text-sm text-zinc-500 p-6">
-                    Loading PDF prototype…
-                  </p>
-                }
-              >
-                <PdfPrototype />
-              </Suspense>
-            }
-          />
+          {DEBUG_ROUTES_ENABLED && PdfPrototype !== null && (
+            <Route
+              path="/debug/pdf-prototype"
+              element={
+                <Suspense
+                  fallback={
+                    <p className="text-sm text-zinc-500 p-6">
+                      Loading PDF prototype…
+                    </p>
+                  }
+                >
+                  <PdfPrototype />
+                </Suspense>
+              }
+            />
+          )}
           <Route path="*" element={<Navigate to="/units" replace />} />
         </Routes>
       </main>

@@ -12,8 +12,12 @@
  *
  * Usage:
  *
- *   npx tsx scripts/pdf-prototype.tsx
- *   open /tmp/matchline-pdf-prototype.pdf
+ *   npm run pdf:prototype
+ *   open "$(printenv TMPDIR)matchline-pdf-prototype.pdf"
+ *
+ * Or directly:
+ *
+ *   npx tsx scripts/pdf-prototype.ts
  *
  * Exit codes:
  *   0 — render succeeded
