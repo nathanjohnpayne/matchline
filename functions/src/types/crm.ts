@@ -27,17 +27,25 @@ export interface GeneratedExperienceSection {
   bullets: GeneratedBullet[];
 }
 
-export interface GeneratedSummary {
+/**
+ * See `src/types/crm.ts` for the full docstring. Same shape
+ * across summary / skills / education — the validation
+ * orchestrator (#109) iterates them all uniformly.
+ */
+export interface GeneratedItem {
   id: UUID;
   text: string;
   source_unit_ids: UUID[];
 }
+export type GeneratedSummary = GeneratedItem;
+export type GeneratedSkill = GeneratedItem;
+export type GeneratedEducation = GeneratedItem;
 
 export interface GeneratedAssetContent {
   summary: GeneratedSummary;
   experience: GeneratedExperienceSection[];
-  skills: string[];
-  education?: string[];
+  skills: GeneratedSkill[];
+  education?: GeneratedEducation[];
 }
 
 export type ValidationFlagStatus = "traced" | "untraceable" | "specificity";

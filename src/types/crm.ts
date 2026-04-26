@@ -95,24 +95,36 @@ export interface GeneratedExperienceSection {
 }
 
 /**
- * The asset's summary section. Same shape as a bullet (id +
- * text + source_unit_ids) so the validation orchestrator (#109)
- * can validate it through the same per-bullet pipeline. Codex
- * P1 round 1 on PR #117 caught a prior version where `summary`
- * was a plain string and bypassed validation entirely — a
- * fabricated summary claim could ship unchecked.
+ * A fact-bearing item the validator can check — same shape
+ * across `summary`, each `skills` entry, and each `education`
+ * entry: a stable id + the prose the user sees + the
+ * `source_unit_ids` the generator grounded it on.
+ *
+ * The validation orchestrator (#109) iterates summary + bullets
+ * + skills + education uniformly. Cursor caught a prior version
+ * where `skills: string[]` and `education?: string[]` were
+ * plain string arrays and bypassed validation entirely — a
+ * fabricated skill or education entry could ship with
+ * `validation_status: "passed"` as long as summary + bullets
+ * cleared. Codex P1 round 1 caught the same gap for `summary`.
+ *
+ * Three named aliases below make the use-site clearer; the
+ * underlying shape is the same.
  */
-export interface GeneratedSummary {
+export interface GeneratedItem {
   id: UUID;
   text: string;
   source_unit_ids: UUID[];
 }
+export type GeneratedSummary = GeneratedItem;
+export type GeneratedSkill = GeneratedItem;
+export type GeneratedEducation = GeneratedItem;
 
 export interface GeneratedAssetContent {
   summary: GeneratedSummary;
   experience: GeneratedExperienceSection[];
-  skills: string[];
-  education?: string[];
+  skills: GeneratedSkill[];
+  education?: GeneratedEducation[];
 }
 
 /**

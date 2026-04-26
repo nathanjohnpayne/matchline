@@ -513,6 +513,118 @@ describe("validateAsset orchestrator", () => {
     expect(checkTraceability).toHaveBeenCalledTimes(1);
   });
 
+  it("validates SKILLS items as synthetic bullets (cursor CHANGES_REQUESTED round 2 on #117)", async () => {
+    // Cursor caught a prior version where `skills: string[]`
+    // was a plain string array and bypassed validation —
+    // a fabricated skill could ship with status=passed.
+    // Fix: skills are now GeneratedSkill items
+    // (id+text+source_unit_ids) and the orchestrator
+    // iterates them through the same per-bullet pipeline.
+    const content: GeneratedAssetContent = {
+      summary: { id: "summary-1", text: "", source_unit_ids: [] },
+      experience: [],
+      skills: [
+        // Real-skill claim that traces.
+        {
+          id: "skill-1",
+          text: "Product strategy at scale.",
+          source_unit_ids: ["u1"],
+        },
+        // Fabricated-skill claim — no Unit supports it.
+        {
+          id: "skill-fab",
+          text: "Built rocket guidance systems at NASA.",
+          source_unit_ids: ["u1"],
+        },
+      ],
+    };
+
+    const checkTraceability = vi.fn(async (claim) => {
+      if (claim.text.toLowerCase().includes("nasa"))
+        return FAKE_TRACE_NO_SUPPORT;
+      return fakeTraceSupports("u1");
+    });
+    let idCounter = 0;
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [makeUnit("u1", { raw_text: "Disney+ work" })],
+      extractClaims: async (bullet, ctx) => [
+        fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, bullet.text),
+      ],
+      checkTraceability,
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags: async () => {},
+      generateId: () => `f${++idCounter}`,
+      now: () => "2026-04-26T00:00:00.000Z",
+    });
+
+    expect(result.flags).toHaveLength(2);
+    const fabFlag = result.flags.find((f) => f.bullet_id === "skill-fab");
+    const realFlag = result.flags.find((f) => f.bullet_id === "skill-1");
+    expect(fabFlag?.status).toBe("untraceable");
+    expect(realFlag?.status).toBe("traced");
+    expect(result.status).toBe("failed");
+  });
+
+  it("validates EDUCATION items as synthetic bullets (cursor CHANGES_REQUESTED round 2 on #117)", async () => {
+    // Mirror of the skills test — same gap, same shape.
+    const content: GeneratedAssetContent = {
+      summary: { id: "summary-1", text: "", source_unit_ids: [] },
+      experience: [],
+      skills: [],
+      education: [
+        // Fabricated-education claim.
+        {
+          id: "edu-fab",
+          text: "PhD in Astrophysics, MIT, 2020.",
+          source_unit_ids: ["u1"],
+        },
+      ],
+    };
+
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [makeUnit("u1", { raw_text: "BA in CS" })],
+      extractClaims: async (bullet, ctx) => [
+        fakeClaim(`${ctx.bulletId}-c1`, ctx.bulletId, bullet.text),
+      ],
+      checkTraceability: async () => FAKE_TRACE_NO_SUPPORT,
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags: async () => {},
+      generateId: () => "f1",
+      now: () => "2026-04-26T00:00:00.000Z",
+    });
+
+    expect(result.flags).toHaveLength(1);
+    expect(result.flags[0]!.status).toBe("untraceable");
+    expect(result.flags[0]!.bullet_id).toBe("edu-fab");
+    expect(result.status).toBe("failed");
+  });
+
+  it("treats education as optional (no education field → no flags from education)", async () => {
+    // The schema marks education optional. An asset without
+    // it shouldn't crash the orchestrator; it shouldn't
+    // produce education-derived flags either.
+    const content: GeneratedAssetContent = {
+      summary: { id: "summary-1", text: "", source_unit_ids: [] },
+      experience: [{ title: "PM", company: "Disney", bullets: [] }],
+      skills: [],
+      // education intentionally omitted
+    };
+
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [],
+      extractClaims: async () => [],
+      checkTraceability: async () => fakeTraceSupports("u1"),
+      checkSpecificity: async () => FAKE_SPEC_OK,
+      persistFlags: async () => {},
+    });
+
+    expect(result.flags).toHaveLength(0);
+    expect(result.status).toBe("passed");
+  });
+
   it("validates the SUMMARY as a synthetic bullet (Codex P1 round 1 on #117)", async () => {
     // Codex caught a prior version that iterated only
     // experience[*].bullets — claims in the summary bypassed

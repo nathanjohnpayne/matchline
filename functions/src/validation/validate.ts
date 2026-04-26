@@ -124,19 +124,22 @@ export async function validateAsset(
 
   // Validate every fact-bearing piece of the asset, NOT just
   // the experience bullets. Codex P1 round 1 on PR #117 caught
-  // a prior version that iterated only `content.experience[*]
-  // .bullets` — claims in `content.summary` (and any future
-  // non-bullet fields) bypassed validation entirely. Treating
-  // the summary as a synthetic bullet (same shape: id + text +
-  // source_unit_ids) gives the per-bullet pipeline below
-  // uniform handling.
+  // the original `content.summary` gap; cursor's CHANGES_REQUESTED
+  // review on `3557e99` caught the same gap for `skills` +
+  // `education`. All four section types share the same
+  // `GeneratedItem` shape (id + text + source_unit_ids) so the
+  // orchestrator can iterate them uniformly through the per-
+  // bullet pipeline below.
+  //
+  // The order summary → bullets → skills → education isn't
+  // semantically meaningful (each item is independently
+  // validated); kept stable for deterministic flag-list
+  // ordering downstream.
   const allBullets: GeneratedBullet[] = [
-    {
-      id: content.summary.id,
-      text: content.summary.text,
-      source_unit_ids: content.summary.source_unit_ids,
-    },
+    content.summary,
     ...content.experience.flatMap((s) => s.bullets),
+    ...content.skills,
+    ...(content.education ?? []),
   ];
 
   // Collect every Unit id referenced across the asset's bullets,
