@@ -11,9 +11,11 @@
     "test": "vitest run --passWithNoTests --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
     "test:watch": "vitest --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
     "test:rules": "scripts/firebase/with-java.sh firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts tests/matching-replace.integration.test.ts tests/validation-fabrication.integration.test.ts tests/generation-persistence.integration.test.ts --exclude=.claude/**'",
-    "eval": "tsx tests/eval/run.ts"
+    "eval": "tsx tests/eval/run.ts",
+    "pdf:prototype": "tsx scripts/pdf-prototype.ts"
   },
   "dependencies": {
+    "@react-pdf/renderer": "^4.5.1",
     "firebase": "^11.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

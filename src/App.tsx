@@ -1,4 +1,5 @@
 import { signOut } from "firebase/auth";
+import { Suspense, lazy } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import Wordmark from "./components/Wordmark.tsx";
@@ -10,6 +11,15 @@ import Pipeline from "./routes/Pipeline.tsx";
 import RoleDetail from "./routes/RoleDetail/index.tsx";
 import SignIn from "./routes/SignIn.tsx";
 import UnitReview from "./routes/UnitReview/index.tsx";
+
+// Lazy-load the PDF prototype route: `@react-pdf/renderer`
+// is ~1.5MB minified and only used by the debug surface
+// (#50 / `/debug/pdf-prototype`). Without lazy loading,
+// the main bundle balloons from ~700KB to ~2.3MB for a
+// hidden route normal users never visit.
+const PdfPrototype = lazy(
+  () => import("./routes/debug/PdfPrototype.tsx"),
+);
 
 const navItems = [
   { to: "/onboarding", label: "Onboarding" },
@@ -97,6 +107,28 @@ export default function App() {
             element={<ApplicationEditor />}
           />
           <Route path="/pipeline" element={<Pipeline />} />
+          {/*
+            Hidden debug route per #50 — PDF rendering
+            prototype. NOT linked from the main nav. Reachable
+            by typing /debug/pdf-prototype in the URL bar.
+            Renders Nathan's sample resume content through
+            @react-pdf/renderer for fidelity evaluation
+            before Phase 2's full export pipeline (#33).
+          */}
+          <Route
+            path="/debug/pdf-prototype"
+            element={
+              <Suspense
+                fallback={
+                  <p className="text-sm text-zinc-500 p-6">
+                    Loading PDF prototype…
+                  </p>
+                }
+              >
+                <PdfPrototype />
+              </Suspense>
+            }
+          />
           <Route path="*" element={<Navigate to="/units" replace />} />
         </Routes>
       </main>
