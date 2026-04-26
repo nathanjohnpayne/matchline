@@ -154,3 +154,43 @@ export async function setMatchApproval(
     : { approved_for_use: false };
   await updateDoc(ref(matchId), update);
 }
+
+/**
+ * Toggle a UnitMatch's `user_rejected` flag. The Matches tab
+ * (#21 / sub-issue #130) wires this to the Reject button;
+ * the matching pipeline (#82 / `tests/rejected-exclusion.
+ * integration.test.ts`) filters `user_rejected: true`
+ * matches OUT of the input set on re-run, which propagates
+ * to generation as "the underlying Unit pair has nothing
+ * to ground on for this Requirement."
+ *
+ * **Symmetric mutual exclusion with `approved_for_use`,
+ * mirroring `setMatchApproval`.** Rejecting a previously-
+ * approved match MUST clear the approval flag — otherwise
+ * the match could land in `{ approved_for_use: true,
+ * user_rejected: true }`, which generation would consume
+ * (it gates on `approved_for_use === true`) but the next
+ * matching run would drop. cursor's #132 r2 catch named
+ * this surface; the symmetric write here closes the same
+ * gap on the rejection side.
+ *
+ * Un-rejecting (`user_rejected: false`) does NOT touch
+ * `approved_for_use` — un-reject is "withdraw rejection,"
+ * not "approve." If the user wants the match approved
+ * after un-rejecting, that's a separate `setMatchApproval`
+ * click.
+ */
+export async function setMatchRejection(
+  matchId: string,
+  rejection: { user_rejected: boolean },
+): Promise<void> {
+  // When rejecting (true), also clear any stale approval
+  // flag. When un-rejecting (false), only flip
+  // user_rejected; un-rejecting is not the same user
+  // intent as approving.
+  const update: Pick<UnitMatch, "user_rejected"> &
+    Partial<Pick<UnitMatch, "approved_for_use">> = rejection.user_rejected
+    ? { user_rejected: true, approved_for_use: false }
+    : { user_rejected: false };
+  await updateDoc(ref(matchId), update);
+}

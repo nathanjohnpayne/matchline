@@ -105,6 +105,7 @@ function makeUnit(id: string, summary: string): ExperienceUnit {
 }
 
 const NOOP = (): void => {};
+const NOOP_TOGGLE = (): void => {};
 
 describe("RoleDetailView", () => {
   it("LOADING: renders a loading placeholder before the first snapshot", () => {
@@ -118,6 +119,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-loading\"");
@@ -135,6 +138,8 @@ describe("RoleDetailView", () => {
         error={new Error("permission-denied")}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-error\"");
@@ -152,6 +157,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-not-found\"");
@@ -169,6 +176,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("Director of Platform");
@@ -199,6 +208,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"matches-tab\"");
@@ -228,6 +239,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("Req r-empty");
@@ -249,6 +262,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("Unit no longer available");
@@ -266,6 +281,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("must-have");
@@ -284,6 +301,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="requirements"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"requirements-tab-placeholder\"");
@@ -301,6 +320,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="applications"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain("data-testid=\"applications-tab-placeholder\"");
@@ -317,6 +338,8 @@ describe("RoleDetailView", () => {
         error={null}
         activeTab="matches"
         onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
       />,
     );
     expect(html).toContain('role="tablist"');
@@ -324,5 +347,159 @@ describe("RoleDetailView", () => {
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('aria-selected="false"');
     expect(html).toContain('role="tabpanel"');
+  });
+
+  // -- #130: approve/reject buttons + Gaps view ---------------------
+
+  it("BUTTONS: each match card renders Approve + Reject buttons with aria-pressed reflecting state", () => {
+    const reqs = [makeReq("r1")];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [
+      makeMatch("m-fresh", "r1", "u1", 0.7), // not approved, not rejected
+    ];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
+      />,
+    );
+    expect(html).toContain('data-testid="match-approve-button"');
+    expect(html).toContain('data-testid="match-reject-button"');
+    expect(html).toContain(">Approve<");
+    expect(html).toContain(">Reject<");
+    // Both aria-pressed=false when neither flag is set.
+    const ap = (html.match(/aria-pressed="false"/g) ?? []).length;
+    expect(ap).toBeGreaterThanOrEqual(2);
+  });
+
+  it("BUTTONS: approved match renders 'Approved ✓' with aria-pressed=true on the Approve button", () => {
+    const reqs = [makeReq("r1")];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [
+      {
+        ...makeMatch("m-approved", "r1", "u1", 0.7),
+        approved_for_use: true,
+      },
+    ];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
+      />,
+    );
+    expect(html).toContain("Approved ✓");
+    expect(html).toContain("data-approved=\"true\"");
+  });
+
+  it("BUTTONS: rejected match renders 'Rejected ✗' with aria-pressed=true on the Reject button", () => {
+    const reqs = [makeReq("r1")];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [
+      {
+        ...makeMatch("m-rejected", "r1", "u1", 0.7),
+        user_rejected: true,
+      },
+    ];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
+      />,
+    );
+    expect(html).toContain("Rejected ✗");
+    expect(html).toContain("data-rejected=\"true\"");
+  });
+
+  it("GAPS VIEW: renders the empty/affirmative state when every must-have has a qualifying match", () => {
+    const reqs = [makeReq("r-mh", { must_have: true })];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [makeMatch("m-strong", "r-mh", "u1", 0.85)];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
+      />,
+    );
+    expect(html).toContain('data-testid="gaps-view-empty"');
+    expect(html).toContain("Every must-have requirement has a qualifying match");
+  });
+
+  it("GAPS VIEW: renders unmet must-have requirements with the gap-row layout", () => {
+    const reqs = [
+      makeReq("r-met", { must_have: true }),
+      makeReq("r-unmet", { must_have: true, raw_text: "Original wording." }),
+      makeReq("r-nice-no-match", { must_have: false }),
+    ];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [
+      makeMatch("m-met-strong", "r-met", "u1", 0.9),
+      makeMatch("m-unmet-weak", "r-unmet", "u1", 0.2),
+    ];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApproveToggle={NOOP_TOGGLE}
+        onRejectToggle={NOOP_TOGGLE}
+      />,
+    );
+    expect(html).toContain('data-testid="gaps-view"');
+    expect(html).toContain("1 unmet must-have requirement");
+    // Slice the gaps section out of the rendered HTML so we
+    // can assert what's IN it without false positives from
+    // the matches list (which renders all Requirements
+    // regardless of must-have status).
+    const gapsStart = html.indexOf('data-testid="gaps-view"');
+    const gapsEnd = html.indexOf("</section>", gapsStart);
+    const gapsBlock = html.slice(gapsStart, gapsEnd);
+    expect(gapsBlock).toContain("Req r-unmet");
+    // Met must-have NOT in gaps.
+    expect(gapsBlock).not.toContain("Req r-met");
+    // Non-must-have with no matches NOT in gaps (regardless
+    // of how it renders elsewhere).
+    expect(gapsBlock).not.toContain("Req r-nice-no-match");
   });
 });

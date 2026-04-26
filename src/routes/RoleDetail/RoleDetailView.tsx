@@ -22,6 +22,7 @@ import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
 import type { Role } from "../../types/crm.ts";
 
 import MatchesTab from "./MatchesTab.tsx";
+import { computeGaps } from "./computeGaps.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 
@@ -45,6 +46,15 @@ export interface RoleDetailViewProps {
   readonly error: Error | null;
   readonly activeTab: Tab;
   readonly onTabChange: (tab: Tab) => void;
+  /** #130 — passed through to MatchCard buttons. */
+  readonly onApproveToggle: (
+    matchId: string,
+    nextApproved: boolean,
+  ) => void;
+  readonly onRejectToggle: (
+    matchId: string,
+    nextRejected: boolean,
+  ) => void;
 }
 
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -62,6 +72,8 @@ export default function RoleDetailView({
   error,
   activeTab,
   onTabChange,
+  onApproveToggle,
+  onRejectToggle,
 }: RoleDetailViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -105,6 +117,7 @@ export default function RoleDetailView({
   }
 
   const groups = groupMatchesByRequirement(requirements, matches);
+  const gaps = computeGaps(requirements, matches);
 
   return (
     <section className="mx-auto max-w-6xl space-y-6">
@@ -160,7 +173,13 @@ export default function RoleDetailView({
           </p>
         )}
         {activeTab === "matches" && (
-          <MatchesTab groups={groups} unitsById={unitsById} />
+          <MatchesTab
+            groups={groups}
+            gaps={gaps}
+            unitsById={unitsById}
+            onApproveToggle={onApproveToggle}
+            onRejectToggle={onRejectToggle}
+          />
         )}
         {activeTab === "applications" && (
           <p

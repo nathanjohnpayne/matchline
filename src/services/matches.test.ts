@@ -67,7 +67,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const { setMatchApproval } = await import("./matches.ts");
+const { setMatchApproval, setMatchRejection } = await import("./matches.ts");
 
 describe("setMatchApproval — mutual exclusion (cursor #132 r2)", () => {
   it("APPROVE: writes approved_for_use:true AND user_rejected:false (clears stale rejection)", async () => {
@@ -101,6 +101,43 @@ describe("setMatchApproval — mutual exclusion (cursor #132 r2)", () => {
 
   it("APPROVE: passes the matchId through to updateDoc's ref arg", async () => {
     await setMatchApproval("specific-match-id", { approved_for_use: true });
+    expect(updateDoc.mock.calls[0]![0]).toEqual({
+      __mockedRef: "specific-match-id",
+    });
+  });
+});
+
+describe("setMatchRejection — symmetric mutual exclusion (#130)", () => {
+  it("REJECT: writes user_rejected:true AND approved_for_use:false (clears stale approval)", async () => {
+    // Symmetric to APPROVE's clear-rejection. Rejecting a
+    // previously-approved match must clear the approval
+    // flag — otherwise generation (gates on
+    // approved_for_use) would consume the match while the
+    // next matching run (filters user_rejected) would drop
+    // the underlying Unit pair.
+    await setMatchRejection("match-1", { user_rejected: true });
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    expect(updateDoc.mock.calls[0]![1]).toEqual({
+      user_rejected: true,
+      approved_for_use: false,
+    });
+  });
+
+  it("UN-REJECT: writes user_rejected:false WITHOUT touching approved_for_use (un-reject is not approve)", async () => {
+    // Un-rejecting is "withdraw rejection," not "approve."
+    // If the user wants the match approved after
+    // un-rejecting, that's a separate setMatchApproval click.
+    await setMatchRejection("match-1", { user_rejected: false });
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    expect(updateDoc.mock.calls[0]![1]).toEqual({
+      user_rejected: false,
+    });
+    const payload = updateDoc.mock.calls[0]![1] as Record<string, unknown>;
+    expect("approved_for_use" in payload).toBe(false);
+  });
+
+  it("REJECT: passes the matchId through to updateDoc's ref arg", async () => {
+    await setMatchRejection("specific-match-id", { user_rejected: true });
     expect(updateDoc.mock.calls[0]![0]).toEqual({
       __mockedRef: "specific-match-id",
     });

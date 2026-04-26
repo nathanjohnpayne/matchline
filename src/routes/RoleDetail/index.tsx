@@ -44,7 +44,11 @@ import {
   subscribeRequirementsForRole,
   getRole,
 } from "../../services/roles.ts";
-import { subscribeMatchesByRole } from "../../services/matches.ts";
+import {
+  setMatchApproval,
+  setMatchRejection,
+  subscribeMatchesByRole,
+} from "../../services/matches.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -65,6 +69,37 @@ export default function RoleDetail(): ReactElement {
   const [activeTab, setActiveTab] = useState<Tab>("matches");
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
+
+  // Approve / Reject handlers (#130). Fire-and-forget the
+  // service write — the Firestore subscription's next
+  // snapshot delivers the new state. If the write fails
+  // (rules deny, transport), the snapshot is unchanged so
+  // the optimistic UI naturally reverts. Errors are
+  // swallowed here to avoid unhandled-promise warnings;
+  // the rules layer's permission check is the security
+  // gate, not the client error path. Future enhancement:
+  // surface a toast on rejection (deferred to Phase 2 UX).
+  const onApproveToggle = useCallback(
+    (matchId: string, nextApproved: boolean) => {
+      void setMatchApproval(matchId, { approved_for_use: nextApproved })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn("setMatchApproval failed", err);
+        });
+    },
+    [],
+  );
+
+  const onRejectToggle = useCallback(
+    (matchId: string, nextRejected: boolean) => {
+      void setMatchRejection(matchId, { user_rejected: nextRejected })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn("setMatchRejection failed", err);
+        });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (roleId === undefined || roleId === "") {
@@ -189,6 +224,8 @@ export default function RoleDetail(): ReactElement {
       error={error}
       activeTab={activeTab}
       onTabChange={onTabChange}
+      onApproveToggle={onApproveToggle}
+      onRejectToggle={onRejectToggle}
     />
   );
 }
