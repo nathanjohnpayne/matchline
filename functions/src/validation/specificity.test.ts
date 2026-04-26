@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { logger } from "firebase-functions";
 import { describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
@@ -328,14 +329,15 @@ describe("checkSpecificity: LLM fallback", () => {
     );
   });
 
-  it("recordUsage rejection is swallowed; the LLM verdict still ships (CodeRabbit on #113)", async () => {
-    // Pin: cost telemetry is observability infrastructure. A
-    // Firestore 503 (or any other recordUsage failure) must NOT
-    // discard an otherwise-successful specificity verdict. The
-    // try/catch around `await record(...)` enforces this.
+  it("recordUsage rejection is swallowed; the LLM verdict still ships, warn logged without ownerUid (CodeRabbit on #113, #118)", async () => {
+    // Pin THREE properties of the non-fatal telemetry contract:
+    // result still ships, warn logged exactly once, ownerUid
+    // omitted from payload. CodeRabbit Major on #116 / Trivial
+    // on #118.
     const record = vi.fn<typeof RecordUsage>(async () => {
       throw new Error("Firestore unavailable");
     });
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
     const { client } = mockClient([
       mockMessage({
         specific: true,
@@ -343,14 +345,25 @@ describe("checkSpecificity: LLM fallback", () => {
       }),
     ]);
 
-    const result = await checkSpecificity(
-      makeClaim("The user shipped a feature on PS4."),
-      CTX,
-      { client, record },
-    );
+    try {
+      const result = await checkSpecificity(
+        makeClaim("The user shipped a feature on PS4."),
+        CTX,
+        { client, record },
+      );
 
-    expect(result.specific).toBe(true);
-    expect(record).toHaveBeenCalledTimes(1);
+      expect(result.specific).toBe(true);
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const warnPayload = warn.mock.calls[0]![1] as Record<string, unknown>;
+      expect(warnPayload).not.toHaveProperty("ownerUid");
+      expect(warnPayload).toMatchObject({
+        stage: "validation",
+        error: "Firestore unavailable",
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries on schema error and succeeds on the second attempt", async () => {
