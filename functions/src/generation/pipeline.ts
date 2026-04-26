@@ -114,13 +114,36 @@ export async function runGenerationPipeline(
 
   const inputs = await loadInputs(ctx);
 
-  if (inputs.units.length === 0) {
-    // Empty-Units short-circuit. Generation has nothing to
-    // ground on; calling the LLM would invite fabrication. The
-    // callable (#121) maps this to failed-precondition so the
-    // editor can prompt "approve some Units first."
+  // Filter to Units that have at least one APPROVED match for
+  // this Role. The spec's gate is "approved Units AND their
+  // approved matches" — both signals required, mirroring the
+  // zero-fab discipline at every other layer of the pipeline.
+  // A Unit the user approved but never connected to a Role
+  // Requirement (no approved match) is generic content; using
+  // it as ground for THIS Role's resume invites generic prose
+  // the user hasn't reviewed in context.
+  // cursor CHANGES_REQUESTED round 1 on PR #123 caught the gap:
+  // the prior version loaded approvedMatches but didn't use
+  // them to gate the prompt input.
+  const approvedMatchedUnitIds = new Set(
+    inputs.approvedMatches.map((m) => m.experience_unit_id),
+  );
+  const eligibleUnits = inputs.units.filter((u) =>
+    approvedMatchedUnitIds.has(u.id),
+  );
+
+  if (eligibleUnits.length === 0) {
+    // Empty-eligible-Units short-circuit. Two distinct upstream
+    // causes both land here: (a) no approved Units, or (b)
+    // approved Units but no approved matches connecting any of
+    // them to this Role's Requirements. The error message
+    // distinguishes for the editor surface (#24)'s UX.
+    const detail =
+      inputs.units.length === 0
+        ? "No approved ExperienceUnits"
+        : `Approved Units present (${inputs.units.length}) but no approved UnitMatches for this Role`;
     throw new GenerationNoApprovedUnitsError(
-      `No approved ExperienceUnits found for application ${ctx.applicationId}; nothing to generate from.`,
+      `${detail} for application ${ctx.applicationId}; nothing to generate from. Approve at least one match in the Matches tab before generating.`,
     );
   }
 
@@ -137,13 +160,19 @@ export async function runGenerationPipeline(
     $refStrategy: "none",
   });
 
-  const validUnitIds = new Set(inputs.units.map((u) => u.id));
+  // The cross-validation Unit set is the ELIGIBLE Units only —
+  // the same set the prompt sees. A fabricated id catches both
+  // pure inventions AND attempts to ground on a Unit the user
+  // approved but didn't connect to this Role via an approved
+  // match. Same gate, two failure modes.
+  const validUnitIds = new Set(eligibleUnits.map((u) => u.id));
+  const eligibleInputs: GenerationInputs = { ...inputs, units: eligibleUnits };
   const failures: GenerationAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
-    const userContent = buildUserContent(prompt.userFewShot, inputs);
+    const userContent = buildUserContent(prompt.userFewShot, eligibleInputs);
 
     let response: Anthropic.Messages.Message;
     try {

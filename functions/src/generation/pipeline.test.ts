@@ -5,6 +5,7 @@ import type { recordUsage as RecordUsage } from "../llm/cost.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
+  UnitMatch,
 } from "../types/capability.ts";
 import type { Role } from "../types/crm.ts";
 
@@ -100,12 +101,40 @@ function makeReq(id: string): JobRequirementUnit {
   };
 }
 
-function makeInputs(unitIds: string[]): GenerationInputs {
+function makeMatch(unitId: string): UnitMatch {
+  return {
+    id: `match-${unitId}`,
+    owner_uid: "user-alice",
+    role_id: "role-1",
+    experience_unit_id: unitId,
+    job_requirement_unit_id: "req-1",
+    semantic_score: 0.8,
+    rule_score: 0.7,
+    final_score: 0.75,
+    rationale: "supports",
+    surface_evidence: "evidence",
+    approved_for_use: true,
+    user_rejected: false,
+    created_at: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+/**
+ * Build inputs. By default every Unit is "eligible" — i.e. has
+ * an approved match. Pass `approvedMatchUnitIds` to override
+ * (e.g. `[]` for the empty-matches edge case, or a subset of
+ * `unitIds` to test the partial-eligibility case).
+ */
+function makeInputs(
+  unitIds: string[],
+  approvedMatchUnitIds?: string[],
+): GenerationInputs {
+  const matchedIds = approvedMatchUnitIds ?? unitIds;
   return {
     units: unitIds.map((id) => makeUnit(id)),
     role: makeRole(),
     requirements: [makeReq("req-1")],
-    approvedMatches: [],
+    approvedMatches: matchedIds.map((id) => makeMatch(id)),
   };
 }
 
@@ -214,7 +243,7 @@ describe("runGenerationPipeline", () => {
     expect(result.latency_ms).toBeGreaterThanOrEqual(0);
   });
 
-  it("EMPTY-UNITS GUARD: throws GenerationNoApprovedUnitsError WITHOUT calling the LLM", async () => {
+  it("EMPTY-UNITS GUARD: 0 approved Units → throws GenerationNoApprovedUnitsError WITHOUT calling the LLM", async () => {
     const record = vi.fn<typeof RecordUsage>(async () => 0);
     const { client, create } = mockClient([]);
 
@@ -228,6 +257,77 @@ describe("runGenerationPipeline", () => {
 
     expect(create).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it("APPROVED-MATCHES GATE (cursor #123 r1): approved Units WITHOUT approved matches → throws GenerationNoApprovedUnitsError", async () => {
+    // The spec gates generation on Units AND their approved
+    // matches for THIS Role. A Unit the user approved but
+    // never connected to a Role Requirement (no
+    // UnitMatch.approved_for_use === true) is generic content
+    // — using it as ground for THIS Role's resume invites
+    // generic prose the user hasn't reviewed in context.
+    //
+    // The error message distinguishes this case from the
+    // 0-Units case so the editor surface (#24) can prompt
+    // "approve a match in the Matches tab" specifically.
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([]);
+
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client,
+        record,
+        // 1 approved Unit, 0 approved matches.
+        loadInputs: async () => makeInputs(["u1"], []),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("Approved Units present");
+      expect(thrown.message).toContain("no approved UnitMatches");
+    }
+    expect(create).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("APPROVED-MATCHES GATE: only Units WITH approved matches reach the prompt + cross-validation", async () => {
+    // 3 Units approved, but only u1 + u2 have approved
+    // matches. u3 is approved-but-unmatched. The pipeline
+    // filters u3 out of the prompt; cross-validation rejects
+    // any LLM emission citing u3.
+    const groundsOnUnmatched = {
+      summary: { text: "Summary", source_unit_ids: ["u3"] }, // u3 is approved but unmatched
+      bullets: [],
+      skills: [],
+    };
+    const validResponse = {
+      summary: { text: "Summary", source_unit_ids: ["u1"] }, // u1 is matched
+      bullets: [],
+      skills: [],
+    };
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([
+      mockMessage(groundsOnUnmatched),
+      mockMessage(validResponse),
+    ]);
+
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record,
+      loadInputs: async () =>
+        makeInputs(["u1", "u2", "u3"], ["u1", "u2"]),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+
+    // First attempt rejected (u3 isn't an eligible Unit);
+    // second attempt accepted.
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.content.summary.source_unit_ids).toEqual(["u1"]);
   });
 
   it("CROSS-VALIDATION (load-bearing zero-fab pin): fabricated source_unit_id → retry → succeed on second attempt", async () => {
