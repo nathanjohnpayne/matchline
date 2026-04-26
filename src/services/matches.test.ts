@@ -27,6 +27,7 @@ vi.mock("./auth.ts", () => ({
 }));
 
 const updateDoc = vi.fn();
+const setDoc = vi.fn();
 
 vi.mock("firebase/firestore", () => ({
   updateDoc: (...args: unknown[]) => updateDoc(...args),
@@ -44,9 +45,7 @@ vi.mock("firebase/firestore", () => ({
   },
   orderBy: () => undefined,
   query: () => undefined,
-  setDoc: () => {
-    throw new Error("setDoc not mocked in matches.test.ts");
-  },
+  setDoc: (...args: unknown[]) => setDoc(...args),
   where: () => undefined,
 }));
 
@@ -58,13 +57,35 @@ vi.mock("./firestore.ts", () => ({
 beforeEach(() => {
   updateDoc.mockReset();
   updateDoc.mockResolvedValue(undefined);
+  setDoc.mockReset();
+  setDoc.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-const { setMatchApprovalState, approvalStateOf } = await import("./matches.ts");
+const { setMatchApprovalState, approvalStateOf, upsertMatch } = await import("./matches.ts");
+
+function makeMatchInput(
+  overrides: Partial<UnitMatch> = {},
+): Omit<UnitMatch, "owner_uid"> {
+  return {
+    id: "match-1",
+    role_id: "role-1",
+    experience_unit_id: "u1",
+    job_requirement_unit_id: "r1",
+    semantic_score: 0.5,
+    rule_score: 0.5,
+    final_score: 0.5,
+    rationale: "x",
+    surface_evidence: "y",
+    approved_for_use: false,
+    user_rejected: false,
+    created_at: "2026-04-26T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 describe("setMatchApprovalState — single-writer, atomic flag pair (cursor #133 r1)", () => {
   it("APPROVED: writes { approved_for_use: true, user_rejected: false }", async () => {
@@ -151,5 +172,45 @@ describe("approvalStateOf — derive enum from persisted flag pair", () => {
     // to downstream readers, so the conservative read is
     // correct.
     expect(approvalStateOf(flags(true, true))).toBe("rejected");
+  });
+});
+
+describe("upsertMatch — contradictory-shape guard (cursor #133 r4)", () => {
+  it("REJECTS the (true, true) shape with a clear error", async () => {
+    // The unified setter and the carry-forward
+    // canonicalization handle V1 write paths, but
+    // upsertMatch is a generic write surface (used by
+    // tests, the eval harness #25, and future migration
+    // scripts). Defense in depth at the service layer.
+    let thrown: unknown;
+    try {
+      await upsertMatch(
+        makeMatchInput({
+          approved_for_use: true,
+          user_rejected: true,
+        }),
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("contradictory");
+    // Critical: setDoc was NOT called — the guard fires
+    // BEFORE the write.
+    expect(setDoc).not.toHaveBeenCalled();
+  });
+
+  it("ACCEPTS each of the 3 valid flag pairs", async () => {
+    for (const [a, r] of [
+      [false, false],
+      [true, false],
+      [false, true],
+    ] as const) {
+      setDoc.mockClear();
+      await upsertMatch(
+        makeMatchInput({ approved_for_use: a, user_rejected: r }),
+      );
+      expect(setDoc).toHaveBeenCalledTimes(1);
+    }
   });
 });

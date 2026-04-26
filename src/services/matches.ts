@@ -94,10 +94,37 @@ export function subscribeMatchesByRole(
   );
 }
 
-/** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
+/**
+ * Upsert a UnitMatch directly. Most callers should NOT use
+ * this — the matching pipeline owns match creation and the
+ * UI uses `setMatchApprovalState` for the user-action flag
+ * pair. This is the escape hatch for tests + the eval
+ * harness (#25) + future migration scripts.
+ *
+ * Stamps `owner_uid` from the signed-in user (see
+ * `upsertExperienceUnit` for the rationale).
+ *
+ * **Rejects the contradictory `(approved_for_use: true,
+ * user_rejected: true)` shape.** The unified setter and
+ * the carry-forward canonicalization handle the V1 write
+ * paths, but `upsertMatch` is a generic write surface that
+ * could otherwise produce the bad pair. cursor
+ * CHANGES_REQUESTED round 4 on PR #133. The Firestore rule
+ * (`isValidUnitMatchWrite`) is the security boundary; this
+ * service-layer guard is defense in depth + a clearer
+ * error message at the call site.
+ */
 export async function upsertMatch(
   match: Omit<UnitMatch, "owner_uid">,
 ): Promise<void> {
+  if (match.approved_for_use && match.user_rejected) {
+    throw new Error(
+      "upsertMatch: refusing to write the contradictory " +
+        "{ approved_for_use: true, user_rejected: true } shape. " +
+        "Use `setMatchApprovalState` for user-action toggles; " +
+        "rejection wins for the canonical interpretation.",
+    );
+  }
   await setDoc(
     ref(match.id),
     { ...match, owner_uid: getOwnerUidOrThrow() },

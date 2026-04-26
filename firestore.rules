@@ -33,11 +33,44 @@ service cloud.firestore {
       return request.auth != null
         && request.resource.data.owner_uid == request.auth.uid;
     }
+    // Reject any unitMatches write that produces the
+    // contradictory `(approved_for_use: true, user_rejected:
+    // true)` flag pair. The unified service-layer setter
+    // (`setMatchApprovalState`, cursor #133 r1) and the
+    // matching pipeline's carry-forward canonicalization
+    // (cursor #133 r3) make the bad shape unrepresentable
+    // through the V1 write paths, but `upsertMatch` and
+    // direct admin-SDK writes can still produce it. Rules
+    // are the SECURITY boundary — generation gates on
+    // `approved_for_use === true` and would consume a
+    // contradictory match without this guard, silently
+    // violating the user's rejection intent. cursor
+    // CHANGES_REQUESTED round 4 on PR #133.
+    //
+    // The guard runs against `request.resource.data` (the
+    // FINAL doc state after a partial update), so both
+    // `create` and `update` paths catch the violation
+    // regardless of whether the write was full or partial.
+    function isValidUnitMatchWrite(collection) {
+      // `.get(field, default)` rather than `.field` direct
+      // access — rules-engine direct access throws on missing
+      // keys, which would reject every write that doesn't
+      // include both flag names (e.g. the existing generic
+      // `owner can create` test which writes only owner_uid +
+      // data). Defaulting to `false` for absent fields means
+      // the contradictory pair is the ONLY shape rejected.
+      return collection != 'unitMatches'
+        || !(request.resource.data.get('approved_for_use', false) == true
+             && request.resource.data.get('user_rejected', false) == true);
+    }
 
     match /{collection}/{docId} {
       allow read: if isOwner();
-      allow create: if isCreatingAsOwner();
-      allow update: if isOwner() && isCreatingAsOwner();
+      allow create: if isCreatingAsOwner()
+        && isValidUnitMatchWrite(collection);
+      allow update: if isOwner()
+        && isCreatingAsOwner()
+        && isValidUnitMatchWrite(collection);
       allow delete: if isOwner();
     }
   }
