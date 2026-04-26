@@ -162,6 +162,23 @@ export interface UnitMatch {
   rule_score: number;
   final_score: number;
 
+  /**
+   * The 7 weighted sub-components that produce `rule_score`.
+   * Persisted alongside the score so the Matches tab's
+   * sub-score breakdown tooltip (#21 / sub-issue #131) can
+   * render without re-computing. Each value is in [0, 1];
+   * `rule_score = Σ(component × weight)` with weights from
+   * `WEIGHTS` in `functions/src/matching/score.ts`.
+   *
+   * Optional because pre-#131 matches in storage won't have
+   * it; the matching pipeline's carry-forward (cursor #133
+   * r2) doesn't reach into this field, but every NEW match
+   * persisted post-#131 includes it. Reader-side: fall back
+   * to `undefined` and skip the breakdown for legacy rows
+   * (one rerun heals the corpus).
+   */
+  components?: ScoreComponents;
+
   rationale: string;
   surface_evidence: string;
 
@@ -169,4 +186,21 @@ export interface UnitMatch {
   user_rejected: boolean;
 
   created_at: ISOTimestamp;
+}
+
+/**
+ * The 7 weighted sub-components that contribute to a
+ * UnitMatch's `rule_score`. Mirrors `ScoreComponents` in
+ * `functions/src/matching/score.ts` (the canonical source);
+ * declared here so the client + server share a contract for
+ * the field. Each value in [0, 1].
+ */
+export interface ScoreComponents {
+  readonly semantic_similarity: number;
+  readonly skill_overlap: number;
+  readonly domain_overlap: number;
+  readonly tool_overlap: number;
+  readonly seniority_alignment: number;
+  readonly scope_alignment: number;
+  readonly recency: number;
 }
