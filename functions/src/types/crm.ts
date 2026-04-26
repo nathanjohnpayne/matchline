@@ -11,6 +11,27 @@
 
 import type { ISOTimestamp, UUID } from "./capability.js";
 
+export type RemotePolicy = "onsite" | "hybrid" | "remote";
+
+/**
+ * Server-side mirror of `Role` from `src/types/crm.ts`. The
+ * generation pipeline (#120) loads this for the prompt; the
+ * matching engine indirectly references via JobRequirementUnit's
+ * `role_id`.
+ */
+export interface Role {
+  id: UUID;
+  owner_uid: UUID;
+  company_id: UUID;
+  title: string;
+  jd_raw: string;
+  jd_url?: string;
+  location?: string;
+  remote_policy?: RemotePolicy;
+  comp_range?: string;
+  discovered_at: ISOTimestamp;
+}
+
 export type AssetKind = "resume" | "cover_letter" | "outreach";
 export type AssetFormat = "pdf" | "docx" | "txt" | "json";
 
