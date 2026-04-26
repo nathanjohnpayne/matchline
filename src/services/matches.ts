@@ -4,6 +4,7 @@ import {
   orderBy,
   query,
   setDoc,
+  updateDoc,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -102,4 +103,37 @@ export async function upsertMatch(
     { ...match, owner_uid: getOwnerUidOrThrow() },
     { merge: true },
   );
+}
+
+/**
+ * Toggle a UnitMatch's `approved_for_use` flag. The
+ * Matches tab (#21 / sub-issue #129) wires this to the
+ * Approve button; the generation pipeline (#120 +
+ * #121) reads `approved_for_use === true` as the gate
+ * for which Units flow into the LLM prompt.
+ *
+ * `updateDoc` is preferred over `setDoc(..., { merge: true
+ * })` here because we touch one field — Firestore rules
+ * accept the partial update, and a future field added to
+ * `UnitMatch` doesn't have to be defaulted in this call
+ * site.
+ *
+ * `user_rejected` is its own toggle (sub-issue #130) — the
+ * UI layer enforces mutual exclusion (clicking Approve
+ * clears Reject and vice versa); the service layer treats
+ * the two flags as independent writes for testability.
+ *
+ * Owner check happens at the rules layer, not here. The
+ * client-side guard would be a confused-deputy attack
+ * surface (an attacker who can write the doc has already
+ * bypassed it). `getOwnerUidOrThrow` is in the audit log
+ * but not the gate.
+ */
+export async function setMatchApproval(
+  matchId: string,
+  approval: { approved_for_use: boolean },
+): Promise<void> {
+  await updateDoc(ref(matchId), {
+    approved_for_use: approval.approved_for_use,
+  });
 }

@@ -1,10 +1,12 @@
 import {
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   setDoc,
   where,
   type QueryConstraint,
+  type Unsubscribe,
 } from "firebase/firestore";
 
 import type { JobRequirementUnit } from "../types/capability.ts";
@@ -51,6 +53,35 @@ export async function listRequirementsForRole(
     query(reqCol(), ...ownerScope(), where("role_id", "==", roleId)),
   );
   return snap.docs.map((d) => d.data());
+}
+
+/**
+ * Subscribe to JobRequirementUnit changes for a Role.
+ * Powers the Matches tab's left-side rows (#21 / sub-issue
+ * #129). Returns the firestore `Unsubscribe` cleanup
+ * function — caller (a React effect) must invoke it on
+ * unmount.
+ *
+ * Same owner_uid + role_id query shape as
+ * `listRequirementsForRole`; the subscription path lets
+ * the editor inline-edit a Requirement and have the
+ * Matches tab re-render against the new normalized text.
+ */
+export function subscribeRequirementsForRole(
+  roleId: string,
+  callback: (requirements: JobRequirementUnit[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const q = query(
+    reqCol(),
+    ...ownerScope(),
+    where("role_id", "==", roleId),
+  );
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => d.data())),
+    onError,
+  );
 }
 
 /** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
