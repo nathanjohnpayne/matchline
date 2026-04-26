@@ -50,6 +50,17 @@ export interface JdParsingDeps {
 const MAX_ATTEMPTS = 3;
 const TOOL_NAME = "record_job_requirements";
 
+/**
+ * Output-token budget per attempt. Mirrors `MAX_OUTPUT_TOKENS`
+ * in `extraction/resume.ts`. The previous `4096` ceiling silently
+ * truncated long JD parses (Google's SPM listing carries ~25
+ * Requirements once each is fully labeled with category, priority,
+ * extracted_from, and skills/tools/domains). `16_384` (4× prior)
+ * gives generous headroom and stays well inside Sonnet 4.6's
+ * 64,000-token output ceiling.
+ */
+const MAX_OUTPUT_TOKENS = 16_384;
+
 const RETRY_REMINDERS: readonly string[] = [
   "",
   "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields.",
@@ -89,7 +100,7 @@ export async function parseJobRequirements(
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 4096,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -144,6 +155,25 @@ export async function parseJobRequirements(
         model,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // `stop_reason: "max_tokens"` means the model hit the budget
+    // mid-tool-call and the `tool_use.input` is truncated. Surface
+    // as its own failure kind so debug runs don't chase a
+    // misleading "requirements required" schema error. Retries
+    // can't fix the truncation. See extraction/resume.ts for the
+    // full rationale.
+    if (response.stop_reason === "max_tokens") {
+      failures.push({
+        attempt,
+        kind: "max_tokens_exceeded",
+        message:
+          `Anthropic returned stop_reason: "max_tokens" — the model hit the ` +
+          `${MAX_OUTPUT_TOKENS}-token output budget mid-tool-call and the ` +
+          `tool_use.input was truncated. Retries cannot recover; raise ` +
+          `MAX_OUTPUT_TOKENS in parsing/jd.ts.`,
+      });
+      continue;
     }
 
     const toolUse = response.content.find(

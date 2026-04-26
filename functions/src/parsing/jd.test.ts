@@ -194,6 +194,44 @@ describe("parseJobRequirements", () => {
     }
   });
 
+  it("surfaces stop_reason: max_tokens as a max_tokens_exceeded failure (mirror of extraction)", async () => {
+    // Long JDs blow the same wall as long resumes — Google's SPM
+    // listing carries ~25 Requirements once each is fully labeled.
+    // See extraction/resume.test.ts for the parallel test + the
+    // full rationale.
+    const truncated = {
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "claude-haiku-4-5-20251001",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_test",
+          name: "record_job_requirements",
+          input: {},
+        },
+      ],
+      stop_reason: "max_tokens",
+      stop_sequence: null,
+      usage: { input_tokens: 2500, output_tokens: 4096 },
+    } as unknown as Anthropic.Messages.Message;
+    const client = mockClient([truncated, truncated, truncated]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+
+    await expect(
+      parseJobRequirements("JD", CTX, { client, record, generateId: () => "x" }),
+    ).rejects.toMatchObject({
+      name: "JdParsingError",
+      failures: [
+        { attempt: 0, kind: "max_tokens_exceeded" },
+        { attempt: 1, kind: "max_tokens_exceeded" },
+        { attempt: 2, kind: "max_tokens_exceeded" },
+      ],
+    });
+    expect(record).toHaveBeenCalledTimes(3);
+  });
+
   it("retries on missing tool_use response", async () => {
     const noToolUse = {
       id: "msg_test",
