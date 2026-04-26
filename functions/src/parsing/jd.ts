@@ -15,6 +15,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { logger } from "firebase-functions";
 import { randomUUID } from "node:crypto";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
@@ -117,15 +118,33 @@ export async function parseJobRequirements(
       continue;
     }
 
-    await record({
-      stage: "requirement_parsing",
-      provider: "anthropic",
-      model,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      latencyMs: Date.now() - start,
-      ownerUid: ctx.ownerUid,
-    });
+    // Cost telemetry must never block a successful LLM verdict.
+    // recordUsage is fire-and-forget by contract (see llm/cost.ts);
+    // this guard is defense-in-depth so a future regression — or a
+    // test-injected `record` that rejects — can't kill the pipeline.
+    // CodeRabbit on PR #113.
+    try {
+      await record({
+        stage: "requirement_parsing",
+        provider: "anthropic",
+        model,
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        latencyMs: Date.now() - start,
+        ownerUid: ctx.ownerUid,
+      });
+    } catch (err) {
+      // ownerUid intentionally omitted from the log payload —
+      // matches the redaction shape `cost.ts` already uses on its
+      // own internal failure paths so logs don't widen PII exposure
+      // for an observability-only failure path. CodeRabbit Major on
+      // PR #116.
+      logger.warn("parsing.jd: recordUsage failed (non-fatal)", {
+        stage: "requirement_parsing",
+        model,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     const toolUse = response.content.find(
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",

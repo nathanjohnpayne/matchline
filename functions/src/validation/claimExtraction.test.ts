@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { logger } from "firebase-functions";
 import { describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
@@ -162,6 +163,43 @@ describe("extractClaims", () => {
         ownerUid: "user-alice",
       }),
     );
+  });
+
+  it("recordUsage rejection is swallowed; the LLM verdict still ships, warn logged without ownerUid (CodeRabbit on #113, #118)", async () => {
+    // Pin THREE properties of the non-fatal telemetry contract:
+    //   1. The LLM verdict still returns successfully despite
+    //      recordUsage rejecting (Firestore 503, etc).
+    //   2. The catch block calls `logger.warn` exactly once — a
+    //      regression that silently swallows the error without
+    //      logging would lose all observability of the failure.
+    //   3. The warn payload OMITS `ownerUid` — PII redaction for
+    //      an observability-only failure path. CodeRabbit Major
+    //      on #116 / Trivial on #118 (test pinning).
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const { client } = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    try {
+      const claims = await extractClaims(
+        { text: "Led migration.", source_unit_ids: [] },
+        CTX,
+        { client, record, generateId: () => "c1" },
+      );
+
+      expect(claims).toHaveLength(3);
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const warnPayload = warn.mock.calls[0]![1] as Record<string, unknown>;
+      expect(warnPayload).not.toHaveProperty("ownerUid");
+      expect(warnPayload).toMatchObject({
+        stage: "validation",
+        error: "Firestore unavailable",
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries once on schema failure and succeeds on the second attempt", async () => {

@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { logger } from "firebase-functions";
 import { describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
@@ -110,6 +111,44 @@ describe("extractFromResume", () => {
         ownerUid: "user-alice",
       }),
     );
+  });
+
+  it("recordUsage rejection is swallowed; the LLM result still ships, warn logged without ownerUid (CodeRabbit on #113, #118)", async () => {
+    // Pin THREE properties of the non-fatal telemetry contract:
+    // result still ships, warn logged exactly once, ownerUid
+    // omitted from payload. CodeRabbit Major on #116 / Trivial
+    // on #118.
+    const record = vi.fn<typeof RecordUsage>(async () => {
+      throw new Error("Firestore unavailable");
+    });
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    try {
+      const units = await extractFromResume(
+        "Resume text here",
+        { ownerUid: "user-alice" },
+        {
+          client,
+          record,
+          generateId: () => "id-1",
+          now: () => new Date("2026-04-24T00:00:00Z"),
+        },
+      );
+
+      expect(units).toHaveLength(1);
+      expect(units[0]!.id).toBe("id-1");
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const warnPayload = warn.mock.calls[0]![1] as Record<string, unknown>;
+      expect(warnPayload).not.toHaveProperty("ownerUid");
+      expect(warnPayload).toMatchObject({
+        stage: "extraction",
+        error: "Firestore unavailable",
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("retries once on schema failure and succeeds on the second attempt", async () => {
