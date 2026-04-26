@@ -52,7 +52,17 @@ export interface ExpectedMatchesFile {
   readonly jd_fixture_id: string;
   readonly k: number;
   readonly expected_top_matches: readonly string[];
-  readonly expected_requirements?: readonly ExpectedRequirement[];
+  /**
+   * Required since cursor #139 r1. Without it,
+   * `mapRequirementIds([], actualReqs)` returns every
+   * actual as `unmapped_<id>`, the composite-string
+   * comparison falls through, and `topKOverlap` returns
+   * 0 — a false zero that would make every fixture
+   * trip the 80% match-accuracy gate even when the
+   * matching engine worked perfectly. The loader now
+   * fails loudly if the field is missing or empty.
+   */
+  readonly expected_requirements: readonly ExpectedRequirement[];
 }
 
 export interface FixturePaths {
@@ -227,14 +237,37 @@ function validateExpectedMatchesFile(
         `See tests/fixtures/expected-matches/README.md § Choosing k.`,
     );
   }
+  // cursor #139 r1: `expected_requirements` is required.
+  // Without it, the requirement-mapping step returns
+  // all-unmapped and produces false-zero match accuracy
+  // even on a perfectly-working pipeline. Better to fail
+  // loud here than silently produce noise.
+  if (!Array.isArray(r.expected_requirements)) {
+    throw new Error(
+      `${filePath}: missing array "expected_requirements". ` +
+        `The harness needs labeled Requirements with stable IDs to map runtime UUIDs ` +
+        `against; without them mapRequirementIds returns all-unmapped and topKOverlap ` +
+        `produces a false zero. See tests/fixtures/expected-matches/README.md.`,
+    );
+  }
+  if (r.expected_requirements.length === 0) {
+    throw new Error(
+      `${filePath}: "expected_requirements" must be non-empty. An empty list ` +
+        `would map every runtime Requirement to "unmapped_<id>" and produce ` +
+        `false-zero match accuracy.`,
+    );
+  }
+  const expected_requirements = validateExpectedRequirements(
+    r.expected_requirements,
+    filePath,
+  );
+
   return {
     resume_fixture_id: r.resume_fixture_id as string,
     jd_fixture_id: r.jd_fixture_id as string,
     k: r.k,
     expected_top_matches,
-    expected_requirements: Array.isArray(r.expected_requirements)
-      ? validateExpectedRequirements(r.expected_requirements, filePath)
-      : undefined,
+    expected_requirements,
   };
 }
 

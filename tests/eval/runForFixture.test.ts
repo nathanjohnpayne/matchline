@@ -208,7 +208,12 @@ describe("runForFixture", () => {
     expect(result.matchAccuracy).toBeGreaterThanOrEqual(0);
     expect(result.matchAccuracy).toBeLessThanOrEqual(1);
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-    expect(result.costUsd).toBeNull();
+    // cursor #139 r1: cost is now accumulated via the
+    // closure-bound priceFor recorder, NOT dropped on the
+    // floor. Mock LLM calls produce non-zero token counts
+    // (100/50 anthropic + N×10 openai) so cost > 0.
+    expect(result.costUsd).toBeGreaterThan(0);
+    expect(result.costUsd).toBeLessThan(1); // a tiny test run; sanity bound
   });
 
   it("FAILURE CAPTURE: extraction throws → result.ok=false, result.error populated, accuracies=0", async () => {
@@ -236,6 +241,9 @@ describe("runForFixture", () => {
     expect(result.extractionAccuracy).toBe(0);
     expect(result.matchAccuracy).toBe(0);
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    // Failure path returns 0, not null — cost is a number
+    // post-#139 r1 (no LLM call made → 0 accumulated).
+    expect(result.costUsd).toBe(0);
   });
 
   it("FIXTURE-NOT-FOUND: missing fixture id → result.ok=false with descriptive error", async () => {

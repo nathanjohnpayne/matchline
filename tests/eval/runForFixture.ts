@@ -28,6 +28,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 
 import { extractFromResume } from "../../functions/src/extraction/resume.ts";
+import {
+  priceFor,
+  type UsageRecord,
+} from "../../functions/src/llm/cost.ts";
 import { embedMany } from "../../functions/src/llm/embeddings.ts";
 import { runMatchingPipeline } from "../../functions/src/matching/pipeline.ts";
 import { parseJobRequirements } from "../../functions/src/parsing/jd.ts";
@@ -86,15 +90,19 @@ export interface RunForFixtureResult {
   /** End-to-end orchestration latency. */
   readonly latencyMs: number;
   /**
-   * Cost telemetry is collected via `recordUsage` writes
-   * by the underlying pipelines. The eval harness's run.ts
-   * reads aggregated usage separately; per-fixture cost is
-   * not easily attributable without restructuring
-   * `recordUsage` to return a value, so this is null at the
-   * orchestrator level. Future enhancement: thread a
-   * per-fixture accumulator through the pipelines.
+   * Total cost in USD across every LLM call in this
+   * fixture's run (extraction + Unit embeddings + parsing
+   * + Requirement embeddings). Computed via the pure
+   * `priceFor` from `functions/src/llm/cost.ts` against
+   * each call's token counts; the harness binds a
+   * closure-scoped recorder to the pipeline deps so cost
+   * accumulates without Firestore writes.
+   *
+   * cursor #139 r1 caught the prior shape (always null) —
+   * a no-op recordUsage dropped the cost on the floor and
+   * the harness couldn't surface real per-fixture spend.
    */
-  readonly costUsd: number | null;
+  readonly costUsd: number;
   /** Counts for the report. */
   readonly extractedUnitCount: number;
   readonly parsedRequirementCount: number;
@@ -128,7 +136,7 @@ export async function runForFixture(
       extractionAccuracy: 0,
       matchAccuracy: 0,
       latencyMs: Date.now() - start,
-      costUsd: null,
+      costUsd: 0,
       extractedUnitCount: 0,
       parsedRequirementCount: 0,
       matchCount: 0,
@@ -156,13 +164,40 @@ async function runForFixtureInner(
     deps.fixturePaths,
   );
 
+  // Closure-bound cost recorder. Each pipeline's `record`
+  // dep gets a function that:
+  //   1. Computes the per-call cost via the pure `priceFor`
+  //      (same pricing logic the production `recordUsage`
+  //      uses, just without the Firestore write).
+  //   2. Accumulates into `costAccum`.
+  //   3. Returns the per-call cost so the pipeline's own
+  //      cost-return contract is satisfied.
+  // No Firestore writes; the harness has no admin app
+  // initialized. cursor #139 r1's catch — the prior shape
+  // dropped costs on the floor.
+  let costAccum = 0;
+  const recordCost = async (usage: UsageRecord): Promise<number> => {
+    let cost = 0;
+    try {
+      cost = priceFor(usage.model, usage);
+    } catch {
+      // Same fallback as production `recordUsage`: pricing
+      // failures (unknown model) → 0 contribution. Don't
+      // throw — fixture eval shouldn't fail because of an
+      // unfamiliar model name.
+      cost = 0;
+    }
+    costAccum += cost;
+    return cost;
+  };
+
   // 2. Extract Units (Anthropic).
   const extractedUnits = await extractFromResume(
     resumeText,
     { ownerUid: EVAL_OWNER_UID },
     {
       client: deps.anthropicClient,
-      record: async () => 0,
+      record: recordCost,
     },
   );
 
@@ -172,7 +207,7 @@ async function runForFixtureInner(
   const unitTexts = extractedUnits.map((u) => u.normalized_summary);
   const unitEmbeddings = await embedMany(unitTexts, {
     client: deps.openaiClient,
-    record: async () => 0,
+    record: recordCost,
     ownerUid: EVAL_OWNER_UID,
   });
   const embeddedUnits: ExperienceUnit[] = extractedUnits.map((u, idx) => ({
@@ -186,7 +221,7 @@ async function runForFixtureInner(
     { ownerUid: EVAL_OWNER_UID, roleId: EVAL_ROLE_ID },
     {
       client: deps.anthropicClient,
-      record: async () => 0,
+      record: recordCost,
     },
   );
 
@@ -194,7 +229,7 @@ async function runForFixtureInner(
   const reqTexts = parsedRequirements.map((r) => r.normalized_requirement);
   const reqEmbeddings = await embedMany(reqTexts, {
     client: deps.openaiClient,
-    record: async () => 0,
+    record: recordCost,
     ownerUid: EVAL_OWNER_UID,
   });
   const embeddedReqs: JobRequirementUnit[] = parsedRequirements.map((r, idx) => ({
@@ -227,9 +262,13 @@ async function runForFixtureInner(
 
   // 8. Score matches. Build mnemonic-ID maps; convert
   //    actual matches to composite strings; topKOverlap.
-  const expectedRequirements = expectedMatchesFile.expected_requirements ?? [];
+  // expected_requirements is required by the loader
+  // (cursor #139 r1) so we don't have to fall back here.
   const unitMap = mapUnitIds(expectedUnitsFile.expected_units, embeddedUnits);
-  const reqMap = mapRequirementIds(expectedRequirements, embeddedReqs);
+  const reqMap = mapRequirementIds(
+    expectedMatchesFile.expected_requirements,
+    embeddedReqs,
+  );
   const actualComposite = compositeIdsFromMatches(matches, unitMap, reqMap);
   const matchAccuracy = topKOverlap(
     expectedMatchesFile.expected_top_matches,
@@ -243,7 +282,7 @@ async function runForFixtureInner(
     extractionAccuracy,
     matchAccuracy,
     latencyMs: Date.now() - start,
-    costUsd: null,
+    costUsd: costAccum,
     extractedUnitCount: embeddedUnits.length,
     parsedRequirementCount: embeddedReqs.length,
     matchCount: matches.length,
