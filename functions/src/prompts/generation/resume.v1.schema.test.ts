@@ -8,6 +8,12 @@ import {
 /**
  * Schema-level tests for the resume-generation Zod contract.
  * Pure schema validation — no LLM, no fixtures-on-disk.
+ *
+ * V1 is intentionally FLAT — `bullets[]` is a single list, no
+ * experience-section grouping. cursor's CHANGES_REQUESTED rounds
+ * 3 + 4 on PR #122 motivated dropping section metadata until
+ * the data model has a real source of truth (#22's V2/Phase 2
+ * work).
  */
 
 const KNOWN_GOOD = {
@@ -15,17 +21,14 @@ const KNOWN_GOOD = {
     text: "Senior PM with streaming-video infrastructure experience.",
     source_unit_ids: ["u-disney", "u-edx"],
   },
-  experience: [
+  bullets: [
     {
-      title: "Senior PM",
-      company: "Disney+",
-      date_range: "2018–2024",
-      bullets: [
-        {
-          text: "Led 64-bit NCP migration on Disney+ playback (30% memory reduction).",
-          source_unit_ids: ["u-disney"],
-        },
-      ],
+      text: "Led 64-bit NCP migration on Disney+ playback (30% memory reduction).",
+      source_unit_ids: ["u-disney"],
+    },
+    {
+      text: "Owned smart-TV device certification across Samsung and LG.",
+      source_unit_ids: ["u-edx"],
     },
   ],
   skills: [
@@ -45,7 +48,7 @@ describe("ResumeGenerationResponseV1Schema", () => {
         "u-disney",
         "u-edx",
       ]);
-      expect(result.data.experience).toHaveLength(1);
+      expect(result.data.bullets).toHaveLength(2);
       expect(result.data.skills).toHaveLength(1);
       expect(result.data.education).toBeUndefined();
     }
@@ -58,21 +61,13 @@ describe("ResumeGenerationResponseV1Schema", () => {
 
   it("accepts an empty bullets array (gap-acknowledgment per prompt rule 3)", () => {
     // The prompt's hard rule 3 says "leave the Requirement-
-    // linked bullet empty rather than invent". An experience
-    // section with bullets: [] is the legitimate gap-
-    // acknowledgment shape.
-    const withEmptyBullets = {
+    // linked bullet empty rather than invent". An empty
+    // bullets array is the legitimate gap-acknowledgment shape
+    // when the user has no Unit-backed content for the role.
+    const result = ResumeGenerationResponseV1Schema.safeParse({
       ...KNOWN_GOOD,
-      experience: [
-        {
-          title: "Senior PM",
-          company: "Disney+",
-          bullets: [],
-        },
-      ],
-    };
-    const result =
-      ResumeGenerationResponseV1Schema.safeParse(withEmptyBullets);
+      bullets: [],
+    });
     expect(result.success).toBe(true);
   });
 
@@ -82,6 +77,29 @@ describe("ResumeGenerationResponseV1Schema", () => {
       skills: [],
     });
     expect(result.success).toBe(true);
+  });
+
+  it("REJECTS legacy `experience` field (cursor #122 r4: V1 has flat bullets only)", () => {
+    // Strict mode pin: a regression that re-introduces the
+    // experience array (with section metadata) would fail
+    // schema parse. Catches drift in either direction.
+    const withExperience = {
+      ...KNOWN_GOOD,
+      experience: [
+        {
+          title: "Senior PM",
+          company: "Disney+",
+          bullets: [
+            {
+              text: "Led migration.",
+              source_unit_ids: ["u-disney"],
+            },
+          ],
+        },
+      ],
+    };
+    const result = ResumeGenerationResponseV1Schema.safeParse(withExperience);
+    expect(result.success).toBe(false);
   });
 
   // -- LOAD-BEARING PINS: source_unit_ids non-empty ------------------------
@@ -112,16 +130,10 @@ describe("ResumeGenerationResponseV1Schema", () => {
   it("REJECTS a bullet with empty source_unit_ids", () => {
     const result = ResumeGenerationResponseV1Schema.safeParse({
       ...KNOWN_GOOD,
-      experience: [
+      bullets: [
         {
-          title: "Senior PM",
-          company: "Disney+",
-          bullets: [
-            {
-              text: "Led migration.",
-              source_unit_ids: [],
-            },
-          ],
+          text: "Led migration.",
+          source_unit_ids: [],
         },
       ],
     });
@@ -156,61 +168,6 @@ describe("ResumeGenerationResponseV1Schema", () => {
       },
     };
     const result = ResumeGenerationResponseV1Schema.safeParse(withId);
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects whitespace-only section title/company/date_range — cursor round 3 on PR #122", () => {
-    // Mirror the GenerationItem whitespace-rejection. Section
-    // metadata uses the same .min(1) + non-whitespace refine.
-    const wsCases: Array<{ field: "title" | "company" | "date_range"; value: string }> = [
-      { field: "title", value: "   " },
-      { field: "company", value: "\t" },
-      { field: "date_range", value: "\n " },
-    ];
-    for (const { field, value } of wsCases) {
-      const section = {
-        title: "Senior PM",
-        company: "Disney+",
-        bullets: [],
-        [field]: value,
-      };
-      const result = ResumeGenerationResponseV1Schema.safeParse({
-        ...KNOWN_GOOD,
-        experience: [section],
-      });
-      expect(result.success).toBe(false);
-    }
-  });
-
-  it("accepts non-empty title/company even with leading/trailing whitespace (the trim is for the floor check, not the value)", () => {
-    // The .refine() trims for the empty-check; the persisted
-    // value retains the original whitespace. This is symmetric
-    // with how `text` works on items.
-    const result = ResumeGenerationResponseV1Schema.safeParse({
-      ...KNOWN_GOOD,
-      experience: [
-        {
-          title: "Senior PM ",
-          company: " Disney+",
-          bullets: [],
-        },
-      ],
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unknown fields on the section (strict mode)", () => {
-    const result = ResumeGenerationResponseV1Schema.safeParse({
-      ...KNOWN_GOOD,
-      experience: [
-        {
-          title: "Senior PM",
-          company: "Disney+",
-          bullets: [],
-          surprise_field: "should fail",
-        },
-      ],
-    });
     expect(result.success).toBe(false);
   });
 
@@ -285,7 +242,7 @@ describe("ResumeGenerationResponseV1Schema", () => {
 
   it("rejects when summary is missing", () => {
     const result = ResumeGenerationResponseV1Schema.safeParse({
-      experience: [],
+      bullets: [],
       skills: [],
     });
     expect(result.success).toBe(false);
@@ -296,11 +253,13 @@ describe("ResumeGenerationResponseV1Schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("rejects an experience section with missing title or company", () => {
+  it("accepts education when provided (each entry is a GeneratedItem)", () => {
     const result = ResumeGenerationResponseV1Schema.safeParse({
       ...KNOWN_GOOD,
-      experience: [{ company: "Disney+", bullets: [] }],
+      education: [
+        { text: "BS, Computer Science, MIT", source_unit_ids: ["u-edu"] },
+      ],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });

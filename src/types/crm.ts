@@ -69,46 +69,24 @@ export type AssetKind = "resume" | "cover_letter" | "outreach";
 export type AssetFormat = "pdf" | "docx" | "txt" | "json";
 
 /**
- * Generated asset content. The structured output of #22's
- * resume-generation pipeline. Defined here (in shared types)
- * because the validation orchestrator (#109) reads this shape
- * BEFORE generation lands — the orchestrator + the generator
- * are co-designed against this contract.
- *
- * Each bullet carries `id` + `source_unit_ids[]`. The id lets
- * the validation layer key flag records on it (claims belong
- * to bullets); the source_unit_ids drive per-bullet
- * traceability — the validator only checks claims against
- * Units the generator says it grounded on.
- */
-export interface GeneratedBullet {
-  id: UUID;
-  text: string;
-  source_unit_ids: UUID[];
-}
-
-export interface GeneratedExperienceSection {
-  title: string;
-  company: string;
-  date_range?: string;
-  bullets: GeneratedBullet[];
-}
-
-/**
  * A fact-bearing item the validator can check — same shape
- * across `summary`, each `skills` entry, and each `education`
- * entry: a stable id + the prose the user sees + the
- * `source_unit_ids` the generator grounded it on.
+ * across `summary`, each `skills` entry, each `education`
+ * entry, and each `bullets` entry: a stable id + the prose
+ * the user sees + the `source_unit_ids` the generator
+ * grounded it on.
  *
- * The validation orchestrator (#109) iterates summary + bullets
- * + skills + education uniformly. Cursor caught a prior version
- * where `skills: string[]` and `education?: string[]` were
- * plain string arrays and bypassed validation entirely — a
- * fabricated skill or education entry could ship with
- * `validation_status: "passed"` as long as summary + bullets
- * cleared. Codex P1 round 1 caught the same gap for `summary`.
+ * The validation orchestrator (#109) iterates summary +
+ * bullets + skills + education uniformly. Cursor caught
+ * prior versions that bypassed validation: `summary` as a
+ * plain string (Codex P1 round 1 on #117), `skills` /
+ * `education` as plain string arrays (cursor round 2 on
+ * #117), and experience-section `title` / `company` as
+ * ungrounded metadata that the data model couldn't validate
+ * (cursor rounds 3 + 4 on #122). The current shape is
+ * "everything fact-bearing is a GeneratedItem" — no
+ * structural escape hatches.
  *
- * Three named aliases below make the use-site clearer; the
+ * Four named aliases below make the use-site clearer; the
  * underlying shape is the same.
  */
 export interface GeneratedItem {
@@ -117,12 +95,28 @@ export interface GeneratedItem {
   source_unit_ids: UUID[];
 }
 export type GeneratedSummary = GeneratedItem;
+export type GeneratedBullet = GeneratedItem;
 export type GeneratedSkill = GeneratedItem;
 export type GeneratedEducation = GeneratedItem;
 
+/**
+ * Generated resume content. V1 is intentionally flat —
+ * `bullets[]` is a single list, NOT grouped by experience
+ * section. Section grouping (employer + title + date_range
+ * headers) lands in V2/Phase 2 once `ExperienceUnit` gains
+ * structured `employer`/`title` fields the validator can
+ * cross-check. cursor's CHANGES_REQUESTED rounds 3 + 4 on
+ * #122 surfaced the prior over-promise: schema requiring
+ * ungrounded section metadata that the data model couldn't
+ * validate.
+ *
+ * The Application Editor (#24) renders the bullets as a
+ * single chronological list for V1; Phase 2 introduces
+ * section grouping when there's an honest grounding source.
+ */
 export interface GeneratedAssetContent {
   summary: GeneratedSummary;
-  experience: GeneratedExperienceSection[];
+  bullets: GeneratedBullet[];
   skills: GeneratedSkill[];
   education?: GeneratedEducation[];
 }

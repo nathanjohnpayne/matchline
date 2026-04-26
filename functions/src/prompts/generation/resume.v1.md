@@ -69,21 +69,14 @@ Example tool call:
     "text": "Product manager shipping streaming-video infrastructure across connected-TV platforms. Led 64-bit NCP migration on Disney+ playback (30% memory reduction at 5M DAU) and owned smart-TV device certification across Samsung and LG.",
     "source_unit_ids": ["u-disney", "u-edx"]
   },
-  "experience": [
+  "bullets": [
     {
-      "title": "Senior PM",
-      "company": "Disney+",
-      "date_range": "2018–2024",
-      "bullets": [
-        {
-          "text": "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox, reducing memory footprint 30% and shipping to 5M DAU.",
-          "source_unit_ids": ["u-disney"]
-        },
-        {
-          "text": "Owned smart-TV device certification pipeline across Samsung and LG.",
-          "source_unit_ids": ["u-edx"]
-        }
-      ]
+      "text": "Led 64-bit NCP migration on Disney+ playback stack across PS4/PS5/Xbox, reducing memory footprint 30% and shipping to 5M DAU.",
+      "source_unit_ids": ["u-disney"]
+    },
+    {
+      "text": "Owned smart-TV device certification pipeline across Samsung and LG.",
+      "source_unit_ids": ["u-edx"]
     }
   ],
   "skills": [
@@ -96,7 +89,7 @@ Example tool call:
 ```
 
 Notes for the model on the example:
-- The summary contains NO claims that aren't in a Unit. "7+ years" was removed from a prior version — that figure was a Role Requirement, not a Unit fact, and including it would have violated rule 1.
-- Section `title`, `company`, and `date_range` are inferred by the model from Unit `raw_text` and `date_range` content (the example Disney+ employer is named in the Unit's raw_text). For V1, the validator does NOT check these fields — they're LLM-emitted free-form metadata the user reviews + approves in the Application Editor. A future ticket will harden this when ExperienceUnit gains structured `employer`/`title` fields. Until then, do NOT invent employer / title / date values that aren't supported by Unit content; the user will flag them on review.
+- The output is FLAT — `bullets[]` is a single list, NOT grouped by employer or section header. V1 generation does not emit `experience[]` with `title` / `company` / `date_range` headers. cursor's review on PR #122 caught the prior over-promise: requiring section metadata the data model couldn't ground. Phase 2 reintroduces section grouping when `ExperienceUnit` gains structured `employer` / `title` fields. Until then, the Application Editor renders bullets as a single chronological list.
+- The summary contains NO claims that aren't in a Unit. A prior version of this example included "7+ years" — that figure was a Role Requirement, not a Unit fact, and would have violated rule 1.
 
 The real input follows.

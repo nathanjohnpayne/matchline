@@ -64,71 +64,37 @@ export const GenerationItemV1Schema = z
   .strict();
 
 /**
- * An experience section: title + company + date_range +
- * bullets.
+ * V1 generation output is intentionally FLAT. No experience-
+ * section grouping (no `title` / `company` / `date_range`
+ * headers) because `ExperienceUnit` doesn't have structured
+ * `employer` / `title` fields the validator could cross-check.
  *
- * **V1 SCOPE NOTE — section metadata is NOT validated against
- * Unit content.** A prior version of this docstring promised
- * pipeline-level cross-validation against `Unit.employer` /
- * `Unit.title` / `Unit.date_range`, but the actual
- * `ExperienceUnit` contract (`functions/src/types/capability.ts`)
- * only has `date_range` — `employer` and `title` don't exist on
- * Units in V1. cursor CHANGES_REQUESTED round 3 on PR #122
- * caught the unfulfillable promise.
+ * cursor's CHANGES_REQUESTED rounds 3 + 4 on PR #122 surfaced
+ * the prior over-promise: schema requiring ungrounded section
+ * metadata that the data model couldn't validate. The honest
+ * V1 shape is "every fact-bearing item is a GeneratedItem" —
+ * each bullet, summary sentence, skill, and education entry
+ * carries `source_unit_ids[]` and runs through the validator's
+ * per-claim pipeline (#23). No structural escape hatch.
  *
- * The honest contract for V1:
- *   - `bullets` items carry `source_unit_ids[]` and ARE
- *     validated through the per-claim pipeline (#23).
- *   - `title`, `company`, `date_range` are LLM-emitted
- *     free-form strings the validator does NOT check. The user
- *     reviews + approves these in the Application Editor (#24).
+ * Phase 2 reintroduces section grouping when ExperienceUnit
+ * gains structured `employer` + `title` fields. Tracked
+ * separately; not in this PR's scope.
  *
- * V2/Phase 2 addresses the gap: add `employer` + `title` fields
- * to `ExperienceUnit` (with extraction prompt updates + schema
- * tests), then promote section metadata to grounded items the
- * validator iterates. Tracked separately; not in this PR's
- * scope.
- *
- * Bullets array can be empty for an experience section the
- * generator chose to acknowledge as a gap (per the prompt's
- * hard rule 3: "acknowledge gaps; never invent").
- *
- * The whitespace-rejection refinement on title/company/
- * date_range mirrors `GenerationItemV1Schema`'s contract — same
- * .min(1) + non-whitespace combo. CR Trivial round 2 on PR #122
- * (extended in round 3 to cover section metadata too).
+ * The Application Editor (#24) renders the bullets as a single
+ * chronological list for V1; section grouping is a Phase 2
+ * concern.
  */
-const nonWhitespaceString = (max: number) =>
-  z
-    .string()
-    .min(1)
-    .max(max)
-    .refine((v) => v.trim().length > 0, {
-      message: "must contain at least one non-whitespace character",
-    });
-
-export const GenerationExperienceSectionV1Schema = z
-  .object({
-    title: nonWhitespaceString(200),
-    company: nonWhitespaceString(200),
-    date_range: nonWhitespaceString(100).optional(),
-    bullets: z.array(GenerationItemV1Schema),
-  })
-  .strict();
-
 export const ResumeGenerationResponseV1Schema = z
   .object({
     summary: GenerationItemV1Schema,
-    experience: z.array(GenerationExperienceSectionV1Schema),
+    bullets: z.array(GenerationItemV1Schema),
     skills: z.array(GenerationItemV1Schema),
     education: z.array(GenerationItemV1Schema).optional(),
   })
   .strict();
 
 export type GenerationItemV1 = z.infer<typeof GenerationItemV1Schema>;
-export type GenerationExperienceSectionV1 = z.infer<
-  typeof GenerationExperienceSectionV1Schema
->;
 export type ResumeGenerationResponseV1 = z.infer<
   typeof ResumeGenerationResponseV1Schema
 >;

@@ -126,8 +126,8 @@ async function seedApplication(
       approved_unit_ids: asset.generated_content
         ? Array.from(
             new Set(
-              asset.generated_content.experience.flatMap((s) =>
-                s.bullets.flatMap((b) => b.source_unit_ids),
+              asset.generated_content.bullets.flatMap(
+                (b) => b.source_unit_ids,
               ),
             ),
           )
@@ -168,19 +168,13 @@ describe("validateAsset — Firestore integration", () => {
         text: "",
         source_unit_ids: [],
       },
-      experience: [
-        {
-          title: "PM",
-          company: "Disney",
-          bullets: [
+      bullets: [
             {
               id: "b1",
               text: "Managed a team of 40 at Netflix.",
               source_unit_ids: ["u1"],
             },
           ],
-        },
-      ],
       skills: [],
     });
     await seedApplication("app-1", ALICE, asset);
@@ -230,19 +224,13 @@ describe("validateAsset — Firestore integration", () => {
     await seedUnit("u1", ALICE, "Reduced Disney+ playback memory 30%.");
     const asset = makeAsset("asset-1", "app-1", ALICE, {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [
-        {
-          title: "PM",
-          company: "Disney",
-          bullets: [
+      bullets: [
             {
               id: "b1",
               text: "Reduced playback memory 30% on Disney+.",
               source_unit_ids: ["u1"],
             },
           ],
-        },
-      ],
       skills: [],
     });
     await seedApplication("app-1", ALICE, asset);
@@ -292,19 +280,13 @@ describe("validateAsset — Firestore integration", () => {
     await seedUnit("u1", ALICE, "Reduced Disney+ playback memory 30%.");
     const initialAsset = makeAsset("asset-1", "app-1", ALICE, {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [
-        {
-          title: "PM",
-          company: "Disney",
-          bullets: [
+      bullets: [
             {
               id: "b1",
               text: "Managed Netflix infra.",
               source_unit_ids: ["u1"],
             },
           ],
-        },
-      ],
       skills: [],
     });
     await seedApplication("app-1", ALICE, initialAsset);
@@ -373,7 +355,7 @@ describe("validateAsset — Firestore integration", () => {
     await seedUnit("u1", ALICE, "Alice's work.");
     const asset = makeAsset("asset-1", "app-1", ALICE, {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [],
+      bullets: [],
       skills: [],
     });
     await seedApplication("app-1", ALICE, asset);
