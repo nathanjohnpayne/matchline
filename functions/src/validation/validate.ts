@@ -122,14 +122,15 @@ export async function validateAsset(
 
   const { content } = await loadAsset(ctx);
 
-  // Validate every fact-bearing piece of the asset, NOT just
-  // the experience bullets. Codex P1 round 1 on PR #117 caught
-  // the original `content.summary` gap; cursor's CHANGES_REQUESTED
-  // review on `3557e99` caught the same gap for `skills` +
-  // `education`. All four section types share the same
-  // `GeneratedItem` shape (id + text + source_unit_ids) so the
-  // orchestrator can iterate them uniformly through the per-
-  // bullet pipeline below.
+  // Validate every fact-bearing piece of the asset. All four
+  // section types share the same `GeneratedItem` shape (id +
+  // text + source_unit_ids) so the orchestrator iterates them
+  // uniformly. cursor caught prior versions that bypassed
+  // validation: summary as a plain string (#117 r1), skills/
+  // education as plain string arrays (#117 r2), and
+  // experience-section metadata as ungrounded fields the data
+  // model couldn't validate (#122 rounds 3+4). V1 is
+  // intentionally flat — no experience-section grouping.
   //
   // The order summary → bullets → skills → education isn't
   // semantically meaningful (each item is independently
@@ -137,7 +138,7 @@ export async function validateAsset(
   // ordering downstream.
   const allBullets: GeneratedBullet[] = [
     content.summary,
-    ...content.experience.flatMap((s) => s.bullets),
+    ...content.bullets,
     ...content.skills,
     ...(content.education ?? []),
   ];

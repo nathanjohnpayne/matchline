@@ -14,23 +14,17 @@ import type { ISOTimestamp, UUID } from "./capability.js";
 export type AssetKind = "resume" | "cover_letter" | "outreach";
 export type AssetFormat = "pdf" | "docx" | "txt" | "json";
 
-export interface GeneratedBullet {
-  id: UUID;
-  text: string;
-  source_unit_ids: UUID[];
-}
-
-export interface GeneratedExperienceSection {
-  title: string;
-  company: string;
-  date_range?: string;
-  bullets: GeneratedBullet[];
-}
-
 /**
  * See `src/types/crm.ts` for the full docstring. Same shape
- * across summary / skills / education — the validation
- * orchestrator (#109) iterates them all uniformly.
+ * across summary / bullets / skills / education — the
+ * validation orchestrator (#109) iterates them all uniformly.
+ *
+ * V1 is intentionally flat (no experience-section grouping).
+ * cursor's CHANGES_REQUESTED rounds 3 + 4 on PR #122 surfaced
+ * the prior over-promise: schema requiring ungrounded section
+ * metadata that the data model couldn't validate. Phase 2
+ * adds `employer`/`title` to ExperienceUnit and re-introduces
+ * section grouping with grounded metadata.
  */
 export interface GeneratedItem {
   id: UUID;
@@ -38,12 +32,13 @@ export interface GeneratedItem {
   source_unit_ids: UUID[];
 }
 export type GeneratedSummary = GeneratedItem;
+export type GeneratedBullet = GeneratedItem;
 export type GeneratedSkill = GeneratedItem;
 export type GeneratedEducation = GeneratedItem;
 
 export interface GeneratedAssetContent {
   summary: GeneratedSummary;
-  experience: GeneratedExperienceSection[];
+  bullets: GeneratedBullet[];
   skills: GeneratedSkill[];
   education?: GeneratedEducation[];
 }

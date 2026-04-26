@@ -80,13 +80,10 @@ function makeContent(
       text: summaryOverride?.text ?? "",
       source_unit_ids: summaryOverride?.source_unit_ids ?? [],
     },
-    experience: [
-      {
-        title: "Senior PM",
-        company: "Disney",
-        bullets,
-      },
-    ],
+    // V1 has flat bullets (no experience-section grouping).
+    // cursor's #122 round 4 motivated dropping section
+    // metadata; V2 reintroduces it with grounded fields.
+    bullets,
     skills: [],
   };
 }
@@ -584,7 +581,7 @@ describe("validateAsset orchestrator", () => {
     // iterates them through the same per-bullet pipeline.
     const content: GeneratedAssetContent = {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [],
+      bullets: [],
       skills: [
         // Real-skill claim that traces.
         {
@@ -632,7 +629,7 @@ describe("validateAsset orchestrator", () => {
     // Mirror of the skills test — same gap, same shape.
     const content: GeneratedAssetContent = {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [],
+      bullets: [],
       skills: [],
       education: [
         // Fabricated-education claim.
@@ -669,7 +666,7 @@ describe("validateAsset orchestrator", () => {
     // produce education-derived flags either.
     const content: GeneratedAssetContent = {
       summary: { id: "summary-1", text: "", source_unit_ids: [] },
-      experience: [{ title: "PM", company: "Disney", bullets: [] }],
+      bullets: [],
       skills: [],
       // education intentionally omitted
     };

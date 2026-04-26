@@ -25,9 +25,9 @@ export const PROMPT_CONFIG = {
     traceability: "v1",
     specificity: "v1",
   },
-  // Future stages (matching, generation, traceability,
-  // specificity) land their first prompts alongside their
-  // respective tickets.
+  generation: {
+    resume: "v1",
+  },
 } as const;
 
 /** Stages with at least one prompt entry. */
