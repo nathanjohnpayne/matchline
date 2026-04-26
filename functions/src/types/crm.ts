@@ -91,5 +91,15 @@ export interface AssetRef {
   validation_flags?: ValidationFlag[];
   validation_status: ValidationStatus;
   validated_at?: ISOTimestamp;
+  /**
+   * Generation telemetry, populated by #121's `generateResume`
+   * callable from `runGenerationPipeline`'s cumulative
+   * counters. Mirror of the same fields on the client-side
+   * type. See `src/types/crm.ts` for full docstrings.
+   */
+  cost_usd?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  latency_ms?: number;
   created_at: ISOTimestamp;
 }

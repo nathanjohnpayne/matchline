@@ -39,3 +39,12 @@ export { runMatchingCallable as runMatching } from "./callables/runMatching.js";
  * core loop. Export blocked while validation_status === "failed".
  */
 export { validateAssetCallable as validateAsset } from "./callables/validateAsset.js";
+
+/**
+ * Phase 1: run the generation pipeline against an Application's
+ * approved Units + their approved matches; persist the
+ * generated asset on the Application with `validation_status:
+ * "pending"`. Step 5 of the core loop. The editor surface (#24)
+ * calls `validateAsset` next to flip the status.
+ */
+export { generateResumeCallable as generateResume } from "./callables/generateResume.js";

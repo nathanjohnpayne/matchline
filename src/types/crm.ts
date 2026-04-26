@@ -180,6 +180,27 @@ export interface AssetRef {
   validation_status: ValidationStatus;
   /** Set on validateAsset's last successful completion. */
   validated_at?: ISOTimestamp;
+  /**
+   * Per-application LLM cost in USD, populated by
+   * `generateResume` (#121). Optional because legacy/manual
+   * assets won't have it. The Application Editor (#24)
+   * surfaces this for the per-app budget signal (spec §
+   * Execution targets, p95 < $1/app); the Phase 3 dashboard
+   * aggregates across `generated_assets[]`.
+   */
+  cost_usd?: number;
+  /** Anthropic input tokens — paired with `cost_usd`. */
+  input_tokens?: number;
+  /** Anthropic output tokens — paired with `cost_usd`. */
+  output_tokens?: number;
+  /**
+   * End-to-end generation latency (operation total, including
+   * any failed-attempt retries + transport backoff). The
+   * pipeline returns this from `runGenerationPipeline`'s
+   * cumulative timer; we persist it for the per-app SLA
+   * signal (PRD: p95 < 20s).
+   */
+  latency_ms?: number;
   created_at: ISOTimestamp;
 }
 
