@@ -149,16 +149,28 @@ async function seedRequirement(
   ownerUid: string,
   roleId: string,
 ): Promise<JobRequirementUnit> {
+  // Canonical JobRequirementUnit shape (matches
+  // `functions/src/types/capability.ts` exactly). Codex P2
+  // round 1 on PR #124 caught a prior version that used
+  // non-canonical fields (`text`, `priority: "must_have"`,
+  // free-form `extracted_from`) — the test passed because the
+  // pipeline's prompt formatter reads `normalized_requirement`
+  // and the LLM was mocked, so the request shape didn't affect
+  // assertions. Pinning the real schema here makes the test
+  // catch a future regression in requirement-loading.
   const req: JobRequirementUnit = {
     id: reqId,
     owner_uid: ownerUid,
     role_id: roleId,
-    text: "Ship a 0→1 product",
-    priority: "must_have",
-    must_have: true,
+    raw_text: "Ship a 0→1 product",
+    normalized_requirement: "Ship a new product end-to-end",
     category: "domain",
-    extracted_from: "Build great things.",
-    created_at: "2026-01-01T00:00:00.000Z",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "high",
+    must_have: true,
+    extracted_from: "qualifications",
   };
   await db().collection("jobRequirementUnits").doc(reqId).set(req);
   return req;
