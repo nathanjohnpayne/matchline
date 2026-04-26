@@ -1,6 +1,7 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getFunctions, type Functions } from "firebase/functions";
 
 /**
  * Firebase client config. Values are injected via Vite env vars (`VITE_*`)
@@ -37,6 +38,7 @@ function readConfig() {
 let app: FirebaseApp | undefined;
 let auth: Auth | undefined;
 let db: Firestore | undefined;
+let functions: Functions | undefined;
 
 export function getApp(): FirebaseApp {
   if (!app) app = initializeApp(readConfig());
@@ -51,4 +53,14 @@ export function getAuthClient(): Auth {
 export function getDb(): Firestore {
   if (!db) db = getFirestore(getApp());
   return db;
+}
+
+/**
+ * Firebase Functions client singleton. Used for HTTPS-callable
+ * invocations from the browser (e.g. the Matches tab's
+ * auto-trigger of `runMatching` per #131).
+ */
+export function getFunctionsClient(): Functions {
+  if (!functions) functions = getFunctions(getApp());
+  return functions;
 }

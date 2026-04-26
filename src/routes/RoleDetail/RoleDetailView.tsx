@@ -58,6 +58,14 @@ export interface RoleDetailViewProps {
     matchId: string,
     state: MatchApprovalState,
   ) => void;
+  /**
+   * True while the auto-trigger's `runMatching` callable is
+   * in flight (#131). The Matches tab renders a "Computing
+   * matches…" hint above the requirements grid; the
+   * subscription's next snapshot delivers the new matches
+   * regardless, so this is purely a UX signal.
+   */
+  readonly computingMatches: boolean;
 }
 
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -76,6 +84,7 @@ export default function RoleDetailView({
   activeTab,
   onTabChange,
   onApprovalStateChange,
+  computingMatches,
 }: RoleDetailViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -180,6 +189,7 @@ export default function RoleDetailView({
             gaps={gaps}
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
+            computingMatches={computingMatches}
           />
         )}
         {activeTab === "applications" && (

@@ -45,6 +45,8 @@ import {
   type MatchApprovalState,
 } from "../../services/matches.ts";
 
+import MatchScoreBadge from "./MatchScoreBadge.tsx";
+
 export interface MatchCardProps {
   readonly match: UnitMatch;
   readonly unit: ExperienceUnit | null;
@@ -59,10 +61,6 @@ export default function MatchCard({
   unit,
   onApprovalStateChange,
 }: MatchCardProps): ReactElement {
-  // 0-100 with 1 decimal — readable score, not a precision
-  // signal. Score breakdown for the curious lives in #131's
-  // tooltip.
-  const score100 = (match.final_score * 100).toFixed(1);
   const state = approvalStateOf(match);
 
   const onClickApprove = () => {
@@ -92,13 +90,11 @@ export default function MatchCard({
             </span>
           )}
         </h4>
-        <span
-          className="shrink-0 rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs font-mono tabular-nums text-zinc-700 dark:text-zinc-300"
-          data-testid="match-score"
-          aria-label={`Match score: ${score100} out of 100`}
-        >
-          {score100}
-        </span>
+        <MatchScoreBadge
+          finalScore={match.final_score}
+          components={match.components}
+          confidence={unit !== null ? unit.confidence_score : null}
+        />
       </header>
       <p className="text-xs text-zinc-600 dark:text-zinc-400">
         <span className="font-medium">Why: </span>

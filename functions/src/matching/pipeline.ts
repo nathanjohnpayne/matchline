@@ -209,6 +209,12 @@ export async function runMatchingPipeline(
         semantic_score: result.semantic_score,
         rule_score: result.rule_score,
         final_score: result.final_score,
+        // Persist the 7 sub-components so the Matches tab's
+        // sub-score breakdown tooltip (#21 / sub-issue #131)
+        // can render without re-computing. Spread keeps the
+        // type contract aligned with `ScoreComponents`'s
+        // canonical shape in `../types/capability.ts`.
+        components: { ...result.components },
         // Rationale + surface_evidence populated by #100's
         // deterministic generator. Cached on the doc so the
         // Matches tab (#21) doesn't re-render compute.

@@ -8,7 +8,9 @@ import {
   where,
   type Unsubscribe,
 } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
+import { getFunctionsClient } from "../firebase.ts";
 import type { UnitMatch } from "../types/capability.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
@@ -215,4 +217,30 @@ export async function setMatchApprovalState(
         ? { approved_for_use: false, user_rejected: true }
         : { approved_for_use: false, user_rejected: false };
   await updateDoc(ref(matchId), update);
+}
+
+/**
+ * Invoke the `runMatching` HTTPS callable (#99). Returns
+ * when the server-side persist transaction has committed —
+ * the Firestore subscription will deliver the new matches
+ * shortly thereafter, so callers typically don't need to
+ * read the response.
+ *
+ * The Matches tab (#21 / sub-issue #131) calls this on
+ * auto-trigger when a Role's matches subscription resolves
+ * to an empty set on first render.
+ *
+ * Server-side error mapping (per `runMatching.ts`):
+ *   - `unauthenticated` if no auth context
+ *   - `invalid-argument` for missing/malformed roleId
+ *   - `permission-denied` for foreign/missing role_id
+ * Client surfaces these via the rejection path; the caller
+ * decides whether to log + retry or surface to the user.
+ */
+export async function invokeRunMatching(roleId: string): Promise<void> {
+  const fn = httpsCallable<
+    { roleId: string },
+    { matches: UnitMatch[] }
+  >(getFunctionsClient(), "runMatching");
+  await fn({ roleId });
 }

@@ -39,8 +39,17 @@ import {
 import type {
   ExperienceUnit,
   JobRequirementUnit,
+  ScoreComponents,
   SeniorityLevel,
 } from "../types/capability.js";
+
+// Re-exported so existing matching-internal callers keep
+// working without an import-path change. The canonical
+// declaration moved to `../types/capability.ts` because
+// ScoreComponents is now persisted on UnitMatch (#131) and
+// is therefore part of the shared data contract, not just
+// a matching-internal computation type.
+export type { ScoreComponents };
 
 // -- Weights ----------------------------------------------------------------
 
@@ -61,16 +70,11 @@ export const WEIGHTS = Object.freeze({
 } as const);
 
 // -- Score component types --------------------------------------------------
-
-export interface ScoreComponents {
-  readonly semantic_similarity: number;
-  readonly skill_overlap: number;
-  readonly domain_overlap: number;
-  readonly tool_overlap: number;
-  readonly seniority_alignment: number;
-  readonly scope_alignment: number;
-  readonly recency: number;
-}
+// `ScoreComponents` lives in `../types/capability.ts` (shared
+// data contract) and is re-exported above. `ScoreResult` stays
+// here because it's specifically the matching pipeline's
+// internal return shape, not part of the persisted data
+// contract.
 
 export interface ScoreResult {
   readonly components: ScoreComponents;

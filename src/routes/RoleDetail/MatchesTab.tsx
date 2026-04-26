@@ -41,6 +41,12 @@ export interface MatchesTabProps {
     matchId: string,
     state: MatchApprovalState,
   ) => void;
+  /**
+   * True while the auto-trigger's `runMatching` callable is
+   * in flight (#131). Renders a "Computing matches…" hint
+   * above the requirements grid.
+   */
+  readonly computingMatches: boolean;
 }
 
 export default function MatchesTab({
@@ -48,6 +54,7 @@ export default function MatchesTab({
   gaps,
   unitsById,
   onApprovalStateChange,
+  computingMatches,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -67,6 +74,16 @@ export default function MatchesTab({
 
   return (
     <div className="space-y-4" data-testid="matches-tab">
+      {computingMatches && (
+        <p
+          className="rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950 px-3 py-2 text-sm text-blue-800 dark:text-blue-300"
+          data-testid="matches-computing"
+          role="status"
+          aria-live="polite"
+        >
+          Computing matches…
+        </p>
+      )}
       <GapsView gaps={gaps} />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (

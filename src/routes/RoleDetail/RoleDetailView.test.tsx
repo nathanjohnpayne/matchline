@@ -120,6 +120,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-loading\"");
@@ -138,6 +139,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-error\"");
@@ -156,6 +158,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-not-found\"");
@@ -174,6 +177,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("Director of Platform");
@@ -205,6 +209,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"matches-tab\"");
@@ -235,6 +240,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("Req r-empty");
@@ -257,6 +263,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("Unit no longer available");
@@ -275,6 +282,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("must-have");
@@ -294,6 +302,7 @@ describe("RoleDetailView", () => {
         activeTab="requirements"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"requirements-tab-placeholder\"");
@@ -312,6 +321,7 @@ describe("RoleDetailView", () => {
         activeTab="applications"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("data-testid=\"applications-tab-placeholder\"");
@@ -329,6 +339,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain('role="tablist"');
@@ -358,6 +369,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain('data-testid="match-approve-button"');
@@ -390,6 +402,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("Approved ✓");
@@ -417,6 +430,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain("Rejected ✗");
@@ -439,10 +453,161 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain('data-testid="gaps-view-empty"');
     expect(html).toContain("Every must-have requirement has a qualifying match");
+  });
+
+  // -- #131: sub-score breakdown badge + auto-trigger UX --
+
+  it("BADGE (#131): match score badge tooltip renders the 7 component breakdown rows when components are persisted", () => {
+    const reqs = [makeReq("r1")];
+    const units = [makeUnit("u1", "Some work")];
+    const matches = [
+      {
+        ...makeMatch("m-with-components", "r1", "u1", 0.7),
+        components: {
+          semantic_similarity: 0.9,
+          skill_overlap: 0.8,
+          domain_overlap: 0.7,
+          tool_overlap: 0.6,
+          seniority_alignment: 0.5,
+          scope_alignment: 0.4,
+          recency: 0.3,
+        },
+      },
+    ];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+      />,
+    );
+    expect(html).toContain('data-testid="match-score-badge"');
+    expect(html).toContain('data-testid="match-score-popover"');
+    // 7 component rows in display order.
+    expect(html).toContain(">Semantic<");
+    expect(html).toContain(">Skill<");
+    expect(html).toContain(">Domain<");
+    expect(html).toContain(">Tool<");
+    expect(html).toContain(">Seniority<");
+    expect(html).toContain(">Scope<");
+    expect(html).toContain(">Recency<");
+    // 7 component rows pinned by data-testid.
+    expect((html.match(/data-testid="match-score-row"/g) ?? []).length).toBe(7);
+    // Confidence multiplier line (Unit's confidence_score = 1
+    // per default fixture).
+    expect(html).toContain('data-testid="match-score-confidence"');
+    expect(html).toContain("×1.00");
+  });
+
+  it("BADGE (#131): legacy match without components renders the 'breakdown unavailable' hint", () => {
+    const reqs = [makeReq("r1")];
+    const units = [makeUnit("u1", "Some work")];
+    // Note: no `components` field — pre-#131 legacy match.
+    const matches = [makeMatch("m-legacy", "r1", "u1", 0.7)];
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={unitsById}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+      />,
+    );
+    expect(html).toContain('data-testid="match-score-breakdown-unavailable"');
+    expect(html).toContain("Re-run matching");
+  });
+
+  it("BADGE (#131): missing source Unit hides the confidence multiplier line", () => {
+    const reqs = [makeReq("r1")];
+    // No matching Unit in unitsById — match references u-deleted.
+    const matches = [
+      {
+        ...makeMatch("m-orphan", "r1", "u-deleted", 0.7),
+        components: {
+          semantic_similarity: 0.5,
+          skill_overlap: 0.5,
+          domain_overlap: 0.5,
+          tool_overlap: 0.5,
+          seniority_alignment: 0.5,
+          scope_alignment: 0.5,
+          recency: 0.5,
+        },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={reqs}
+        matches={matches}
+        unitsById={new Map()}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+      />,
+    );
+    expect(html).toContain('data-testid="match-score-confidence-missing"');
+    expect(html).not.toContain('data-testid="match-score-confidence"');
+  });
+
+  it("AUTO-TRIGGER UX (#131): computingMatches=true renders the Computing matches… hint with role=status + aria-live", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[makeReq("r1")]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={true}
+      />,
+    );
+    expect(html).toContain('data-testid="matches-computing"');
+    expect(html).toContain("Computing matches");
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+  });
+
+  it("AUTO-TRIGGER UX (#131): computingMatches=false does NOT render the hint", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[makeReq("r1")]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+      />,
+    );
+    expect(html).not.toContain('data-testid="matches-computing"');
   });
 
   it("GAPS VIEW: renders unmet must-have requirements with the gap-row layout", () => {
@@ -468,6 +633,7 @@ describe("RoleDetailView", () => {
         activeTab="matches"
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
       />,
     );
     expect(html).toContain('data-testid="gaps-view"');
