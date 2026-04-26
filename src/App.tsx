@@ -7,7 +7,7 @@ import { useCurrentUser } from "./lib/auth.tsx";
 import ApplicationEditor from "./routes/ApplicationEditor.tsx";
 import Onboarding from "./routes/Onboarding.tsx";
 import Pipeline from "./routes/Pipeline.tsx";
-import RoleDetail from "./routes/RoleDetail.tsx";
+import RoleDetail from "./routes/RoleDetail/index.tsx";
 import SignIn from "./routes/SignIn.tsx";
 import UnitReview from "./routes/UnitReview/index.tsx";
 

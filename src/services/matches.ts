@@ -4,6 +4,7 @@ import {
   orderBy,
   query,
   setDoc,
+  updateDoc,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -102,4 +103,54 @@ export async function upsertMatch(
     { ...match, owner_uid: getOwnerUidOrThrow() },
     { merge: true },
   );
+}
+
+/**
+ * Toggle a UnitMatch's `approved_for_use` flag. The
+ * Matches tab (#21 / sub-issue #129) wires this to the
+ * Approve button; the generation pipeline (#120 +
+ * #121) reads `approved_for_use === true` as the gate
+ * for which Units flow into the LLM prompt.
+ *
+ * **Mutual exclusion with `user_rejected` is enforced
+ * here.** Approving a previously-rejected match (or a
+ * match that the matching pipeline at #82 already filtered
+ * via `user_rejected`) MUST clear the rejection flag —
+ * otherwise the match could land in `{ approved_for_use:
+ * true, user_rejected: true }`, which is nonsensical:
+ * generation would consume it but the next matching run
+ * would silently filter the underlying Unit pair.
+ * cursor CHANGES_REQUESTED round 2 on PR #132 caught the
+ * gap — the prior version wrote only `approved_for_use`,
+ * leaving the stale rejection in place.
+ *
+ * Symmetric clearing on the un-approve side: setting
+ * `approved_for_use: false` does NOT touch `user_rejected`
+ * (un-approving is "withdraw approval," not "reject" —
+ * those are different user intents). Use `setMatchRejection`
+ * (sub-issue #130) for the explicit rejection path.
+ *
+ * `updateDoc` is preferred over `setDoc(..., { merge: true
+ * })` because a future field on `UnitMatch` doesn't have to
+ * be defaulted in this call site.
+ *
+ * Owner check happens at the rules layer, not here. The
+ * client-side guard would be a confused-deputy attack
+ * surface (an attacker who can write the doc has already
+ * bypassed it). `getOwnerUidOrThrow` is in the audit log
+ * but not the gate.
+ */
+export async function setMatchApproval(
+  matchId: string,
+  approval: { approved_for_use: boolean },
+): Promise<void> {
+  // When approving (true), also clear any stale rejection
+  // flag. When un-approving (false), only flip
+  // approved_for_use; un-approving is not the same user
+  // intent as rejecting.
+  const update: Pick<UnitMatch, "approved_for_use"> &
+    Partial<Pick<UnitMatch, "user_rejected">> = approval.approved_for_use
+    ? { approved_for_use: true, user_rejected: false }
+    : { approved_for_use: false };
+  await updateDoc(ref(matchId), update);
 }
