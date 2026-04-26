@@ -24,9 +24,10 @@
  * layer's content matching exercises actual prose.
  */
 
-import type Anthropic from "@anthropic-ai/sdk";
-import type OpenAI from "openai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
+import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { runForFixture } from "./runForFixture.ts";
 

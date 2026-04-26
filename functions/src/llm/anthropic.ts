@@ -54,3 +54,12 @@ export function anthropicForCli(): Anthropic {
 }
 
 export { anthropicKey };
+
+/**
+ * Re-export the Anthropic class type for tooling (eval harness,
+ * tests) that lives outside `functions/` and therefore can't
+ * resolve `@anthropic-ai/sdk` from its own node_modules. Importing
+ * from this module routes resolution through `functions/`'s own
+ * dependency tree, where the SDK is installed.
+ */
+export type { default as AnthropicClient } from "@anthropic-ai/sdk";

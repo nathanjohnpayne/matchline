@@ -40,7 +40,6 @@
  * pipeline.test.ts` (#120).
  */
 
-import type Anthropic from "@anthropic-ai/sdk";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -51,6 +50,7 @@ import {
   GenerationApplicationNotFound,
   GenerationNoApprovedUnitsError,
 } from "../functions/src/generation/pipeline.ts";
+import type { AnthropicClient as Anthropic } from "../functions/src/llm/anthropic.ts";
 import { runGenerateResume } from "../functions/src/generation/runGenerateResume.ts";
 import type {
   ExperienceUnit,

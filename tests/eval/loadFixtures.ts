@@ -264,6 +264,10 @@ function validateExpectedMatchesFile(
       `${filePath}: "k" must be a positive integer (got ${JSON.stringify(r.k)}).`,
     );
   }
+  // After the guard above, `r.k` is a positive integer.
+  // Hoist to a typed local so callers (and the return
+  // statement below) don't need to re-cast through `unknown`.
+  const k: number = r.k as number;
   if (!Array.isArray(r.expected_top_matches)) {
     throw new Error(`${filePath}: missing array "expected_top_matches".`);
   }
@@ -286,9 +290,9 @@ function validateExpectedMatchesFile(
   );
   // cursor #138 r1's catch — k must allow the gate to be
   // mathematically achievable.
-  if (r.k < expected_top_matches.length) {
+  if (k < expected_top_matches.length) {
     throw new Error(
-      `${filePath}: k=${r.k} < expected_top_matches.length=${expected_top_matches.length}. ` +
+      `${filePath}: k=${k} < expected_top_matches.length=${expected_top_matches.length}. ` +
         `topKOverlap caps at k/expected — set k >= expected.length so the 0.80 gate is achievable. ` +
         `See tests/fixtures/expected-matches/README.md § Choosing k.`,
     );
@@ -321,7 +325,7 @@ function validateExpectedMatchesFile(
   return {
     resume_fixture_id: r.resume_fixture_id as string,
     jd_fixture_id: r.jd_fixture_id as string,
-    k: r.k,
+    k,
     expected_top_matches,
     expected_requirements,
   };
