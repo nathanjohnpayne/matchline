@@ -3,8 +3,8 @@
   "jd_fixture_id": "google-compute-spm-2026",
   "labeled_by": "nathanjohnpayne",
   "labeled_at": "2026-04-26",
-  "k": 21,
-  "notes": "This is a deliberate stretch: Nathan's experience is streaming video infrastructure / device platform PM, the role is cloud compute infrastructure. The expected matches are HONEST — strong matches on transferable scope (0-to-1 launches, GTM, executive engagement, cross-functional leadership) and clear gaps on the cloud-compute-specific requirements (CPU/Arm architecture, hypervisor, LSDD/SAP HANA, multi-year silicon roadmap). The Gaps view (#130) should surface those. Stable mnemonic IDs match `expected-units/nathan-2026.json`'s `id` fields. Requirement IDs are labeler-assigned mnemonics; the harness wiring (#136) maps runtime IDs to these via content matching.\n\nFormat: `\"<unit_id>:<requirement_id>\"` per `expected-matches/README.md`'s composite-string contract — what `tests/eval/scoring.ts::topKOverlap` consumes.\n\n`k` is set to match `expected_top_matches.length` so the scorer's `hits / expected.length` ratio can mathematically reach the 0.80 gate. cursor #138 r1 caught the prior shape (k=5 with 22 expected matches) which capped achievable accuracy at 22.7% regardless of matching engine quality — making the fixture unscorable against the gate.",
+  "k": 24,
+  "notes": "Deliberate stretch: streaming-video-infra PM applying to cloud-compute-infra role. Expected matches reflect transferable scope (0-to-1, GTM, executive engagement, cross-functional, category-defining); expected gaps reflect cloud-compute-specific requirements (CPU/Arm, hypervisor, LSDD/SAP HANA, multi-year silicon roadmap, B2B sales). See `expected-matches/README.md` for the stable-id contract, `k` sizing rule, and optional-section conventions used here.",
 
   "expected_requirements": [
     {
@@ -123,7 +123,11 @@
     "u_dsot:r_3yr_zero_to_one",
     "u_dsot:r_3yr_cloud",
 
-    "u_partner_data:r_3yr_cloud"
+    "u_partner_data:r_3yr_cloud",
+
+    "u_kepler:r_8yr_pm",
+    "u_disney_plus_launch:r_8yr_pm",
+    "u_bamtech_ott:r_8yr_pm"
   ],
 
   "expected_gaps": [
