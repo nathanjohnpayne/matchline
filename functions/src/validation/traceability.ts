@@ -29,7 +29,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
@@ -111,10 +111,7 @@ export async function checkTraceability(
     );
   }
 
-  const toolSchema = zodToJsonSchema(TraceabilityResponseV1Schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-  });
+  const toolSchema = zodToToolSchema(TraceabilityResponseV1Schema);
 
   const failures: ValidationAttemptFailure[] = [];
 

@@ -24,7 +24,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
@@ -144,10 +144,7 @@ async function runLlmFallback(
     );
   }
 
-  const toolSchema = zodToJsonSchema(SpecificityResponseV1Schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-  });
+  const toolSchema = zodToToolSchema(SpecificityResponseV1Schema);
 
   const failures: ValidationAttemptFailure[] = [];
 
