@@ -87,16 +87,76 @@ export function tokenJaccard(a: Set<string>, b: Set<string>): number {
 }
 
 /**
+ * Overlap coefficient (Szymkiewicz–Simpson):
+ *   |A ∩ B| / min(|A|, |B|)
+ *
+ * Returns [0, 1]; empty vs. empty defined as 0 (mirror of
+ * `tokenJaccard`'s convention — no shared tokens = no
+ * mapping signal).
+ *
+ * **Why we need this for summary scoring (#148).** The
+ * runtime extractor produces verbose summaries (~30 tokens
+ * with detail / metrics / context); labeled `expected_units`
+ * are intentionally concise (~13 tokens — the essential
+ * claim). Token-Jaccard penalizes that asymmetry hard:
+ *
+ *   runtime "Led the Amazon Kepler launch, a ground-up
+ *           rewrite of Fire TV's Android stack..." (30 tok)
+ *   expected "Led Amazon Kepler launch — ground-up rewrite
+ *            replacing Fire TV Android stack with native
+ *            Linux-based OS" (13 tok)
+ *
+ *   intersection: 11 tokens (kepler, launch, ground-up,
+ *                 rewrite, fire, android, stack, native,
+ *                 linux-based, etc.)
+ *   tokenJaccard = 11 / (30+13-11) = 0.344
+ *   overlapCoef  = 11 / min(30, 13) = 0.846
+ *
+ * Live diagnostic on Nathan-2026 × Google-Compute-SPM
+ * (#148) showed the runtime "Kepler" unit scoring **0.174**
+ * total (= 0.6×Jaccard summary + 0.4×skills) against
+ * `u_kepler` — below the 0.30 mapping threshold, so
+ * `mapUnitIds` left u_kepler unmapped despite Kepler being
+ * the most distinctive content match. With overlap
+ * coefficient on the summary axis the same pair scores
+ * 0.6×0.846 + 0.4×skills ≈ 0.55-0.60, comfortably above
+ * threshold.
+ *
+ * **Why not for skills.** Skills are intentionally curated
+ * canonical phrases (e.g. "release engineering", "platform
+ * launch"). Both labeler and extractor emit the same shape
+ * (small list, no verbosity asymmetry), so the size-disparity
+ * problem doesn't apply. Keeping `tokenJaccard` for skills
+ * preserves the existing semantics + tests.
+ */
+export function tokenOverlapCoefficient(
+  a: Set<string>,
+  b: Set<string>,
+): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) {
+    if (b.has(t)) inter += 1;
+  }
+  return inter / Math.min(a.size, b.size);
+}
+
+/**
  * Score how well an actual ExperienceUnit matches an
- * ExpectedUnit. Same shape as `unitSetAccuracy`'s pairing
- * logic in `scoring.ts`: 0.6 × normalized_summary token
- * Jaccard + 0.4 × skills Jaccard.
+ * ExpectedUnit. 0.6 × summary overlap-coefficient + 0.4 ×
+ * skills Jaccard.
+ *
+ * Summary uses overlap coefficient (not Jaccard) for
+ * verbosity-asymmetry resilience — see
+ * `tokenOverlapCoefficient` docstring + #148 diagnostic.
+ * Skills stay full-phrase Jaccard since both labeler and
+ * extractor emit the same curated canonical-phrase shape.
  */
 export function scoreUnitPair(
   expected: ExpectedUnit,
   actual: ExperienceUnit,
 ): number {
-  const summaryScore = tokenJaccard(
+  const summaryScore = tokenOverlapCoefficient(
     tokenize(expected.normalized_summary),
     tokenize(actual.normalized_summary),
   );

@@ -82,18 +82,24 @@ describe("unitSetAccuracy", () => {
 
   // -- #146 paraphrase-resilience regression -----------------------------
 
-  it("#146: paraphrased summaries score in proportion to token overlap, not 0", () => {
+  it("#146 + #148: paraphrased + verbose-actual summaries score in proportion to overlap, not 0", () => {
     // Real shape from the live eval run on Nathan's resume.
-    // Expected fixture (labeler):
+    // Expected fixture (labeler) — concise:
     //   "Led Amazon Kepler launch — ground-up rewrite replacing Fire
     //   TV Android stack with native Linux-based OS"
-    // Actual (LLM output):
+    // Actual (LLM output) — verbose, contains expected + extra detail:
     //   "Led the Amazon Kepler launch, a ground-up rewrite replacing
     //   Fire TV's Android stack with a native Linux OS; ported all
     //   three NCP apps"
-    // Under exact-string equality these score 0 (the prior bug).
-    // Under token-Jaccard the overlap is ~0.55, contributing
-    // 0.55*0.6 = ~0.33 to the score before skills.
+    //
+    // Pre-#146 (exact-string equality) scored 0.
+    // Pre-#148 (token-Jaccard) scored ~0.34: the actual's extra
+    //   tokens ("ported", "all", "three", "ncp", "apps") inflate
+    //   the union and depress Jaccard.
+    // #148 (overlap-coefficient): expected tokens fully covered
+    //   by actual's superset → overlap ~0.85. Skills still don't
+    //   overlap (different canonical phrases), so total score
+    //   ≈ 0.6×0.85 + 0.4×0 = 0.51-0.55.
     const expected = [
       {
         normalizedSummary:
@@ -109,10 +115,12 @@ describe("unitSetAccuracy", () => {
       },
     ];
     const score = unitSetAccuracy(expected, actual);
-    // Skills don't overlap (different phrases — that's a prompt
-    // concern, not a metric one), so the bound is just summary.
-    expect(score).toBeGreaterThan(0.25);
-    expect(score).toBeLessThan(0.55);
+    // Bound the new overlap-coefficient regime: should be
+    // markedly above the 0.34 prior token-Jaccard ceiling but
+    // below 0.6 (= 100% summary + 0 skills, the upper bound
+    // when skills don't overlap).
+    expect(score).toBeGreaterThan(0.45);
+    expect(score).toBeLessThan(0.6);
   });
 
   it("#146 (Codex P2 on #147): identical short-token summaries get full credit when both tokenize empty", () => {
