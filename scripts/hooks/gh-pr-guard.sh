@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # gh-pr-guard.sh — PreToolUse hook for Claude Code
 #
-# Gates three operations:
+# Gates four operations:
 #   1. gh pr create — blocks unless the command text includes
 #      "Authoring-Agent:" and "## Self-Review"
 #   2. gh pr merge --admin — blocks unless BREAK_GLASS_ADMIN=1
 #      (human must explicitly authorize in chat)
-#   3. gh pr merge (non-admin) — blocks when the target PR carries
+#   3. gh pr merge (any flavor) — blocks when the target PR's
+#      `mergeStateStatus` is BLOCKED / DIRTY / UNSTABLE / BEHIND
+#      (or any unrecognized future value) unless
+#      BREAK_GLASS_MERGE_STATE=1. This is the defense-in-depth
+#      layer behind GitHub branch protection — see #170 / #171
+#      for the merge-gate gap this closes (PR #165 merged with
+#      failing CI on every matrix cell because nothing in the
+#      merge path actually blocked).
+#   4. gh pr merge (non-admin) — blocks when the target PR carries
 #      the `needs-external-review` label unless CODEX_CLEARED=1
 #      (agent must have just run scripts/codex-review-check.sh
 #      successfully). This enforces REVIEW_POLICY.md § Phase 4a
@@ -285,6 +293,7 @@ done < "$TMP_TOKENS"
 # else starting with - is assumed boolean and skipped.
 INLINE_CODEX_CLEARED=""
 INLINE_BREAK_GLASS_ADMIN=""
+INLINE_BREAK_GLASS_MERGE_STATE=""
 GLOBAL_REPO=""
 PR_SUBCOMMAND=""
 PR_SUBCOMMAND_INDEX=-1    # index in TOKENS where the gh pr subcommand was found
@@ -390,6 +399,7 @@ for i in "${!TOKENS[@]}"; do
       if [ "$SEGMENT_HAS_COMMAND" -eq 1 ]; then
         INLINE_CODEX_CLEARED=""
         INLINE_BREAK_GLASS_ADMIN=""
+        INLINE_BREAK_GLASS_MERGE_STATE=""
       fi
       SEGMENT_HAS_COMMAND=0
       continue
@@ -411,6 +421,9 @@ for i in "${!TOKENS[@]}"; do
         ;;
       BREAK_GLASS_ADMIN=*)
         INLINE_BREAK_GLASS_ADMIN="${tok#BREAK_GLASS_ADMIN=}"
+        ;;
+      BREAK_GLASS_MERGE_STATE=*)
+        INLINE_BREAK_GLASS_MERGE_STATE="${tok#BREAK_GLASS_MERGE_STATE=}"
         ;;
     esac
   fi
@@ -499,6 +512,7 @@ done
 # must work.
 EFFECTIVE_CODEX_CLEARED="${CODEX_CLEARED:-${INLINE_CODEX_CLEARED:-}}"
 EFFECTIVE_BREAK_GLASS_ADMIN="${BREAK_GLASS_ADMIN:-${INLINE_BREAK_GLASS_ADMIN:-}}"
+EFFECTIVE_BREAK_GLASS_MERGE_STATE="${BREAK_GLASS_MERGE_STATE:-${INLINE_BREAK_GLASS_MERGE_STATE:-}}"
 
 # Not a pr create/merge command? Allow.
 if [ "$PR_SUBCOMMAND" != "create" ] && [ "$PR_SUBCOMMAND" != "merge" ]; then
@@ -637,24 +651,93 @@ if [ -z "$REPO_ARG" ] && [ -n "$GLOBAL_REPO" ]; then
   REPO_ARG="$GLOBAL_REPO"
 fi
 
-# Fetch labels. `gh pr view` with no positional argument resolves
-# the PR from the current branch; with a positional argument it
-# accepts number / URL / branch forms identically to gh pr merge.
-GH_ARGS=(pr view --json labels --jq '[.labels[].name] | join(",")')
+# Fetch labels AND mergeStateStatus in a single API call. `gh pr
+# view` with no positional argument resolves the PR from the
+# current branch; with a positional argument it accepts number /
+# URL / branch forms identically to gh pr merge.
+#
+# Output format: a single line `MERGE_STATE|LABELS` (e.g.
+# `CLEAN|`, `BLOCKED|needs-external-review,bug`). The custom
+# `--jq` filter joins the two fields so the hook only has to
+# parse one string.
+#
+# #171 / #170 retrospective: pre-this-change the hook fetched
+# only labels and let `gh pr merge` run even when GitHub's
+# `mergeStateStatus` was BLOCKED (failing CI / active
+# CHANGES_REQUESTED). PR #165 merged with red CI on every
+# matrix cell because nothing in the merge path actually
+# blocked. The new check is defense-in-depth behind branch
+# protection: even if branch protection is misconfigured or
+# disabled for an emergency hotfix, the hook will still refuse
+# to dispatch the merge.
+GH_JQ='"\(.mergeStateStatus)|\([.labels[].name] | join(","))"'
+GH_ARGS=(pr view --json labels,mergeStateStatus --jq "$GH_JQ")
 if [ -n "$PR_SELECTOR" ]; then
-  GH_ARGS=(pr view "$PR_SELECTOR" --json labels --jq '[.labels[].name] | join(",")')
+  GH_ARGS=(pr view "$PR_SELECTOR" --json labels,mergeStateStatus --jq "$GH_JQ")
 fi
 if [ -n "$REPO_ARG" ]; then
   GH_ARGS+=(--repo "$REPO_ARG")
 fi
 
-if ! LABELS=$(gh "${GH_ARGS[@]}" 2>&1); then
-  echo "BLOCKED: gh-pr-guard could not fetch PR labels to verify merge-gate clearance." >&2
-  echo "  error: $LABELS" >&2
+if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>&1); then
+  echo "BLOCKED: gh-pr-guard could not fetch PR metadata to verify merge-gate clearance." >&2
+  echo "  error: $GH_OUTPUT" >&2
   echo "  command: gh ${GH_ARGS[*]}" >&2
   echo "  Fix the underlying gh/auth issue and retry, or set BREAK_GLASS_ADMIN=1 + use --admin if this is a break-glass merge." >&2
   exit 2
 fi
+
+# Split on the first `|`. The mergeStateStatus enum values are
+# all uppercase ASCII identifiers without `|`, and the labels
+# are comma-joined (commas, not pipes), so the split is
+# unambiguous. Empty MERGE_STATE (e.g., transient API state)
+# falls into the `*` case below and fails closed.
+MERGE_STATE="${GH_OUTPUT%%|*}"
+LABELS="${GH_OUTPUT#*|}"
+
+# mergeStateStatus check (#171 layer 2). API enum:
+#   CLEAN       — checks pass, no merge conflicts, ready to merge
+#   HAS_HOOKS   — branch has post-commit hooks (legacy state)
+#   UNKNOWN     — state not yet determined (often transient; allow
+#                 rather than wedge on slow API responses)
+#   BLOCKED     — required check failing OR active CHANGES_REQUESTED
+#                 review (this is the #165 case)
+#   DIRTY       — merge conflict
+#   UNSTABLE    — non-required check failed
+#   BEHIND      — base has commits the head lacks (with "Require
+#                 branches to be up to date" enabled)
+#
+# Unknown future states (anything not in the case below) fail
+# CLOSED — a new GitHub API state shouldn't silently bypass the
+# guard. Override with BREAK_GLASS_MERGE_STATE=1 if needed.
+case "$MERGE_STATE" in
+  CLEAN|HAS_HOOKS|UNKNOWN)
+    ;;  # allow
+  BLOCKED|DIRTY|UNSTABLE|BEHIND)
+    if [ "$EFFECTIVE_BREAK_GLASS_MERGE_STATE" = "1" ]; then
+      echo "BREAK-GLASS: merge with mergeStateStatus=$MERGE_STATE authorized by human." >&2
+    else
+      echo "BLOCKED: PR mergeStateStatus is $MERGE_STATE." >&2
+      echo "  Resolve required checks / merge conflicts / change requests first." >&2
+      echo "  Override: BREAK_GLASS_MERGE_STATE=1 (export or inline prefix; must be authorized by human in chat)." >&2
+      echo "  See #170 / #171 for the regression this guard closes." >&2
+      exit 2
+    fi
+    ;;
+  *)
+    # Unknown state — fail closed with a hint pointing to the
+    # case statement above. New API states should be classified
+    # explicitly, not absorbed into a default-allow.
+    if [ "$EFFECTIVE_BREAK_GLASS_MERGE_STATE" = "1" ]; then
+      echo "BREAK-GLASS: merge with unrecognized mergeStateStatus=$MERGE_STATE authorized by human." >&2
+    else
+      echo "BLOCKED: PR mergeStateStatus=$MERGE_STATE is not recognized by gh-pr-guard." >&2
+      echo "  Update the case statement in scripts/hooks/gh-pr-guard.sh to classify it." >&2
+      echo "  Override: BREAK_GLASS_MERGE_STATE=1 (export or inline prefix)." >&2
+      exit 2
+    fi
+    ;;
+esac
 
 case ",$LABELS," in
   *,needs-external-review,*)
