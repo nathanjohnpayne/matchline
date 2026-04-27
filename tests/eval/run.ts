@@ -14,7 +14,7 @@
  *   npm run eval -- --full     — full corpus (projection-guard gated)
  */
 
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -102,16 +102,44 @@ async function main(): Promise<number> {
     fixturesDir,
   );
 
-  // Build (resume, jd) pairs. Smoke = single pair for fast
-  // feedback; full = cross product for the corpus run.
-  const pairs: Array<{ resume: string; jd: string }> = [];
+  // Build (resume, jd) pairs. Smoke = single pair (smoke pin
+  // points at a labeled pair already). Full = cross product
+  // for the corpus run, then filter to pairs that actually
+  // have labeled `expected-matches/*.json` so the eval doesn't
+  // mark every unlabeled cell as a 0/0 failed-fixture entry
+  // (Codex P1 on PR #151 post-merge).
+  const allPairs: Array<{ resume: string; jd: string }> = [];
   for (const r of selectedResumes) {
     for (const j of selectedJds) {
-      pairs.push({ resume: r, jd: j });
+      allPairs.push({ resume: r, jd: j });
     }
   }
+  const { labeled: pairs, skipped } = filterToLabeledPairs(
+    allPairs,
+    fixturesDir,
+  );
 
   const fixtureResults: FixtureResult[] = [];
+  // Emit a "skipped" entry per unlabeled pair so the operator
+  // sees the gap explicitly. `extractionAccuracy: null` and
+  // `matchAccuracy: null` keep skipped cells out of the mean
+  // (the aggregator already filters nulls), so corpus accuracy
+  // is dominated by labeled pairs — not by ENOENT-driven
+  // false-zeros.
+  for (const sk of skipped) {
+    const resumeId = sk.resume.replace(/\.txt$/, "");
+    const jdId = sk.jd.replace(/\.txt$/, "");
+    fixtureResults.push({
+      id: `${resumeId}__${jdId}`,
+      extractionAccuracy: null,
+      matchAccuracy: null,
+      latencyMs: null,
+      costUsd: null,
+      notes:
+        `skipped: no tests/fixtures/expected-matches/${resumeId}__${jdId}.json. ` +
+        `Label this pair to include in the corpus run.`,
+    });
+  }
   if (haveKeys && pairs.length > 0) {
     const anthropicClient = anthropicForCli();
     const openaiClient = openaiForCli();
@@ -150,14 +178,17 @@ async function main(): Promise<number> {
   // and operators see the monthly picture. Phase 1 replaces the
   // zero-currentUsage mock with a real Firestore aggregation.
   const currentUsage = { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 };
-  // A flow is one (resume × JD) pair, not one resume. With N resumes
-  // and M JDs, a --full run is N×M flows. No floor on the JD
-  // multiplier: if zero JDs are present, the run has zero flows,
-  // projected spend is genuinely zero, and the guard should not trip.
-  // A prior `Math.max(selectedJdCount, 1)` defaulted the multiplier
-  // to 1 and falsely projected N×1 flows on a resumes-only corpus
-  // (blocker from nathanpayne-codex on #55).
-  const flowCount = computeFlowCount(mode, selectedResumes.length, jdFixtures.length);
+  // A flow is one (resume × JD) pair THAT WILL ACTUALLY RUN —
+  // skipped pairs (no expected-matches label yet) don't dispatch
+  // to the engine and therefore don't add to projected spend.
+  // Pre-#151-postmerge this used the full listing counts and
+  // would overshoot — projecting 110 flows on the current corpus
+  // when only 1 (the canonical labeled pair) actually runs.
+  // `pairs.length` is post-`filterToLabeledPairs`. For smoke
+  // mode this is identical to the prior count (smoke pin always
+  // points at a labeled pair); for full mode it falls to the
+  // labeled subset.
+  const flowCount = pairs.length;
   const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
@@ -353,6 +384,58 @@ export function selectFixturesForMode(
     selectedResumes: [`${SMOKE_RESUME}.txt`],
     selectedJds: [`${SMOKE_JD}.txt`],
   };
+}
+
+/**
+ * Partition (resume, jd) pairs by whether their corresponding
+ * `expected-matches/<resume>__<jd>.json` label file exists on
+ * disk. Pairs without a label file are returned in `skipped`
+ * so the harness can emit a per-pair "skipped" report entry
+ * (with `extractionAccuracy: null` so the aggregate isn't
+ * polluted) instead of dispatching the pair to the engine,
+ * which would throw ENOENT inside `loadExpectedMatches`.
+ *
+ * **Why this exists** (Codex P1 on PR #151 post-merge):
+ * the corpus PRs added 9 resumes × 10 JDs = 100 cells but
+ * only the 1 canonical (`nathan-2026 × google-compute-spm-2026`)
+ * cell has labels. A full-mode run on main would cascade-fail
+ * the other 99 cells, marking each as a failed fixture
+ * contributing 0% extraction + 0% match accuracy to the
+ * aggregate. The eval would report a corrupted picture
+ * dominated by label incompleteness, not by real prompt
+ * quality.
+ *
+ * Intent: corpus accuracy is computed over **labeled cells
+ * only** until the per-pair labeling work in #137 sub-issue 3
+ * lands. Skipped cells stay visible in the per-fixture report
+ * so it's obvious which pairs need labeling next.
+ *
+ * Pure: filesystem reads scoped to `expected-matches/` only;
+ * no LLM, no Firestore, no process state.
+ */
+export function filterToLabeledPairs(
+  pairs: ReadonlyArray<{ resume: string; jd: string }>,
+  fixturesDir: string,
+): {
+  labeled: Array<{ resume: string; jd: string }>;
+  skipped: Array<{ resume: string; jd: string }>;
+} {
+  const stripTxt = (n: string): string => n.replace(/\.txt$/, "");
+  const labeled: Array<{ resume: string; jd: string }> = [];
+  const skipped: Array<{ resume: string; jd: string }> = [];
+  for (const p of pairs) {
+    const labelPath = join(
+      fixturesDir,
+      "expected-matches",
+      `${stripTxt(p.resume)}__${stripTxt(p.jd)}.json`,
+    );
+    if (existsSync(labelPath)) {
+      labeled.push(p);
+    } else {
+      skipped.push(p);
+    }
+  }
+  return { labeled, skipped };
 }
 
 /**
