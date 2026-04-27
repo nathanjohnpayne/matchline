@@ -37,7 +37,10 @@ describe("unitSetAccuracy", () => {
 
   it("returns 0 when expected has entries and actual is empty", () => {
     expect(
-      unitSetAccuracy([{ normalizedSummary: "x", skills: [] }], []),
+      unitSetAccuracy(
+        [{ normalizedSummary: "led migration project", skills: [] }],
+        [],
+      ),
     ).toBe(0);
   });
 
@@ -49,23 +52,89 @@ describe("unitSetAccuracy", () => {
     expect(unitSetAccuracy(units, units)).toBe(1);
   });
 
-  it("scores partial match with summary + jaccard weighting (0.6 / 0.4)", () => {
-    // Matching summary gets 0.6, half-matching skills get 0.4 * ~0.33 = 0.13.
-    const expected = [{ normalizedSummary: "x", skills: ["a", "b"] }];
-    const actual = [{ normalizedSummary: "x", skills: ["a", "c"] }];
-    // summary=1, jaccard=1/3; score = 0.6 + 0.4*(1/3)
+  it("scores partial match with token-Jaccard summary + phrase-Jaccard skills (0.6 / 0.4)", () => {
+    // Identical summaries → token-Jaccard = 1.
+    // Skills: |∩|=1 ("a"), |∪|=3 ("a", "b", "c") → jaccard = 1/3.
+    // Score = 1*0.6 + (1/3)*0.4
+    const expected = [
+      { normalizedSummary: "shipped initial release", skills: ["a", "b"] },
+    ];
+    const actual = [
+      { normalizedSummary: "shipped initial release", skills: ["a", "c"] },
+    ];
     expect(unitSetAccuracy(expected, actual)).toBeCloseTo(0.6 + 0.4 / 3, 6);
   });
 
   it("pairs greedily — an already-used actual can't double-count", () => {
     const expected = [
-      { normalizedSummary: "x", skills: [] },
-      { normalizedSummary: "x", skills: [] },
+      { normalizedSummary: "shipped product launch", skills: [] },
+      { normalizedSummary: "shipped product launch", skills: [] },
     ];
-    const actual = [{ normalizedSummary: "x", skills: [] }];
-    // First expected pairs with actual (score 1). Second finds no
-    // free actual → contributes 0. Mean = 0.5.
+    const actual = [
+      { normalizedSummary: "shipped product launch", skills: [] },
+    ];
+    // First expected pairs with actual (token-Jaccard on identical
+    // multi-word string = 1, skills both empty → jaccard = 1, score
+    // = 1*0.6 + 1*0.4 = 1.0). Second finds no free actual →
+    // contributes 0. Mean = 0.5.
     expect(unitSetAccuracy(expected, actual)).toBe(0.5);
+  });
+
+  // -- #146 paraphrase-resilience regression -----------------------------
+
+  it("#146: paraphrased summaries score in proportion to token overlap, not 0", () => {
+    // Real shape from the live eval run on Nathan's resume.
+    // Expected fixture (labeler):
+    //   "Led Amazon Kepler launch — ground-up rewrite replacing Fire
+    //   TV Android stack with native Linux-based OS"
+    // Actual (LLM output):
+    //   "Led the Amazon Kepler launch, a ground-up rewrite replacing
+    //   Fire TV's Android stack with a native Linux OS; ported all
+    //   three NCP apps"
+    // Under exact-string equality these score 0 (the prior bug).
+    // Under token-Jaccard the overlap is ~0.55, contributing
+    // 0.55*0.6 = ~0.33 to the score before skills.
+    const expected = [
+      {
+        normalizedSummary:
+          "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack with native Linux-based OS",
+        skills: ["platform launch", "release engineering"],
+      },
+    ];
+    const actual = [
+      {
+        normalizedSummary:
+          "Led the Amazon Kepler launch, a ground-up rewrite replacing Fire TV's Android stack with a native Linux OS; ported all three NCP apps",
+        skills: ["platform migration", "release management"],
+      },
+    ];
+    const score = unitSetAccuracy(expected, actual);
+    // Skills don't overlap (different phrases — that's a prompt
+    // concern, not a metric one), so the bound is just summary.
+    expect(score).toBeGreaterThan(0.25);
+    expect(score).toBeLessThan(0.55);
+  });
+
+  it("#146: wholly unrelated summaries with disjoint skills score near 0", () => {
+    // Sanity: the new metric isn't so loose that random text scores
+    // high. No shared content tokens AND no shared skills → near 0.
+    // Note: empty-vs-empty skills jaccard is 1 by the function's
+    // own convention ("perfect agreement on nothing"), so to test
+    // the unrelated case we need DIFFERENT non-empty skills on
+    // both sides — otherwise the empty-empty=1 quirk dominates.
+    const expected = [
+      {
+        normalizedSummary: "led broadway production financing",
+        skills: ["theatrical financing"],
+      },
+    ];
+    const actual = [
+      {
+        normalizedSummary: "designed san storage infrastructure",
+        skills: ["storage hardware"],
+      },
+    ];
+    expect(unitSetAccuracy(expected, actual)).toBeLessThan(0.1);
   });
 });
 
