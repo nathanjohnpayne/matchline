@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   SMOKE_JD,
   SMOKE_RESUME,
   computeFlowCount,
+  filterToLabeledPairs,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -218,5 +223,98 @@ describe("selectFixturesForMode", () => {
     result.selectedJds.push("malicious.txt");
     expect(resumes).toEqual(SAMPLE_RESUMES);
     expect(jds).toEqual(SAMPLE_JDS);
+  });
+});
+
+// -- filterToLabeledPairs (Codex P1 on PR #151 post-merge) ----------------
+
+describe("filterToLabeledPairs", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "matchline-eval-test-"));
+    mkdirSync(join(tempDir, "expected-matches"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function writeLabel(resumeId: string, jdId: string): void {
+    writeFileSync(
+      join(tempDir, "expected-matches", `${resumeId}__${jdId}.json`),
+      "{}",
+    );
+  }
+
+  it("partitions pairs by expected-matches file existence", () => {
+    writeLabel("nathan-2026", "google-compute-spm-2026");
+    const pairs = [
+      { resume: "nathan-2026.txt", jd: "google-compute-spm-2026.txt" },
+      { resume: "alex-fintech-backend-2026.txt", jd: "google-compute-spm-2026.txt" },
+      { resume: "nathan-2026.txt", jd: "anthropic-pm-claude-code-2026.txt" },
+    ];
+    const { labeled, skipped } = filterToLabeledPairs(pairs, tempDir);
+    expect(labeled).toEqual([
+      { resume: "nathan-2026.txt", jd: "google-compute-spm-2026.txt" },
+    ]);
+    expect(skipped.length).toBe(2);
+  });
+
+  it("returns ALL pairs as skipped when no labels exist", () => {
+    const pairs = [
+      { resume: "alex-2026.txt", jd: "dolby-tpm-ott-2026.txt" },
+      { resume: "priya-2026.txt", jd: "discord-spm-nitro-2026.txt" },
+    ];
+    const { labeled, skipped } = filterToLabeledPairs(pairs, tempDir);
+    expect(labeled).toEqual([]);
+    expect(skipped).toEqual(pairs);
+  });
+
+  it("returns ALL pairs as labeled when every cell has a label file", () => {
+    writeLabel("a-2026", "x-2026");
+    writeLabel("b-2026", "y-2026");
+    const pairs = [
+      { resume: "a-2026.txt", jd: "x-2026.txt" },
+      { resume: "b-2026.txt", jd: "y-2026.txt" },
+    ];
+    const { labeled, skipped } = filterToLabeledPairs(pairs, tempDir);
+    expect(labeled).toEqual(pairs);
+    expect(skipped).toEqual([]);
+  });
+
+  it("strips .txt from resume and jd before constructing the label path", () => {
+    // The pair entries carry filenames (`<id>.txt`), but
+    // expected-matches files are named `<resume_id>__<jd_id>.json`
+    // (without the .txt). Mirror of the bare-ID/.txt-suffix
+    // contract from `selectFixturesForMode`.
+    writeLabel("foo", "bar");
+    const pairs = [{ resume: "foo.txt", jd: "bar.txt" }];
+    const { labeled, skipped } = filterToLabeledPairs(pairs, tempDir);
+    expect(labeled).toEqual(pairs);
+    expect(skipped).toEqual([]);
+  });
+
+  it("preserves input pair order in both labeled and skipped arrays", () => {
+    // Determinism: a future caller that relies on report
+    // ordering (e.g. operator scanning the per-fixture list)
+    // must see pairs in the same order they were provided.
+    writeLabel("a-2026", "x-2026");
+    writeLabel("c-2026", "z-2026");
+    const pairs = [
+      { resume: "a-2026.txt", jd: "x-2026.txt" }, // labeled
+      { resume: "b-2026.txt", jd: "y-2026.txt" }, // skipped
+      { resume: "c-2026.txt", jd: "z-2026.txt" }, // labeled
+      { resume: "d-2026.txt", jd: "w-2026.txt" }, // skipped
+    ];
+    const { labeled, skipped } = filterToLabeledPairs(pairs, tempDir);
+    expect(labeled).toEqual([pairs[0], pairs[2]]);
+    expect(skipped).toEqual([pairs[1], pairs[3]]);
+  });
+
+  it("returns empty arrays when no pairs are provided", () => {
+    const { labeled, skipped } = filterToLabeledPairs([], tempDir);
+    expect(labeled).toEqual([]);
+    expect(skipped).toEqual([]);
   });
 });
