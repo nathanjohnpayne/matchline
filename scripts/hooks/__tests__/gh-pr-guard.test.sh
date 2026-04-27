@@ -213,14 +213,37 @@ run_case "create without Authoring-Agent still blocks" \
 ok"' \
   "" "Missing 'Authoring-Agent:' in PR body"
 
-# --- --admin gate is unaffected ---
+# --- --admin gate composes correctly with merge-state gate ---
+#
+# Per CodeRabbit on PR #174 r1: the `--admin` guard used to run
+# BEFORE the mergeStateStatus check, meaning a BREAK_GLASS_ADMIN
+# break-glass exited the hook before the new merge-state guard
+# fired. The hook now evaluates merge-state FIRST, then admin —
+# so an emergency `--admin` merge against a BLOCKED PR requires
+# both BREAK_GLASS_MERGE_STATE=1 AND BREAK_GLASS_ADMIN=1. Each
+# break-glass authorizes one specific gate; bypassing both
+# requires acknowledging both risks.
 
-run_case "--admin without break-glass still blocks" \
+run_case "--admin without break-glass still blocks (CLEAN)" \
   2 "CLEAN|" "gh pr merge --admin 123 --squash --delete-branch" \
   "" "BLOCKED: --admin merge requires explicit human authorization."
 
-run_case "--admin with break-glass allows" \
+run_case "--admin with break-glass allows (CLEAN)" \
   0 "CLEAN|" "BREAK_GLASS_ADMIN=1 gh pr merge --admin 123 --squash --delete-branch"
+
+# This is the case the original test suite missed — proves the
+# merge-state gate runs even when the admin override is set.
+run_case "--admin + BREAK_GLASS_ADMIN still blocks BLOCKED merge state" \
+  2 "BLOCKED|" "BREAK_GLASS_ADMIN=1 gh pr merge --admin 123 --squash --delete-branch" \
+  "" "BLOCKED: PR mergeStateStatus is BLOCKED"
+
+run_case "--admin + both break-glass overrides allows BLOCKED" \
+  0 "BLOCKED|" "BREAK_GLASS_ADMIN=1 BREAK_GLASS_MERGE_STATE=1 gh pr merge --admin 123 --squash --delete-branch" \
+  "" "BREAK-GLASS: merge with mergeStateStatus=BLOCKED authorized by human."
+
+run_case "--admin + only merge-state break-glass still blocks (admin gate)" \
+  2 "BLOCKED|" "BREAK_GLASS_MERGE_STATE=1 gh pr merge --admin 123 --squash --delete-branch" \
+  "" "BLOCKED: --admin merge requires explicit human authorization."
 
 # --- summary ---
 
@@ -232,7 +255,12 @@ echo "────────────────────────�
 if [ "$FAIL" -gt 0 ]; then
   echo ""
   echo "Failures:"
-  printf "$FAILURES"
+  # CodeRabbit on PR #174 (SC2059): a `%` in a future test
+  # name would otherwise be interpreted as a printf format
+  # specifier and corrupt the failure summary. Pass FAILURES
+  # as data via `%b` (which preserves the embedded `\n`
+  # escapes already in the buffer).
+  printf '%b' "$FAILURES"
   exit 1
 fi
 exit 0

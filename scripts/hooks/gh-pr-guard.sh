@@ -631,19 +631,6 @@ for j in "${!TOKENS[@]}"; do
   fi
 done
 
-# --admin sub-guard: break-glass only. Now token-based: the walk
-# above sets ADMIN_REQUESTED=1 only when `--admin` appears as a
-# REAL flag of `merge`, not as a substring of another flag's value.
-if [ "$ADMIN_REQUESTED" -eq 1 ]; then
-  if [ "$EFFECTIVE_BREAK_GLASS_ADMIN" = "1" ]; then
-    echo "BREAK-GLASS: --admin merge authorized by human." >&2
-    exit 0
-  fi
-  echo "BLOCKED: --admin merge requires explicit human authorization." >&2
-  echo "Ask the human to confirm break-glass, then retry with BREAK_GLASS_ADMIN=1 (export or inline prefix)." >&2
-  exit 2
-fi
-
 # Subcommand-scoped REPO_ARG wins over global GLOBAL_REPO (mirrors
 # gh's typical "more specific flag wins" behavior). Fall back to
 # the global value only if the subcommand didn't specify one.
@@ -738,6 +725,30 @@ case "$MERGE_STATE" in
     fi
     ;;
 esac
+
+# --admin sub-guard: break-glass only. Now token-based: the walk
+# above sets ADMIN_REQUESTED=1 only when `--admin` appears as a
+# REAL flag of `merge`, not as a substring of another flag's value.
+#
+# Ordering note (#171 / CodeRabbit on PR #174): this guard is
+# evaluated AFTER the mergeStateStatus check above. Pre-this-
+# ordering, `--admin + BREAK_GLASS_ADMIN=1` exited before the
+# merge-state guard ran — meaning an emergency `--admin` merge
+# would silently bypass the new BLOCKED/DIRTY/UNSTABLE/BEHIND
+# refusal. The two break-glass overrides are independent
+# decisions: BREAK_GLASS_ADMIN authorizes admin-flag use,
+# BREAK_GLASS_MERGE_STATE authorizes merging despite a failing
+# merge state. Requiring both for the worst-case merge (admin
+# AND failing CI) is intentional.
+if [ "$ADMIN_REQUESTED" -eq 1 ]; then
+  if [ "$EFFECTIVE_BREAK_GLASS_ADMIN" = "1" ]; then
+    echo "BREAK-GLASS: --admin merge authorized by human." >&2
+    exit 0
+  fi
+  echo "BLOCKED: --admin merge requires explicit human authorization." >&2
+  echo "Ask the human to confirm break-glass, then retry with BREAK_GLASS_ADMIN=1 (export or inline prefix)." >&2
+  exit 2
+fi
 
 case ",$LABELS," in
   *,needs-external-review,*)
