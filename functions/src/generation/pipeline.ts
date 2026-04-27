@@ -223,7 +223,16 @@ export async function runGenerationPipeline(
       // Backoff before next attempt — same #112 pattern as
       // claimExtraction / traceability / specificity. Skip
       // sleep on the last attempt (no retry coming).
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(transportBackoffMs(attempt));
+      //
+      // Pass `err` so the helper can pull `retry-after` /
+      // `anthropic-ratelimit-*-reset` headers off the SDK's
+      // APIError and elevate the delay to the server-supplied
+      // window (#114 / PR #144). Without `err`, generation
+      // retries silently fall back to the exponential schedule
+      // and ignore the server's hint — caught post-merge on
+      // PR #144 (cursor review).
+      if (attempt < MAX_ATTEMPTS - 1)
+        await sleep(transportBackoffMs(attempt, err));
       continue;
     }
 

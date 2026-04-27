@@ -495,6 +495,44 @@ describe("runGenerationPipeline", () => {
     expect(record).toHaveBeenCalledTimes(1);
   });
 
+  it("post-merge cursor on PR #144: passes err to transportBackoffMs so retry-after / anthropic-ratelimit-*-reset headers are honored", async () => {
+    // Pin the regression cursor caught after #114/#144 merged:
+    // generation/pipeline.ts was calling
+    // `transportBackoffMs(attempt)` without the err arg, so the
+    // header-aware backoff (#114) silently fell back to the
+    // exponential schedule. With err passed correctly, a 429
+    // carrying `retry-after: 30` elevates the delay to ≥30,000
+    // ms (vs. the slow-down exponential's 1,000-1,250 ms at
+    // attempt 0). Asserting `>= 30000` proves the err arg
+    // propagated through.
+    const apiError = Object.assign(new Error("rate limited"), {
+      status: 429,
+      headers: { "retry-after": "30" },
+    });
+    const { client, create } = mockClient([
+      apiError,
+      mockMessage(VALID_RESPONSE),
+    ]);
+    const sleep = vi.fn(async () => {});
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record,
+      loadInputs: async () => makeInputs(["u1"]),
+      generateId: () => "id-x",
+      sleep,
+    });
+
+    expect(result.content.summary.text).toBeDefined();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    // 30s retry-after → backoff ≥ 30,000 ms (jitter adds up to
+    // 250). Without the err arg, attempt-0 slow-down backoff
+    // tops out around 1,250 ms — well below this bound.
+    expect(sleep.mock.calls[0]![0]).toBeGreaterThanOrEqual(30_000);
+  });
+
   it("no_tool_use response: counts as failure, retries", async () => {
     const { client, create } = mockClient([
       mockTextOnlyMessage("I would emit but cannot use tools."),
