@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SMOKE_JD,
   SMOKE_RESUME,
+  aggregateSampledFixture,
   computeFlowCount,
   filterToLabeledPairs,
+  parseSamples,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -316,5 +318,148 @@ describe("filterToLabeledPairs", () => {
     const { labeled, skipped } = filterToLabeledPairs([], tempDir);
     expect(labeled).toEqual([]);
     expect(skipped).toEqual([]);
+  });
+});
+
+// -- parseSamples (multi-sample averaging, follow-up to #168) -----------
+
+describe("parseSamples", () => {
+  it("defaults to 1 when --samples is absent", () => {
+    expect(parseSamples([])).toBe(1);
+    expect(parseSamples(["--full"])).toBe(1);
+    expect(parseSamples(["--smoke", "--other"])).toBe(1);
+  });
+
+  it("parses --samples N (space-separated form)", () => {
+    expect(parseSamples(["--samples", "3"])).toBe(3);
+    expect(parseSamples(["--full", "--samples", "5"])).toBe(5);
+    expect(parseSamples(["--samples", "10", "--smoke"])).toBe(10);
+  });
+
+  it("parses --samples=N (equals-separated form)", () => {
+    expect(parseSamples(["--samples=3"])).toBe(3);
+    expect(parseSamples(["--full", "--samples=5"])).toBe(5);
+  });
+
+  it("rejects fractional values", () => {
+    expect(() => parseSamples(["--samples", "1.5"])).toThrow(
+      /positive integer/,
+    );
+    expect(() => parseSamples(["--samples=2.5"])).toThrow(/positive integer/);
+  });
+
+  it("rejects zero and negative values", () => {
+    // The regex `/^\d+$/` rejects negative numbers (the minus sign
+    // doesn't match), so this surfaces as the integer-format error;
+    // zero parses as integer but trips the >=1 floor.
+    expect(() => parseSamples(["--samples", "0"])).toThrow(/>= 1/);
+    expect(() => parseSamples(["--samples", "-3"])).toThrow(
+      /positive integer/,
+    );
+  });
+
+  it("rejects non-numeric values", () => {
+    expect(() => parseSamples(["--samples", "abc"])).toThrow(
+      /positive integer/,
+    );
+    expect(() => parseSamples(["--samples=NaN"])).toThrow(/positive integer/);
+  });
+
+  it("rejects --samples without a value", () => {
+    expect(() => parseSamples(["--samples"])).toThrow(/requires/);
+    expect(() => parseSamples(["--full", "--samples"])).toThrow(/requires/);
+  });
+});
+
+// -- aggregateSampledFixture (multi-sample averaging) -------------------
+
+describe("aggregateSampledFixture", () => {
+  it("single-sample mode produces the same notes shape as toFixtureResult (backward compat)", () => {
+    const r = makeOrchestratorResult({
+      extractionAccuracy: 0.5,
+      matchAccuracy: 0.2,
+    });
+    const agg = aggregateSampledFixture([r]);
+    const single = toFixtureResult(r);
+    // Same accuracy + cost + latency.
+    expect(agg.extractionAccuracy).toBe(single.extractionAccuracy);
+    expect(agg.matchAccuracy).toBe(single.matchAccuracy);
+    expect(agg.costUsd).toBe(single.costUsd);
+    // Same notes shape (the single-sample branch matches
+    // `toFixtureResult`'s exact format).
+    expect(agg.notes).toBe(single.notes);
+  });
+
+  it("aggregates 3 samples into mean accuracy + sum cost + range notes", () => {
+    const samples = [
+      makeOrchestratorResult({ extractionAccuracy: 0.4, matchAccuracy: 0.1, costUsd: 0.1 }),
+      makeOrchestratorResult({ extractionAccuracy: 0.5, matchAccuracy: 0.2, costUsd: 0.15 }),
+      makeOrchestratorResult({ extractionAccuracy: 0.6, matchAccuracy: 0.3, costUsd: 0.12 }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.extractionAccuracy).toBeCloseTo(0.5, 6); // mean
+    expect(r.matchAccuracy).toBeCloseTo(0.2, 6); // mean
+    expect(r.costUsd).toBeCloseTo(0.37, 6); // sum
+    expect(r.notes).toContain("3 samples");
+    expect(r.notes).toContain("extraction range 40.0–60.0%");
+    expect(r.notes).toContain("match range 10.0–30.0%");
+  });
+
+  it("failed samples contribute 0 to accuracy means + their partial cost to total", () => {
+    const samples = [
+      makeOrchestratorResult({ extractionAccuracy: 0.5, matchAccuracy: 0.2, costUsd: 0.1 }),
+      makeOrchestratorResult({
+        ok: false,
+        error: "Extraction failed",
+        extractionAccuracy: 0,
+        matchAccuracy: 0,
+        costUsd: 0.05, // partial cost from earlier API calls
+      }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    // Mean of [0.5, 0] = 0.25
+    expect(r.extractionAccuracy).toBeCloseTo(0.25, 6);
+    // Mean of [0.2, 0] = 0.10
+    expect(r.matchAccuracy).toBeCloseTo(0.1, 6);
+    // Sum: 0.10 + 0.05 = 0.15
+    expect(r.costUsd).toBeCloseTo(0.15, 6);
+    // Failure tally surfaced.
+    expect(r.notes).toContain("1/2 failed");
+  });
+
+  it("multi-sample notes use the first SUCCESSFUL run as exemplar for unit/req counts", () => {
+    // First sample failed — exemplar should fall through to the
+    // first successful one so the per-run counts in the report
+    // aren't 0.
+    const samples = [
+      makeOrchestratorResult({
+        ok: false,
+        error: "transport error",
+        extractedUnitCount: 0,
+        parsedRequirementCount: 0,
+        matchCount: 0,
+      }),
+      makeOrchestratorResult({
+        extractedUnitCount: 22,
+        parsedRequirementCount: 15,
+        matchCount: 330,
+      }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.notes).toContain("22 units / 15 reqs / 330 matches");
+  });
+
+  it("throws on empty samples array", () => {
+    expect(() => aggregateSampledFixture([])).toThrow(/empty/);
+  });
+
+  it("computes mean latency across samples (rounded to integer ms)", () => {
+    const samples = [
+      makeOrchestratorResult({ latencyMs: 1000 }),
+      makeOrchestratorResult({ latencyMs: 2000 }),
+      makeOrchestratorResult({ latencyMs: 1500 }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.latencyMs).toBe(1500); // Math.round((1000+2000+1500)/3)
   });
 });

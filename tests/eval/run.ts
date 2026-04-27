@@ -33,6 +33,64 @@ function parseMode(argv: readonly string[]): Mode {
   return argv.includes("--full") ? "full" : "smoke";
 }
 
+/**
+ * Parse `--samples N` / `--samples=N` from argv. Default 1.
+ *
+ * **Why this exists.** LLM extraction is non-deterministic at
+ * temperature > 0 — the same fixture pair produces 22 vs 24
+ * Units across runs, which cascades into match-accuracy variance
+ * of ~8pp on a single fixture (live-measured during PR #168
+ * review). A single-run reading can land above or below the
+ * 80/80 PRD bar for the same code, making per-PR verification
+ * unreliable.
+ *
+ * Multi-sample averaging stabilizes the reading: run extraction
+ * + matching N times per (resume, JD) pair, report the mean +
+ * min/max range. Default 1 keeps the existing behavior; opt
+ * into N>1 only when you want stable numbers (PR review,
+ * benchmark runs, etc.) since cost scales linearly.
+ *
+ * Rejects: 0, negative, non-integer, non-numeric forms.
+ * The projection guard scales planned spend by `samples` so
+ * a `--samples 5 --full` run on a 100-cell labeled corpus
+ * doesn't silently project 1× spend.
+ */
+export function parseSamples(argv: readonly string[]): number {
+  // Accept both `--samples 5` and `--samples=5`.
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "--samples") {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new Error(
+          "--samples requires a positive integer (e.g. `--samples 3`)",
+        );
+      }
+      return validateSamples(value);
+    }
+    if (arg.startsWith("--samples=")) {
+      return validateSamples(arg.slice("--samples=".length));
+    }
+  }
+  return 1;
+}
+
+function validateSamples(raw: string): number {
+  // Reject: empty, NaN, fractional, negative, zero.
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(
+      `--samples must be a positive integer (got ${JSON.stringify(raw)})`,
+    );
+  }
+  const n = Number.parseInt(raw, 10);
+  if (n < 1) {
+    throw new Error(
+      `--samples must be >= 1 (got ${n})`,
+    );
+  }
+  return n;
+}
+
 function listFixtures(dir: string, ext: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -75,7 +133,9 @@ function mean(values: readonly number[]): number | null {
 }
 
 async function main(): Promise<number> {
-  const mode = parseMode(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const mode = parseMode(argv);
+  const samples = parseSamples(argv);
   const fixturesDir = join(process.cwd(), "tests", "fixtures");
   const resumeFixtures = listFixtures(join(fixturesDir, "resumes"), ".txt");
   const jdFixtures = listFixtures(join(fixturesDir, "jds"), ".txt");
@@ -148,11 +208,20 @@ async function main(): Promise<number> {
       // fixture id (resumes/jds are always `<id>.txt`).
       const resumeFixtureId = pair.resume.replace(/\.txt$/, "");
       const jdFixtureId = pair.jd.replace(/\.txt$/, "");
-      const result = await runForFixture(
-        { resumeFixtureId, jdFixtureId },
-        { anthropicClient, openaiClient },
-      );
-      fixtureResults.push(toFixtureResult(result));
+      // Multi-sample averaging: when `--samples N` (N > 1) is
+      // passed, run extraction + matching N times per pair and
+      // aggregate. Default 1 keeps the single-run cost +
+      // behavior. See parseSamples docstring for rationale.
+      const samplesForThisPair: RunForFixtureResult[] = [];
+      for (let i = 0; i < samples; i++) {
+        samplesForThisPair.push(
+          await runForFixture(
+            { resumeFixtureId, jdFixtureId },
+            { anthropicClient, openaiClient },
+          ),
+        );
+      }
+      fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
     }
   } else {
     // No API keys (or no JD fixtures yet) — list each
@@ -188,7 +257,13 @@ async function main(): Promise<number> {
   // mode this is identical to the prior count (smoke pin always
   // points at a labeled pair); for full mode it falls to the
   // labeled subset.
-  const flowCount = pairs.length;
+  //
+  // `--samples N` multiplies the flow count: N independent
+  // runs per pair → N× LLM calls → N× projected spend. The
+  // guard MUST scale by samples or a `--samples 5 --full`
+  // run on a 100-cell labeled corpus would silently project
+  // 1× and let real spend blow past caps.
+  const flowCount = pairs.length * samples;
   const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
@@ -215,6 +290,84 @@ async function main(): Promise<number> {
   );
 
   return 0;
+}
+
+/**
+ * Aggregate N samples for one (resume, JD) pair into a single
+ * FixtureResult. Mean of accuracy axes; sum of cost (the
+ * operator paid for every sample); mean of latency. Failed
+ * samples contribute 0 to accuracy means and their partial
+ * cost to the cost sum (same shape as `toFixtureResult`'s
+ * single-run failure path).
+ *
+ * The min/max range is surfaced in `notes` when N > 1 so
+ * an operator can see the variance from a single report
+ * without parsing a separate file.
+ *
+ * Pure: no I/O, no clock dep. Tested in isolation against
+ * synthetic samples in `run.test.ts`.
+ */
+export function aggregateSampledFixture(
+  results: readonly RunForFixtureResult[],
+): FixtureResult {
+  if (results.length === 0) {
+    throw new Error("aggregateSampledFixture: empty samples");
+  }
+  const first = results[0]!;
+  const id = `${first.resumeFixtureId}__${first.jdFixtureId}`;
+  const n = results.length;
+
+  // Per-sample accuracies: failed samples contribute 0 (same
+  // semantics as the single-sample failure path in
+  // `toFixtureResult`).
+  const ext = results.map((r) => (r.ok ? r.extractionAccuracy : 0));
+  const mat = results.map((r) => (r.ok ? r.matchAccuracy : 0));
+  const meanExt = ext.reduce((a, b) => a + b, 0) / n;
+  const meanMat = mat.reduce((a, b) => a + b, 0) / n;
+  const meanLatency = results.reduce((a, r) => a + r.latencyMs, 0) / n;
+  const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
+
+  // Failure tally — if any sample failed, surface in notes.
+  const failed = results.filter((r) => !r.ok);
+  const succeeded = results.filter((r) => r.ok);
+
+  let notes: string;
+  if (n === 1) {
+    // Backward compat: single-sample shape produces the same
+    // notes string `toFixtureResult` did.
+    if (!first.ok) {
+      notes = `failed (cost=$${first.costUsd.toFixed(4)}): ${first.error ?? "unknown error"}`;
+    } else {
+      notes = `extracted=${first.extractedUnitCount} reqs=${first.parsedRequirementCount} matches=${first.matchCount}`;
+    }
+  } else {
+    // Multi-sample: lead with mean and explicit min-max ranges
+    // on each accuracy axis, then per-run unit/req counts as a
+    // compact tail (median run's counts as exemplar).
+    const minExt = Math.min(...ext);
+    const maxExt = Math.max(...ext);
+    const minMat = Math.min(...mat);
+    const maxMat = Math.max(...mat);
+    const fmtPctRange = (mn: number, mx: number): string =>
+      `${(mn * 100).toFixed(1)}–${(mx * 100).toFixed(1)}%`;
+    const failTag = failed.length > 0 ? `; ${failed.length}/${n} failed` : "";
+    const exemplar = succeeded[0] ?? first;
+    notes =
+      `${n} samples; ` +
+      `extraction range ${fmtPctRange(minExt, maxExt)}, ` +
+      `match range ${fmtPctRange(minMat, maxMat)}; ` +
+      `~${exemplar.extractedUnitCount} units / ${exemplar.parsedRequirementCount} reqs / ${exemplar.matchCount} matches per run` +
+      failTag;
+  }
+
+  return {
+    id,
+    extractionAccuracy: meanExt,
+    matchAccuracy: meanMat,
+    latencyMs: Math.round(meanLatency),
+    costUsd: totalCost,
+    notes,
+  };
 }
 
 /**
