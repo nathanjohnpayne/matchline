@@ -1,32 +1,26 @@
-import { zodToJsonSchema } from "zod-to-json-schema";
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 
-// zod-to-json-schema@3.25.2's TypeScript signature still uses zod v3's
-// public type (`ZodType<any, ZodTypeDef, any>`). At runtime it accepts
-// zod v4 schemas just fine — its peerDependencies declare
-// `^3.25.28 || ^4` — but TS rejects the call because zod v4 dropped
-// the `ZodTypeDef` generic from the public type.
+// Convert a zod v4 schema into a JSON Schema object suitable for
+// Anthropic's tool_use `input_schema`. Uses zod v4's native
+// `z.toJSONSchema` with the draft-7 target — Anthropic's tool API
+// accepts draft-7 (the `$schema` field is ignored by the server).
 //
-// This helper bridges the gap: take any zod v4 schema, runtime-call
-// zodToJsonSchema with the v3-flavored type cast, and return the
-// JSON-schema-shaped object we hand to Anthropic's `input_schema`.
+// Why not zod-to-json-schema (3rd-party). Its 3.25.x line declares
+// `peerDependencies.zod = "^3.25.28 || ^4"` but its converter still
+// expects the v3 internal shape; passing a v4 schema collapses the
+// output to `{}`. That silently removes upstream schema enforcement
+// on every tool call (extraction / parsing / generation /
+// validation), which Codex P1 caught on the first round of #165 —
+// confirmed locally by passing a real v4 schema and getting `{}`
+// back. Native `z.toJSONSchema` handles v4 correctly because it IS
+// part of zod v4.
 //
-// Options mirror what every call site was passing:
-//   target: "openApi3"     — produces the OpenAPI-3.0 flavor of
-//                            JSON Schema that Anthropic's tool_use
-//                            input_schema accepts.
-//   $refStrategy: "none"   — inlines all $refs so the output is one
-//                            self-contained schema (Anthropic does
-//                            not resolve $ref).
-//
-// When zod-to-json-schema ships v4-typed declarations (or we migrate
-// to zod v4's native z.toJSONSchema once it supports the OpenAPI-3.0
-// target + ref-inlining we depend on), this helper can be removed.
+// Output shape comparison vs the prior `target: "openApi3" +
+// $refStrategy: "none"` output: the new draft-7 form has the same
+// `properties` / `required` / `additionalProperties` structure that
+// Anthropic actually reads, with no $ref entries (zod v4's
+// generator inlines by default, matching what `$refStrategy:
+// "none"` used to do).
 export function zodToToolSchema(schema: ZodType): Record<string, unknown> {
-  // Cast through unknown so the v3-typed parameter accepts our v4 schema.
-  // Runtime is unaffected.
-  return zodToJsonSchema(schema as unknown as Parameters<typeof zodToJsonSchema>[0], {
-    target: "openApi3",
-    $refStrategy: "none",
-  }) as Record<string, unknown>;
+  return z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
 }
