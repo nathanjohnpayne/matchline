@@ -54,6 +54,14 @@ if [[ "${GH_FIXTURE_FAIL:-0}" = "1" ]]; then
   echo "${GH_FIXTURE_RESPONSE:-fake gh error}" >&2
   exit 1
 fi
+# Optional stderr noise (Codex P1 on PR #174 r2): real `gh` can
+# emit non-fatal notices on stderr — update available, telemetry
+# opt-in prompts, deprecation warnings — even on a successful
+# command. The hook MUST isolate stdout when parsing
+# MERGE_STATE|LABELS or the noise will corrupt the parse.
+if [[ -n "${GH_FIXTURE_STDERR:-}" ]]; then
+  printf '%s\n' "$GH_FIXTURE_STDERR" >&2
+fi
 printf '%s' "${GH_FIXTURE_RESPONSE:-CLEAN|}"
 SHIM
 chmod +x "$TMP/bin/gh"
@@ -257,6 +265,63 @@ run_case "--admin + both break-glass overrides allows BLOCKED" \
 run_case "--admin + only merge-state break-glass still blocks (admin gate)" \
   2 "BLOCKED|" "BREAK_GLASS_MERGE_STATE=1 gh pr merge --admin 123 --squash --delete-branch" \
   "" "BLOCKED: --admin merge requires explicit human authorization."
+
+# --- gh stderr noise must not corrupt MERGE_STATE parsing ---
+#
+# Codex P1 on PR #174 r2: the prior parser ran `gh ... 2>&1`,
+# which would prepend any stderr noise (update notifier, etc.)
+# to the stdout payload and corrupt MERGE_STATE — turning a
+# CLEAN PR into the unrecognized-state block path. These cases
+# pin the regression: even with realistic stderr noise, MERGE_STATE
+# must be parsed cleanly from stdout.
+run_case_with_stderr() {
+  local name="$1"
+  local expected_exit="$2"
+  local fixture="$3"
+  local stderr_noise="$4"
+  local cmd="$5"
+
+  local input
+  input=$(printf '{"tool_input":{"command":%s}}' \
+    "$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")
+
+  local out
+  local actual_exit
+  set +e
+  out=$(PATH="$TMP/bin:$PATH" \
+    GH_FIXTURE_RESPONSE="$fixture" \
+    GH_FIXTURE_STDERR="$stderr_noise" \
+    bash "$HOOK" <<< "$input" 2>&1)
+  actual_exit=$?
+  set -e
+
+  if [ "$actual_exit" -ne "$expected_exit" ]; then
+    echo "FAIL: $name"
+    echo "  expected exit $expected_exit, got $actual_exit"
+    echo "  output:"
+    echo "$out" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILURES="${FAILURES}${name}\n"
+    return
+  fi
+  echo "PASS: $name"
+  PASS=$((PASS + 1))
+}
+
+run_case_with_stderr "CLEAN with gh update-notifier on stderr still allows" \
+  0 "CLEAN|" \
+  'gh: A new release of gh is available: 2.42.1 → 2.43.0' \
+  "gh pr merge 123 --squash --delete-branch"
+
+run_case_with_stderr "BLOCKED with stderr noise still blocks (no false-allow)" \
+  2 "BLOCKED|" \
+  'gh: telemetry hint' \
+  "gh pr merge 123 --squash --delete-branch"
+
+run_case_with_stderr "needs-external-review label survives stderr noise" \
+  2 "CLEAN|needs-external-review" \
+  'gh: deprecation warning' \
+  "gh pr merge 123 --squash --delete-branch"
 
 # --- summary ---
 

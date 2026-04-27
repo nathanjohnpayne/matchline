@@ -666,9 +666,24 @@ if [ -n "$REPO_ARG" ]; then
   GH_ARGS+=(--repo "$REPO_ARG")
 fi
 
-if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>&1); then
+# Capture stdout and stderr separately. Codex P1 on PR #174 r2:
+# the prior `2>&1` form would prepend ANY non-fatal stderr gh
+# emitted (update notifier, deprecation warnings, etc.) to the
+# stdout payload, then the `${GH_OUTPUT%%|*}` parameter expansion
+# would parse that noise as MERGE_STATE — corrupting a CLEAN PR
+# into the unrecognized-state block path. Routing stderr to a
+# tempfile keeps MERGE_STATE pure. We still surface stderr in the
+# error path for diagnostics.
+GH_STDERR=$(mktemp)
+# Re-declare the EXIT trap so $GH_STDERR is also cleaned up. The
+# trap call replaces (not appends) any prior trap; keep all four
+# tempfile names listed here so a future edit doesn't drop one.
+trap 'rm -f "$TMP_TOKENS" "$TMP_TOKENS_ERR" "$GH_STDERR"' EXIT
+if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>"$GH_STDERR"); then
   echo "BLOCKED: gh-pr-guard could not fetch PR metadata to verify merge-gate clearance." >&2
-  echo "  error: $GH_OUTPUT" >&2
+  if [ -s "$GH_STDERR" ]; then
+    echo "  stderr: $(cat "$GH_STDERR")" >&2
+  fi
   echo "  command: gh ${GH_ARGS[*]}" >&2
   echo "  Fix the underlying gh/auth issue and retry, or set BREAK_GLASS_ADMIN=1 + use --admin if this is a break-glass merge." >&2
   exit 2
