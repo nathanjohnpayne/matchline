@@ -29,7 +29,7 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { getAdminDb } from "../firestore/admin.js";
 import { anthropic } from "../llm/anthropic.js";
@@ -155,10 +155,7 @@ export async function runGenerationPipeline(
     );
   }
 
-  const toolSchema = zodToJsonSchema(ResumeGenerationResponseV1Schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-  });
+  const toolSchema = zodToToolSchema(ResumeGenerationResponseV1Schema);
 
   // The cross-validation Unit set is the ELIGIBLE Units only —
   // the same set the prompt sees. A fabricated id catches both

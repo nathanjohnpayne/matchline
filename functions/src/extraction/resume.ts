@@ -23,7 +23,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
 import { randomUUID, createHash } from "node:crypto";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
@@ -111,10 +111,7 @@ export async function extractFromResume(
     );
   }
 
-  const toolSchema = zodToJsonSchema(ExtractionResponseV1Schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-  });
+  const toolSchema = zodToToolSchema(ExtractionResponseV1Schema);
 
   const failures: ExtractionAttemptFailure[] = [];
 

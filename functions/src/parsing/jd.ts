@@ -17,7 +17,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
 import { randomUUID } from "node:crypto";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
@@ -84,10 +84,7 @@ export async function parseJobRequirements(
     );
   }
 
-  const toolSchema = zodToJsonSchema(JdParsingResponseV1Schema, {
-    target: "openApi3",
-    $refStrategy: "none",
-  });
+  const toolSchema = zodToToolSchema(JdParsingResponseV1Schema);
 
   const failures: JdParsingAttemptFailure[] = [];
 
