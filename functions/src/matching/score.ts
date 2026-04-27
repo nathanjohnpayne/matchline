@@ -317,7 +317,9 @@ export function seniorityAlignment(
  * Because scope strings are heterogeneous and the JD parser
  * doesn't currently emit a `requirement.scope_signals` field
  * (only `keywords` + `tools` + `domains`), V1 falls back to:
- *   - Both sides empty → 1.0 (no constraint)
+ *   - Both sides empty → 0.5 (neutral; #148 changed this from
+ *     the original 1.0 to stop "no signal = perfect match"
+ *     ranking inflation — see jaccard's docstring above)
  *   - Only one side empty → 0.0
  *   - Else: Jaccard on `normalizeKey`-canonicalized signal sets.
  *     Loose: "40M users" and "40M monthly viewers" don't match
@@ -334,8 +336,9 @@ export function seniorityAlignment(
  * Wrap `normalizeKey` to match the `jaccard()` helper's
  * "normalizer returns string | null" contract: empty/whitespace
  * inputs collapse to null and get filtered out by `canonicalize`,
- * preserving the both-empty → 1.0 / one-empty → 0.0 semantics
- * the helper enforces.
+ * preserving the both-empty → 0.5 / one-empty → 0.0 semantics
+ * the helper enforces (#148 changed both-empty from 1.0 to 0.5
+ * to fix rule_score flattening).
  */
 function normalizeScopeKey(raw: string): string | null {
   const key = normalizeKey(raw);

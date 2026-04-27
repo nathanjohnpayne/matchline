@@ -189,11 +189,24 @@ describe("toolOverlap", () => {
   });
 
   it("monotonic: partial overlap is between 0 and 1", () => {
-    const req = makeRequirement({ tools: ["jira", "linear", "notion"] });
-    const partial = makeUnit({ tools: ["jira"] });
-    const score = toolOverlap(partial, req);
+    const score = toolOverlap(
+      makeUnit({ tools: ["jira"] }),
+      makeRequirement({ tools: ["jira", "linear", "notion"] }),
+    );
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThan(1);
+  });
+
+  it("returns 0.5 (neutral) when BOTH sides are empty (#148)", () => {
+    // Mirrors the empty-empty regression tests on `skillOverlap`
+    // and `domainOverlap`. JD parser frequently emits empty
+    // `tools` on requirements that don't call out specific tools
+    // (live trace on Google Compute SPM: 14/15 reqs had
+    // `tools=[]`). With pre-#148 `1.0`, every Unit's
+    // `tool_overlap` flattened to 1.0 against those reqs, adding
+    // 0.10 of false-positive signal to rule_score. 0.5 keeps the
+    // dimension neutral when neither side asserts a constraint.
+    expect(toolOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 });
 
