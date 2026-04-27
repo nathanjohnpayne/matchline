@@ -1,0 +1,67 @@
+Jamie Okafor
+
+Full-Stack Software Engineer — TypeScript · React · Node · Postgres
+
+Brooklyn, NY · hire@example.com · (555) 010-0142
+jamieokafor.dev · linkedin.com/in/jamieokafor · github.com/jamieokafor
+
+
+SUMMARY
+
+Full-stack engineer three years out of school, currently shipping payment and onboarding flows at a mid-stage fintech-adjacent SaaS. Comfortable owning a feature end-to-end — schema design, API, React UI, and the on-call rotation that follows. Started in internships writing Python services, spent two years at a Series-B consumer startup growing into a primary author of the React codebase, and now operate as the second engineer on a small platform team where the work has shifted toward reliability, data integrity, and reviewing other people's PRs.
+
+
+EXPERIENCE
+
+Software Engineer II — Plinth Financial
+Onboarding Platform · Brooklyn, NY · 2025 – Present
+
+One of three engineers on the team that owns customer onboarding, KYC, and the underwriting hand-off for a B2B payments product. Stack is TypeScript, Node (Fastify), Postgres, and a React + Remix front-end. On-call once every six weeks.
+
+- Rebuilt the KYC verification flow from a 12-step linear form into a saved-state wizard with resumable sessions; cut median time-to-complete from 9m12s to 4m48s and reduced abandonment past step 3 by 31% over the 8-week measurement window.
+- Owned the migration from Knex to Drizzle ORM across 47 query sites in the onboarding service. Wrote a codemod that handled 80% of the call-site rewrites, paired with two engineers on the remainder, and shipped behind a per-route flag with zero rollback events.
+- Built the document-upload pipeline (S3 presigned URLs, virus scanning via ClamAV, async OCR through AWS Textract, structured field extraction). Now processes ~14k documents/week at a 99.7% success rate; prior vendor solution was costing $0.42/doc, this came in at $0.06/doc.
+- Designed and shipped the audit-log service for compliance — append-only Postgres table with row-level hashing, structured event taxonomy, and a Retool dashboard for the compliance team. Replaced an ad-hoc CSV-export workflow that took the ops lead two days per quarter.
+- Lead engineer on the React 18 → 19 upgrade across the onboarding app (~140 components). Coordinated with design on Suspense boundaries, untangled three legacy class components, and shipped without a customer-visible regression.
+
+Software Engineer I — Tessera Labs
+Consumer Products · Remote · 2023 – 2025
+
+Series-B consumer marketplace (~70 employees when I joined, ~180 when I left). Wore many hats; ended up as one of two primary authors of the React/Next.js front-end and the GraphQL gateway behind it.
+
+- Shipped the seller-onboarding redesign that moved sellers from a single 23-field form to a progressive 4-step flow with inline validation and Stripe Connect embedded onboarding. Conversion from "started" to "first listing live" went from 38% to 61% over the quarter following launch.
+- Built the search-results page from scratch on top of Algolia — faceted filters, saved searches, infinite scroll with cursor pagination, and a server-rendered shell that improved Lighthouse performance score from 54 to 86.
+- Migrated the GraphQL gateway from Apollo Server v3 to v4 and introduced persisted queries, cutting p95 query payload size by 62% and removing two recurring rate-limit incidents tied to mobile clients.
+- Owned the move from Heroku Postgres to AWS RDS, including a zero-downtime cutover using logical replication. Wrote the runbook the team still uses for subsequent database migrations.
+- Built the internal admin tool used by the trust-and-safety team for listing review and account actions. ~30 daily users; replaced four Retool boards plus a Google Sheet.
+
+Software Engineering Intern — Halberd Analytics
+Data Platform · Atlanta, GA · Summer 2022 & Summer 2023
+
+Two consecutive summers on the data-platform team at a B2B analytics company. Wrote Python services and helped the platform team ship the v2 of their ingest API.
+
+- Returning intern in summer 2023: built the schema-validation layer for incoming customer events using Pydantic + a custom diff-against-registered-schemas check; rolled out across 12 customer integrations.
+- First-summer project: a Slack bot that surfaced data-quality alerts to the on-call channel from the existing Great Expectations runs; still in production at offer-return time.
+
+
+SIDE PROJECTS
+
+Hopper — Habit-tracking iOS web app
+Next.js · TypeScript · Supabase · Tailwind
+
+A small habit tracker built as a learning project for App Router and Supabase auth. ~120 weekly users from friends and a Hacker News post. Open source on GitHub.
+
+Lichen — Static-site CMS for Markdown blogs
+Astro · TypeScript · Cloudflare Pages
+
+A minimal CMS layer over a folder of Markdown files for personal blogs. Edits go through a GitHub PR rather than a database. I use it for my own blog.
+
+
+EDUCATION
+
+B.S., Computer Science
+University of Maryland, College Park · 2023
+Coursework: distributed systems, databases, programming languages, HCI
+
+Bridge Bootcamp — full-stack web (part-time, 2021)
+Project capstone: a real-time collaborative whiteboard built on WebSockets + Yjs.

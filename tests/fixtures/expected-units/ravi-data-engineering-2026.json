@@ -1,0 +1,225 @@
+{
+  "fixture_id": "ravi-data-engineering-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the senior data engineer archetype. One ExpectedUnit per fact-bearing bullet in EXPERIENCE + SIDE PROJECTS sections. Role-intro paragraphs and the WRITING section are intentionally not labeled.",
+  "expected_units": [
+    {
+      "id": "u_per_tenant_snowflake",
+      "normalized_summary": "Led migration from shared-schema Snowflake to per-tenant database model with metadata-driven dbt project, cutting p95 latency for top 20 tenants by 47% and unblocking SOC 2 Type II",
+      "skills": [
+        "data warehouse architecture",
+        "multi-tenant data isolation",
+        "performance optimization",
+        "data modeling"
+      ],
+      "tools": ["Snowflake", "dbt"],
+      "domains": ["data infrastructure", "b2b analytics"]
+    },
+    {
+      "id": "u_incremental_framework",
+      "normalized_summary": "Built incremental-models framework on dbt standardizing late-arriving data, snapshot strategy, and freshness SLAs across 1,400+ models; mean build time from 38m to 11m",
+      "skills": [
+        "analytics engineering",
+        "framework design",
+        "data modeling",
+        "performance optimization"
+      ],
+      "tools": ["dbt", "Snowflake"],
+      "domains": ["data infrastructure", "analytics engineering"]
+    },
+    {
+      "id": "u_dagster_migration",
+      "normalized_summary": "Owned Airflow-to-Dagster migration mapping 220+ DAGs into asset-based pipelines with six-month dual-run; reduced top-10 backfill times 4-12x",
+      "skills": [
+        "orchestration",
+        "data lineage",
+        "platform migration",
+        "pipeline engineering"
+      ],
+      "tools": ["Airflow", "Dagster"],
+      "domains": ["data infrastructure", "analytics engineering"]
+    },
+    {
+      "id": "u_data_contracts",
+      "normalized_summary": "Designed data-contract layer with Postgres CDC to Parquet on S3 validated against versioned Avro schema registry, quarantining rejected events with Slack alerts; reduced incorrect-dashboard incidents ~70% YoY",
+      "skills": [
+        "data contracts",
+        "schema design",
+        "data quality",
+        "change data capture"
+      ],
+      "tools": ["Postgres", "AWS S3", "Parquet", "Avro", "Slack"],
+      "domains": ["data infrastructure", "data quality"]
+    },
+    {
+      "id": "u_cost_attribution",
+      "normalized_summary": "Built Snowflake cost-attribution pipeline tagging queries to dbt model, dashboard, and tenant; surfaced $340k annualized waste in first quarter and enabled per-tenant chargeback",
+      "skills": [
+        "cost optimization",
+        "data observability",
+        "warehouse instrumentation"
+      ],
+      "tools": ["Snowflake", "dbt"],
+      "domains": ["data infrastructure", "finops"]
+    },
+    {
+      "id": "u_team_hiring",
+      "normalized_summary": "Hired and onboarded three data engineers; authored interview rubric, on-call runbook, and performance-calibration doc",
+      "skills": [
+        "hiring",
+        "team building",
+        "engineering management",
+        "documentation"
+      ],
+      "tools": [],
+      "domains": ["engineering leadership"]
+    },
+    {
+      "id": "u_streaming_watch_pipeline",
+      "normalized_summary": "Rebuilt watch-event pipeline from Kinesis-to-Redshift batch into Spark Structured Streaming on Delta Lake; latency from ~45m to under 90s, unblocking same-day programming decisions",
+      "skills": [
+        "streaming pipelines",
+        "pipeline engineering",
+        "latency optimization",
+        "data lake architecture"
+      ],
+      "tools": ["Spark", "Kinesis", "Delta Lake", "Redshift"],
+      "domains": ["streaming media", "data infrastructure"]
+    },
+    {
+      "id": "u_content_metadata_scd2",
+      "normalized_summary": "Owned canonical content-metadata model (title, season, episode, edit, asset, region, license window) replacing four drifted tables with a single SCD2 source of truth; migrated 80+ downstream models in a quarter",
+      "skills": [
+        "data modeling",
+        "slowly changing dimensions",
+        "schema consolidation",
+        "data governance"
+      ],
+      "tools": ["dbt", "Snowflake"],
+      "domains": ["streaming media", "data infrastructure"]
+    },
+    {
+      "id": "u_recommendation_features",
+      "normalized_summary": "Designed recommendation-features warehouse with hourly per-user denormalized tables and 24-hour replay; powered offline training and online personalization feature lookups",
+      "skills": [
+        "feature engineering",
+        "data modeling",
+        "ml infrastructure",
+        "warehouse design"
+      ],
+      "tools": ["Spark", "Delta Lake"],
+      "domains": ["streaming media", "machine learning infrastructure"]
+    },
+    {
+      "id": "u_dbt_bootstrap",
+      "normalized_summary": "Bootstrapped analytics-engineering practice with dbt — project structure, CI gate, first 80 models; now used by 4 teams across ~600 models",
+      "skills": [
+        "analytics engineering",
+        "platform bootstrapping",
+        "ci/cd"
+      ],
+      "tools": ["dbt"],
+      "domains": ["analytics engineering", "data infrastructure"]
+    },
+    {
+      "id": "u_looker_to_mode",
+      "normalized_summary": "Led Looker-to-Mode BI migration; re-implemented top-30 dashboards, deprecated 200+ unused looks, ran enablement sessions for ~50 users",
+      "skills": [
+        "bi migration",
+        "dashboard development",
+        "stakeholder enablement"
+      ],
+      "tools": ["Looker", "Mode"],
+      "domains": ["business intelligence", "analytics"]
+    },
+    {
+      "id": "u_oncall_runbook",
+      "normalized_summary": "Owned data-platform on-call rotation for two years; authored incident-response runbook and reduced repeat incidents 60% via a post-incident-review action-item tracker",
+      "skills": [
+        "incident response",
+        "operational reliability",
+        "runbook authoring"
+      ],
+      "tools": [],
+      "domains": ["data infrastructure", "operational reliability"]
+    },
+    {
+      "id": "u_rtb_pipeline",
+      "normalized_summary": "Built bid-request log pipeline ingesting ~3.5 billion events/day from RTB exchanges with Kafka, Spark batch, S3 Parquet, Hive metastore; system of record for revenue reconciliation, ran 6 years post-departure",
+      "skills": [
+        "high-throughput pipelines",
+        "pipeline engineering",
+        "data lake architecture",
+        "system design"
+      ],
+      "tools": ["Kafka", "Spark", "AWS S3", "Parquet", "Hive"],
+      "domains": ["ad tech", "data infrastructure"]
+    },
+    {
+      "id": "u_impression_dedup",
+      "normalized_summary": "Designed impression-deduplication across nine ad-server endpoints, cutting double-counting from ~2.1% to <0.05% and recovering $1.2M in over-billed refunds annually",
+      "skills": [
+        "data quality",
+        "deduplication",
+        "system design"
+      ],
+      "tools": [],
+      "domains": ["ad tech", "data infrastructure"]
+    },
+    {
+      "id": "u_vertica_to_snowflake",
+      "normalized_summary": "Migrated warehouse from on-prem Vertica to Snowflake; hand-ported 600+ stored procedures with a single-weekend cutover and one fast-recovered rollback",
+      "skills": [
+        "warehouse migration",
+        "stored-procedure rewriting",
+        "cutover planning"
+      ],
+      "tools": ["Vertica", "Snowflake"],
+      "domains": ["data infrastructure", "ad tech"]
+    },
+    {
+      "id": "u_data_quality_framework",
+      "normalized_summary": "Built data-quality framework wrapping every nightly job with row-count, null-rate, and schema-drift assertions; surfaced a six-figure billing bug in week one",
+      "skills": [
+        "data quality",
+        "framework design",
+        "assertion testing"
+      ],
+      "tools": [],
+      "domains": ["data infrastructure", "data quality"]
+    },
+    {
+      "id": "u_mentorship",
+      "normalized_summary": "Mentored two junior engineers, one of whom is now a staff engineer at the same company",
+      "skills": [
+        "mentorship",
+        "engineering leadership"
+      ],
+      "tools": [],
+      "domains": ["engineering leadership"]
+    },
+    {
+      "id": "u_sleet",
+      "normalized_summary": "Built Sleet — open-source cost-aware Snowflake query advisor that profiles spend, attributes it to dbt models and dashboards, and suggests rewrites",
+      "skills": [
+        "open source",
+        "cost optimization",
+        "developer tooling"
+      ],
+      "tools": ["Python", "Snowflake", "Streamlit"],
+      "domains": ["data infrastructure", "developer tools"]
+    },
+    {
+      "id": "u_dbt_quarantine_pkg",
+      "normalized_summary": "Built dbt-quarantine — a dbt package codifying the quarantine-and-replay pattern for late-arriving and rejected rows; used at three other companies",
+      "skills": [
+        "open source",
+        "data quality",
+        "dbt package authoring"
+      ],
+      "tools": ["dbt", "SQL", "Jinja"],
+      "domains": ["data infrastructure", "analytics engineering"]
+    }
+  ]
+}

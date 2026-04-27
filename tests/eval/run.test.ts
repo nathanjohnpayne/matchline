@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { computeFlowCount, toFixtureResult } from "./run.js";
+import {
+  SMOKE_JD,
+  SMOKE_RESUME,
+  computeFlowCount,
+  selectFixturesForMode,
+  toFixtureResult,
+} from "./run.js";
 import type { RunForFixtureResult } from "./runForFixture.js";
 
 function makeOrchestratorResult(
@@ -116,5 +122,101 @@ describe("toFixtureResult", () => {
     expect(r.costUsd).toBe(0);
     expect(r.notes).toContain("$0.0000");
     expect(r.notes).toContain("fixture not found");
+  });
+});
+
+// -- selectFixturesForMode (smoke pin, #150 + #151 review) ----------------
+
+describe("selectFixturesForMode", () => {
+  // The bug cursor caught on the first smoke-pin attempt:
+  // `listFixtures` returns `<id>.txt`-shaped names; the constants
+  // are bare IDs. The .includes() membership check was comparing
+  // bare-ID against `<id>.txt`-suffixed entries → always false →
+  // the missing-fixture throw fired even when the fixture WAS
+  // present. These tests pin the contract end-to-end so a future
+  // refactor that drops the .txt-stripping path fails immediately.
+  const SAMPLE_RESUMES = [
+    "alex-fintech-backend-2026.txt",
+    "nathan-2026.txt",
+    "priya-ml-research-pm-2026.txt",
+  ];
+  const SAMPLE_JDS = [
+    "anthropic-pm-claude-code-2026.txt",
+    "google-compute-spm-2026.txt",
+  ];
+
+  it("smoke mode pins to nathan-2026 + google-compute-spm-2026 with .txt suffix", () => {
+    const { selectedResumes, selectedJds } = selectFixturesForMode(
+      "smoke",
+      SAMPLE_RESUMES,
+      SAMPLE_JDS,
+      "/tmp/fixtures",
+    );
+    expect(selectedResumes).toEqual(["nathan-2026.txt"]);
+    expect(selectedJds).toEqual(["google-compute-spm-2026.txt"]);
+  });
+
+  it("constants match the documented pinned IDs", () => {
+    // Pins the convention that `SMOKE_RESUME` / `SMOKE_JD` are
+    // BARE IDs (no `.txt`). The function appends `.txt` on the
+    // way out; failing this assertion means the rest of the file
+    // (and downstream `loadResumeText` / `loadJdText` calls that
+    // strip `.txt`) needs to update in lock step.
+    expect(SMOKE_RESUME).toBe("nathan-2026");
+    expect(SMOKE_JD).toBe("google-compute-spm-2026");
+  });
+
+  it("smoke mode throws when SMOKE_RESUME is missing from the listing", () => {
+    expect(() =>
+      selectFixturesForMode(
+        "smoke",
+        ["foo-2026.txt", "bar-2026.txt"],
+        SAMPLE_JDS,
+        "/tmp/fixtures",
+      ),
+    ).toThrow(/SMOKE_RESUME/);
+  });
+
+  it("smoke mode throws when SMOKE_JD is missing from the listing", () => {
+    expect(() =>
+      selectFixturesForMode(
+        "smoke",
+        SAMPLE_RESUMES,
+        ["some-other-jd-2026.txt"],
+        "/tmp/fixtures",
+      ),
+    ).toThrow(/SMOKE_JD/);
+  });
+
+  it("smoke mode error message includes the fixtures directory + a constant-update hint", () => {
+    try {
+      selectFixturesForMode("smoke", [], SAMPLE_JDS, "/tmp/fixtures");
+      throw new Error("expected throw");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      expect(message).toContain("/tmp/fixtures/resumes");
+      expect(message).toContain("Update SMOKE_RESUME");
+    }
+  });
+
+  it("full mode returns all fixtures verbatim (no slicing or pinning)", () => {
+    const { selectedResumes, selectedJds } = selectFixturesForMode(
+      "full",
+      SAMPLE_RESUMES,
+      SAMPLE_JDS,
+      "/tmp/fixtures",
+    );
+    expect(selectedResumes).toEqual(SAMPLE_RESUMES);
+    expect(selectedJds).toEqual(SAMPLE_JDS);
+  });
+
+  it("full mode returns DEFENSIVE COPIES — caller can't mutate the listing", () => {
+    const resumes = [...SAMPLE_RESUMES];
+    const jds = [...SAMPLE_JDS];
+    const result = selectFixturesForMode("full", resumes, jds, "/tmp/fixtures");
+    result.selectedResumes.push("malicious.txt");
+    result.selectedJds.push("malicious.txt");
+    expect(resumes).toEqual(SAMPLE_RESUMES);
+    expect(jds).toEqual(SAMPLE_JDS);
   });
 });

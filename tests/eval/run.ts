@@ -91,9 +91,16 @@ async function main(): Promise<number> {
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
 
-  const selectedResumes =
-    mode === "smoke" ? resumeFixtures.slice(0, 1) : resumeFixtures;
-  const selectedJds = mode === "smoke" ? jdFixtures.slice(0, 1) : jdFixtures;
+  // Smoke mode pins to a SPECIFIC (resume, JD) pair via
+  // `selectFixturesForMode` (extracted as a pure helper so the
+  // bare-ID-vs-`.txt`-filename mismatch and the missing-fixture
+  // throw paths are testable without touching the filesystem).
+  const { selectedResumes, selectedJds } = selectFixturesForMode(
+    mode,
+    resumeFixtures,
+    jdFixtures,
+    fixturesDir,
+  );
 
   // Build (resume, jd) pairs. Smoke = single pair for fast
   // feedback; full = cross product for the corpus run.
@@ -275,6 +282,77 @@ export function computeFlowCount(
     return Math.min(resumeCount, 1) * Math.min(jdCount, 1);
   }
   return resumeCount * jdCount;
+}
+
+/**
+ * Smoke-mode fixture pin. Bare fixture IDs (no `.txt` extension) —
+ * `listFixtures` returns `<id>.txt`-shaped names, so the comparison
+ * is "ID ∈ stripped(filenames)" and the selected output always
+ * carries the `.txt` suffix the rest of the pipeline expects.
+ *
+ * **Why constants, not slice(0, 1).** Codex P1 + cursor on PRs
+ * #150 / #151: prior `slice(0, 1)` selected whatever filename
+ * sorted first, which became one of the new unlabeled fixtures
+ * the moment a corpus PR landed. `loadExpectedMatches` then threw
+ * ENOENT before any LLM call and the smoke run reported a
+ * guaranteed 0/0 instead of a meaningful signal. Pinning to a
+ * SPECIFIC pair makes that regression structural — not behavioral.
+ *
+ * **Why this pair.** Nathan + Google SPM is the canonical fixture;
+ * it has hand-curated `expected-matches/*.json` and the rest of
+ * #137's labeling work keeps it current.
+ */
+export const SMOKE_RESUME = "nathan-2026";
+export const SMOKE_JD = "google-compute-spm-2026";
+
+/**
+ * Select the resume + JD fixture filenames to evaluate for a given
+ * mode. Pure: takes the listing arrays and returns the slice/pin —
+ * no filesystem or process state. Extracted so the bare-ID-vs-
+ * `.txt`-filename comparison and the missing-fixture throw paths
+ * are testable without mocking the filesystem (the regression
+ * cursor caught on the first smoke-pin attempt).
+ *
+ * Throws `Error` with a clear "update SMOKE_RESUME / SMOKE_JD"
+ * message if either pinned fixture is absent from the listing,
+ * so removing a pinned fixture fails loud at startup instead of
+ * producing a confusing downstream `loadX` error.
+ */
+export function selectFixturesForMode(
+  mode: Mode,
+  resumeFixtures: readonly string[],
+  jdFixtures: readonly string[],
+  fixturesDir: string,
+): { selectedResumes: string[]; selectedJds: string[] } {
+  if (mode !== "smoke") {
+    return {
+      selectedResumes: [...resumeFixtures],
+      selectedJds: [...jdFixtures],
+    };
+  }
+  const stripTxt = (n: string): string => n.replace(/\.txt$/, "");
+  const resumeIds = resumeFixtures.map(stripTxt);
+  const jdIds = jdFixtures.map(stripTxt);
+  if (!resumeIds.includes(SMOKE_RESUME)) {
+    throw new Error(
+      `Smoke mode pin: resume fixture "${SMOKE_RESUME}" not found in ${join(
+        fixturesDir,
+        "resumes",
+      )}. Update SMOKE_RESUME in tests/eval/run.ts.`,
+    );
+  }
+  if (!jdIds.includes(SMOKE_JD)) {
+    throw new Error(
+      `Smoke mode pin: JD fixture "${SMOKE_JD}" not found in ${join(
+        fixturesDir,
+        "jds",
+      )}. Update SMOKE_JD in tests/eval/run.ts.`,
+    );
+  }
+  return {
+    selectedResumes: [`${SMOKE_RESUME}.txt`],
+    selectedJds: [`${SMOKE_JD}.txt`],
+  };
 }
 
 /**

@@ -1,0 +1,72 @@
+Marcus Chen
+
+Senior Product Manager — Silicon Platforms, SoC Partnerships, Connected Devices
+
+San Diego, CA · hire@example.com · (555) 010-0210
+marcuschen.dev · linkedin.com/in/marcuschen · github.com/marcuschen
+
+
+SUMMARY
+
+Hardware product manager with eleven years building silicon and reference platforms for mobile and connected devices. I sit at the seam where chip roadmaps, OEM integration timelines, and codec and certification programs collide — turning what is shippable in silicon into what an OEM partner can actually take to retail. Spent six years at a top-five mobile SoC vendor running partner programs for premium-tier Android OEMs, then four years at a consumer hardware OEM owning the audio and video subsystem from spec through certification. I think in reference designs, board-bring-up windows, and the long tail of partner-reported defects, and I am happiest when the spec, the silicon, and the certification body all agree.
+
+
+EXPERIENCE
+
+Senior Product Manager — Audio & Video Subsystems
+Lumenix Labs · Premium Headphones & Wearables · San Diego · 2022 – 2026
+
+Owned the audio and video subsystem product roadmap across Lumenix's premium over-ear headphones, true-wireless earbuds, and the second-generation Lumenix Vision XR headset. Scope spanned codec selection, DSP partner relationships, certification programs (Dolby, Hi-Res Audio, Bluetooth SIG), and the cross-functional bring-up process from silicon sampling through retail launch.
+
+- Led codec strategy across the Lumenix Aria 3 headphone line — added Dolby Atmos with head tracking, LC3 over LE Audio, and Snapdragon Sound co-marketing. Aria 3 shipped on the September 2024 cycle with Atmos certification cleared two weeks before FCS, the first time the program hit its certification gate without a slip.
+- Drove the SoC selection RFQ for the Lumenix Vision 2 XR headset. Evaluated three candidate platforms across power, video decode pipeline, dual-display compositor latency, and partner support depth; landed on the Qualcomm XR2 Gen 2 reference. Negotiated NRE and per-unit volume tiers tied to a 2.4M-unit four-year forecast.
+- Owned the Dolby Atmos for Headphones certification program across four product lines. Built a shared certification matrix tracking 38 test cases per SKU, drove rework on the Aria 2 EQ preset chain that was failing the height-channel localization test, and got every active SKU re-certified ahead of the Atmos 2.1 spec deadline.
+- Shipped the LE Audio + Auracast preview firmware for Aria 3 Pro at IFA 2024. Coordinated with Bluetooth SIG on a one-month-early certification window so the demo booth could run on production silicon. Press reception drove a 14% lift in pre-order conversion versus the prior cycle.
+- Stood up a structured partner-defect intake process with the Qualcomm and Cirrus Logic FAE teams. Replaced an ad-hoc email chain across three time zones with a tracked Jira intake plus a weekly triage call; cut median silicon-bug turnaround from 41 days to 17 across the Vision and Aria programs.
+- Co-authored the Lumenix Vision 2 reference compositor spec with the silicon partner — defined the asynchronous timewarp budget at 6ms, the foveated-rendering tile size, and the passthrough video pipeline color management contract. Spec became the contractual basis for Qualcomm's XR2 Gen 2 reference design adjustments shipped to two other OEMs.
+
+Product Manager II — Mobile Multimedia Reference Programs
+Halberd Semiconductor · Premium Mobile Tier · San Diego · 2018 – 2022
+
+Halberd is a fictional top-five mobile SoC vendor; my scope was the multimedia reference platform program for premium-tier Android OEM partners (think the Korean and Chinese flagship cohort).
+
+- Ran the multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400). Owned the codec, ISP, and display feature matrix that OEMs took as their starting point, including AV1 decode rollout across the 8300 cycle and 8K30 HDR10+ recording on the 8400.
+- Led OEM enablement for AV1 hardware decode on the Halberd 8300. Wrote the partner integration guide, drove a four-OEM pilot through YouTube and Netflix's certification labs, and shipped the first Android phones with AV1 hardware decode in market in Q3 2020.
+- Owned the camera ISP feature roadmap negotiation with two top-three Korean OEMs. Translated their flagship-camera roadmap into a prioritized list of 27 ISP features, negotiated a tiered deliverable schedule across two SoC generations, and hit every committed feature gate on the 8400 cycle.
+- Shipped Snapdragon Sound program co-launch on the Halberd 8200 reference, including aptX Lossless and aptX Adaptive co-certification. Coordinated marketing approval with Qualcomm's XR/audio team and three OEM partners; program landed on time despite an aptX certification spec change six weeks before launch.
+- Built the partner reference-design issue dashboard in Looker on top of a Snowflake JIRA mirror. Replaced a quarterly-PDF status report with a live dashboard tracking 1,400+ partner-reported issues across 9 OEMs; weekly exec review now runs against the dashboard and the PDF was retired.
+- Led the cross-program response to a Mali GPU driver regression that was blocking three OEM tape-outs. Coordinated the rollback decision with the GPU IP vendor, owned partner communication across nine OEMs, and shepherded the patched driver through the partner certification matrix in eleven days.
+
+Associate Product Manager — Connectivity Reference Designs
+Halberd Semiconductor · San Diego · 2016 – 2018
+
+Supported the Wi-Fi and Bluetooth combo-chip reference design program for tier-2 IoT and connected-home OEMs. Owned the partner-facing feature matrix, ran the quarterly partner roadmap review, and managed the certification submission queue across Wi-Fi Alliance and Bluetooth SIG.
+
+- Drove the Wi-Fi 6 enablement cycle across 14 connected-home partners, including the partner integration guide and a quarterly office-hours program.
+- Owned the Bluetooth 5.2 LE Audio early-access program and shipped the partner-facing reference firmware to seven OEMs ahead of the public spec ratification.
+
+Hardware Engineer — Audio Subsystem
+Auralink Acoustics · Boston, MA · 2014 – 2016
+
+First role out of school. Worked on the audio subsystem for Auralink's professional studio monitor line — DSP firmware, board bring-up, and acoustic measurement. Co-owned the move from a fixed-point legacy DSP to a Cirrus Logic floating-point part, and authored the bring-up checklist still in use on the current product.
+
+
+SIDE PROJECTS
+
+CodecBench — Open-source codec comparison harness
+Python · FFmpeg · GitHub Actions
+
+A reproducible perceptual-quality benchmark harness for AV1, HEVC, VP9, and H.264 across a curated 200-clip test corpus. Used by two academic groups and cited in three SMPTE conference papers; the GitHub repo has 1,400+ stars.
+
+
+EDUCATION
+
+M.S., Electrical Engineering — Signal Processing & Communications
+University of California, San Diego · 2014
+
+B.S., Electrical & Computer Engineering
+Carnegie Mellon University · 2012
+
+Continuing Education
+- Strategic Negotiation Program — Stanford GSB Executive Education, 2021
+- Bluetooth SIG Auracast Implementer Workshop, 2023

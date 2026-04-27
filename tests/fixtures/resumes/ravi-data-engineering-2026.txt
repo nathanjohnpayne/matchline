@@ -1,0 +1,77 @@
+Ravi Sundararajan
+
+Senior Data Engineer — Data Platforms · Pipelines · Warehousing
+
+Austin, TX · hire@example.com · (555) 010-0177
+ravisundar.dev · linkedin.com/in/ravisundar · github.com/ravisundar
+
+
+SUMMARY
+
+Senior data engineer with eleven years building the platforms that other engineers and analysts run their work on. Three companies, three different shapes of the same problem: an ad-tech firm where the constraint was throughput, a media streaming company where the constraint was latency and lineage, and currently a B2B analytics company where the constraint is per-tenant correctness at warehouse scale. I model my time around the principle that a data platform is a product, the analysts are the users, and the SLA is what I'm actually selling. Snowflake / dbt / Airflow are the tools I reach for first; I'll write Spark when the workload genuinely needs it.
+
+
+EXPERIENCE
+
+Staff Data Engineer — Vellum Insights
+Data Platform · Austin, TX · 2022 – Present
+
+Lead engineer on the team that owns the warehouse, the orchestration layer, and the per-tenant data-isolation guarantees underneath a B2B analytics product serving 400+ enterprise customers. Team of seven engineers; I report to the VP of Engineering and partner with the Head of Analytics on roadmap.
+
+- Designed and led the migration from a single shared-schema Snowflake account to a per-tenant database model with a metadata-driven dbt project. Cut p95 query latency for the largest 20 tenants by 47%, eliminated an entire class of cross-tenant join bugs, and unblocked the SOC 2 Type II re-audit.
+- Built the incremental-models framework on top of dbt that the rest of the analytics-engineering org now uses. Standardized late-arriving-data handling, snapshot strategy, and freshness SLAs across 1,400+ models. Mean model build time dropped from 38m to 11m on the daily run.
+- Owned the Airflow-to-Dagster migration. Mapped 220+ DAGs into asset-based pipelines, coordinated a six-month dual-run period for confidence, and decommissioned Airflow. New platform reduced backfill time for the top-10 pipelines by 4-12x and gave analytics engineers a single place to define lineage.
+- Designed the data-contract layer between product engineering and analytics. CDC events from Postgres land in S3 as Parquet, are validated against a versioned Avro schema registry, and rejected events go to a quarantine table with a Slack notification to the producing team. Reduced "the dashboard is wrong" incidents by ~70% YoY.
+- Built the cost-attribution pipeline that tags every Snowflake query with its originating dbt model, dashboard, and tenant. Surfaced $340k of annualized waste in the first quarter (mostly runaway full-refresh dbt models); enabled per-tenant chargeback for the enterprise plan.
+- Hired and onboarded three data engineers. Wrote the team's interview rubric, the on-call runbook, and the "what does great look like" doc still used for performance calibration.
+
+Senior Data Engineer — Marquee Stream
+Content Analytics · Los Angeles, CA · 2018 – 2022
+
+A streaming-media company. Joined as the third data engineer; left as a tech lead on the content-analytics platform team.
+
+- Rebuilt the watch-event pipeline from a Kinesis-to-Redshift batch job into a Spark Structured Streaming pipeline writing to Delta Lake. End-to-end latency dropped from ~45 minutes to under 90 seconds, which is what unblocked the live-content programming team's same-day decisioning.
+- Owned the canonical content-metadata model — title, season, episode, edit, asset, region, license window. Replaced four overlapping tables that had drifted apart over five years with a single SCD2-modeled source of truth, and migrated 80+ downstream models onto it over a quarter.
+- Designed and shipped the recommendation-features warehouse — denormalized per-user feature tables refreshed hourly with a 24-hour replay capability for ML retraining. Used by the recommendation team's offline training jobs and the personalization service's online feature lookups.
+- Built the analytics-engineering bootstrap that introduced dbt to the company. Set up the project structure, the CI gate, and the first 80 models. dbt is now used by 4 teams across ~600 models.
+- Led the Looker-to-Mode migration for the analytics organization. Re-implemented the top-30 dashboards by usage, deprecated 200+ unused looks, and ran enablement sessions for ~50 internal users.
+- Owned the on-call rotation for the data platform for two years. Authored the incident-response runbook; reduced repeat incidents (>1 page in a quarter) by 60% over the second year by writing a post-incident-review-to-fix tracker that closed the loop on action items.
+
+Data Engineer — Cresswell Media Network
+Ad Operations Engineering · New York, NY · 2014 – 2018
+
+An ad-tech company. First data-engineering hire on the ad-operations side. The constraint was always throughput.
+
+- Built the bid-request log pipeline that ingested ~3.5 billion events per day from RTB exchanges. Kafka in front, Spark batch jobs writing to S3 + Parquet, Hive metastore on top. This pipeline was the system of record for revenue reconciliation and ran for 6 years post-departure.
+- Designed the impression-deduplication system across nine ad-server endpoints. Reduced double-counting from ~2.1% to <0.05% and recovered $1.2M annually in over-billed refunds.
+- Migrated the warehouse from an aging on-prem Vertica cluster to Snowflake. Hand-ported 600+ stored procedures; the cutover took a single weekend and a single rollback that was fixed within 90 minutes.
+- Built the data-quality framework that wrapped every nightly job with row-count, null-rate, and schema-drift assertions. Surfaced a six-figure billing bug in week one of rollout.
+- Mentored two junior engineers; one is now a staff engineer at the same company.
+
+
+SIDE PROJECTS
+
+Sleet — Cost-aware Snowflake query advisor
+Python · Snowflake · Streamlit
+
+A small CLI + dashboard that profiles a Snowflake account, attributes spend to dbt models and dashboards, and suggests rewrites for the top-N most expensive queries. Open source; a few hundred stars and four contributors.
+
+dbt-quarantine — A dbt package for late-arriving and rejected rows
+dbt · Jinja · SQL
+
+A dbt macro library that codifies the quarantine-and-replay pattern from my day job. Used at three other companies that I know of.
+
+
+EDUCATION
+
+M.S., Computer Science (Distributed Systems track)
+Carnegie Mellon University · Pittsburgh, PA · 2014
+
+B.Tech., Information Technology
+National Institute of Technology, Tiruchirappalli · 2012
+
+
+WRITING
+
+"What 'data platform as a product' actually looks like" — ravisundar.dev/blog/2025-platform-as-product
+A talk-turned-essay arguing that the analyst is your customer, the warehouse is your runtime, and the on-call rotation is your real SLA — based on the Vellum migration.

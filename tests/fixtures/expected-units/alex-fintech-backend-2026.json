@@ -1,0 +1,207 @@
+{
+  "fixture_id": "alex-fintech-backend-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the senior fintech backend engineer archetype. One ExpectedUnit per fact-bearing bullet in the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_spanner_migration",
+      "normalized_summary": "Led migration of core ledger from single-region Postgres to multi-region active-active Spanner — cut cross-region write P99 from 740ms to 95ms, eliminated nightly failover drill, unblocked European payments license",
+      "skills": [
+        "distributed systems",
+        "database migration",
+        "data residency compliance",
+        "multi-region architecture",
+        "zero-downtime migration"
+      ],
+      "tools": ["Spanner", "PostgreSQL", "Go"],
+      "domains": ["fintech", "payments infrastructure"]
+    },
+    {
+      "id": "u_idempotency_layer",
+      "normalized_summary": "Designed and shipped Go-based idempotency layer fronting the authorization path that deduplicates retries across card networks; reduced duplicate-charge tickets by 82% and cited in SOC 2 Type II report",
+      "skills": [
+        "distributed systems",
+        "api design",
+        "payments infrastructure",
+        "compliance engineering"
+      ],
+      "tools": ["Go", "card networks"],
+      "domains": ["fintech", "payments infrastructure"]
+    },
+    {
+      "id": "u_kafka_topology",
+      "normalized_summary": "Migrated 38 producer services off shared Kafka cluster onto tiered-storage deployment with topic-level isolation; reduced tail-latency incidents from weekly to fewer than 4 per year and cut $1.4M in annual infra spend",
+      "skills": [
+        "distributed systems",
+        "event streaming",
+        "infrastructure cost optimization",
+        "platform isolation"
+      ],
+      "tools": ["Kafka"],
+      "domains": ["fintech", "payments infrastructure"]
+    },
+    {
+      "id": "u_chargeback_recon",
+      "normalized_summary": "Built chargeback reconciliation service from scratch in Python and Postgres — auto-resolves 71% of breaks and replaced a $2.8M annual vendor product with chronic SLA misses",
+      "skills": [
+        "data pipelines",
+        "reconciliation systems",
+        "vendor replacement",
+        "operational tooling"
+      ],
+      "tools": ["Python", "PostgreSQL"],
+      "domains": ["fintech", "payments operations"]
+    },
+    {
+      "id": "u_pci_dss",
+      "normalized_summary": "Tech lead on PCI DSS 4.0 readiness — refactored tokenization service to remove unencrypted PAN from logs, automated key rotation runbook from 6 hours to 12 minutes, closed Q3 2025 certification with zero findings",
+      "skills": [
+        "security engineering",
+        "compliance engineering",
+        "tokenization",
+        "key management",
+        "audit readiness"
+      ],
+      "tools": ["PCI DSS"],
+      "domains": ["fintech", "payments security"]
+    },
+    {
+      "id": "u_oncall_lead",
+      "normalized_summary": "On-call rotation lead for 9-engineer money-movement platform — cut pages per engineer per week from 11 to 2.4 and improved mean time to mitigate from 38 minutes to 9 minutes",
+      "skills": [
+        "incident response",
+        "on-call leadership",
+        "operational excellence",
+        "runbook design"
+      ],
+      "tools": ["incident response tooling"],
+      "domains": ["fintech", "payments infrastructure"]
+    },
+    {
+      "id": "u_mentoring",
+      "normalized_summary": "Mentored four engineers from senior to staff over three years and authored the technical-leadership rubric used for platform-org promotion calibration",
+      "skills": [
+        "engineering mentorship",
+        "career development",
+        "promotion calibration"
+      ],
+      "tools": [],
+      "domains": ["engineering management"]
+    },
+    {
+      "id": "u_fraud_decisioning",
+      "normalized_summary": "Built real-time fraud-decisioning service scoring every authorization in under 12ms P99 with pluggable ONNX-runtime model server supporting A/B and shadow-traffic deployment",
+      "skills": [
+        "low-latency systems",
+        "machine learning infrastructure",
+        "shadow deployment",
+        "risk decisioning"
+      ],
+      "tools": ["ONNX", "Go"],
+      "domains": ["fintech", "fraud and risk"]
+    },
+    {
+      "id": "u_rules_engine",
+      "normalized_summary": "Decommissioned legacy 1,200-rule Java rules engine — migrated active rules to typed DSL, retired 60% as unused, cut decisioning P99 from 84ms to 12ms",
+      "skills": [
+        "legacy migration",
+        "domain-specific languages",
+        "performance optimization"
+      ],
+      "tools": ["Java"],
+      "domains": ["fintech", "fraud and risk"]
+    },
+    {
+      "id": "u_eventing_standard",
+      "normalized_summary": "Co-authored internal Eventing Standard for Kafka schema evolution and topic naming — adopted by 11 other teams and cited in two Kafka Summit talks",
+      "skills": [
+        "schema evolution",
+        "event streaming",
+        "platform standards",
+        "technical writing"
+      ],
+      "tools": ["Kafka"],
+      "domains": ["fintech", "platform engineering"]
+    },
+    {
+      "id": "u_posting_engine",
+      "normalized_summary": "Re-architected core posting engine from synchronous request/response to event-sourced log — eliminated class of out-of-order posting bugs that had caused three regulatory near-misses",
+      "skills": [
+        "event sourcing",
+        "ledger systems",
+        "regulatory compliance",
+        "system architecture"
+      ],
+      "tools": ["event sourcing"],
+      "domains": ["fintech", "core banking"]
+    },
+    {
+      "id": "u_settlement_files",
+      "normalized_summary": "Built daily settlement-file generator producing NACHA, FedWire, and SWIFT MT103 outputs from unified ledger — processes ~$840M in daily flow",
+      "skills": [
+        "settlement systems",
+        "banking integrations",
+        "file-based protocols"
+      ],
+      "tools": ["NACHA", "FedWire", "SWIFT MT103"],
+      "domains": ["fintech", "core banking"]
+    },
+    {
+      "id": "u_postgres_incident",
+      "normalized_summary": "Led engineering response to first major outage at Northwind — 3-hour Postgres replication-lag partial outage; wrote postmortem and drove four follow-up workstreams",
+      "skills": [
+        "incident response",
+        "postmortem writing",
+        "database operations"
+      ],
+      "tools": ["PostgreSQL"],
+      "domains": ["fintech", "core banking"]
+    },
+    {
+      "id": "u_quill_queues",
+      "normalized_summary": "Owned queue and worker infrastructure for document-automation product in Python and RabbitMQ — scaled throughput from 800 to 26,000 documents per minute over 18 months without rewriting the data model",
+      "skills": [
+        "queue systems",
+        "horizontal scaling",
+        "throughput optimization"
+      ],
+      "tools": ["Python", "RabbitMQ", "PostgreSQL"],
+      "domains": ["workflow automation", "saas infrastructure"]
+    },
+    {
+      "id": "u_quill_sso",
+      "normalized_summary": "Built SAML SSO integration layer — shipped enterprise SSO for three largest customers and unblocked $4M in ARR",
+      "skills": [
+        "enterprise sso",
+        "identity integration",
+        "saml"
+      ],
+      "tools": ["SAML"],
+      "domains": ["enterprise software"]
+    },
+    {
+      "id": "u_ledgerline",
+      "normalized_summary": "Built and open-sourced Ledgerline — a Go double-entry ledger library with idempotency keys, multi-currency support, and explicit reversal semantics; ~2.4k GitHub stars and used in production at three fintechs",
+      "skills": [
+        "open source",
+        "ledger systems",
+        "library design",
+        "double-entry accounting"
+      ],
+      "tools": ["Go", "PostgreSQL"],
+      "domains": ["fintech", "open source"]
+    },
+    {
+      "id": "u_pgbench_replay",
+      "normalized_summary": "Built and open-sourced postgres-bench-replay — a Go CLI capturing pg_stat_statements snapshots and replaying workloads to validate that read paths would not regress under realistic concurrency",
+      "skills": [
+        "performance testing",
+        "database benchmarking",
+        "open source"
+      ],
+      "tools": ["Go", "PostgreSQL", "pg_stat_statements"],
+      "domains": ["distributed systems", "open source"]
+    }
+  ]
+}

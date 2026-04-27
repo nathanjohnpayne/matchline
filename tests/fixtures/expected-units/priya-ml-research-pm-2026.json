@@ -1,0 +1,170 @@
+{
+  "fixture_id": "priya-ml-research-pm-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the ML research-adjacent product manager archetype. One ExpectedUnit per fact-bearing bullet in the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_personalization_launch",
+      "normalized_summary": "Productionized first long-context personalization model into the consumer assistant — drove eval design, rollout-stage gating, and pre-launch red-team plan; shipped to 100% of paid users with +14% helpfulness eval lift",
+      "skills": [
+        "research to product",
+        "model launch",
+        "rollout gating",
+        "red-team planning",
+        "ml product management"
+      ],
+      "tools": ["consumer assistant", "personalization model"],
+      "domains": ["machine learning", "applied ai"]
+    },
+    {
+      "id": "u_eval_suite",
+      "normalized_summary": "Designed and ran the offline eval suite for the personalization release — 7 capability slices, 3 safety slices, plus a held-out user-simulation slice; now the team's standing release gate",
+      "skills": [
+        "model evaluation",
+        "eval design",
+        "release gating",
+        "safety evaluation"
+      ],
+      "tools": ["offline eval suite", "user simulation"],
+      "domains": ["machine learning", "model evaluation"]
+    },
+    {
+      "id": "u_memory_feature",
+      "normalized_summary": "Owned the spec for user-facing memory feature exposing the personalization model — shipped read/edit/pin UX, drove privacy review, launched memory-on-by-default with explicit opt-out approved by policy",
+      "skills": [
+        "product specification",
+        "privacy by design",
+        "user-facing ml",
+        "policy partnership"
+      ],
+      "tools": ["memory ui"],
+      "domains": ["machine learning", "consumer ai"]
+    },
+    {
+      "id": "u_refusal_calibration",
+      "normalized_summary": "Led cross-functional working group on refusal calibration with three research scientists — built measurement framework distinguishing safety-relevant refusals from over-cautious ones; now the standard refusal eval used by two adjacent teams",
+      "skills": [
+        "model behavior",
+        "safety evaluation",
+        "research collaboration",
+        "measurement framework design"
+      ],
+      "tools": ["refusal eval"],
+      "domains": ["machine learning", "model safety"]
+    },
+    {
+      "id": "u_research_playbook",
+      "normalized_summary": "Co-authored internal playbook for shipping research artifacts — eval gates, red-team requirements, rollout staging, and the research-to-product handoff template; adopted by four product teams",
+      "skills": [
+        "research to product",
+        "playbook authoring",
+        "cross-team standards"
+      ],
+      "tools": [],
+      "domains": ["machine learning", "applied ai"]
+    },
+    {
+      "id": "u_structured_output",
+      "normalized_summary": "Shipped structured-output API surface — constrained-decoding interface that pins a JSON schema; +$8M net-new ARR within two quarters, adopted by 41% of top-100 API customers",
+      "skills": [
+        "api product management",
+        "developer platform",
+        "pricing design",
+        "constrained decoding"
+      ],
+      "tools": ["JSON Schema"],
+      "domains": ["developer tools", "machine learning"]
+    },
+    {
+      "id": "u_reels_ranker",
+      "normalized_summary": "Led rollout of second-generation transformer-based ranker for Reels — owned experiment design and staged-traffic rollout; +6.1% time-spent across four largest markets and +2.4% on fairness metrics in smaller-language locales",
+      "skills": [
+        "ranking systems",
+        "experimentation",
+        "staged rollout",
+        "fairness evaluation"
+      ],
+      "tools": ["transformer ranker", "Reels"],
+      "domains": ["machine learning", "recommendations"]
+    },
+    {
+      "id": "u_creator_value",
+      "normalized_summary": "Designed and shipped creator-value objective head — ranking signal rewarding distribution to early-stage creators; -0.3% watch-time tradeoff for +18% in distinct creators served per week and creator-side retention lift",
+      "skills": [
+        "objective design",
+        "ranking systems",
+        "tradeoff analysis",
+        "marketplace dynamics"
+      ],
+      "tools": ["Reels"],
+      "domains": ["machine learning", "creator economy"]
+    },
+    {
+      "id": "u_integrity_workstream",
+      "normalized_summary": "Owned integrity workstream for Reels ranking — reduced policy-violating content prevalence by 38% via candidate-generation filter, re-ranker penalty model, and review-routing change",
+      "skills": [
+        "trust and safety",
+        "ranking systems",
+        "policy enforcement"
+      ],
+      "tools": ["Reels"],
+      "domains": ["machine learning", "trust and safety"]
+    },
+    {
+      "id": "u_eval_refresh",
+      "normalized_summary": "Replaced aging offline-replay tool with counterfactual eval framework based on logged-policy importance sampling — eval cycle time for a new ranking model dropped from 3 weeks to 4 days",
+      "skills": [
+        "model evaluation",
+        "counterfactual evaluation",
+        "developer velocity"
+      ],
+      "tools": ["counterfactual eval framework"],
+      "domains": ["machine learning", "model evaluation"]
+    },
+    {
+      "id": "u_search_embeddings",
+      "normalized_summary": "Led introduction of embedding-based candidate generator for Instagram Search alongside inverted-index lookup — +11% on long-tail recall without measurable precision regression on head queries",
+      "skills": [
+        "candidate generation",
+        "embedding retrieval",
+        "search relevance"
+      ],
+      "tools": ["Instagram Search", "embeddings"],
+      "domains": ["machine learning", "search"]
+    },
+    {
+      "id": "u_trending_now",
+      "normalized_summary": "Shipped Instagram Search trending-now surface — required real-time aggregation pipeline and re-ranker that explicitly demoted historical-but-stale queries",
+      "skills": [
+        "real-time pipelines",
+        "re-ranking",
+        "search product management"
+      ],
+      "tools": ["Instagram Search"],
+      "domains": ["machine learning", "search"]
+    },
+    {
+      "id": "u_evalbench",
+      "normalized_summary": "Built and open-sourced evalbench — a Python eval harness for hobby model fine-tunes with capability slices, regression baselines, and GitHub Actions integration",
+      "skills": [
+        "open source",
+        "model evaluation",
+        "developer tooling"
+      ],
+      "tools": ["Python", "Pytest", "Hugging Face", "GitHub Actions"],
+      "domains": ["machine learning", "open source"]
+    },
+    {
+      "id": "u_finetune_diaries",
+      "normalized_summary": "Published 14 reproducible LoRA fine-tuning notebooks on small public datasets with explicit eval baselines as a teaching resource",
+      "skills": [
+        "fine-tuning",
+        "technical writing",
+        "developer education"
+      ],
+      "tools": ["Hugging Face", "LoRA", "Jupyter"],
+      "domains": ["machine learning", "education"]
+    }
+  ]
+}

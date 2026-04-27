@@ -1,0 +1,84 @@
+Priya Raman
+
+Senior Product Manager — Applied ML, Research-to-Product
+
+San Francisco, CA · hire@example.com · (555) 010-0322
+priyaraman.dev · linkedin.com/in/priyaraman · github.com/priya-r
+
+
+SUMMARY
+
+Product manager with eight years shipping ML-powered products, the last two of those embedded directly with a frontier-model research team at Halcyon AI. I came up as a software engineer, switched into product at Meta's Reels ranking team, and have spent my career sitting between research scientists and the teams that have to put a model behind a UI. I read the papers, run my own evals, and write specs that survive contact with both a researcher's ablation study and a launch-eng team's load-test results. I'm at my best when a model's behavior is the product — when the spec has to talk about calibration and refusal-rate tradeoffs as primary success metrics, not just latency and CTR.
+
+
+EXPERIENCE
+
+Senior Product Manager — Halcyon AI
+Model Behavior & Personalization · San Francisco · 2024 – 2026
+
+Embedded PM on Halcyon's personalization research team. The team produces post-training recipes for adapting Halcyon's frontier model to long-running user contexts; my job is turning a research recipe into a product surface that ships behind the API and in the consumer assistant.
+
+- Productionized Halcyon's first long-context personalization model — a research artifact that adapted to a user's prior conversations via a learned retrieval head — into the consumer assistant. Drove the eval design, the rollout-stage gating criteria, and the pre-launch red-team plan. Shipped to 100% of paid users in March 2026 with a +14% measured improvement on internal helpfulness eval and a -23% reduction in repeated-context complaints in user feedback.
+- Designed and ran the offline eval suite for the personalization release — 7 capability slices, 3 safety slices, and a held-out user-simulation slice we built from anonymized real conversations. Eval suite is now the team's standing release gate; three subsequent fine-tunes have been blocked or reshaped by it before getting to a launch review.
+- Owned the spec for the user-facing memory feature that exposes the underlying personalization model. Wrote the calibration-and-edit UX (users can read, edit, and pin their model-held memories), drove the privacy review with the trust team, and shipped a memory-on-by-default rollout with an explicit opt-out path that the policy team signed off on without modifications.
+- Led the cross-functional working group on refusal calibration for the personalization model. Worked directly with three research scientists on a measurement framework that distinguished safety-relevant refusals from over-cautious ones; the framework is now the standard refusal eval used by two adjacent product teams.
+- Co-authored Halcyon's internal playbook for "shipping a research artifact" — the canonical 30-page doc covering eval gates, red-team requirements, rollout staging, and the research-to-product handoff template. Adopted by four product teams across the personalization, coding, and agentic surfaces.
+
+Product Manager — Halcyon AI
+Developer Platform · San Francisco · 2024
+
+Joined Halcyon on the API team six months before moving onto the research-embedded role above.
+
+- Shipped the structured-output API surface — a constrained-decoding interface that lets API customers pin a JSON schema. Drove the spec, the docs, and the pricing model; +$8M in net-new ARR within two quarters and adopted by 41% of Halcyon's top-100 API customers.
+
+Senior Product Manager — Meta
+Reels Ranking & Recommendations · Menlo Park · 2021 – 2024
+
+PM on the Reels ranking team — the multi-stage candidate-generation, ranking, and re-ranking pipeline that decides what shows up in the Reels feed for ~2 billion monthly users.
+
+- Led the rollout of the second-generation transformer-based ranker for Reels. Owned the experiment design, the staged-traffic rollout, and the model-version comparison framework that compared the new model to the production baseline across 26 metric slices including under-served language locales. +6.1% time-spent across the four largest markets and +2.4% on a basket of fairness metrics across smaller-language-locales.
+- Designed and shipped the "creator value" objective head — a ranking signal that rewards distribution to creators in earlier stages of their growth curve. Required a six-month working partnership with the creator-economy team and a research scientist who had to convince me the formulation wasn't going to tank watch-time. Net effect at full launch: -0.3% watch-time, +18% in distinct-creators-served-per-week, and a measurable retention lift on the creator side.
+- Owned the integrity workstream for Reels ranking. Reduced the prevalence of policy-violating content in the feed by 38% over four quarters via three coordinated launches: a candidate-generation filter, a re-ranker penalty model, and a downstream review-routing change.
+- Ran the Reels eval-environment refresh — replaced an aging offline-replay tool with a counterfactual eval framework based on logged-policy importance sampling. Eval cycle time for a new ranking model dropped from 3 weeks to 4 days.
+
+Product Manager — Meta
+Instagram Search · New York · 2019 – 2021
+
+- PM for the candidate-generation half of Instagram Search. Led the introduction of an embedding-based candidate generator alongside the existing inverted-index lookup; +11% on long-tail recall without measurable precision regression on head queries.
+- Shipped the search "trending now" surface — required a real-time aggregation pipeline I helped scope with the infra team and a re-ranker that explicitly demoted historical-but-stale queries.
+
+Software Engineer → Associate Product Manager — Meta
+Various teams · New York · 2018 – 2019
+
+Started as a software engineer on Instagram's notifications-ranking team. Transitioned to APM after a year. The engineering background turned out to be the single most useful thing I brought into product — being able to read the ranker code and run my own offline evals saved a lot of round-trips.
+
+
+SIDE PROJECTS
+
+evalbench — Lightweight eval harness for hobby model fine-tunes
+Python · Pytest · Hugging Face
+
+A small Python package I wrote to run evals against locally-served fine-tunes without spinning up a full eval framework. Supports capability slices, regression baselines, and a thin GitHub Actions integration. Used internally by my weekend-projects pipeline; ~600 stars on GitHub.
+
+fine-tune diaries — Public fine-tuning notebooks
+Python · Hugging Face · LoRA
+
+A series of 14 reproducible LoRA fine-tunes published as Jupyter notebooks, each on a small public dataset, with explicit eval baselines. The point is the methodology, not the artifact — a teaching resource for PMs who want to read a fine-tune the way an engineer reads a diff.
+
+
+WRITING
+
+ml-product-notes — priyaraman.dev/notes
+
+- "Evals Are the Spec" (February 2026) — On why the eval suite, not the PRD, is the binding contract for an ML product. Drawn from the Halcyon personalization launch.
+- "Six Things I Learned from Embedding with Researchers" (November 2025) — A field guide for product managers who are about to be the only non-PhD in a research-embedded role.
+
+
+EDUCATION
+
+B.S., Computer Science
+Stanford University · Stanford, CA · 2018
+
+Continuing Education
+- Practical Deep Learning for Coders — fast.ai, 2021
+- The Anthropic Frontier Model Series — public lecture series, 2024

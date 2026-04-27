@@ -1,0 +1,85 @@
+Alex Castellanos
+
+Senior Backend Engineer — Distributed Systems, Payments Infrastructure
+
+New York, NY · hire@example.com · (555) 010-0211
+alexcastellanos.dev · linkedin.com/in/alexcastellanos · github.com/acastellanos
+
+
+SUMMARY
+
+Senior backend engineer with eleven years building payments and ledger infrastructure at scale. Most recently at Plaintree Financial, a public payments processor, where I led the platform team responsible for the authorization path, money movement, and the multi-region ledger that closes the books for merchants in 23 countries. I work in the seam where correctness meets latency — where a ten-millisecond regression at the auth path becomes a contractual breach with the card networks, and a single double-spend bug becomes a regulatory event. I run on-call rotations for systems that can never be down, mentor mid-career engineers into staff-level scope, and write the runbooks that keep us out of the news.
+
+
+EXPERIENCE
+
+Staff Backend Engineer — Plaintree Financial
+Money Movement Platform · New York · 2021 – 2026
+
+Tech lead for the team that owns Plaintree's authorization path, settlement engine, and core ledger. Backend stack is Go and Python on Postgres, Kafka, and Spanner; we serve ~14k authorization requests per second at peak with a 99.99% availability SLO and a contractual P99 budget of 180ms end-to-end.
+
+- Led the migration of Plaintree's core ledger from a single-region Postgres deployment to a multi-region active-active topology on Spanner. Cut cross-region write latency from a P99 of 740ms to 95ms, eliminated the nightly 47-minute failover drill, and unblocked our European payments license by satisfying data-residency requirements for EU principals. Migration shipped over 14 months with zero customer-visible downtime.
+- Designed and shipped Plaintree's idempotency layer — a Go service fronting the authorization path that deduplicates retries across the four card networks and our own client SDKs. Reduced duplicate-charge support tickets by 82% in the first quarter post-launch and became the reference implementation cited in our SOC 2 Type II report.
+- Owned the Kafka topology powering settlement events. Migrated 38 producer services off a shared cluster onto a tiered storage Kafka deployment with topic-level isolation; cut tail-latency incidents from a weekly occurrence to fewer than four per year and reduced infrastructure spend by $1.4M annually.
+- Built the chargeback reconciliation service from scratch — a Python and Postgres pipeline that reconciles disputes against the network-provided clearing files, surfaces breaks within 30 minutes of file delivery, and auto-resolves 71% of breaks without analyst intervention. Replaced a vendor product that cost $2.8M annually and missed a 24-hour SLA roughly twice a quarter.
+- Tech lead on Plaintree's PCI DSS 4.0 readiness program for the cardholder data environment. Refactored the tokenization service to remove all unencrypted PAN exposure from application logs, drove the cryptographic key rotation runbook from a 6-hour all-hands exercise to a 12-minute automated procedure, and led the auditor walkthroughs that closed Q3 2025 certification with zero findings.
+- On-call rotation lead for the money-movement platform — 9 engineers across two timezones. Rewrote the incident-response playbook around a strict "page only on customer-impacting symptoms" rule; reduced pages per engineer per week from 11 to 2.4 over four quarters, and improved median acknowledgement-to-mitigation time from 38 minutes to 9 minutes.
+- Mentored four engineers from senior to staff over the last three years, including writing the technical-leadership rubric Plaintree's platform org now uses for promotion calibration.
+
+Senior Backend Engineer — Plaintree Financial
+Risk & Decisioning · New York · 2019 – 2021
+
+- Built the real-time fraud-decisioning service that scores every authorization in under 12ms at P99. Pluggable model server backed by ONNX runtime; supports A/B and shadow-traffic deployment of new models without redeploys. Currently serves the production-decisioning path for all of Plaintree's North American volume.
+- Led the decommissioning of a legacy Java rules engine that had grown to 1,200+ rules; migrated active rules to a typed DSL, retired 60% of them as unused, and cut decisioning-path P99 from 84ms to 12ms.
+- Co-authored the internal "Eventing Standard" — the canonical schema-evolution and topic-naming spec that all of Plaintree's Kafka producers now follow. Adopted by 11 other teams and cited in two external Kafka Summit talks.
+
+Backend Engineer — Northwind Banking
+Core Ledger · New York · 2017 – 2019
+
+Northwind is a mid-market bank-as-a-service provider; the core ledger team owns the double-entry bookkeeping system that backs every dollar moving through Northwind's BIN sponsorships.
+
+- Re-architected Northwind's posting engine from a synchronous request/response design to an event-sourced log; eliminated a class of out-of-order posting bugs that had caused three regulatory near-misses in the prior year.
+- Built the daily settlement-file generator that produces NACHA, FedWire, and SWIFT MT103 outputs from the unified ledger. Currently processes ~$840M in daily flow.
+- Led the engineering response to Northwind's first major incident — a 3-hour partial outage caused by a Postgres replication lag spike. Wrote the postmortem, drove the four follow-up workstreams, and the runbook is still in use.
+
+Backend Engineer — Quill Software
+Workflow Automation · Brooklyn · 2015 – 2017
+
+- Owned the queue and worker infrastructure for Quill's document-automation product (Python, RabbitMQ, Postgres). Scaled it from 800 to 26,000 documents-per-minute over 18 months without rewriting the data model.
+- Built the SAML SSO integration layer; shipped enterprise SSO for Quill's three largest customers and unblocked $4M ARR.
+
+Software Engineer — Halverson Logistics
+Routing & Dispatch · Boston · 2013 – 2015
+
+First engineering job out of school. Wrote Python services for the dispatch and routing platform; on-call for the overnight run that scheduled the next day's deliveries for ~3,200 trucks.
+
+
+SIDE PROJECTS
+
+Ledgerline — Open-source double-entry ledger library
+Go · Postgres
+
+A small, audited Go library implementing a strict double-entry posting model with idempotency keys, multi-currency support, and explicit reversal semantics. Written as the reference implementation I wish I'd had at Northwind. ~2.4k GitHub stars; used in production at three fintechs I know of.
+
+postgres-bench-replay — Replay tooling for Postgres workload capture
+Go · Postgres
+
+A small CLI that captures pg_stat_statements snapshots and replays the same workload against a candidate cluster, with per-query latency and lock-wait deltas. Built during the Plaintree Spanner migration to validate that read paths would not regress under realistic concurrency. Open-sourced under Apache 2.0 in early 2025.
+
+
+WRITING
+
+Distributed-systems essays — alexcastellanos.dev/writing
+
+- "Idempotency Keys Are a Public API" (October 2025) — A long-form post on why idempotency keys can never be implementation details, and why every payments system that treats them as such ends up with a chargeback reconciliation problem.
+- "What Spanner Actually Costs You" (June 2025) — Honest accounting of the developer-experience and observability costs of a multi-region Spanner deployment, written one year after Plaintree's migration GA'd.
+
+
+EDUCATION
+
+B.S., Computer Science
+Carnegie Mellon University · Pittsburgh, PA · 2013
+
+Continuing Education
+- Distributed Systems for Practitioners — MIT Professional Education, 2020
+- Effective Technical Leadership — Plato Mentoring Program, 2022

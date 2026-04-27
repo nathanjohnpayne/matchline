@@ -1,0 +1,186 @@
+{
+  "fixture_id": "chen-hardware-silicon-pm-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the hardware/silicon PM archetype. One ExpectedUnit per fact-bearing bullet in the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_aria3_codec",
+      "normalized_summary": "Led codec strategy across Lumenix Aria 3 headphone line — added Dolby Atmos with head tracking, LC3 over LE Audio, and Snapdragon Sound co-marketing; cleared Atmos certification two weeks before FCS",
+      "skills": [
+        "codec strategy",
+        "audio product management",
+        "certification program management",
+        "partner co-marketing"
+      ],
+      "tools": ["Dolby Atmos", "LC3", "LE Audio", "Snapdragon Sound"],
+      "domains": ["consumer audio", "connected devices"]
+    },
+    {
+      "id": "u_xr2_rfq",
+      "normalized_summary": "Drove SoC selection RFQ for Lumenix Vision 2 XR headset across three candidate platforms; landed on Qualcomm XR2 Gen 2 with NRE and volume tiers tied to a 2.4M-unit four-year forecast",
+      "skills": [
+        "soc selection",
+        "vendor negotiation",
+        "platform evaluation",
+        "volume forecasting"
+      ],
+      "tools": ["Qualcomm XR2 Gen 2", "Qualcomm Snapdragon"],
+      "domains": ["xr devices", "connected devices"]
+    },
+    {
+      "id": "u_atmos_headphones_cert",
+      "normalized_summary": "Owned Dolby Atmos for Headphones certification across four product lines, built shared 38-test-case-per-SKU matrix, drove EQ preset rework, recertified all active SKUs ahead of Atmos 2.1 spec deadline",
+      "skills": [
+        "certification program management",
+        "audio engineering coordination",
+        "compliance",
+        "test matrix design"
+      ],
+      "tools": ["Dolby Atmos"],
+      "domains": ["consumer audio", "device certification"]
+    },
+    {
+      "id": "u_auracast_ifa",
+      "normalized_summary": "Shipped LE Audio plus Auracast preview firmware for Aria 3 Pro at IFA 2024, coordinated one-month-early Bluetooth SIG certification window; press reception drove 14% lift in pre-order conversion",
+      "skills": [
+        "trade show launch",
+        "firmware program management",
+        "standards body coordination",
+        "go-to-market"
+      ],
+      "tools": ["LE Audio", "Auracast", "Bluetooth SIG"],
+      "domains": ["consumer audio", "wireless connectivity"]
+    },
+    {
+      "id": "u_partner_defect_intake",
+      "normalized_summary": "Stood up structured partner-defect intake with Qualcomm and Cirrus Logic FAE teams replacing ad-hoc email chain, cut median silicon-bug turnaround from 41 days to 17 across Vision and Aria programs",
+      "skills": [
+        "partner operations",
+        "process design",
+        "cross-vendor coordination",
+        "issue triage"
+      ],
+      "tools": ["Jira", "Qualcomm", "Cirrus Logic"],
+      "domains": ["partner operations", "connected devices"]
+    },
+    {
+      "id": "u_vision2_compositor_spec",
+      "normalized_summary": "Co-authored Lumenix Vision 2 reference compositor spec with silicon partner — defined 6ms asynchronous timewarp budget, foveated rendering tile size, and passthrough video color management; spec adopted by two other OEMs",
+      "skills": [
+        "spec authorship",
+        "xr systems design",
+        "graphics pipeline product management",
+        "partner technical negotiation"
+      ],
+      "tools": ["Qualcomm XR2 Gen 2"],
+      "domains": ["xr devices", "graphics and display"]
+    },
+    {
+      "id": "u_halberd_reference_design",
+      "normalized_summary": "Ran multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400) — owned codec, ISP, and display feature matrix including AV1 decode rollout and 8K30 HDR10+ recording",
+      "skills": [
+        "reference design ownership",
+        "soc roadmap planning",
+        "feature matrix design",
+        "oem enablement"
+      ],
+      "tools": ["AV1", "HDR10+"],
+      "domains": ["mobile silicon", "connected devices"]
+    },
+    {
+      "id": "u_av1_decode_rollout",
+      "normalized_summary": "Led OEM enablement for AV1 hardware decode on Halberd 8300, drove four-OEM pilot through YouTube and Netflix certification labs, shipped first Android phones with AV1 hardware decode in market Q3 2020",
+      "skills": [
+        "codec rollout",
+        "oem enablement",
+        "ecosystem partnership",
+        "integration guide authorship"
+      ],
+      "tools": ["AV1", "YouTube", "Netflix"],
+      "domains": ["mobile silicon", "video codecs"]
+    },
+    {
+      "id": "u_isp_roadmap_negotiation",
+      "normalized_summary": "Owned camera ISP feature roadmap negotiation with two top-three Korean OEMs, translated flagship camera roadmap into 27 prioritized ISP features across two SoC generations, hit every committed feature gate on 8400 cycle",
+      "skills": [
+        "roadmap negotiation",
+        "feature prioritization",
+        "image signal processing product management",
+        "oem partnership"
+      ],
+      "tools": ["camera ISP"],
+      "domains": ["mobile silicon", "computational imaging"]
+    },
+    {
+      "id": "u_snapdragon_sound_colaunch",
+      "normalized_summary": "Shipped Snapdragon Sound program co-launch on Halberd 8200 reference including aptX Lossless and aptX Adaptive co-certification across three OEM partners despite late aptX spec change",
+      "skills": [
+        "co-marketing program management",
+        "audio certification",
+        "partner coordination",
+        "scope tradeoffs"
+      ],
+      "tools": ["Snapdragon Sound", "aptX Lossless", "aptX Adaptive"],
+      "domains": ["mobile silicon", "consumer audio"]
+    },
+    {
+      "id": "u_partner_dashboard",
+      "normalized_summary": "Built partner reference-design issue dashboard in Looker on Snowflake JIRA mirror tracking 1,400+ issues across 9 OEMs, replaced quarterly PDF status report with live exec-review dashboard",
+      "skills": [
+        "data infrastructure",
+        "executive reporting",
+        "operational tooling",
+        "partner visibility"
+      ],
+      "tools": ["Looker", "Snowflake", "Jira"],
+      "domains": ["partner operations", "platform observability"]
+    },
+    {
+      "id": "u_mali_regression",
+      "normalized_summary": "Led cross-program response to Mali GPU driver regression blocking three OEM tape-outs, coordinated rollback with IP vendor, shepherded patched driver through partner certification matrix in eleven days",
+      "skills": [
+        "incident response",
+        "cross-vendor escalation",
+        "gpu driver coordination",
+        "release management"
+      ],
+      "tools": ["ARM Mali"],
+      "domains": ["mobile silicon", "graphics and display"]
+    },
+    {
+      "id": "u_wifi6_enablement",
+      "normalized_summary": "Drove Wi-Fi 6 enablement cycle across 14 connected-home partners including partner integration guide and quarterly office-hours program",
+      "skills": [
+        "partner enablement",
+        "wireless standards rollout",
+        "developer relations"
+      ],
+      "tools": ["Wi-Fi 6"],
+      "domains": ["connected devices", "wireless connectivity"]
+    },
+    {
+      "id": "u_bt_le_audio_early",
+      "normalized_summary": "Owned Bluetooth 5.2 LE Audio early-access program, shipped partner-facing reference firmware to seven OEMs ahead of public spec ratification",
+      "skills": [
+        "early-access program management",
+        "wireless standards rollout",
+        "firmware delivery"
+      ],
+      "tools": ["Bluetooth 5.2", "LE Audio"],
+      "domains": ["wireless connectivity", "connected devices"]
+    },
+    {
+      "id": "u_codecbench",
+      "normalized_summary": "Built CodecBench — open-source codec comparison harness for AV1, HEVC, VP9, H.264 across 200-clip corpus; cited in three SMPTE papers, 1,400+ GitHub stars",
+      "skills": [
+        "open source maintenance",
+        "video quality measurement",
+        "benchmarking",
+        "0-to-1 product"
+      ],
+      "tools": ["Python", "FFmpeg", "GitHub Actions", "AV1", "HEVC"],
+      "domains": ["video codecs", "developer tools"]
+    }
+  ]
+}

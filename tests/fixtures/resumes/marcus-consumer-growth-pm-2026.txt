@@ -1,0 +1,82 @@
+Marcus Okafor
+
+Senior Product Manager — Consumer Growth, Mobile, 0-to-1 Launches
+
+Brooklyn, NY · hire@example.com · (555) 010-0433
+marcusokafor.com · linkedin.com/in/marcusokafor · github.com/m-okafor
+
+
+SUMMARY
+
+Consumer growth product manager with eight years building mobile-first products that grow on their own. I led the activation and viral-loop team at Riff, a Gen-Z social app that went from 400k to 22M monthly actives during my tenure, and most recently led the subscription monetization team at Loom Goods, a direct-to-consumer marketplace. I'm a 0-to-1 PM in temperament — I like the early stretch where the funnel is still being invented, the experiments still surface real signal, and a single good loop can change the trajectory of a company. I run my own SQL, instrument my own events, and have lost more bets in Statsig than most people have launched.
+
+
+EXPERIENCE
+
+Senior Product Manager — Loom Goods
+Subscription & Monetization · Brooklyn · 2023 – 2026
+
+PM for Loom Goods' subscription program — the membership tier that bundles free shipping, member pricing, and an exclusive-products catalog. Owned the end-to-end subscriber lifecycle: acquisition, activation, retention, and winback.
+
+- Redesigned the subscription paywall from a single-screen pricing page to a three-step value-then-price flow. Tested in five iterative experiments over four months; the winning variant lifted paid-conversion from 2.8% to 4.6% on a base of ~3.1M monthly paywall impressions. Annualized impact: +$11.4M in net-new subscription revenue.
+- Designed and shipped the "first-month onboarding" flow that drives new subscribers to use their first three benefits within seven days of signup. Activation lift of +21% measured at the seven-day mark; downstream effect of a +9% improvement in 90-day retention.
+- Owned the price-experimentation roadmap. Ran a structured set of nine pricing tests across plan duration, intro-offer depth, and currency framing; the winning combination reduced first-year churn from 38% to 27% on the annual plan.
+- Led the winback program redesign. Replaced a single batch email with a behavioral-trigger system spanning email, push, and in-app — segmented by reason-for-cancel where known. Reactivation rate among 90-day-lapsed members lifted from 4.2% to 9.8%; payback is positive within the first reactivated billing cycle.
+- Shepherded the subscription brand refresh in partnership with Marketing — repositioned from "Loom Goods Plus" to a named program with its own visual identity, member-only product drops, and a referral program that now drives 14% of new signups.
+
+Senior Product Manager — Riff
+Activation & Viral Loops · New York · 2020 – 2023
+
+Riff is a Gen-Z short-form social app. I joined when the company was 18 people and DAU was ~140k; left as PM lead for the activation team in a company of 220 with a peak of 22M MAU.
+
+- Owned the new-user activation funnel from app-open through "first content posted." Through 27 launched experiments over 30 months, lifted day-1 activation from 19% to 41% and the day-7 retained-poster rate from 6% to 17%. The largest single contributor was the rebuilt onboarding video-capture flow, which removed three taps and a permission prompt by lazy-loading the camera permissions request to the moment of first capture.
+- Designed and shipped Riff's contact-import-driven friend graph — the cold-start mechanic that gave new users an instantly populated feed on their first session. Net contribution: +12 percentage points to day-1 retention. Required a careful privacy-and-consent design that the policy team approved without modification.
+- Built Riff's referral system from scratch — link-based invites with attribution back to the inviting user, plus a tiered rewards program with cosmetic unlocks. At peak, drove 22% of weekly new installs at a fully-loaded CAC of $0.41 versus $4.30 on paid social.
+- Led the cross-functional team that shipped Riff's iOS App Clip — a tap-to-preview experience that let a non-installed user watch a Riff before installing. Drove a +6.8% lift in install-conversion from shared-link traffic during the launch quarter.
+- Owned the in-app push-notification strategy. Replaced a hand-tuned set of 14 batch notifications with a model-scored personalized notification system; cut notification volume per user by 38% while lifting notification-driven sessions by 12% (i.e., dramatically reduced annoyance for the same outcome).
+- Ran Riff's A/B testing infrastructure migration from a homegrown allocator to Statsig. Wrote the experimentation playbook the company still uses, including the pre-registration template, the minimum-detectable-effect calculator, and the "no winner without a power analysis" review rule.
+
+Product Manager — Spool
+Creator Tools · Los Angeles · 2018 – 2020
+
+Spool is a creator-focused tipping and subscription platform. I owned the creator-discovery surface and the supporter-acquisition funnel.
+
+- Shipped Spool's first creator landing-page experience — a personalized page each creator can share that became the single largest source of supporter signups (47% of new supporter accounts at the time I left).
+- Owned the supporter onboarding funnel; lifted email-capture-to-paying-supporter conversion from 3.1% to 7.4% over my tenure across a sequence of small, mostly-copy-driven experiments.
+- Built the creator analytics dashboard from scratch — the screen creators actually opened daily. Designed the metric set, ran the user research, and drove the engineering scope from 14 weeks down to 6 by removing things creators didn't actually look at.
+
+Associate Product Manager → Product Manager — TableTop
+Restaurant Discovery · San Francisco · 2017 – 2018
+
+First PM role. Owned the iOS reservation-confirmation funnel — the screens between a tap on a restaurant card and a confirmed booking. Shipped six experiments in twelve months; cumulative impact was +18% in completed reservations per active user.
+
+
+SIDE PROJECTS
+
+Funnelpack — Free funnel-analysis notebook for early-stage PMs
+Python · Jupyter · DuckDB
+
+A single notebook that takes a CSV export of session events and produces a clean activation-funnel chart with a confidence-band overlay. Written for early-stage PMs who don't yet have a Mixpanel or Amplitude license. ~1.1k downloads since launch in late 2024.
+
+growth-stack-101 — Newsletter
+Substack
+
+A weekly newsletter on consumer growth — funnel teardowns, paywall reviews, and post-mortems on growth experiments other companies have made public. ~9,800 subscribers, mostly junior consumer PMs.
+
+
+WRITING
+
+Consumer growth essays — marcusokafor.com/writing
+
+- "What Riff Got Right About Cold-Start" (October 2025) — A retrospective on the contact-import-driven feed and why it worked despite (because of) being almost embarrassingly old-fashioned.
+- "Paywalls Are Not Pricing Pages" (March 2026) — On the difference between a paywall (a value-conversion surface) and a pricing page (a price-comparison surface), with three teardowns drawn from public marketplaces.
+
+
+EDUCATION
+
+B.A., Economics
+Northwestern University · Evanston, IL · 2017
+
+Continuing Education
+- Reforge: Growth Series — 2021
+- Reforge: Retention + Engagement — 2022
