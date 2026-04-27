@@ -87,10 +87,22 @@ export function unitSetAccuracy(
     for (let i = 0; i < actual.length; i++) {
       if (used.has(i)) continue;
       const a = actual[i]!;
-      const summaryMatch = tokenJaccard(
-        tokenize(e.normalizedSummary),
-        tokenize(a.normalizedSummary),
-      );
+      // Codex P2 on PR #147: a summary made entirely of short
+      // tokens (e.g. "AI ML", "TV OS") tokenizes to empty under
+      // the >2-char filter, and `tokenJaccard(empty, empty) = 0`
+      // would punish a perfect textual match. Fall back to exact
+      // equality on the trimmed lowercase strings when either side
+      // tokenizes empty so identical short-token summaries still
+      // get full credit.
+      const expectedTokens = tokenize(e.normalizedSummary);
+      const actualTokens = tokenize(a.normalizedSummary);
+      const summaryMatch =
+        expectedTokens.size === 0 || actualTokens.size === 0
+          ? e.normalizedSummary.trim().toLowerCase() ===
+            a.normalizedSummary.trim().toLowerCase()
+            ? 1
+            : 0
+          : tokenJaccard(expectedTokens, actualTokens);
       const skillsMatch = jaccard(e.skills, a.skills);
       const score = summaryMatch * 0.6 + skillsMatch * 0.4;
       if (score > bestScore) {

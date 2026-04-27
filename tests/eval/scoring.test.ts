@@ -115,6 +115,37 @@ describe("unitSetAccuracy", () => {
     expect(score).toBeLessThan(0.55);
   });
 
+  it("#146 (Codex P2 on #147): identical short-token summaries get full credit when both tokenize empty", () => {
+    // Pathological case: "AI ML" tokenizes to empty under the
+    // >2-char filter. `tokenJaccard(empty, empty) = 0` would
+    // punish a perfect textual match. Fall-back to exact-equality
+    // on the trimmed lowercase string preserves the credit. With
+    // identical short-token skill, score should be 1.0 (perfect
+    // pair).
+    const expected = [
+      { normalizedSummary: "AI ML", skills: ["AI"] },
+    ];
+    const actual = [
+      { normalizedSummary: "AI ML", skills: ["AI"] },
+    ];
+    expect(unitSetAccuracy(expected, actual)).toBe(1);
+  });
+
+  it("#146 (Codex P2 on #147): different short-token summaries that both tokenize empty score 0 on summary", () => {
+    // Different content, both tokenize empty — exact-equality
+    // fall-back returns 0, and with identical skills the score is
+    // just the skills component (0.4).
+    const expected = [
+      { normalizedSummary: "AI ML", skills: ["AI"] },
+    ];
+    const actual = [
+      { normalizedSummary: "TV OS", skills: ["AI"] },
+    ];
+    // summary 0 (different content via fall-back), skills 1
+    // (identical), score = 0*0.6 + 1*0.4 = 0.4.
+    expect(unitSetAccuracy(expected, actual)).toBeCloseTo(0.4, 6);
+  });
+
   it("#146: wholly unrelated summaries with disjoint skills score near 0", () => {
     // Sanity: the new metric isn't so loose that random text scores
     // high. No shared content tokens AND no shared skills → near 0.
