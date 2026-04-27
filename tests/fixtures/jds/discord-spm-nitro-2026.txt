@@ -1,0 +1,30 @@
+Senior Product Manager, Nitro (Nitro Value squad)
+
+Discord · US (location not specified) · Senior
+
+
+ROLE SUMMARY
+
+Lead Nitro Value squad. Define vision for the premium feature set, launch new high-value experiences, and continuously optimize the existing catalog. Drive execution while partnering with Engagement and other Revenue teams to unlock new monetization opportunities for Nitro.
+
+Team / product: Nitro — Discord's premium subscription, focused on the most loyal/engaged power users; the Nitro Value squad covers utility, identity, and expression features that drive subscriber value and growth.
+
+
+QUALIFICATIONS
+
+- 5+ years experience as a PM shipping great software with a track record of building durable monetization infrastructure.
+- Thrives in ambiguous environments; excited about complex problems and executing on them.
+- Curiosity and empathy for Discord users; deep understanding of gaming culture and online communities.
+- Strong analytical ability; experience making metric-vs-customer trade-offs.
+- Experience with A/B testing and experimentation frameworks.
+- Demonstrated technical proficiency working closely with engineers on user-facing products at high scale.
+- Bonus: BA/BS in CS / Engineering or relevant technical experience; consumer products, especially gaming / messaging / community / social.
+
+
+RESPONSIBILITIES
+
+- Guide product philosophy, vision, and roadmap for Nitro Value (utility, identity, expression features that drive subscriber value and growth).
+- Lead cross-functional execution with Engineering, Design, and Data Science.
+- Partner with other product teams across Discord (Engagement, Core Tech, Boosting, Identity, Shop).
+- Communicate roadmaps, priorities, experiments, and decisions across audiences from partner teams to executives.
+- Empathize and relate to Discord users, especially the most active.

@@ -1,0 +1,29 @@
+Sr. Technical Product Manager - OTT
+
+Dolby · San Francisco, CA · Senior
+
+
+ROLE SUMMARY
+
+Looking for a Senior Technical Product Manager to shape how Dolby experiences are delivered across the OTT ecosystem. Connects strategy to execution across engineering, business, and industry stakeholders to deliver scalable, high-quality OTT solutions.
+
+Team / product: Dolby's consumer entertainment & cinema businesses, OTT distribution and playback for audio, imaging, and security technologies that power Dolby ecosystems worldwide.
+
+
+QUALIFICATIONS
+
+- BS in Computer Science, Electrical Engineering, or equivalent experience (MBA or business background a plus).
+- 10+ years of experience in streaming media technologies.
+- Hands-on experience with OTT products such as packagers, (de-)muxers, and players.
+- Strong understanding of OTT architectures and system-level problem solving.
+- A collaborative, thoughtful leadership style with the ability to influence across teams.
+- Clear, confident communication skills and curiosity about evolving market trends.
+
+
+RESPONSIBILITIES
+
+- Set and evolve the cross-company strategy for enabling Dolby technologies in OTT distribution and playback.
+- Define requirements and roadmaps for technology components that meet both current and future market needs.
+- Partner closely with engineering teams, adapting plans as priorities shift and ensuring agile, high-quality delivery.
+- Influence standards, collaborate with industry leaders, and represent Dolby's OTT technologies internally and externally.
+- Clearly communicate vision, progress, and tradeoffs, and foster a culture of technical excellence and inclusion.

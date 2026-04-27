@@ -1,0 +1,29 @@
+Senior Staff Product Engineer, Full Stack — B2B Applications
+
+OpenAI · San Francisco · Senior (IC)
+
+
+ROLE SUMMARY
+
+Full stack engineer to design and scale the systems that drive OpenAI's developer and enterprise-facing products. Push the boundaries of OpenAI's newest tech to enable interactions and automations that are functional and delightful. Note: this is an engineering IC role, not a PM role — title is externally branded "Senior Staff" but the internal title is Member of Technical Staff.
+
+Team / product: B2B Applications — designs and scales the systems behind OpenAI's developer and enterprise-facing products.
+
+
+QUALIFICATIONS
+
+- 9+ years of professional engineering experience (excluding internships) at tech and product-driven companies.
+- Former founder, or early engineer at a startup who has built a product from scratch is a plus.
+- Proficiency with TypeScript, React, and other web technologies.
+- Proficiency in one or more backend languages (Python, Go, Rust, TypeScript or similar) and distributed systems concepts.
+- Some experience with relational databases like Postgres / MySQL.
+- Care deeply about reliability, safety, and performance in production environments.
+- Interest in AI/ML (direct experience not required).
+- Proven ability to thrive in fast-growing, product-driven companies.
+
+
+RESPONSIBILITIES
+
+- Own the end-to-end development lifecycle for new enterprise products.
+- Collaborate closely with product, design, and external customers to understand problems and implement effective solutions.
+- Work with the research team to improve our next generation of models.
