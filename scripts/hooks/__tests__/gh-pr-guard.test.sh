@@ -323,6 +323,51 @@ run_case_with_stderr "needs-external-review label survives stderr noise" \
   'gh: deprecation warning' \
   "gh pr merge 123 --squash --delete-branch"
 
+# --- gh metadata-fetch failure path ---
+#
+# Cursor on PR #174 noted that the recovery hint at this failure
+# was stale (it suggested BREAK_GLASS_ADMIN=1 + --admin, but the
+# gh call happens BEFORE the admin gate, so the bypass would
+# re-fail at the same point). Pin the new wording so a future
+# edit can't silently re-introduce a misleading hint.
+run_case_gh_failure() {
+  local name="$1"
+  local expect_substr="$2"
+
+  local input='{"tool_input":{"command":"gh pr merge 123 --squash --delete-branch"}}'
+
+  local out
+  local actual_exit
+  set +e
+  out=$(PATH="$TMP/bin:$PATH" \
+    GH_FIXTURE_FAIL=1 \
+    GH_FIXTURE_RESPONSE="auth error: token expired" \
+    bash "$HOOK" <<< "$input" 2>&1)
+  actual_exit=$?
+  set -e
+
+  if [ "$actual_exit" -ne 2 ]; then
+    echo "FAIL: $name (expected exit 2, got $actual_exit)"
+    echo "$out" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILURES="${FAILURES}${name}\n"
+    return
+  fi
+  if ! echo "$out" | grep -qF "$expect_substr"; then
+    echo "FAIL: $name (expected substring missing: $expect_substr)"
+    echo "$out" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILURES="${FAILURES}${name}\n"
+    return
+  fi
+  echo "PASS: $name"
+  PASS=$((PASS + 1))
+}
+
+run_case_gh_failure \
+  "metadata-fetch failure exits 2 with non-stale recovery hint" \
+  "metadata fetch is unconditional and runs before any break-glass override"
+
 # --- summary ---
 
 echo ""

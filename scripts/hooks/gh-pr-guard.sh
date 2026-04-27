@@ -685,7 +685,16 @@ if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>"$GH_STDERR"); then
     echo "  stderr: $(cat "$GH_STDERR")" >&2
   fi
   echo "  command: gh ${GH_ARGS[*]}" >&2
-  echo "  Fix the underlying gh/auth issue and retry, or set BREAK_GLASS_ADMIN=1 + use --admin if this is a break-glass merge." >&2
+  # Cursor on PR #174: the prior recovery hint suggested
+  # `BREAK_GLASS_ADMIN=1 + --admin` to bypass this failure, but
+  # the gh-call happens BEFORE the admin gate in the current
+  # ordering — so the bypass would re-fail here regardless of
+  # break-glass state. There is no agent-side override for a
+  # metadata-fetch failure; the only fix is restoring gh/auth
+  # connectivity. (Once that's restored, BREAK_GLASS_MERGE_STATE
+  # and BREAK_GLASS_ADMIN are still available downstream if the
+  # PR's merge state or admin gate need to be overridden.)
+  echo "  Fix the underlying gh/auth issue and retry. The metadata fetch is unconditional and runs before any break-glass override." >&2
   exit 2
 fi
 
