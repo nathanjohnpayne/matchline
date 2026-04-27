@@ -151,6 +151,19 @@ run_case "BEHIND denies merge (default)" \
   2 "BEHIND|" "gh pr merge 123 --squash --delete-branch" \
   "" "BLOCKED: PR mergeStateStatus is BEHIND"
 
+# DRAFT has its own diagnostic (Codex P3 on PR #174 r2): blocking
+# is correct but the message points at "mark draft as ready"
+# rather than the generic "update the case statement" hint, since
+# DRAFT is a known state, not a future-API surprise.
+run_case "DRAFT denies merge with draft-specific diagnostic" \
+  2 "DRAFT|" "gh pr merge 123 --squash --delete-branch" \
+  "" "BLOCKED: PR is a draft (mergeStateStatus=DRAFT)."
+
+run_case "DRAFT allowed under BREAK_GLASS_MERGE_STATE" \
+  0 "DRAFT|" "gh pr merge 123 --squash --delete-branch" \
+  "BREAK_GLASS_MERGE_STATE=1" \
+  "BREAK-GLASS: merge of draft PR authorized by human."
+
 # --- BREAK_GLASS_MERGE_STATE override ---
 
 run_case "BREAK_GLASS_MERGE_STATE=1 allows BLOCKED via env(1) prefix" \

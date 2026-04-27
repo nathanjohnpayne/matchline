@@ -682,7 +682,8 @@ fi
 MERGE_STATE="${GH_OUTPUT%%|*}"
 LABELS="${GH_OUTPUT#*|}"
 
-# mergeStateStatus check (#171 layer 2). API enum:
+# mergeStateStatus check (#171 layer 2). API enum (full set per
+# GitHub GraphQL `MergeStateStatus`):
 #   CLEAN       — checks pass, no merge conflicts, ready to merge
 #   HAS_HOOKS   — branch has post-commit hooks (legacy state)
 #   UNKNOWN     — state not yet determined (often transient; allow
@@ -693,6 +694,10 @@ LABELS="${GH_OUTPUT#*|}"
 #   UNSTABLE    — non-required check failed
 #   BEHIND      — base has commits the head lacks (with "Require
 #                 branches to be up to date" enabled)
+#   DRAFT       — PR is in draft mode (Codex on PR #174 r2: cover
+#                 explicitly so the diagnostic points at the right
+#                 fix, "mark draft as ready," not at "update the
+#                 case statement for a future state")
 #
 # Unknown future states (anything not in the case below) fail
 # CLOSED — a new GitHub API state shouldn't silently bypass the
@@ -700,6 +705,16 @@ LABELS="${GH_OUTPUT#*|}"
 case "$MERGE_STATE" in
   CLEAN|HAS_HOOKS|UNKNOWN)
     ;;  # allow
+  DRAFT)
+    if [ "$EFFECTIVE_BREAK_GLASS_MERGE_STATE" = "1" ]; then
+      echo "BREAK-GLASS: merge of draft PR authorized by human." >&2
+    else
+      echo "BLOCKED: PR is a draft (mergeStateStatus=DRAFT)." >&2
+      echo "  Mark the PR as ready for review before merging (gh pr ready <PR#>)." >&2
+      echo "  Override: BREAK_GLASS_MERGE_STATE=1 (export or inline prefix)." >&2
+      exit 2
+    fi
+    ;;
   BLOCKED|DIRTY|UNSTABLE|BEHIND)
     if [ "$EFFECTIVE_BREAK_GLASS_MERGE_STATE" = "1" ]; then
       echo "BREAK-GLASS: merge with mergeStateStatus=$MERGE_STATE authorized by human." >&2
