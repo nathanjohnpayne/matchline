@@ -1,0 +1,32 @@
+Product Management, Research
+
+Anthropic · San Francisco, CA / New York City, NY · Senior
+
+
+ROLE SUMMARY
+
+Own ideation and deployment of new models and products as Anthropic advances frontier, safe AI. Productize credible applied research, identify high-potential use cases grounded in customer needs, and uncover non-obvious use cases for nascent technologies.
+
+Team / product: Embedded with Anthropic Research; bridges research and ambitious product experimentation, creating new product categories enabled by frontier AI.
+
+
+QUALIFICATIONS
+
+- Deep passion and curiosity for AI and LLMs; uses AI regularly.
+- 5+ years in product management; experience launching new products and scaling existing ones (founder background a plus).
+- First-principles thinker who can navigate and execute amidst ambiguity.
+- Deep technical background with strong grasp of AI/ML concepts; data-driven mindset with working proficiency in Python and SQL.
+- Strong user empathy; can synthesize vague or contradictory feedback into actionable priorities.
+- Track record of launching ambitious products with distribution or commercial success.
+- Intellectual curiosity without ego; creative thinker about risks/benefits of new tech.
+- Creative, hacker spirit and loves solving puzzles.
+
+
+RESPONSIBILITIES
+
+- Lead vision, strategy, roadmap, and execution of frontier technologies that leverage the latest AI capabilities to solve real-world problems.
+- Partner with research to define, improve, and ship model capabilities within a research area.
+- Identify nascent research that could become transformative products.
+- Synthesize user insights into actionable requirements and evaluations.
+- Understand the AI landscape and ecosystem; ensure an objective view of market capabilities and our position.
+- Work with and influence research, product engineering, and platform engineering teams.

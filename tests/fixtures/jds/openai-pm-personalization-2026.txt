@@ -1,0 +1,28 @@
+Product Manager, Personalization (Memory & Personalization team)
+
+OpenAI · San Francisco (hybrid, 3 days/week in office) · Senior
+
+
+ROLE SUMMARY
+
+Define and scale the next generation of AI personalization for hundreds of millions of ChatGPT users. Work at the intersection of product, research, and engineering to design systems that capture meaningful user signals and translate them into more helpful, personalized experiences — balancing ambitious innovation with safeguards around control, privacy, and transparency.
+
+Team / product: Memory & Personalization — building the systems that let ChatGPT learn from interactions over time, remembering context, preferences, goals, and workflows to deliver more helpful, tailored experiences.
+
+
+QUALIFICATIONS
+
+- 7-10+ years of product management experience or successfully started a company.
+- Bachelor's in Computer Science, Engineering, Information Systems, Analytics, Mathematics, Physics, Applied Sciences, or related field.
+- Proven experience shipping products in a technical environment, collaborating with multiple cross-functional teams.
+- Strong leadership, organizational, and execution skills with excellent communication, comfortable in high-ambiguity, fast-moving environments.
+- Proven track record of working with LLM research and translating into production applications.
+- Pays attention to how the product landscape is evolving across the industry.
+
+
+RESPONSIBILITIES
+
+- Spearhead development and implementation of cutting-edge AI features by crafting vision, strategy, roadmap, and execution plan.
+- Convert user feedback into detailed product requirements, narratives, and technical specifications.
+- Utilize data to deeply understand user needs and guide future product development.
+- Work closely with research, product design, and engineering teams to bring new capabilities to life.

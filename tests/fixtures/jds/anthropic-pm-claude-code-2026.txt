@@ -1,0 +1,26 @@
+Product Manager, Claude Code
+
+Anthropic · San Francisco, CA / Seattle, WA (>=25% in office) · Mid-Senior
+
+
+ROLE SUMMARY
+
+Drive the evolution of the Claude Code product suite and shape how developers work with AI. Work closely with internal users, customers, engineering, research, and XFN teams to keep Claude Code ahead of model capabilities. Equally comfortable in customer convos, engineering debugging, and exec strategy.
+
+Team / product: Claude Code product suite — agentic AI for software development; CLI plus an ecosystem developers can extend.
+
+
+QUALIFICATIONS
+
+- Combined 5+ years in product management AND engineering, including at least 1 year as a professional engineer.
+- Deep technical background; experience working cross-functionally with engineering teams to ship technical products.
+- Track record of launching ambitious products that have achieved distribution or commercial success (dev tools experience preferred).
+- Stay up-to-date and hands-on with AI coding tools, model capabilities, and industry trends.
+- Creative, hacker spirit and love solving puzzles.
+
+
+RESPONSIBILITIES
+
+- Define the roadmap for an area of the Claude Code product suite.
+- Translate cutting-edge AI advances into practical developer features.
+- Build an ecosystem around the CLI and other products so that developers can easily share best practices.

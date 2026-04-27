@@ -1,0 +1,32 @@
+Senior Technical Product Manager, RAN Digital Twin
+
+NVIDIA · Santa Clara, CA (and US remote) · Senior
+
+
+ROLE SUMMARY
+
+Lead end-to-end development and ecosystem strategy for NVIDIA's Radio Access Network (RAN) Digital Twin portfolio. Drive the roadmap for a software-defined platform that simulates, optimizes, and validates radio access networks in a physically accurate digital environment.
+
+Team / product: RAN (Radio Access Network) Digital Twin portfolio — unifying high-performance computing, AI, and wireless simulation on NVIDIA's accelerated infrastructure for global telecom operators (5G evolving toward AI-native 6G).
+
+
+QUALIFICATIONS
+
+- 8+ years of PM experience in wireless communications industry AND 7+ years of PM experience in software simulation tools / HPC / SaaS tool development.
+- BS/MS or equivalent in Electrical Engineering, Computer Science, or related technical field.
+- Deep customer insights and business perspective on RAN digital twins (researchers, developers, integrators, NEMs, telecom operators).
+- Strong technical background in wireless communications and detailed understanding of AI-native RAN (HW + SW).
+- Outstanding communication and project management skills.
+- Stand out: direct experience with NVIDIA software (Aerial, Omniverse) and SDKs; large-scale simulations and multi-sensor data; concept-to-launch product ownership.
+
+
+RESPONSIBILITIES
+
+- Own the product lifecycle of the RAN Digital Twin portfolio, concept through launch and ongoing lifecycle management.
+- Articulate the value props of different digital twin architectures and map them to specific workloads and telco use cases.
+- Define product requirements (PRDs) and prioritize reference architectures for key verticals.
+- Distill insights from strategic customers and partners to define, prioritize, and execute product roadmaps.
+- Analyze competitive products; engage key opinion leaders on next-gen technology adoption.
+- Develop business requirement, user stories, product definition and specifications, and value propositions.
+- Work with engineering, operations, and field teams on GTM plans and product positioning.
+- Partner with sales to build collateral and tools to drive adoption of digital twin technologies.
