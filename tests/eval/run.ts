@@ -324,6 +324,28 @@ export function aggregateSampledFixture(
     throw new Error("aggregateSampledFixture: empty samples");
   }
   const first = results[0]!;
+  // Same-fixture invariant (cursor on PR #172): every sample
+  // must share the same (resumeFixtureId, jdFixtureId) pair as
+  // the first. Without this check, a caller that accidentally
+  // mixes samples from different fixtures would silently
+  // produce a `FixtureResult` labeled with the first fixture's
+  // ID but with means averaged across heterogeneous content —
+  // a false-positive accuracy reading attributed to the wrong
+  // pair. Throw loudly at the boundary instead.
+  for (let i = 1; i < results.length; i++) {
+    const r = results[i]!;
+    if (
+      r.resumeFixtureId !== first.resumeFixtureId ||
+      r.jdFixtureId !== first.jdFixtureId
+    ) {
+      throw new Error(
+        `aggregateSampledFixture: heterogeneous samples — index 0 is ` +
+          `(${first.resumeFixtureId}, ${first.jdFixtureId}) but index ${i} ` +
+          `is (${r.resumeFixtureId}, ${r.jdFixtureId}). All samples passed ` +
+          `to a single aggregation MUST be for the same (resume, JD) pair.`,
+      );
+    }
+  }
   const id = `${first.resumeFixtureId}__${first.jdFixtureId}`;
   const n = results.length;
 

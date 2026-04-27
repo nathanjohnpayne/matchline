@@ -454,6 +454,59 @@ describe("aggregateSampledFixture", () => {
     expect(() => aggregateSampledFixture([])).toThrow(/empty/);
   });
 
+  it("throws on heterogeneous samples (cursor invariant on #172)", () => {
+    // Pre-fix the aggregator silently averaged samples from
+    // different fixture pairs and labeled the result with the
+    // FIRST sample's IDs — a false-positive accuracy reading
+    // attributed to the wrong pair. Throw loudly so a caller
+    // bug surfaces at the boundary, not in a downstream report.
+    const a = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "role-x",
+      extractionAccuracy: 0.8,
+    });
+    const b = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "role-y", // different JD
+      extractionAccuracy: 0.2,
+    });
+    expect(() => aggregateSampledFixture([a, b])).toThrow(
+      /heterogeneous samples/,
+    );
+  });
+
+  it("heterogeneous-samples error includes both fixture IDs for diagnosis", () => {
+    const a = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "google",
+    });
+    const b = makeOrchestratorResult({
+      resumeFixtureId: "bob", // different resume
+      jdFixtureId: "google",
+    });
+    try {
+      aggregateSampledFixture([a, b]);
+      throw new Error("expected throw");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("alice");
+      expect(msg).toContain("bob");
+      expect(msg).toContain("index 1");
+    }
+  });
+
+  it("accepts homogeneous samples even with content variance (extractedUnits, accuracy, etc.)", () => {
+    // The invariant check should ONLY guard fixture-ID equality.
+    // Per-sample variance in unit counts / accuracy / cost is
+    // expected (LLM stochasticity) and must NOT trip the throw.
+    const samples = [
+      makeOrchestratorResult({ extractedUnitCount: 22, extractionAccuracy: 0.4 }),
+      makeOrchestratorResult({ extractedUnitCount: 24, extractionAccuracy: 0.6 }),
+      makeOrchestratorResult({ extractedUnitCount: 23, extractionAccuracy: 0.5 }),
+    ];
+    expect(() => aggregateSampledFixture(samples)).not.toThrow();
+  });
+
   it("computes mean latency across samples (rounded to integer ms)", () => {
     const samples = [
       makeOrchestratorResult({ latencyMs: 1000 }),
