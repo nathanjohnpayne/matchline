@@ -107,7 +107,7 @@
     { "canonical": "customer support partnership", "synonyms": ["working with cs", "cx partnership", "support collaboration"] },
     { "canonical": "sales partnership", "synonyms": ["sales collaboration", "working with sales", "go-to-market with sales"] },
 
-{ "canonical": "product management", "synonyms": ["pm", "ott product management", "sdk product management", "connected device product management", "set-top box product management", "data platform product management", "engineering team product management", "cross-platform product management", "platform product management overall", "consumer product management", "consumer growth product management", "growth product management", "consumer mobile product management", "consumer growth pm", "platform pm overall"] },
+    { "canonical": "product management", "synonyms": ["pm", "ott product management", "sdk product management", "connected device product management", "set-top box product management", "data platform product management", "engineering team product management", "cross-platform product management", "platform product management overall", "consumer product management", "consumer growth product management", "growth product management", "consumer mobile product management", "consumer growth pm", "platform pm overall"] },
     { "canonical": "engineering", "synonyms": ["release engineering", "broadcast engineering", "infrastructure engineering", "software engineering", "platform engineering", "systems engineering", "wireless systems engineering", "wireless engineering", "post-production engineering"] },
     { "canonical": "execution", "synonyms": ["product execution", "delivery execution", "shipping", "delivering products", "delivering on commitments"] },
     { "canonical": "communication", "synonyms": ["partner communication", "stakeholder communication", "clear communication", "communicate effectively"] },
@@ -128,7 +128,7 @@
     { "canonical": "partner integration", "synonyms": ["partner integrations", "third party integration", "partner systems integration"] },
     { "canonical": "partner device certification", "synonyms": ["device certification ownership", "partner device qa"] },
     { "canonical": "partner device intelligence", "synonyms": ["partner device data", "device intelligence platform", "partner ecosystem intelligence"] },
-{ "canonical": "javascript", "synonyms": ["js", "javascript development", "javascript/react"] },
+    { "canonical": "javascript", "synonyms": ["js", "javascript development", "javascript/react"] },
     { "canonical": "react development", "synonyms": ["react ui", "react frontend"] },
     { "canonical": "full-stack development", "synonyms": ["fullstack development", "full stack development", "fullstack engineering", "full-stack engineering"] },
     { "canonical": "saas product development", "synonyms": ["saas development", "saas engineering"] },
@@ -164,7 +164,7 @@
     { "canonical": "interactive media", "synonyms": ["interactive content", "interactive display systems", "interactive data visualization"] },
     { "canonical": "product conceptualization", "synonyms": ["product ideation", "concept development", "concept design"] },
 
-{ "canonical": "compute architecture", "synonyms": ["compute architecture knowledge", "compute architectures"] },
+    { "canonical": "compute architecture", "synonyms": ["compute architecture knowledge", "compute architectures"] },
     { "canonical": "data center infrastructure", "synonyms": ["data center", "data center infra", "datacenter infrastructure"] },
     { "canonical": "i/o technologies", "synonyms": ["io technologies", "input output technologies"] },
     { "canonical": "memory technologies", "synonyms": ["memory tech", "memory subsystems"] },
@@ -190,7 +190,7 @@
     { "canonical": "technical background", "synonyms": ["technical foundation", "technical depth", "technical fluency"] },
     { "canonical": "vision", "synonyms": ["product vision setting"] },
 
-{ "canonical": "conversion rate optimization", "synonyms": ["cro", "conversion optimization"] },
+    { "canonical": "conversion rate optimization", "synonyms": ["cro", "conversion optimization"] },
     { "canonical": "personalization", "synonyms": ["product personalization", "user personalization"] },
     { "canonical": "ranking systems", "synonyms": ["ranking models", "ranking ml"] },
     { "canonical": "latency optimization", "synonyms": ["latency reduction", "latency tuning"] },
@@ -214,7 +214,7 @@
     { "canonical": "embedded software", "synonyms": ["firmware", "embedded systems", "embedded development"] },
     { "canonical": "model evaluation", "synonyms": ["evals", "ml evaluation", "model evals"] },
     { "canonical": "data modeling", "synonyms": ["data model design", "schema design"] },
-{ "canonical": "warehousing", "synonyms": ["data warehouse", "data warehousing", "warehouse architecture"] },
+    { "canonical": "warehousing", "synonyms": ["data warehouse", "data warehousing", "warehouse architecture"] },
     { "canonical": "distributed systems", "synonyms": ["distributed systems design", "scalable systems"] },
     { "canonical": "system design", "synonyms": ["large-scale system design", "high-scale system design"] },
     { "canonical": "on-call leadership", "synonyms": ["on call leadership", "oncall leadership"] }
