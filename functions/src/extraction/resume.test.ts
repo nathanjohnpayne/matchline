@@ -355,21 +355,44 @@ describe("extractFromResume", () => {
   });
 
   it("records a transport_error failure on SDK exception", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(async () => {
-          throw new Error("ETIMEDOUT");
-        }),
-      },
-    } as unknown as Anthropic;
-    const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+    // Fake timers (per #115): the retry helper sleeps between
+    // attempts, so on real timers this test paid ~1.7s of CI
+    // tax across three attempts. Mirror the pattern from the
+    // backoff test below: kick off the call, drain pending
+    // timers + microtasks via runAllTimersAsync, then assert
+    // the eventual rejection.
+    vi.useFakeTimers();
+    try {
+      const client = {
+        messages: {
+          create: vi.fn(async () => {
+            throw new Error("ETIMEDOUT");
+          }),
+        },
+      } as unknown as Anthropic;
+      const record = vi.fn<typeof RecordUsage>(async () => 0.01);
 
-    await expect(
-      extractFromResume("Resume", { ownerUid: "user-alice" }, { client, record }),
-    ).rejects.toBeInstanceOf(ExtractionError);
-    // No successful responses → recordUsage never called (nothing
-    // to meter; no token counts available for a transport failure).
-    expect(record).toHaveBeenCalledTimes(0);
+      const promise = extractFromResume(
+        "Resume",
+        { ownerUid: "user-alice" },
+        { client, record },
+      );
+      // Attach the rejection assertion BEFORE draining timers so
+      // the resulting unhandled-rejection window between
+      // `runAllTimersAsync` settling and the explicit `await
+      // expect(...).rejects` consuming the failure doesn't trigger
+      // vitest's unhandled-rejection diagnostic.
+      const rejection = expect(promise).rejects.toBeInstanceOf(
+        ExtractionError,
+      );
+      await vi.runAllTimersAsync();
+      await rejection;
+      // No successful responses → recordUsage never called (nothing
+      // to meter; no token counts available for a transport failure).
+      expect(record).toHaveBeenCalledTimes(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("backs off (non-zero setTimeout delay) before retrying after a transport error", async () => {

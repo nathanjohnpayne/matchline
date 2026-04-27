@@ -257,19 +257,33 @@ describe("parseJobRequirements", () => {
   });
 
   it("records transport_error without calling record (no token counts available)", async () => {
-    const client = {
-      messages: {
-        create: vi.fn(async () => {
-          throw new Error("ETIMEDOUT");
-        }),
-      },
-    } as unknown as Anthropic;
-    const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+    // Fake timers (per #115): without them the retry-helper's
+    // backoff sleeps cost ~1.8s of CI per run. Mirror the
+    // backoff-test pattern (vi.useFakeTimers + runAllTimersAsync)
+    // so the test settles in <50ms while still exercising the
+    // full 3-attempt retry path.
+    vi.useFakeTimers();
+    try {
+      const client = {
+        messages: {
+          create: vi.fn(async () => {
+            throw new Error("ETIMEDOUT");
+          }),
+        },
+      } as unknown as Anthropic;
+      const record = vi.fn<typeof RecordUsage>(async () => 0.005);
 
-    await expect(
-      parseJobRequirements("JD text", CTX, { client, record }),
-    ).rejects.toBeInstanceOf(JdParsingError);
-    expect(record).toHaveBeenCalledTimes(0);
+      const promise = parseJobRequirements("JD text", CTX, { client, record });
+      // Attach the rejection assertion BEFORE draining timers so
+      // vitest doesn't flag the brief unhandled-rejection window
+      // between the function settling and the explicit `await`.
+      const rejection = expect(promise).rejects.toBeInstanceOf(JdParsingError);
+      await vi.runAllTimersAsync();
+      await rejection;
+      expect(record).toHaveBeenCalledTimes(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stamps role_id from ctx on every returned Unit", async () => {
