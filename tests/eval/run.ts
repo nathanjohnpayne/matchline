@@ -91,9 +91,41 @@ async function main(): Promise<number> {
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
 
-  const selectedResumes =
-    mode === "smoke" ? resumeFixtures.slice(0, 1) : resumeFixtures;
-  const selectedJds = mode === "smoke" ? jdFixtures.slice(0, 1) : jdFixtures;
+  // Smoke mode pins to a SPECIFIC (resume, JD) pair rather than
+  // taking `slice(0, 1)` so adding new fixtures can never silently
+  // change which pair is exercised. Codex P1 + cursor on PRs #150
+  // and #151: prior `slice(0, 1)` picked whatever filename sorted
+  // first, which became one of the new unlabeled fixtures the
+  // moment a corpus PR landed — `loadExpectedMatches` then threw
+  // ENOENT before any LLM call, and the smoke run reported a
+  // guaranteed 0/0 instead of a meaningful signal.
+  //
+  // The pinned pair is the canonical fixture (Nathan + Google SPM)
+  // — it has hand-curated `expected-matches/*.json` and is the
+  // pair the rest of #137's labeling work will keep current.
+  // Future smoke-pin changes should land in this constant.
+  const SMOKE_RESUME = "nathan-2026";
+  const SMOKE_JD = "google-compute-spm-2026";
+  if (mode === "smoke") {
+    if (!resumeFixtures.includes(SMOKE_RESUME)) {
+      throw new Error(
+        `Smoke mode pin: resume fixture "${SMOKE_RESUME}" not found in ${join(
+          fixturesDir,
+          "resumes",
+        )}. Update SMOKE_RESUME in tests/eval/run.ts.`,
+      );
+    }
+    if (!jdFixtures.includes(SMOKE_JD)) {
+      throw new Error(
+        `Smoke mode pin: JD fixture "${SMOKE_JD}" not found in ${join(
+          fixturesDir,
+          "jds",
+        )}. Update SMOKE_JD in tests/eval/run.ts.`,
+      );
+    }
+  }
+  const selectedResumes = mode === "smoke" ? [SMOKE_RESUME] : resumeFixtures;
+  const selectedJds = mode === "smoke" ? [SMOKE_JD] : jdFixtures;
 
   // Build (resume, jd) pairs. Smoke = single pair for fast
   // feedback; full = cross product for the corpus run.
