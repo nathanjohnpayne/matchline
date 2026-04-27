@@ -1,0 +1,203 @@
+{
+  "fixture_id": "marcus-consumer-growth-pm-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the consumer growth product manager archetype. One ExpectedUnit per fact-bearing bullet in the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_paywall_redesign",
+      "normalized_summary": "Redesigned subscription paywall from single-screen to three-step value-then-price flow — lifted paid-conversion from 2.8% to 4.6% on ~3.1M monthly impressions; +$11.4M annualized net-new subscription revenue",
+      "skills": [
+        "paywall design",
+        "a/b testing",
+        "conversion optimization",
+        "subscription monetization"
+      ],
+      "tools": ["paywall", "experimentation platform"],
+      "domains": ["consumer growth", "subscription commerce"]
+    },
+    {
+      "id": "u_first_month_onboarding",
+      "normalized_summary": "Designed first-month onboarding flow driving new subscribers to use first three benefits within seven days — +21% activation lift at the seven-day mark and +9% improvement in 90-day retention",
+      "skills": [
+        "activation design",
+        "onboarding",
+        "retention",
+        "behavioral product design"
+      ],
+      "tools": ["onboarding flow"],
+      "domains": ["consumer growth", "subscription commerce"]
+    },
+    {
+      "id": "u_pricing_tests",
+      "normalized_summary": "Owned price-experimentation roadmap — ran nine pricing tests across plan duration, intro-offer depth, and currency framing; reduced first-year churn from 38% to 27% on the annual plan",
+      "skills": [
+        "pricing strategy",
+        "a/b testing",
+        "churn reduction",
+        "experimentation"
+      ],
+      "tools": ["experimentation platform"],
+      "domains": ["consumer growth", "subscription commerce"]
+    },
+    {
+      "id": "u_winback",
+      "normalized_summary": "Led winback program redesign — replaced single batch email with behavioral-trigger system across email, push, and in-app segmented by reason-for-cancel; reactivation rate from 4.2% to 9.8%",
+      "skills": [
+        "winback campaigns",
+        "lifecycle marketing",
+        "behavioral triggers",
+        "segmentation"
+      ],
+      "tools": ["email", "push notifications"],
+      "domains": ["consumer growth", "lifecycle marketing"]
+    },
+    {
+      "id": "u_brand_refresh",
+      "normalized_summary": "Shepherded subscription brand refresh from Loom Goods Plus to a named program with member-only product drops and a referral program now driving 14% of new signups",
+      "skills": [
+        "brand positioning",
+        "referral programs",
+        "cross-functional leadership"
+      ],
+      "tools": ["referral program"],
+      "domains": ["consumer growth", "subscription commerce"]
+    },
+    {
+      "id": "u_riff_activation",
+      "normalized_summary": "Owned new-user activation funnel from app-open through first content posted — through 27 launched experiments lifted day-1 activation from 19% to 41% and day-7 retained-poster rate from 6% to 17%",
+      "skills": [
+        "activation design",
+        "a/b testing",
+        "mobile onboarding",
+        "funnel optimization"
+      ],
+      "tools": ["experimentation platform", "iOS", "Android"],
+      "domains": ["consumer growth", "social apps"]
+    },
+    {
+      "id": "u_contact_import",
+      "normalized_summary": "Designed contact-import-driven friend graph as the cold-start mechanic giving new users an instantly populated feed — +12 percentage points to day-1 retention with policy-team-approved consent design",
+      "skills": [
+        "cold start",
+        "social graph design",
+        "privacy by design",
+        "retention"
+      ],
+      "tools": ["contact import"],
+      "domains": ["consumer growth", "social apps"]
+    },
+    {
+      "id": "u_referrals",
+      "normalized_summary": "Built referral system from scratch with link-based invites, attribution back to the inviting user, and tiered cosmetic rewards — drove 22% of weekly new installs at $0.41 CAC versus $4.30 on paid social",
+      "skills": [
+        "viral loops",
+        "referral programs",
+        "attribution",
+        "user acquisition"
+      ],
+      "tools": ["referral system"],
+      "domains": ["consumer growth", "social apps"]
+    },
+    {
+      "id": "u_app_clip",
+      "normalized_summary": "Led cross-functional team that shipped iOS App Clip enabling tap-to-preview before install — +6.8% lift in install-conversion from shared-link traffic during launch quarter",
+      "skills": [
+        "ios platform features",
+        "viral loops",
+        "install conversion"
+      ],
+      "tools": ["iOS App Clip"],
+      "domains": ["consumer growth", "social apps"]
+    },
+    {
+      "id": "u_push_personalization",
+      "normalized_summary": "Replaced 14 hand-tuned batch push notifications with model-scored personalized notification system — cut notification volume per user by 38% while lifting notification-driven sessions by 12%",
+      "skills": [
+        "push notifications",
+        "personalization",
+        "engagement optimization"
+      ],
+      "tools": ["push notifications"],
+      "domains": ["consumer growth", "social apps"]
+    },
+    {
+      "id": "u_statsig_migration",
+      "normalized_summary": "Ran A/B testing infrastructure migration from homegrown allocator to Statsig — wrote experimentation playbook including pre-registration template, MDE calculator, and power-analysis review rule",
+      "skills": [
+        "experimentation infrastructure",
+        "experimentation playbook",
+        "statistical rigor"
+      ],
+      "tools": ["Statsig"],
+      "domains": ["consumer growth", "experimentation"]
+    },
+    {
+      "id": "u_creator_landing",
+      "normalized_summary": "Shipped Spool's first creator landing-page experience as a personalized shareable page — became single largest source of supporter signups at 47% of new accounts",
+      "skills": [
+        "landing page optimization",
+        "creator tools",
+        "viral loops"
+      ],
+      "tools": ["landing pages"],
+      "domains": ["consumer growth", "creator economy"]
+    },
+    {
+      "id": "u_supporter_funnel",
+      "normalized_summary": "Owned supporter onboarding funnel — lifted email-capture-to-paying-supporter conversion from 3.1% to 7.4% across a sequence of mostly-copy-driven experiments",
+      "skills": [
+        "funnel optimization",
+        "copy testing",
+        "conversion optimization"
+      ],
+      "tools": ["email capture"],
+      "domains": ["consumer growth", "creator economy"]
+    },
+    {
+      "id": "u_creator_dashboard",
+      "normalized_summary": "Built creator analytics dashboard from scratch — designed metric set, ran user research, drove engineering scope from 14 weeks to 6 by removing what creators didn't open",
+      "skills": [
+        "product analytics",
+        "user research",
+        "scope management",
+        "dashboard design"
+      ],
+      "tools": ["analytics dashboard"],
+      "domains": ["consumer growth", "creator economy"]
+    },
+    {
+      "id": "u_tabletop_funnel",
+      "normalized_summary": "Owned iOS reservation-confirmation funnel between tap and confirmed booking — shipped six experiments in twelve months for cumulative +18% in completed reservations per active user",
+      "skills": [
+        "funnel optimization",
+        "a/b testing",
+        "mobile product"
+      ],
+      "tools": ["iOS"],
+      "domains": ["consumer growth", "marketplaces"]
+    },
+    {
+      "id": "u_funnelpack",
+      "normalized_summary": "Built and released Funnelpack — a free Jupyter notebook taking session-event CSV exports and producing activation-funnel charts with confidence-band overlays for early-stage PMs",
+      "skills": [
+        "funnel analysis",
+        "developer tooling",
+        "open source"
+      ],
+      "tools": ["Python", "Jupyter", "DuckDB"],
+      "domains": ["consumer growth", "open source"]
+    },
+    {
+      "id": "u_growth_newsletter",
+      "normalized_summary": "Writes a weekly newsletter on consumer growth with funnel teardowns, paywall reviews, and growth-experiment post-mortems — ~9,800 subscribers",
+      "skills": [
+        "technical writing",
+        "growth analysis",
+        "audience building"
+      ],
+      "tools": ["Substack"],
+      "domains": ["consumer growth", "writing"]
+    }
+  ]
+}

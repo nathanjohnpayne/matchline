@@ -1,0 +1,201 @@
+{
+  "fixture_id": "morgan-ecommerce-pm-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the mid-career e-commerce product manager archetype. One ExpectedUnit per fact-bearing bullet in EXPERIENCE + SIDE PROJECTS sections. Role-intro paragraphs, the WRITING section, and EDUCATION are intentionally not labeled.",
+  "expected_units": [
+    {
+      "id": "u_ltr_ranking",
+      "normalized_summary": "Led overhaul of search ranking from BM25 + business rules to a learning-to-rank model with seller-quality, price-competitiveness, and inventory-freshness features; top-10 CTR up 14% and search-attributed GMV per visitor up 9.3%",
+      "skills": [
+        "search ranking",
+        "machine learning product management",
+        "experimentation",
+        "discovery strategy"
+      ],
+      "tools": ["learning-to-rank", "BM25"],
+      "domains": ["e-commerce", "marketplace"]
+    },
+    {
+      "id": "u_query_understanding",
+      "normalized_summary": "Owned redesign of search results page with a new query-understanding layer (typo correction, attribute extraction, brand canonicalization) and faceted filter rebuild; zero-result-rate fell from 6.1% to 1.4% and refinement abandons fell 28%",
+      "skills": [
+        "search and discovery",
+        "query understanding",
+        "conversion optimization",
+        "ux design partnership"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "marketplace"]
+    },
+    {
+      "id": "u_sponsored_listings",
+      "normalized_summary": "Shipped sponsored listings inline in organic search with relevance floors, take-rate model, and auction-and-ranking interleaving; $24M annualized incremental revenue with no measurable hit to organic CTR or NPS",
+      "skills": [
+        "ads product management",
+        "marketplace dynamics",
+        "monetization",
+        "cross-functional leadership"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "marketplace", "ads"]
+    },
+    {
+      "id": "u_kill_landing_pages",
+      "normalized_summary": "Killed the category landing pages initiative after a six-week scoping pass; wrote the disconfirming memo and redirected the squad to query-understanding work",
+      "skills": [
+        "scope management",
+        "decision making",
+        "product strategy",
+        "written communication"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "marketplace"]
+    },
+    {
+      "id": "u_seller_quality_signal",
+      "normalized_summary": "Owned the seller-quality signal feeding search ranking — defined a weighted metric across late-shipment rate, defect rate, response time, chargeback rate; shipped seller dashboard and rolled out enforcement to 18,000 sellers in a quarter",
+      "skills": [
+        "metric design",
+        "marketplace dynamics",
+        "seller experience",
+        "rollout planning"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "marketplace"]
+    },
+    {
+      "id": "u_compare_price",
+      "normalized_summary": "Partnered with Pricing on a compare-price treatment in search results comparing listing to median across the open web; preliminary 4.1% add-to-cart lift in 50/50 holdout",
+      "skills": [
+        "competitive pricing",
+        "experimentation",
+        "search and discovery"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "marketplace"]
+    },
+    {
+      "id": "u_guest_checkout",
+      "normalized_summary": "Led guest-checkout-by-default rollout removing the forced-account-creation gate; mobile conversion up 11.4% with sustained gains through the quarter",
+      "skills": [
+        "checkout optimization",
+        "conversion optimization",
+        "mobile commerce"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "checkout"]
+    },
+    {
+      "id": "u_apple_google_pay",
+      "normalized_summary": "Shipped Apple Pay and Google Pay across checkout with a six-week fraud-team handoff to recalibrate risk for tokenized payments; reached 22% of mobile checkouts within two quarters",
+      "skills": [
+        "payments",
+        "checkout optimization",
+        "cross-functional coordination"
+      ],
+      "tools": ["Apple Pay", "Google Pay"],
+      "domains": ["e-commerce", "checkout", "payments"]
+    },
+    {
+      "id": "u_address_autocomplete",
+      "normalized_summary": "Rebuilt address-entry with USPS-database autocomplete and international fallback; address-related support tickets down 41% and undeliverable-shipment refunds from 1.8% to 0.6% of mobile orders",
+      "skills": [
+        "checkout optimization",
+        "form design",
+        "operational impact"
+      ],
+      "tools": ["USPS address database"],
+      "domains": ["e-commerce", "checkout"]
+    },
+    {
+      "id": "u_post_purchase_upsell",
+      "normalized_summary": "Built post-purchase upsell rail for same-seller same-box adds; $14M annualized incremental revenue at +8% margin contribution",
+      "skills": [
+        "monetization",
+        "checkout optimization",
+        "upsell design"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "checkout"]
+    },
+    {
+      "id": "u_3ds_step_up",
+      "normalized_summary": "Partnered with Risk on smart-trigger 3DS step-up that only escalates the riskiest 3% of transactions; fraud chargebacks down 22% with <0.5% conversion friction",
+      "skills": [
+        "fraud and risk",
+        "payments",
+        "checkout optimization"
+      ],
+      "tools": ["3D Secure"],
+      "domains": ["e-commerce", "checkout", "payments"]
+    },
+    {
+      "id": "u_hydrogen_checkout",
+      "normalized_summary": "Owned site-wide checkout migration from Shopify Plus stock checkout to a Hydrogen-based custom checkout; cart-to-purchase conversion from 64% to 73% and mobile revenue share from 41% to 54%",
+      "skills": [
+        "checkout optimization",
+        "platform migration",
+        "conversion optimization",
+        "mobile commerce"
+      ],
+      "tools": ["Shopify Plus", "Shopify Hydrogen"],
+      "domains": ["e-commerce", "direct-to-consumer"]
+    },
+    {
+      "id": "u_loyalty_program",
+      "normalized_summary": "Designed and shipped loyalty program with points, tiers, and early-access drops; 90-day repeat-purchase rate from 19% to 31% and LTV/CAC settling at 4.7 for members vs 2.8 for non-members",
+      "skills": [
+        "loyalty program design",
+        "retention",
+        "ltv optimization"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "direct-to-consumer"]
+    },
+    {
+      "id": "u_fits_like",
+      "normalized_summary": "Built fits-like recommendation engine using purchase and return history; women's denim returns dropped from 38% to 22% over six months",
+      "skills": [
+        "recommendations",
+        "discovery strategy",
+        "returns reduction"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "direct-to-consumer", "apparel"]
+    },
+    {
+      "id": "u_headless_cms",
+      "normalized_summary": "Led headless-CMS migration from WordPress to Sanity with a Next.js front-end rebuild; p75 LCP dropped from 4.8s to 1.6s and organic traffic grew 60% YoY",
+      "skills": [
+        "platform migration",
+        "performance optimization",
+        "seo"
+      ],
+      "tools": ["Sanity", "Next.js", "WordPress"],
+      "domains": ["e-commerce", "direct-to-consumer"]
+    },
+    {
+      "id": "u_bundles",
+      "normalized_summary": "Ran bundling experiments tying staple-tee SKU to a discounted three-pack; AOV up 23% on bundle landing pages and the three-pack remains a top-5 SKU",
+      "skills": [
+        "experimentation",
+        "merchandising",
+        "average order value optimization"
+      ],
+      "tools": [],
+      "domains": ["e-commerce", "direct-to-consumer", "apparel"]
+    },
+    {
+      "id": "u_cartwright",
+      "normalized_summary": "Built Cartwright — a browser extension that strips dark patterns from third-party checkouts (pre-checked add-ons, hidden fees, default-on subscriptions); ~600 WAU, open source",
+      "skills": [
+        "browser extension development",
+        "consumer advocacy",
+        "open source"
+      ],
+      "tools": ["TypeScript"],
+      "domains": ["e-commerce", "checkout", "consumer tools"]
+    }
+  ]
+}

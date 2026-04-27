@@ -1,0 +1,85 @@
+Dimitri Volkov, Ph.D.
+
+Principal Wireless Systems Engineer — 5G RAN, Signal Processing, Baseband
+
+Sunnyvale, CA · hire@example.com · (555) 010-0220
+dimitrivolkov.dev · linkedin.com/in/dimitrivolkov · github.com/dimitrivolkov
+
+
+SUMMARY
+
+Wireless systems engineer with thirteen years building 5G radio access networks — from baseband DSP firmware at a tier-one telecom vendor through MIMO algorithm research at a hyperscaler RAN team. PhD in EE with a thesis on iterative receiver design for sub-6 GHz massive MIMO. I have written L1 PHY code that ships in commercial gNodeBs, designed beamforming codebooks for a 64T64R array, and built RAN digital twin pipelines that stand-in for live spectrum trials. Comfortable equally in MATLAB, C++, CUDA, and a vector network analyzer.
+
+
+EXPERIENCE
+
+Principal RAN Systems Engineer — Open RAN Platform
+Helix Cloud Infrastructure · Wireless Systems Group · Sunnyvale · 2022 – 2026
+
+Helix is the wireless infrastructure arm of a hyperscale cloud provider. My scope was the L1 and L2 algorithm stack on a software-defined Open RAN platform targeting public cloud-hosted private 5G deployments — beamforming, MU-MIMO scheduling, channel estimation, and the simulation-and-digital-twin pipeline that backs every algorithm change.
+
+- Designed the type-II codebook beamforming pipeline for the Helix Open RAN 64T64R massive MIMO platform. Implemented the wideband and subband precoder selection paths in C++ on the Marvell Octeon DPU; demonstrated 14% downlink throughput improvement over the type-I baseline in a 16-UE indoor cell trial.
+- Owned the MU-MIMO scheduler co-design across L1 and L2. Closed the gap between the L2 proportional-fair scheduler and the L1 PMI feedback rate by introducing a one-slot precoder-prediction filter; reduced rank mismatch events by 38% on the FR1 8-layer test set.
+- Built the RAN digital twin pipeline that backs every algorithm change in the Helix L1 stack. Pipeline ingests real-world channel sounding traces from three live trial sites, plays them through a GPU-accelerated link-level simulator (NVIDIA Sionna + a custom CUDA channel filter), and emits a regression suite the L1 team treats as a merge gate.
+- Led the spectrum-sharing receiver work for CBRS and the C-band guard region. Designed an iterative SIC receiver for the in-band UE-to-UE leakage scenario; published the algorithm at IEEE Globecom 2024 and shipped a production variant in the 24.3 firmware drop.
+- Owned the L1 firmware integration window for a hyperscaler-private-5G partner deployment at a 1.2M-square-foot logistics facility. Drove the ten-week bring-up across coverage planning, beam codebook tuning, and a fronthaul-clock-jitter regression that took four weeks to root-cause; site went live on schedule with 99.4% uplink reliability across 14,000 handheld scanners.
+- Authored the Helix internal channel model library (TDL, CDL, and a 3GPP-compliant 38.901 spatial channel model in CUDA), now the standard sim backend for L1, L2, and RF system teams across three product lines.
+
+Senior Baseband Engineer — 5G NR PHY
+Marlowe Networks · Stockholm & Sunnyvale · 2017 – 2022
+
+Marlowe is a fictional tier-one telecom equipment vendor; my scope was the 5G NR L1 PHY stack on the company's macro and small-cell baseband cards.
+
+- Implemented the LDPC decoder offload pipeline on the Marlowe 5K baseband card. Hand-tuned the layered min-sum decoder kernel against the FlexNIC FPGA, hit the 14 Gbps peak decode budget for a 100 MHz NR carrier, and reduced PUSCH BLER by 0.6 dB at the 10% target operating point versus the prior fixed-point implementation.
+- Co-designed the SRS-based channel estimation pipeline for FR2 (mmWave) deployments. Implemented the panel-aware spatial filter in fixed-point C on the modem DSP; pipeline shipped in the 4.2 release supporting 28 GHz and 39 GHz US carrier deployments.
+- Owned the SSB beam management algorithm for the 64T64R AAU product. Designed the beam-sweep schedule across SS burst sets and the L1-RSRP filter for handover candidate selection; algorithm became the company default beam-management config for FR1 macro cells.
+- Drove the field-trial debug for a Tier-1 European operator deployment at the 700 MHz refarm. Root-caused a PRACH false-detection regression to a numerology-mismatch in the cell-search engine and authored the patch; carrier launched on schedule.
+- Led the cross-team response to a 3GPP Release 17 spec ambiguity around CSI-RS resource mapping in coordinated multi-point. Drove the internal interpretation review across PHY, scheduling, and standards teams; submitted three CRs to RAN1 of which two were accepted.
+- Built the Marlowe internal RF impairments simulation library (PA AM-AM/AM-PM, IQ imbalance, phase noise) and the link-level regression harness that wraps it; harness runs on every PHY commit and has caught 27 BLER-class regressions over 18 months.
+
+Wireless Systems Engineer — Cellular Modem
+Hartwell Silicon · San Diego · 2014 – 2017
+
+Cellular modem L1 PHY at a fictional fabless modem vendor. Worked on LTE-A Pro features (256-QAM, 4-CC carrier aggregation, eMBMS) and the early NR sub-6 prototype.
+
+- Implemented the LTE 256-QAM downlink demodulator and equalizer; passed conformance against the Anritsu and Rohde & Schwarz test sets, shipped in the modem reference design.
+- Co-authored the NR sub-6 prototype's polar code decoder, including the SCL list-decoding kernel; decoder formed the basis of the production polar block in the next-gen modem.
+
+Graduate Researcher — Wireless Communications Lab
+University of Texas at Austin · Austin, TX · 2010 – 2014
+
+PhD work on iterative receiver design for massive MIMO. Authored seven peer-reviewed papers in IEEE TSP, JSAC, and ICASSP. Built a 16-antenna USRP testbed with GNU Radio that became the lab's standard channel-sounding platform for three years.
+
+
+SIDE PROJECTS
+
+OpenChannelModel — 3GPP-compliant channel modeling library
+Python · NumPy · CUDA · open source
+
+A pure-Python implementation of the 3GPP TR 38.901 spatial channel model with optional CUDA acceleration. Used by two academic groups and one of my prior employer's competitors for early prototyping; 800+ GitHub stars.
+
+GNURadio Sounder — Open-source channel sounder
+GNU Radio · Python · USRP B210
+
+A two-node channel sounder for the 2.4 and 5 GHz ISM bands built on GNU Radio and a pair of USRP B210 SDRs. Workshops at the GNU Radio Conference 2023 walked attendees through replicating the setup; the writeup is the top hit for "USRP B210 channel sounder" on Google.
+
+
+EDUCATION
+
+Ph.D., Electrical & Computer Engineering — Wireless Communications
+University of Texas at Austin · 2014
+Thesis: "Iterative Receiver Design for Sub-6 GHz Massive MIMO Systems"
+
+M.S., Electrical Engineering
+University of Texas at Austin · 2011
+
+B.S., Electrical Engineering
+Bauman Moscow State Technical University · 2009
+
+
+SELECTED PUBLICATIONS
+
+- "Iterative SIC Receivers for In-Band UE-to-UE Interference in Spectrum-Sharing Networks" — IEEE Globecom, 2024
+- "A Codebook-Free Beamforming Approach for 64T64R Massive MIMO" — IEEE TSP, 2023
+- "Polar List Decoding with Path-Pruning Heuristics" — IEEE ICASSP, 2017
+- (Plus ~9 others in IEEE TSP, JSAC, ICASSP, Globecom, VTC.)

@@ -1,0 +1,149 @@
+{
+  "fixture_id": "jamie-junior-fullstack-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the early-career full-stack developer archetype. One ExpectedUnit per fact-bearing bullet in the EXPERIENCE section. Side projects are short-form descriptions without bullets and are intentionally not labeled.",
+  "expected_units": [
+    {
+      "id": "u_kyc_wizard",
+      "normalized_summary": "Rebuilt KYC verification flow from a 12-step linear form into a resumable saved-state wizard, cutting median completion time from 9m12s to 4m48s and reducing abandonment past step 3 by 31%",
+      "skills": [
+        "front-end engineering",
+        "form design",
+        "conversion optimization",
+        "full-stack development"
+      ],
+      "tools": ["TypeScript", "React", "Remix", "Postgres"],
+      "domains": ["fintech", "saas"]
+    },
+    {
+      "id": "u_drizzle_migration",
+      "normalized_summary": "Owned Knex to Drizzle ORM migration across 47 query sites, authored a codemod handling 80% of rewrites, shipped behind per-route flag with zero rollbacks",
+      "skills": [
+        "database migration",
+        "codemod authoring",
+        "feature flag rollout",
+        "back-end engineering"
+      ],
+      "tools": ["Knex", "Drizzle ORM", "Postgres", "Node.js"],
+      "domains": ["fintech", "saas"]
+    },
+    {
+      "id": "u_document_pipeline",
+      "normalized_summary": "Built document-upload pipeline with S3 presigned URLs, ClamAV virus scanning, AWS Textract OCR, and structured field extraction; ~14k docs/week at 99.7% success and $0.06/doc vs prior $0.42",
+      "skills": [
+        "back-end engineering",
+        "pipeline design",
+        "cost optimization",
+        "cloud services integration"
+      ],
+      "tools": ["AWS S3", "AWS Textract", "ClamAV", "Node.js"],
+      "domains": ["fintech", "document processing"]
+    },
+    {
+      "id": "u_audit_log",
+      "normalized_summary": "Designed append-only audit-log service with row-level hashing, structured event taxonomy, and Retool dashboard for compliance, replacing a manual quarterly CSV-export workflow",
+      "skills": [
+        "schema design",
+        "compliance tooling",
+        "back-end engineering",
+        "data integrity"
+      ],
+      "tools": ["Postgres", "Retool"],
+      "domains": ["fintech", "compliance"]
+    },
+    {
+      "id": "u_react19_upgrade",
+      "normalized_summary": "Led React 18 to 19 upgrade across ~140 components in the onboarding app, coordinating Suspense boundaries with design and refactoring legacy class components without customer-visible regressions",
+      "skills": [
+        "front-end engineering",
+        "framework upgrade",
+        "cross-functional coordination",
+        "refactoring"
+      ],
+      "tools": ["React", "TypeScript"],
+      "domains": ["fintech", "saas"]
+    },
+    {
+      "id": "u_seller_onboarding",
+      "normalized_summary": "Shipped seller-onboarding redesign moving from a 23-field single form to a progressive 4-step flow with inline validation and Stripe Connect embedded onboarding; lifted started-to-first-listing conversion from 38% to 61%",
+      "skills": [
+        "front-end engineering",
+        "conversion optimization",
+        "form design",
+        "payments integration"
+      ],
+      "tools": ["React", "Next.js", "Stripe Connect"],
+      "domains": ["consumer marketplace", "e-commerce"]
+    },
+    {
+      "id": "u_search_page",
+      "normalized_summary": "Built search-results page on Algolia with faceted filters, saved searches, cursor-paginated infinite scroll, and SSR shell — Lighthouse score from 54 to 86",
+      "skills": [
+        "search experience",
+        "front-end engineering",
+        "performance optimization",
+        "server-side rendering"
+      ],
+      "tools": ["Algolia", "Next.js", "React"],
+      "domains": ["consumer marketplace", "search and discovery"]
+    },
+    {
+      "id": "u_apollo_v4",
+      "normalized_summary": "Migrated GraphQL gateway from Apollo Server v3 to v4 and introduced persisted queries, cutting p95 payload size 62% and removing two recurring mobile rate-limit incidents",
+      "skills": [
+        "graphql",
+        "back-end engineering",
+        "performance optimization",
+        "framework upgrade"
+      ],
+      "tools": ["Apollo Server", "GraphQL", "Node.js"],
+      "domains": ["consumer marketplace", "saas"]
+    },
+    {
+      "id": "u_rds_cutover",
+      "normalized_summary": "Owned zero-downtime move from Heroku Postgres to AWS RDS using logical replication, authored the runbook used for subsequent migrations",
+      "skills": [
+        "database migration",
+        "infrastructure",
+        "runbook authoring",
+        "operational reliability"
+      ],
+      "tools": ["AWS RDS", "Heroku", "Postgres"],
+      "domains": ["infrastructure", "saas"]
+    },
+    {
+      "id": "u_admin_tool",
+      "normalized_summary": "Built internal admin tool for trust-and-safety listing review and account actions, replacing four Retool boards plus a spreadsheet for ~30 daily users",
+      "skills": [
+        "internal tooling",
+        "full-stack development",
+        "trust and safety"
+      ],
+      "tools": ["React", "Node.js", "Retool"],
+      "domains": ["consumer marketplace", "internal tools"]
+    },
+    {
+      "id": "u_intern_schema_validation",
+      "normalized_summary": "Built schema-validation layer for incoming customer events using Pydantic and a diff-against-registered-schemas check, rolled out across 12 customer integrations",
+      "skills": [
+        "schema validation",
+        "back-end engineering",
+        "data quality"
+      ],
+      "tools": ["Python", "Pydantic"],
+      "domains": ["data infrastructure", "b2b analytics"]
+    },
+    {
+      "id": "u_intern_dq_bot",
+      "normalized_summary": "Built Slack bot surfacing data-quality alerts from Great Expectations runs to the on-call channel; still in production at end of internship",
+      "skills": [
+        "alerting",
+        "back-end engineering",
+        "data quality"
+      ],
+      "tools": ["Python", "Slack", "Great Expectations"],
+      "domains": ["data infrastructure", "b2b analytics"]
+    }
+  ]
+}

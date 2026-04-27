@@ -1,0 +1,212 @@
+{
+  "fixture_id": "dimitri-wireless-ran-engineer-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the wireless/RAN systems engineer archetype. One ExpectedUnit per fact-bearing bullet across the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_type2_codebook",
+      "normalized_summary": "Designed type-II codebook beamforming pipeline for Helix 64T64R massive MIMO platform on Marvell Octeon DPU; demonstrated 14% downlink throughput improvement in 16-UE indoor cell trial",
+      "skills": [
+        "beamforming algorithm design",
+        "massive mimo",
+        "dpu programming",
+        "wireless systems engineering"
+      ],
+      "tools": ["C++", "Marvell Octeon DPU"],
+      "domains": ["telecom infrastructure", "5g ran"]
+    },
+    {
+      "id": "u_mu_mimo_scheduler",
+      "normalized_summary": "Owned MU-MIMO scheduler co-design across L1 and L2, introduced one-slot precoder-prediction filter that reduced rank mismatch events by 38% on FR1 8-layer test set",
+      "skills": [
+        "scheduler design",
+        "cross-layer optimization",
+        "mu-mimo",
+        "signal processing"
+      ],
+      "tools": ["FR1 8-layer"],
+      "domains": ["telecom infrastructure", "5g ran"]
+    },
+    {
+      "id": "u_ran_digital_twin",
+      "normalized_summary": "Built RAN digital twin pipeline ingesting real-world channel sounding traces from three trial sites through GPU-accelerated link-level simulator (NVIDIA Sionna plus custom CUDA channel filter), emits regression suite as L1 merge gate",
+      "skills": [
+        "digital twin engineering",
+        "link-level simulation",
+        "gpu acceleration",
+        "ci infrastructure"
+      ],
+      "tools": ["NVIDIA Sionna", "CUDA"],
+      "domains": ["telecom infrastructure", "5g ran"]
+    },
+    {
+      "id": "u_cbrs_sic_receiver",
+      "normalized_summary": "Led spectrum-sharing receiver work for CBRS and C-band guard region, designed iterative SIC receiver for in-band UE-to-UE leakage; published at Globecom 2024 and shipped in 24.3 firmware",
+      "skills": [
+        "receiver design",
+        "interference cancellation",
+        "spectrum sharing",
+        "signal processing"
+      ],
+      "tools": ["CBRS", "C-band"],
+      "domains": ["telecom infrastructure", "5g ran"]
+    },
+    {
+      "id": "u_private_5g_logistics",
+      "normalized_summary": "Owned L1 firmware integration for hyperscaler private-5G deployment at 1.2M-square-foot logistics facility, drove ten-week bring-up including fronthaul-clock-jitter root-cause; 99.4% uplink reliability across 14,000 handheld scanners",
+      "skills": [
+        "field deployment",
+        "firmware integration",
+        "system bring-up",
+        "root-cause analysis"
+      ],
+      "tools": ["private 5G"],
+      "domains": ["telecom infrastructure", "private wireless"]
+    },
+    {
+      "id": "u_channel_model_library",
+      "normalized_summary": "Authored Helix internal channel model library (TDL, CDL, 3GPP 38.901 spatial channel model in CUDA) — standard simulation backend for L1, L2, RF system teams across three product lines",
+      "skills": [
+        "channel modeling",
+        "simulation tooling",
+        "cuda development",
+        "platform standardization"
+      ],
+      "tools": ["CUDA", "3GPP TR 38.901"],
+      "domains": ["telecom infrastructure", "wireless simulation"]
+    },
+    {
+      "id": "u_ldpc_decoder",
+      "normalized_summary": "Implemented LDPC decoder offload pipeline on Marlowe 5K baseband, hit 14 Gbps peak decode budget for 100 MHz NR carrier, reduced PUSCH BLER by 0.6 dB versus prior fixed-point implementation",
+      "skills": [
+        "ldpc decoding",
+        "fpga acceleration",
+        "fixed-point optimization",
+        "baseband engineering"
+      ],
+      "tools": ["FlexNIC FPGA", "5G NR"],
+      "domains": ["telecom infrastructure", "baseband processing"]
+    },
+    {
+      "id": "u_srs_channel_est",
+      "normalized_summary": "Co-designed SRS-based channel estimation pipeline for FR2 mmWave deployments, implemented panel-aware spatial filter in fixed-point C on modem DSP; shipped in 4.2 release supporting 28 GHz and 39 GHz US carriers",
+      "skills": [
+        "channel estimation",
+        "mmwave signal processing",
+        "dsp programming",
+        "spatial filtering"
+      ],
+      "tools": ["C", "modem DSP", "FR2 mmWave"],
+      "domains": ["telecom infrastructure", "mmwave"]
+    },
+    {
+      "id": "u_ssb_beam_mgmt",
+      "normalized_summary": "Owned SSB beam management algorithm for 64T64R AAU product, designed beam-sweep schedule across SS burst sets and L1-RSRP filter; became company default beam-management config for FR1 macro cells",
+      "skills": [
+        "beam management",
+        "algorithm design",
+        "massive mimo",
+        "handover engineering"
+      ],
+      "tools": ["64T64R AAU"],
+      "domains": ["telecom infrastructure", "5g ran"]
+    },
+    {
+      "id": "u_700mhz_field_debug",
+      "normalized_summary": "Drove field-trial debug for Tier-1 European operator 700 MHz refarm, root-caused PRACH false-detection regression to numerology-mismatch in cell-search engine and authored patch; carrier launched on schedule",
+      "skills": [
+        "field debugging",
+        "prach analysis",
+        "operator deployment support",
+        "regression triage"
+      ],
+      "tools": ["700 MHz refarm"],
+      "domains": ["telecom infrastructure", "operator deployment"]
+    },
+    {
+      "id": "u_3gpp_csi_rs_crs",
+      "normalized_summary": "Led cross-team response to 3GPP Release 17 spec ambiguity around CSI-RS resource mapping in CoMP, drove internal interpretation review and submitted three CRs to RAN1 of which two were accepted",
+      "skills": [
+        "standards body engagement",
+        "spec interpretation",
+        "cross-team technical leadership",
+        "3gpp contribution"
+      ],
+      "tools": ["3GPP Release 17", "RAN1"],
+      "domains": ["telecom infrastructure", "wireless standards"]
+    },
+    {
+      "id": "u_rf_impairments_lib",
+      "normalized_summary": "Built Marlowe internal RF impairments simulation library (PA AM-AM/AM-PM, IQ imbalance, phase noise) and link-level regression harness; caught 27 BLER-class regressions over 18 months",
+      "skills": [
+        "rf modeling",
+        "simulation tooling",
+        "link-level analysis",
+        "regression infrastructure"
+      ],
+      "tools": ["link-level simulator"],
+      "domains": ["telecom infrastructure", "wireless simulation"]
+    },
+    {
+      "id": "u_lte_256qam",
+      "normalized_summary": "Implemented LTE 256-QAM downlink demodulator and equalizer, passed conformance against Anritsu and Rohde & Schwarz test sets, shipped in modem reference design",
+      "skills": [
+        "modem development",
+        "demodulator design",
+        "conformance testing",
+        "signal processing"
+      ],
+      "tools": ["Anritsu", "Rohde & Schwarz", "LTE-A Pro"],
+      "domains": ["cellular modem", "baseband processing"]
+    },
+    {
+      "id": "u_polar_decoder",
+      "normalized_summary": "Co-authored NR sub-6 prototype polar code decoder including SCL list-decoding kernel; decoder formed basis of production polar block in next-gen modem",
+      "skills": [
+        "polar code decoding",
+        "list decoding",
+        "modem development",
+        "algorithm implementation"
+      ],
+      "tools": ["5G NR sub-6"],
+      "domains": ["cellular modem", "baseband processing"]
+    },
+    {
+      "id": "u_phd_testbed",
+      "normalized_summary": "Authored seven peer-reviewed papers in IEEE TSP, JSAC, ICASSP and built 16-antenna USRP testbed in GNU Radio that became lab standard channel-sounding platform for three years",
+      "skills": [
+        "academic research",
+        "testbed design",
+        "channel sounding",
+        "publication"
+      ],
+      "tools": ["GNU Radio", "USRP"],
+      "domains": ["wireless research", "academia"]
+    },
+    {
+      "id": "u_openchannelmodel",
+      "normalized_summary": "Built OpenChannelModel — pure-Python 3GPP TR 38.901 spatial channel model with CUDA acceleration; 800+ GitHub stars, used by two academic groups and a competitor",
+      "skills": [
+        "open source maintenance",
+        "channel modeling",
+        "cuda development",
+        "scientific python"
+      ],
+      "tools": ["Python", "NumPy", "CUDA", "3GPP TR 38.901"],
+      "domains": ["wireless simulation", "developer tools"]
+    },
+    {
+      "id": "u_gnuradio_sounder",
+      "normalized_summary": "Built two-node channel sounder for 2.4 and 5 GHz ISM bands on GNU Radio and USRP B210 SDRs; led GNU Radio Conference 2023 workshop, top search result for USRP B210 channel sounder",
+      "skills": [
+        "sdr development",
+        "channel sounding",
+        "open source",
+        "technical writing"
+      ],
+      "tools": ["GNU Radio", "USRP B210", "Python"],
+      "domains": ["wireless research", "developer tools"]
+    }
+  ]
+}

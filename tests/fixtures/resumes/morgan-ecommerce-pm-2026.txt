@@ -1,0 +1,71 @@
+Morgan Delacroix
+
+Product Manager — E-commerce · Search & Discovery · Checkout
+
+Chicago, IL · hire@example.com · (555) 010-0211
+morgandelacroix.com · linkedin.com/in/morgandelacroix · github.com/mdelacroix
+
+
+SUMMARY
+
+Product manager with seven years in e-commerce — three at a direct-to-consumer apparel brand growing from $40M to $180M GMV during my tenure, and four at a major retail platform where I've owned search relevance and the shared checkout used by 12,000+ third-party sellers. The work I keep being drawn back to sits in the unglamorous middle of the funnel: search results that don't return junk, a checkout that doesn't ask the same question twice, and the marketplace dynamics that decide which seller's product shows up at the top. I write specs that engineers will actually read, run experiments I'm willing to be wrong about, and operate from the assumption that conversion improvements are the dividend you collect for taking customer friction seriously.
+
+
+EXPERIENCE
+
+Senior Product Manager — Halcyon Marketplace
+Search & Discovery · Chicago, IL · 2022 – Present
+
+Lead PM for search and product discovery on a top-10 US online marketplace. Team of two PMs, eight engineers, three data scientists, and a UX researcher. I report to the Director of Discovery and partner closely with the Merchandising org and the Trust & Safety team.
+
+- Led the multi-quarter overhaul of the search ranking model from a hand-tuned BM25 plus business-rules system to a learning-to-rank model with seller-quality, price-competitiveness, and inventory-freshness features. Top-10 click-through rate up 14%, search-attributed GMV per visitor up 9.3%, with no degradation on the head queries that merchandising had been hand-tuning.
+- Owned the redesign of the search results page including a new query-understanding layer (typo correction, attribute extraction, brand canonicalization) and a faceted filter rebuild. Zero-result-rate fell from 6.1% to 1.4%; "refinement abandons" — sessions where a user adds a filter and then leaves — fell 28%.
+- Shipped sponsored-listings inline in organic search after eighteen months of internal debate. Worked with Trust & Safety on relevance floors so sponsored couldn't dominate low-relevance queries; with Finance on the take-rate model; with Engineering on the auction-and-ranking interleaving. Annualized incremental revenue: $24M with no measurable hit to organic CTR or NPS.
+- Killed the "category landing pages" initiative after a six-week scoping pass — wrote the disconfirming memo, presented it to the VP, and redirected the squad to the query-understanding work that ended up shipping the zero-result-rate win above. Saving the quarter from this is something I am quietly proud of.
+- Owned the seller-quality signal that feeds search ranking. Defined the metric (a weighted blend of late-shipment rate, defect rate, response time, and chargeback rate), shipped the seller-facing dashboard, and ran the comms plan that took it from announcement to enforced for 18,000 sellers in a quarter.
+- Partnered with the Pricing team on competitive-price-awareness in search results — a "compare price" treatment that surfaces when our listing is materially under or over the median for the same product across the open web. Currently in 50/50 holdout; preliminary lift of 4.1% on add-to-cart for treatment.
+
+Product Manager — Halcyon Marketplace
+Checkout & Payments · Chicago, IL · 2020 – 2022
+
+Owned the shared checkout used by every seller on the platform. Team of one other PM and twelve engineers across three squads.
+
+- Led the guest-checkout-by-default rollout. Removed the forced-account-creation gate and replaced it with post-purchase account creation. Mobile conversion up 11.4% on the first month after rollout; sustained gains through the quarter.
+- Shipped Apple Pay and Google Pay across the checkout, including a six-week handoff with the fraud team to recalibrate risk rules for tokenized payments. Adoption hit 22% of mobile checkouts within two quarters.
+- Owned the rebuild of the address-entry experience using an autocomplete service against the USPS address database, with a fallback for international addresses. Address-related support tickets dropped 41%; refunds-from-undeliverable-shipments dropped from 1.8% of mobile orders to 0.6%.
+- Built the post-purchase upsell rail (fulfilled by the same seller, ships in the same box). Generated $14M annualized incremental revenue at +8% margin contribution.
+- Partnered with the Risk team on 3DS step-up rollout for high-risk transactions. Shipped a smart-trigger system that only stepped up the riskiest 3% of transactions; reduced fraud chargebacks 22% with a checkout-friction increase of <0.5% on overall conversion.
+
+Product Manager — Pollen & Pine
+Direct-to-Consumer Apparel · Chicago, IL · 2019 – 2022 (overlap)
+
+A DTC sustainable-apparel brand. Joined as the first full-time PM. Reported to the COO. Eventually overlapped with the Halcyon role for the final six months as I transitioned out.
+
+- Owned the site-wide checkout migration from Shopify Plus's stock checkout to a Shopify Hydrogen-based custom checkout. Cart-to-purchase conversion rose from 64% to 73% over the launch quarter; mobile share of revenue rose from 41% to 54%.
+- Designed and shipped the loyalty program (points, tiers, early-access drops). Repeat-purchase rate within 90 days lifted from 19% to 31%; LTV/CAC ratio for the loyalty cohort settled at 4.7 vs 2.8 for non-members.
+- Built the product-discovery experience around a "fits like" recommendation engine using purchase + return history. Cut the return rate on the women's denim category from 38% (industry-bad) to 22% (industry-normal) over six months.
+- Led the headless-CMS migration off WordPress to Sanity, and the corresponding Next.js front-end rebuild. p75 LCP dropped from 4.8s to 1.6s; organic search traffic grew 60% YoY in the year following.
+- Ran the bundling experiments that tied the staple-tee SKU to a discounted three-pack. Average order value up 23% on the bundle landing pages; the three-pack remains a top-5 SKU as of the most recent investor update.
+
+
+SIDE PROJECTS
+
+Cartwright — A bookmarklet that rewrites checkout pages
+TypeScript · browser extension
+
+A small browser extension that strips dark patterns from third-party checkouts (pre-checked add-ons, hidden fees, default-on subscriptions). Open source. ~600 weekly active users, mostly people who saw a Hacker News post.
+
+
+WRITING
+
+"Why your search results are bad and the org chart is the reason" — morgandelacroix.com/blog/2025-search-org-chart
+A long-form piece on why marketplace search ranking is a political problem before it is a technical one, drawing on the Halcyon learning-to-rank rollout.
+
+
+EDUCATION
+
+M.B.A.
+Northwestern University, Kellogg School of Management · Evanston, IL · 2019
+
+B.A., Economics
+University of Chicago · Chicago, IL · 2017

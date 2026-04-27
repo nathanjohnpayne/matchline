@@ -1,0 +1,76 @@
+Sofia Reyes
+
+Full-Stack Engineer & Bootstrapped Founder — TypeScript, React, Postgres, B2B SaaS
+
+Brooklyn, NY · hire@example.com · (555) 010-0230
+sofiareyes.dev · linkedin.com/in/sofiareyes · github.com/sofiareyes
+
+
+SUMMARY
+
+Full-stack engineer for ten years and a bootstrapped founder for the last five. I started as a senior engineer at a fast-growing B2B SaaS company shipping the kind of TypeScript-React-Postgres stack that runs most of the modern internet, then left to start Threadline, a B2B operations platform now at roughly $5M ARR with a team of nine. I do customer development, API design, the SQL plan that fixes the dashboard, and the on-call rotation. I am happiest when the same engineer who took the customer call is the one closing the PR.
+
+
+EXPERIENCE
+
+Founder & CEO — Threadline
+B2B operations platform for apparel manufacturing · Brooklyn · 2021 – 2026
+
+Threadline is a bootstrapped B2B SaaS platform for small-to-mid apparel manufacturers — order management, BOM tracking, factory communication, and a customer-facing portal. I started it solo in late 2020 and have grown it to roughly $5M ARR, a team of nine, and 220+ paying customers across the US and Latin America. Still the largest individual code contributor.
+
+- Built Threadline's MVP solo over fourteen months — Next.js front end, Node.js + Postgres back end, Stripe Billing, and a Twilio-backed factory-comms layer. Closed the first ten paying customers from cold outbound and a single Hacker News Show post; first $10K MRR within seven months of launch.
+- Designed and shipped the Threadline production-tracking schema and API. Single Postgres database, multi-tenant by row-level security, with a Drizzle ORM layer and a typed REST API generated from the schema. Schema has held through three pricing-model changes and a 40x customer growth without a major rewrite.
+- Led the B2B pivot from D2C-brand-as-customer to factory-as-customer in early 2023. Ran 38 customer development calls in six weeks, rewrote the onboarding flow and pricing page, and re-targeted the GTM toward factory operations leads. ARR per logo doubled in the following two quarters and churn dropped from 4.1% to 1.8% monthly.
+- Built the Threadline customer portal — a white-labeled order-status and approvals app that factory customers send to their brand clients. Portal is now the primary acquisition channel: ~40% of new logos arrive via a customer's portal link. Customer-facing event tracking runs on a custom self-hosted PostHog deployment.
+- Owned hiring for the first eight engineers. Built the technical interview loop (a paired-programming round on a real Threadline bug, a system-design round on a real Threadline RFC), the onboarding doc, and the on-call rotation. Engineering team retention has been 100% over three years.
+- Drove the Series Seed conversation in late 2024 and decided to stay bootstrapped. Wrote the customer-facing decision memo. Subsequent annual revenue per employee landed at $580K — within the top decile for B2B SaaS at our stage.
+- Led the SOC 2 Type II program through a single-engineer-plus-vCISO model. Picked Drata for the evidence layer, ran the controls work in a sprint cadence, cleared the auditor's first walkthrough with zero exceptions, and got the report out three weeks ahead of the largest customer's procurement deadline.
+- Designed the Threadline factory-comms scheduler — a Postgres-backed job system with idempotent retries, dead-letter queues per factory, and a SLA-violation alert path that pages the factory's dedicated CS owner. Replaces what would otherwise be Sidekiq plus a separate alerting stack; a single engineer maintains it.
+
+Senior Software Engineer — Pliant
+B2B Workflow Platform · Brooklyn · 2018 – 2021
+
+Pliant is a fictional Series-C-stage B2B SaaS platform for legal-ops workflows. I joined as the 19th engineer and left as a senior IC on the platform team.
+
+- Owned the migration of Pliant's monolithic Rails app to a TypeScript-Node services architecture for the workflow execution path. Designed the service split, ran the dual-write window for six weeks, and cut median workflow execution latency from 1.2s to 280ms; old code path retired three months later.
+- Led the multi-tenant data-export feature end-to-end — schema design, Postgres COPY-based pipeline, S3 hand-off, signed download URLs, and the customer-facing UI. Feature shipped on the deadline tied to a Fortune 500 procurement requirement and unblocked a $1.4M ACV deal.
+- Built the Pliant async job system on top of Postgres LISTEN/NOTIFY plus a row-level locking pattern. Replaced the existing Sidekiq deployment for the workflow execution path; reduced per-job p99 latency by 60% and removed Redis as a tier-1 dependency.
+- Co-designed the Pliant feature-flag system. Self-hosted, schema-versioned, with audit-logged flag changes and a typed client SDK for the Node services. Used by every product team within six months of launch.
+- Took the on-call lead role for the platform team for eight months. Drove the runbook backlog from 31% coverage to 94%, ran the weekly incident review, and shepherded the team through a six-week period that included two SEV-2s and zero customer-visible regressions.
+
+Software Engineer — Anvil Labs
+Developer Tools Startup · Brooklyn · 2016 – 2018
+
+A fictional early-stage dev-tools startup; I was engineer #4. Worked across the full stack on a CLI plus dashboard product for managed Postgres.
+
+- Shipped the v1 Anvil dashboard end-to-end — React front end, Node API, and the CLI integration that backed the live-query view. Product launched at PostgresConf 2017.
+- Built the Anvil query-plan visualizer — a React component that renders Postgres EXPLAIN ANALYZE output as an interactive plan tree with row-estimate-vs-actual deltas highlighted. Component is still the most-trafficked page on the marketing site.
+
+Software Engineer — Cardinal Logistics
+Internal Tools · New York, NY · 2014 – 2016
+
+First role out of school. Built internal logistics tools on a Python/Django stack: a freight-pricing calculator, a driver-routing dashboard, and a Salesforce-to-warehouse-system data sync. Migrated the freight-pricing calculator from a 4,000-line spreadsheet to a tested service in six months; saved the operations team an estimated 12 hours per week of reconciliation work.
+
+
+SIDE PROJECTS
+
+Reading Years — Personal reading log
+Next.js · TypeScript · Postgres · Plausible
+
+A small personal reading log with public year-end pages. Goodreads-replacement for me and ~60 other people. Source open on GitHub.
+
+
+WRITING
+
+Bootstrapping Threadline — sofiareyes.dev/blog
+
+A working journal of the Threadline build, mostly engineering decisions made in public.
+
+- "Why We Stayed on a Single Postgres" (March 2025) — A 4,000-word post arguing that most B2B SaaS at sub-$10M ARR is better served by row-level security plus careful indexing than by per-tenant schemas. Cited in two Postgres conference talks.
+- "The Bootstrapped Founder Hiring Loop" (October 2024) — On the technical interview loop Threadline uses, the failure modes we hit on the first three hires, and the version that has produced eight zero-regret hires in a row.
+
+
+EDUCATION
+
+B.S., Computer Science
+Brown University · Providence, RI · 2014

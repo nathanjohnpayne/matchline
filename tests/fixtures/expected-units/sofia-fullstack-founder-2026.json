@@ -1,0 +1,211 @@
+{
+  "fixture_id": "sofia-fullstack-founder-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-26",
+  "notes": "Hand-curated synthetic fixture for the full-stack engineer + bootstrapped founder archetype. One ExpectedUnit per fact-bearing bullet across the EXPERIENCE + SIDE PROJECTS sections.",
+  "expected_units": [
+    {
+      "id": "u_threadline_mvp",
+      "normalized_summary": "Built Threadline MVP solo over fourteen months — Next.js, Node.js, Postgres, Stripe Billing, Twilio factory-comms; closed first ten customers from cold outbound and Hacker News, hit $10K MRR in seven months",
+      "skills": [
+        "full-stack engineering",
+        "0-to-1 product",
+        "customer development",
+        "founding engineer"
+      ],
+      "tools": ["Next.js", "Node.js", "Postgres", "Stripe Billing", "Twilio"],
+      "domains": ["b2b saas", "apparel manufacturing"]
+    },
+    {
+      "id": "u_threadline_schema",
+      "normalized_summary": "Designed Threadline production-tracking schema and API — single Postgres database with row-level security multi-tenancy, Drizzle ORM, typed REST API; held through three pricing-model changes and 40x customer growth",
+      "skills": [
+        "schema design",
+        "multi-tenant architecture",
+        "api design",
+        "postgres engineering"
+      ],
+      "tools": ["Postgres", "Drizzle ORM", "TypeScript"],
+      "domains": ["b2b saas", "backend engineering"]
+    },
+    {
+      "id": "u_b2b_pivot",
+      "normalized_summary": "Led Threadline B2B pivot from D2C-brand-as-customer to factory-as-customer, ran 38 customer development calls in six weeks; ARR per logo doubled, monthly churn dropped from 4.1% to 1.8%",
+      "skills": [
+        "customer development",
+        "go-to-market strategy",
+        "pricing strategy",
+        "founder-led sales"
+      ],
+      "tools": [],
+      "domains": ["b2b saas", "founder operations"]
+    },
+    {
+      "id": "u_customer_portal",
+      "normalized_summary": "Built Threadline white-labeled customer portal — order status and approvals app sent to brand clients; ~40% of new logos arrive via portal links, custom self-hosted PostHog event tracking",
+      "skills": [
+        "product-led growth",
+        "white-label product design",
+        "event analytics",
+        "full-stack engineering"
+      ],
+      "tools": ["PostHog"],
+      "domains": ["b2b saas", "product-led growth"]
+    },
+    {
+      "id": "u_hiring_loop",
+      "normalized_summary": "Owned hiring for first eight Threadline engineers — paired-programming and system-design interview loop, onboarding doc, on-call rotation; 100% engineering retention over three years",
+      "skills": [
+        "engineering hiring",
+        "interview loop design",
+        "team building",
+        "engineering management"
+      ],
+      "tools": [],
+      "domains": ["founder operations", "engineering leadership"]
+    },
+    {
+      "id": "u_seed_decision",
+      "normalized_summary": "Drove Threadline Series Seed conversation in late 2024 and chose to stay bootstrapped; wrote customer-facing decision memo, subsequent annual revenue per employee landed at $580K",
+      "skills": [
+        "fundraising strategy",
+        "founder decision making",
+        "capital efficiency",
+        "founder communication"
+      ],
+      "tools": [],
+      "domains": ["founder operations", "b2b saas"]
+    },
+    {
+      "id": "u_soc2",
+      "normalized_summary": "Led Threadline SOC 2 Type II program single-engineer-plus-vCISO using Drata, cleared auditor first walkthrough with zero exceptions, delivered report three weeks ahead of largest customer procurement deadline",
+      "skills": [
+        "compliance program management",
+        "security engineering",
+        "vendor selection",
+        "founder operations"
+      ],
+      "tools": ["Drata"],
+      "domains": ["compliance", "b2b saas"]
+    },
+    {
+      "id": "u_factory_scheduler",
+      "normalized_summary": "Designed Threadline factory-comms scheduler — Postgres-backed job system with idempotent retries, per-factory dead-letter queues, and SLA-violation alert path replacing Sidekiq plus separate alerting stack",
+      "skills": [
+        "distributed systems",
+        "job scheduling design",
+        "postgres engineering",
+        "operational tooling"
+      ],
+      "tools": ["Postgres"],
+      "domains": ["backend engineering", "b2b saas"]
+    },
+    {
+      "id": "u_pliant_monolith_split",
+      "normalized_summary": "Owned migration of Pliant Rails monolith to TypeScript-Node services for workflow execution path, six-week dual-write window; cut median workflow execution latency from 1.2s to 280ms",
+      "skills": [
+        "service decomposition",
+        "migration engineering",
+        "performance engineering",
+        "backend architecture"
+      ],
+      "tools": ["TypeScript", "Node.js", "Rails"],
+      "domains": ["b2b saas", "backend engineering"]
+    },
+    {
+      "id": "u_data_export",
+      "normalized_summary": "Led Pliant multi-tenant data export end-to-end — schema design, Postgres COPY pipeline, S3 hand-off, signed URLs, customer UI; shipped on procurement deadline and unblocked $1.4M ACV deal",
+      "skills": [
+        "feature engineering",
+        "postgres optimization",
+        "s3 integration",
+        "full-stack engineering"
+      ],
+      "tools": ["Postgres", "S3"],
+      "domains": ["b2b saas", "enterprise sales"]
+    },
+    {
+      "id": "u_async_jobs_postgres",
+      "normalized_summary": "Built Pliant async job system on Postgres LISTEN/NOTIFY plus row-level locking, replacing Sidekiq for workflow execution; reduced per-job p99 latency by 60% and removed Redis as tier-1 dependency",
+      "skills": [
+        "distributed systems",
+        "postgres engineering",
+        "performance engineering",
+        "infrastructure simplification"
+      ],
+      "tools": ["Postgres", "Sidekiq", "Redis"],
+      "domains": ["backend engineering", "b2b saas"]
+    },
+    {
+      "id": "u_feature_flags",
+      "normalized_summary": "Co-designed Pliant self-hosted feature-flag system with schema-versioned, audit-logged flag changes and typed Node SDK; adopted by every product team within six months",
+      "skills": [
+        "platform engineering",
+        "developer tooling",
+        "audit logging",
+        "sdk design"
+      ],
+      "tools": ["Node.js", "TypeScript"],
+      "domains": ["developer tools", "b2b saas"]
+    },
+    {
+      "id": "u_oncall_lead",
+      "normalized_summary": "Took on-call lead role for Pliant platform team for eight months, drove runbook coverage from 31% to 94%, ran weekly incident review, shepherded team through two SEV-2s with zero customer-visible regressions",
+      "skills": [
+        "on-call leadership",
+        "incident response",
+        "runbook authorship",
+        "reliability engineering"
+      ],
+      "tools": [],
+      "domains": ["reliability engineering", "b2b saas"]
+    },
+    {
+      "id": "u_anvil_dashboard",
+      "normalized_summary": "Shipped Anvil v1 dashboard end-to-end — React front end, Node API, CLI integration backing live-query view; product launched at PostgresConf 2017",
+      "skills": [
+        "full-stack engineering",
+        "0-to-1 product",
+        "cli development",
+        "developer tooling"
+      ],
+      "tools": ["React", "Node.js"],
+      "domains": ["developer tools", "b2b saas"]
+    },
+    {
+      "id": "u_query_plan_viz",
+      "normalized_summary": "Built Anvil query-plan visualizer — React component rendering Postgres EXPLAIN ANALYZE as interactive plan tree with row-estimate-vs-actual deltas; most-trafficked page on marketing site",
+      "skills": [
+        "data visualization",
+        "react component design",
+        "postgres internals",
+        "developer tooling"
+      ],
+      "tools": ["React", "Postgres"],
+      "domains": ["developer tools", "data visualization"]
+    },
+    {
+      "id": "u_freight_calc_migration",
+      "normalized_summary": "Migrated Cardinal Logistics freight-pricing calculator from 4,000-line spreadsheet to tested Python/Django service in six months; saved operations team estimated 12 hours per week of reconciliation",
+      "skills": [
+        "spreadsheet replacement",
+        "service migration",
+        "internal tooling",
+        "operations automation"
+      ],
+      "tools": ["Python", "Django"],
+      "domains": ["internal tools", "logistics"]
+    },
+    {
+      "id": "u_reading_years",
+      "normalized_summary": "Built Reading Years — small personal reading log with public year-end pages, used by 60 people, source open on GitHub",
+      "skills": [
+        "side project engineering",
+        "personal product",
+        "full-stack engineering"
+      ],
+      "tools": ["Next.js", "TypeScript", "Postgres", "Plausible"],
+      "domains": ["personal projects"]
+    }
+  ]
+}
