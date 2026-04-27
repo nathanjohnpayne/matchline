@@ -7,7 +7,21 @@
  *
  * See `specs/matchline.md § Success metrics` for the 80/80 quality
  * bar these score functions feed.
+ *
+ * **Summary scoring is token-Jaccard, not exact equality (#146).**
+ * The first live `npm run eval` run against Nathan's resume + the
+ * Google JD reported 3.3% extraction accuracy because
+ * `unitSetAccuracy` was comparing summaries with `===`. LLMs
+ * paraphrase — they essentially never reproduce a hand-labeled
+ * summary verbatim — so the metric collapsed to 0 in nearly every
+ * pair, even when the underlying claim was the same. Token-Jaccard
+ * via `tokenize` + `tokenJaccard` (already battle-tested in
+ * `mapping.ts::scoreUnitPair`) is the right primitive: paraphrased
+ * summaries with the same factual content score in the 0.4–0.7
+ * range; wholly unrelated content stays near 0.
  */
+
+import { tokenize, tokenJaccard } from "./mapping.js";
 
 export interface ExpectedUnit {
   readonly normalizedSummary: string;
@@ -41,11 +55,24 @@ export function jaccard(a: readonly string[], b: readonly string[]): number {
 
 /**
  * Normalized-Unit set accuracy. Greedy best-match pairing between
- * expected and actual Units by `normalizedSummary` equality, falling
- * back to Jaccard on `skills` for soft pairing. Returns the mean
- * pair score; unpaired expecteds contribute 0, extra actuals are
- * ignored (precision/recall asymmetry — the 80% bar is about recall
- * over expected Units).
+ * expected and actual Units by `normalizedSummary` token-Jaccard
+ * weighted with `skills` Jaccard. Returns the mean pair score;
+ * unpaired expecteds contribute 0, extra actuals are ignored
+ * (precision/recall asymmetry — the 80% bar is about recall over
+ * expected Units).
+ *
+ * **Summary metric is paraphrase-resilient (#146).** Tokenize both
+ * summaries (lowercase, punctuation stripped, short tokens dropped)
+ * and Jaccard the sets. A 0.55-overlap paraphrase scores 0.55, not
+ * 0 — which is what real LLM output produces against a hand-labeled
+ * fixture. The 0.6/0.4 weighting still reflects "summary content is
+ * the primary signal; canonical-vocab skills are secondary".
+ *
+ * **Skills metric stays full-phrase Jaccard.** Skill names should
+ * be canonical ontology terms; phrase-level matching is what the
+ * production matching engine uses. If the prompt produces
+ * non-canonical skill phrases at scale, that's a prompt-tuning
+ * concern (Phase 3 #38), not a metric one.
  */
 export function unitSetAccuracy(
   expected: readonly ExpectedUnit[],
@@ -60,7 +87,22 @@ export function unitSetAccuracy(
     for (let i = 0; i < actual.length; i++) {
       if (used.has(i)) continue;
       const a = actual[i]!;
-      const summaryMatch = e.normalizedSummary === a.normalizedSummary ? 1 : 0;
+      // Codex P2 on PR #147: a summary made entirely of short
+      // tokens (e.g. "AI ML", "TV OS") tokenizes to empty under
+      // the >2-char filter, and `tokenJaccard(empty, empty) = 0`
+      // would punish a perfect textual match. Fall back to exact
+      // equality on the trimmed lowercase strings when either side
+      // tokenizes empty so identical short-token summaries still
+      // get full credit.
+      const expectedTokens = tokenize(e.normalizedSummary);
+      const actualTokens = tokenize(a.normalizedSummary);
+      const summaryMatch =
+        expectedTokens.size === 0 || actualTokens.size === 0
+          ? e.normalizedSummary.trim().toLowerCase() ===
+            a.normalizedSummary.trim().toLowerCase()
+            ? 1
+            : 0
+          : tokenJaccard(expectedTokens, actualTokens);
       const skillsMatch = jaccard(e.skills, a.skills);
       const score = summaryMatch * 0.6 + skillsMatch * 0.4;
       if (score > bestScore) {
