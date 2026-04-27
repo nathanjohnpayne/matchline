@@ -106,15 +106,26 @@ export interface ScoreResult {
  * ontology, and including them as raw strings would defeat the
  * canonical-set discipline.
  *
- * Edge cases per spec § Empty-set Jaccard:
- *   - Both empty → 1.0 (no constraint on this dimension)
- *   - One empty → 0.0 (signal mismatch)
+ * Edge cases:
+ *   - Both empty → **0.5 (neutral)**. Originally 1.0 per the
+ *     spec's "no constraint on this dimension" framing, BUT
+ *     that produced a false-positive cliff: the live matching
+ *     trace on PR #148 showed `skill/tool/domain` flattening
+ *     to 1.0 across **every** (Unit, Requirement) pair on the
+ *     Nathan-2026 × Google SPM fixture — because the seed
+ *     ontology only recognizes ~10% of the LLM's extraction
+ *     vocabulary, so most Units AND most Requirement keywords
+ *     normalize to all-nulls. With empty-empty = 1.0, that
+ *     reads as "perfect agreement on every dimension" and
+ *     14-year-old CNN broadcast Units rank above current
+ *     streaming work. The ontology under-coverage is a
+ *     separate fix (Phase 3 #38); this jaccard change closes
+ *     the worst-case ranking pathology without waiting for it.
+ *   - One empty → 0.0 (signal mismatch).
  *
- * The "both empty → 1" choice can produce false-positives on
- * Requirements that don't specify e.g. tools. The matching
- * engine offsets this via the weighted-sum: a perfect tool
- * score weighted at 0.10 only contributes 0.10 to rule_score,
- * not enough to dominate.
+ * 0.5 is the same neutral the seniority component uses for
+ * "we don't know" — consistent semantics across the rule
+ * components.
  */
 function jaccard(
   a: readonly string[],
@@ -123,7 +134,7 @@ function jaccard(
 ): number {
   const aSet = canonicalize(a, normalize);
   const bSet = canonicalize(b, normalize);
-  if (aSet.size === 0 && bSet.size === 0) return 1;
+  if (aSet.size === 0 && bSet.size === 0) return 0.5;
   if (aSet.size === 0 || bSet.size === 0) return 0;
   let intersection = 0;
   for (const v of aSet) if (bSet.has(v)) intersection += 1;
