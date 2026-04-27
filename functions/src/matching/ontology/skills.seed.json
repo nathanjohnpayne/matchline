@@ -117,6 +117,7 @@
     { "canonical": "broadcast operations", "synonyms": ["live broadcast operations", "broadcast operations management"] },
     { "canonical": "process improvement", "synonyms": ["operational improvement", "process optimization", "workflow improvement"] },
     { "canonical": "ci/cd", "synonyms": ["continuous integration", "continuous deployment", "ci cd pipelines", "build pipelines", "deployment pipelines"] },
+    { "canonical": "shell scripting", "synonyms": ["shell automation", "command-line scripting", "cli scripting"] },
     { "canonical": "data infrastructure design", "synonyms": ["data platform design", "data pipeline design"] },
     { "canonical": "kpi tracking", "synonyms": ["kpi management", "metrics tracking", "tracking kpis"] },
     { "canonical": "executive reporting", "synonyms": ["exec reporting", "leadership reporting", "weekly exec narration"] },
