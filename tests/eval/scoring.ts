@@ -8,20 +8,28 @@
  * See `specs/matchline.md § Success metrics` for the 80/80 quality
  * bar these score functions feed.
  *
- * **Summary scoring is token-Jaccard, not exact equality (#146).**
- * The first live `npm run eval` run against Nathan's resume + the
- * Google JD reported 3.3% extraction accuracy because
- * `unitSetAccuracy` was comparing summaries with `===`. LLMs
- * paraphrase — they essentially never reproduce a hand-labeled
- * summary verbatim — so the metric collapsed to 0 in nearly every
- * pair, even when the underlying claim was the same. Token-Jaccard
- * via `tokenize` + `tokenJaccard` (already battle-tested in
- * `mapping.ts::scoreUnitPair`) is the right primitive: paraphrased
- * summaries with the same factual content score in the 0.4–0.7
- * range; wholly unrelated content stays near 0.
+ * **Summary scoring evolution.** The first live `npm run eval` run
+ * (#146) reported 3.3% extraction accuracy because `unitSetAccuracy`
+ * was comparing summaries with `===` — LLMs paraphrase, so the
+ * metric collapsed to 0. PR #147 switched to `tokenJaccard`,
+ * which lifted extraction to 34% but still penalized the verbosity
+ * asymmetry between the runtime extractor's detailed summaries and
+ * the labeler's concise ones. PR #158 (this contract) switched to
+ * `tokenOverlapCoefficient` (`|A ∩ B| / min(|A|, |B|)`), which
+ * gives full credit when the smaller (labeled) set is fully covered
+ * by the larger (runtime) one — the asymmetry the fixture
+ * convention bakes in. Live extraction lifted to 50.3% and the
+ * matching pair this primitive enables (`u_kepler`) finally maps,
+ * unblocking match accuracy too.
+ *
+ * The empty-token-set fallback to trimmed-lowercase exact equality
+ * (added per Codex P2 on #147 for "AI ML"-shape short-token
+ * summaries) is preserved in this contract — `unitSetAccuracy`'s
+ * inner branch still falls back to exact equality when either side
+ * tokenizes empty.
  */
 
-import { tokenize, tokenJaccard } from "./mapping.js";
+import { tokenOverlapCoefficient, tokenize } from "./mapping.js";
 
 export interface ExpectedUnit {
   readonly normalizedSummary: string;
@@ -55,18 +63,22 @@ export function jaccard(a: readonly string[], b: readonly string[]): number {
 
 /**
  * Normalized-Unit set accuracy. Greedy best-match pairing between
- * expected and actual Units by `normalizedSummary` token-Jaccard
+ * expected and actual Units by `normalizedSummary` overlap-coefficient
  * weighted with `skills` Jaccard. Returns the mean pair score;
  * unpaired expecteds contribute 0, extra actuals are ignored
  * (precision/recall asymmetry — the 80% bar is about recall over
  * expected Units).
  *
- * **Summary metric is paraphrase-resilient (#146).** Tokenize both
- * summaries (lowercase, punctuation stripped, short tokens dropped)
- * and Jaccard the sets. A 0.55-overlap paraphrase scores 0.55, not
- * 0 — which is what real LLM output produces against a hand-labeled
- * fixture. The 0.6/0.4 weighting still reflects "summary content is
- * the primary signal; canonical-vocab skills are secondary".
+ * **Summary metric is paraphrase-resilient AND verbosity-resilient
+ * (#146 + #148).** Tokenize both summaries (lowercase, punctuation
+ * stripped, short tokens dropped) and use overlap-coefficient
+ * (`|A ∩ B| / min(|A|, |B|)`). Pre-#146 used exact-string equality
+ * — the metric was always ~0 against real LLM output. Pre-#148
+ * used token-Jaccard, which still penalized the runtime's verbose
+ * summaries against concise labeler summaries (live diagnostic on
+ * Nathan + Google: Kepler runtime scored 0.344 on the matching
+ * pair where overlap-coefficient scores 0.846). Overlap-coefficient
+ * fixes both at the same primitive.
  *
  * **Skills metric stays full-phrase Jaccard.** Skill names should
  * be canonical ontology terms; phrase-level matching is what the
@@ -89,11 +101,21 @@ export function unitSetAccuracy(
       const a = actual[i]!;
       // Codex P2 on PR #147: a summary made entirely of short
       // tokens (e.g. "AI ML", "TV OS") tokenizes to empty under
-      // the >2-char filter, and `tokenJaccard(empty, empty) = 0`
-      // would punish a perfect textual match. Fall back to exact
-      // equality on the trimmed lowercase strings when either side
-      // tokenizes empty so identical short-token summaries still
-      // get full credit.
+      // the >2-char filter, and the token-set similarity
+      // function returns 0 on empty-vs-empty — that would
+      // punish a perfect textual match. Fall back to exact
+      // equality on the trimmed lowercase strings when either
+      // side tokenizes empty so identical short-token summaries
+      // still get full credit.
+      //
+      // Summary similarity uses overlap-coefficient (#148) not
+      // Jaccard. The runtime extractor produces verbose
+      // summaries (~30 tokens with detail); labeled summaries
+      // are concise (~13 tokens). Jaccard penalized that
+      // asymmetry — the live diagnostic on Nathan-2026 ×
+      // Google-Compute-SPM saw token-Jaccard score ~0.34 on
+      // the Kepler match where overlap-coefficient scores
+      // ~0.85. See `tokenOverlapCoefficient`'s docstring.
       const expectedTokens = tokenize(e.normalizedSummary);
       const actualTokens = tokenize(a.normalizedSummary);
       const summaryMatch =
@@ -102,7 +124,7 @@ export function unitSetAccuracy(
             a.normalizedSummary.trim().toLowerCase()
             ? 1
             : 0
-          : tokenJaccard(expectedTokens, actualTokens);
+          : tokenOverlapCoefficient(expectedTokens, actualTokens);
       const skillsMatch = jaccard(e.skills, a.skills);
       const score = summaryMatch * 0.6 + skillsMatch * 0.4;
       if (score > bestScore) {

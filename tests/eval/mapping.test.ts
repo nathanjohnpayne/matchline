@@ -28,6 +28,7 @@ import {
   mapUnitIds,
   scoreUnitPair,
   tokenJaccard,
+  tokenOverlapCoefficient,
   tokenize,
 } from "./mapping.ts";
 
@@ -70,6 +71,85 @@ describe("tokenJaccard", () => {
     expect(
       tokenJaccard(new Set(["a", "b", "c"]), new Set(["b", "c", "d"])),
     ).toBeCloseTo(2 / 4); // {b,c} / {a,b,c,d}
+  });
+});
+
+// -- tokenOverlapCoefficient (#148) --
+
+describe("tokenOverlapCoefficient", () => {
+  it("returns 1.0 for identical sets", () => {
+    expect(
+      tokenOverlapCoefficient(new Set(["a", "b"]), new Set(["a", "b"])),
+    ).toBeCloseTo(1.0);
+  });
+
+  it("returns 0 when either side is empty (mirror of tokenJaccard)", () => {
+    expect(tokenOverlapCoefficient(new Set(), new Set(["a"]))).toBe(0);
+    expect(tokenOverlapCoefficient(new Set(["a"]), new Set())).toBe(0);
+    expect(tokenOverlapCoefficient(new Set(), new Set())).toBe(0);
+  });
+
+  it("uses min(|A|, |B|) as denominator (verbosity-resilient)", () => {
+    // |A ∩ B| / min(|A|, |B|) = 2 / min(3, 5) = 2/3.
+    // tokenJaccard on the same inputs would be 2 / 6 = 0.33 —
+    // overlap-coefficient gives full credit when the smaller
+    // set is fully contained in the larger one.
+    expect(
+      tokenOverlapCoefficient(
+        new Set(["a", "b", "c"]),
+        new Set(["b", "c", "d", "e", "f"]),
+      ),
+    ).toBeCloseTo(2 / 3);
+  });
+
+  it("returns 1.0 when one side is fully contained in the other (any size)", () => {
+    // The motivation case: actual is verbose but contains
+    // every expected token. Pre-#148 this scored
+    // 3 / (3+10-3) = 0.30 under Jaccard; under overlap-coef
+    // it scores 1.0 (perfect coverage of the smaller set).
+    expect(
+      tokenOverlapCoefficient(
+        new Set(["led", "kepler", "launch"]),
+        new Set([
+          "led",
+          "amazon",
+          "kepler",
+          "launch",
+          "ground-up",
+          "rewrite",
+          "fire",
+          "android",
+          "stack",
+          "linux",
+        ]),
+      ),
+    ).toBe(1.0);
+  });
+
+  it("returns intersection size / smaller-set size, not size-asymmetric", () => {
+    // Symmetric: order-independent.
+    const a = new Set(["a", "b", "c"]);
+    const b = new Set(["b", "c", "d", "e", "f"]);
+    expect(tokenOverlapCoefficient(a, b)).toBe(
+      tokenOverlapCoefficient(b, a),
+    );
+  });
+
+  it("scores Kepler-shape inputs above 0.30 mapping threshold (#148 anchor)", () => {
+    // Exact tokens from the live diagnostic on Nathan-2026 ×
+    // Google-Compute-SPM. With the prior tokenJaccard, this
+    // pair scored ~0.34 on the summary axis × 0.6 = 0.21 +
+    // skills 0.4×low ≈ 0.25 — below the 0.30 threshold so
+    // mapUnitIds left u_kepler unmapped despite being the
+    // correct match. With overlap-coefficient the summary
+    // contribution alone exceeds 0.5, well above threshold.
+    const expected = tokenize(
+      "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack with native Linux-based OS",
+    );
+    const actual = tokenize(
+      "Led the Amazon Kepler launch, a ground-up rewrite of Fire TV's Android stack to a native Linux-based OS, hitting the September 2025 announcement and shipping in October with zero negative impact to engagement metrics on Fire TV",
+    );
+    expect(tokenOverlapCoefficient(expected, actual)).toBeGreaterThan(0.6);
   });
 });
 
@@ -154,6 +234,41 @@ describe("scoreUnitPair", () => {
       ["python"],
     );
     expect(scoreUnitPair(e, a)).toBeLessThan(0.1);
+  });
+
+  // -- empty-token fallback (cursor on PR #158) --
+
+  it("identical short-token summaries get full summary credit (mirror of unitSetAccuracy)", () => {
+    // "AI ML" tokenizes to empty under the >2-char filter, so
+    // `tokenOverlapCoefficient` returns 0. Without the
+    // exact-match fallback that `unitSetAccuracy` already has,
+    // mapping would leave an exact-match short-token pair as
+    // `unmapped_<id>` while extraction-acc would give it full
+    // summary credit — the two metrics would disagree on the
+    // same input. Identical skills → score = 0.6 + 0.4 = 1.0.
+    const e = makeExpectedUnit("u_ai", "AI ML", ["machine learning"]);
+    const a = makeActualUnit("uuid-ai", "AI ML", ["machine learning"]);
+    expect(scoreUnitPair(e, a)).toBe(1);
+  });
+
+  it("different short-token summaries that both tokenize empty score 0 on summary", () => {
+    // Different content via the fallback's exact-equality
+    // arm. With identical skills, score = 0*0.6 + 1*0.4 = 0.4.
+    const e = makeExpectedUnit("u_ai", "AI ML", ["data science"]);
+    const a = makeActualUnit("uuid-tv", "TV OS", ["data science"]);
+    expect(scoreUnitPair(e, a)).toBeCloseTo(0.4, 6);
+  });
+
+  it("trims and lowercases before exact-equality (whitespace + case insensitive)", () => {
+    // "  AI ML  " (extra whitespace) and "ai ML" (mixed case)
+    // should still match the fallback path.
+    const e = makeExpectedUnit("u_ai", "  AI ML  ", []);
+    const a = makeActualUnit("uuid-ai", "ai ML", []);
+    // Both tokenize to empty; exact equality on
+    // trimmed-lowercase form holds → summary 1.0.
+    // Skills both empty → tokenJaccard returns 0 (mapping's
+    // empty-empty convention). Total = 1.0*0.6 + 0*0.4 = 0.6.
+    expect(scoreUnitPair(e, a)).toBeCloseTo(0.6, 6);
   });
 });
 
