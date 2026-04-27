@@ -267,7 +267,7 @@ async function main(): Promise<number> {
   const plannedAdd = estimatePlannedSpend(mode, flowCount);
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
-  if (mode === "full" && shouldBlock(capChecks)) {
+  if (shouldBlock(capChecks)) {
     // Projection guard is enforcing from day 1: once Phase 1 wires
     // real `currentUsage` from the llm_calls Firestore aggregation,
     // this branch will trip in actual over-budget scenarios. Keeping
@@ -275,9 +275,19 @@ async function main(): Promise<number> {
     // as success — which is exactly the failure mode a guard exists
     // to prevent. Exit 1 now, so the gate works identically the
     // moment real spend flows through.
+    //
+    // Cursor on PR #172: smoke mode now ALSO blocks when the
+    // projection exceeds a cap. Pre-fix the block was scoped to
+    // `mode === "full"`, but with `--samples N` smoke runs incur
+    // real LLM spend that scales linearly. A `--samples 200` smoke
+    // run would have run 200 paid flows under the prior gate even
+    // though projected spend exceeded monthly caps. The cap
+    // protection is now mode-agnostic.
+    const refusedDescriptor =
+      mode === "full" ? "--full" : `--samples ${samples}`;
     console.error(
-      "\nRefusing to run --full: projection exceeds a monthly cap.\n" +
-        "Re-run with --smoke or wait for next month's cap reset.\n",
+      `\nRefusing to run ${refusedDescriptor}: projection exceeds a monthly cap.\n` +
+        "Re-run with --smoke / smaller --samples or wait for next month's cap reset.\n",
     );
     console.log(formatReport(buildReport(mode, fixtureResults, capChecks)));
     return 1;
@@ -595,17 +605,35 @@ export function filterToLabeledPairs(
  * Very conservative upfront estimate of what one mode's run will
  * cost, so the projection guard has something to check against even
  * before real calls happen. `flowCount` is resume×JD pairs, not
- * resume count — see `computeFlowCount`. Phase 1 replaces this with
- * per-stage rate × estimated-token math.
+ * resume count — and post-#172 it ALSO multiplies by `--samples N`
+ * so the projection scales with sample count.
+ *
+ * **Per-flow cost.** Smoke and full now use the same `$0.75` per
+ * flow (was: smoke=$0.0). The pre-#172 smoke=$0.0 was a placeholder
+ * from when smoke was a stub. With multi-sample on real keys,
+ * smoke runs incur real LLM spend — observed at $0.15–0.27 per
+ * flow on the canonical Nathan × Google pair. $0.75 is conservative
+ * enough to engage the cap guard before bursty runs blow past
+ * monthly limits, while small enough that single-sample smoke
+ * (the default) projects $0.75 and never trips the guard.
+ *
+ * Cursor caught the regression on PR #172: pre-fix,
+ * `--samples 200` in smoke mode would project $0.00 (passing the
+ * guard) but actually run 200 paid flows. Post-fix it projects
+ * $150 and the guard refuses to run.
+ *
+ * Phase 1 replaces this with per-stage rate × estimated-token
+ * math from real call telemetry (#41).
  */
-function estimatePlannedSpend(
-  mode: Mode,
+const PER_FLOW_USD_ESTIMATE = 0.75;
+
+export function estimatePlannedSpend(
+  _mode: Mode,
   flowCount: number,
 ): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
-  const perFlow = mode === "full" ? 0.75 : 0.0;
   return {
-    anthropicUsd: flowCount * perFlow * 0.7,
-    openaiUsd: flowCount * perFlow * 0.3,
+    anthropicUsd: flowCount * PER_FLOW_USD_ESTIMATE * 0.7,
+    openaiUsd: flowCount * PER_FLOW_USD_ESTIMATE * 0.3,
     firebaseUsd: 0,
   };
 }

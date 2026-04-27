@@ -9,6 +9,7 @@ import {
   SMOKE_RESUME,
   aggregateSampledFixture,
   computeFlowCount,
+  estimatePlannedSpend,
   filterToLabeledPairs,
   parseSamples,
   selectFixturesForMode,
@@ -461,5 +462,56 @@ describe("aggregateSampledFixture", () => {
     ];
     const r = aggregateSampledFixture(samples);
     expect(r.latencyMs).toBe(1500); // Math.round((1000+2000+1500)/3)
+  });
+});
+
+// -- estimatePlannedSpend (cursor on PR #172: smoke-mode samples-aware) --
+
+describe("estimatePlannedSpend", () => {
+  // Pin: per-flow $ estimate is mode-INDEPENDENT post-#172.
+  // Pre-#172 smoke returned $0 regardless of flowCount, which
+  // bypassed the cap guard for `--samples N` smoke runs.
+  const PER_FLOW = 0.75;
+
+  it("smoke and full both project the same per-flow cost (#172 cursor)", () => {
+    const smoke = estimatePlannedSpend("smoke", 10);
+    const full = estimatePlannedSpend("full", 10);
+    expect(smoke).toEqual(full);
+  });
+
+  it("scales linearly with flowCount", () => {
+    const small = estimatePlannedSpend("smoke", 1);
+    const large = estimatePlannedSpend("smoke", 100);
+    expect(large.anthropicUsd / small.anthropicUsd).toBeCloseTo(100, 6);
+    expect(large.openaiUsd / small.openaiUsd).toBeCloseTo(100, 6);
+  });
+
+  it("splits cost 70/30 between Anthropic and OpenAI", () => {
+    const r = estimatePlannedSpend("smoke", 10);
+    expect(r.anthropicUsd).toBeCloseTo(10 * PER_FLOW * 0.7, 6); // 5.25
+    expect(r.openaiUsd).toBeCloseTo(10 * PER_FLOW * 0.3, 6); // 2.25
+    expect(r.firebaseUsd).toBe(0);
+  });
+
+  it("zero flows → zero projection (no-op corpus)", () => {
+    expect(estimatePlannedSpend("full", 0)).toEqual({
+      anthropicUsd: 0,
+      openaiUsd: 0,
+      firebaseUsd: 0,
+    });
+  });
+
+  it("--samples 50 smoke would have projected $0 pre-#172; now projects $37.50 (cursor regression pin)", () => {
+    // The exact regression cursor caught: 1 fixture × 50 samples
+    // = 50 flows. Pre-fix: smoke returned $0, bypassing the cap
+    // guard. Post-fix: projects 50 × $0.75 = $37.50 split 70/30,
+    // which trips the $25 monthly Anthropic cap.
+    const flowCount = 1 * 50;
+    const r = estimatePlannedSpend("smoke", flowCount);
+    expect(r.anthropicUsd).toBeCloseTo(50 * PER_FLOW * 0.7, 6); // $26.25
+    expect(r.openaiUsd).toBeCloseTo(50 * PER_FLOW * 0.3, 6); // $11.25
+    // Total $37.50; Anthropic alone ($26.25) > $25 monthly cap →
+    // shouldBlock(checkCaps(...)) trips → harness refuses to run.
+    expect(r.anthropicUsd).toBeGreaterThan(25);
   });
 });
