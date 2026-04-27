@@ -1,0 +1,104 @@
+{
+  "resume_fixture_id": "sofia-fullstack-founder-2026",
+  "jd_fixture_id": "openai-sse-fullstack-b2b-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-27",
+  "k": 24,
+  "notes": "Strong archetype-fit cell: full-stack founder archetype against an OpenAI Senior Staff Product Engineer (B2B Applications) JD. Sofia is the canonical match for the JD's `Former founder, or early engineer at a startup who has built a product from scratch` plus-qualifier. Direct counterparts to nearly every JD requirement (TS/React/Next, Node backend, Postgres + distributed-systems work on async-jobs-on-Postgres and Pliant monolith split, SOC 2 + on-call leadership for reliability, full lifecycle ownership across Threadline). Note: the JD is an IC engineering role (Member of Technical Staff externally branded `Senior Staff`), so PM-archetype framing does not apply — Sofia's engineer-PM-founder arc reads as direct fit, not equivalence. Composite IDs use the labeler's stable mnemonic convention (see expected-matches/README.md).",
+
+  "expected_requirements": [
+    {
+      "id": "r_9yr_eng",
+      "text": "9+ years of professional engineering experience (excluding internships) at tech and product-driven companies",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_founder_early_eng",
+      "text": "Former founder, or early engineer at a startup who has built a product from scratch is a plus",
+      "must_have": false,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_ts_react_web",
+      "text": "Proficiency with TypeScript, React, and other web technologies",
+      "must_have": true,
+      "category": "tool"
+    },
+    {
+      "id": "r_backend_distsys",
+      "text": "Proficiency in one or more backend languages (Python, Go, Rust, TypeScript or similar) and distributed systems concepts",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_relational_db",
+      "text": "Some experience with relational databases like Postgres / MySQL",
+      "must_have": true,
+      "category": "tool"
+    },
+    {
+      "id": "r_reliability_safety_perf",
+      "text": "Care deeply about reliability, safety, and performance in production environments",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_ai_ml_interest",
+      "text": "Interest in AI/ML (direct experience not required)",
+      "must_have": false,
+      "category": "domain"
+    },
+    {
+      "id": "r_fast_growing",
+      "text": "Proven ability to thrive in fast-growing, product-driven companies",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_lifecycle_ownership",
+      "text": "Own the end-to-end development lifecycle for new enterprise products",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_cross_functional",
+      "text": "Collaborate closely with product, design, and external customers to understand problems and implement effective solutions",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_research_collab",
+      "text": "Work with the research team to improve our next generation of models",
+      "must_have": false,
+      "category": "skill"
+    }
+  ],
+
+  "expected_top_matches": [
+    "u_threadline_mvp:r_founder_early_eng",
+    "u_threadline_mvp:r_ts_react_web",
+    "u_threadline_mvp:r_backend_distsys",
+    "u_threadline_mvp:r_relational_db",
+    "u_threadline_mvp:r_lifecycle_ownership",
+    "u_threadline_schema:r_relational_db",
+    "u_threadline_schema:r_backend_distsys",
+    "u_b2b_pivot:r_fast_growing",
+    "u_b2b_pivot:r_cross_functional",
+    "u_customer_portal:r_lifecycle_ownership",
+    "u_customer_portal:r_ts_react_web",
+    "u_seed_decision:r_founder_early_eng",
+    "u_soc2:r_reliability_safety_perf",
+    "u_factory_scheduler:r_backend_distsys",
+    "u_factory_scheduler:r_relational_db",
+    "u_pliant_monolith_split:r_backend_distsys",
+    "u_pliant_monolith_split:r_reliability_safety_perf",
+    "u_data_export:r_lifecycle_ownership",
+    "u_data_export:r_relational_db",
+    "u_async_jobs_postgres:r_backend_distsys",
+    "u_async_jobs_postgres:r_relational_db",
+    "u_async_jobs_postgres:r_reliability_safety_perf",
+    "u_oncall_lead:r_reliability_safety_perf",
+    "u_anvil_dashboard:r_ts_react_web"
+  ]
+}

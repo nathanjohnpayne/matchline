@@ -1,0 +1,140 @@
+{
+  "resume_fixture_id": "chen-hardware-silicon-pm-2026",
+  "jd_fixture_id": "dolby-pm-xr-devices-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-27",
+  "k": 24,
+  "notes": "Strong archetype-fit cell: hardware/silicon PM archetype against a Dolby XR Devices PM JD. Chen's portfolio has direct counterparts to nearly every JD requirement (Dolby Atmos for headphones, XR2 SoC RFQ, Vision 2 reference compositor spec, Snapdragon Sound co-launch, AV1 OEM enablement, ISP roadmap negotiation, partner-defect intake with Qualcomm/Cirrus). Expected matches reflect that high overlap. Note: Chen's resume is presented as a PM (titles arc-coherent), so the `10+ yrs audio/video PM` framing is a length-of-tenure check rather than a domain mismatch. Composite IDs use the labeler's stable mnemonic convention (see expected-matches/README.md).",
+
+  "expected_requirements": [
+    {
+      "id": "r_10yr_av_pm",
+      "text": "10+ years of progressive product management experience leading audio and/or video product strategies for consumer electronics devices",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_smart_glasses_hmd",
+      "text": "Ideally including Smart Glasses, HMDs, or audio wearables",
+      "must_have": false,
+      "category": "domain"
+    },
+    {
+      "id": "r_av_soc_arch",
+      "text": "Strong understanding of multimedia systems and AV SoC architectures, mobile displays, and camera technologies",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_soc_supplier_collab",
+      "text": "Experience collaborating with major consumer electronics SoC suppliers (Qualcomm, MediaTek, Airoha, BES)",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_embedded_sdk",
+      "text": "Experience with embedded software, SDKs, and audio/video technologies",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_spatial_audio",
+      "text": "Audio: spatial audio",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_hdr_3d_video",
+      "text": "Video: HDR and 3D technologies",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_ecosystem_scaling",
+      "text": "Proven ability to build and scale ecosystems enabling multiple partners",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_travel",
+      "text": "Willingness to travel domestically and internationally",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_bs_advanced",
+      "text": "Bachelor's degree in a relevant field; advanced degree preferred",
+      "must_have": true,
+      "category": "education"
+    },
+    {
+      "id": "r_lifecycle_ownership",
+      "text": "Own the product lifecycle for a portfolio of XR and wearable device experiences (vision, roadmap, PMF validation, execution)",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_xr_ecosystem",
+      "text": "Lead cross-functional collaboration across Dolby teams to deliver a cohesive XR ecosystem",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_research_translation",
+      "text": "Bridge the Entertainment Business Group and the Advanced Technology Group; partner with research to translate innovation into scalable offerings",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_xr_sme",
+      "text": "Act as a SME on XR audio and video tech for immersive content capture and playback (e.g., 360 degree and 6DoF)",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_business_strategy",
+      "text": "Develop and communicate business strategy; build alignment across the org",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_gtm",
+      "text": "Partner with Marketing to shape and execute go-to-market strategies",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_revenue_ownership",
+      "text": "Own revenue planning and execution for the XR and wearables device portfolio",
+      "must_have": true,
+      "category": "skill"
+    }
+  ],
+
+  "expected_top_matches": [
+    "u_xr2_rfq:r_av_soc_arch",
+    "u_xr2_rfq:r_soc_supplier_collab",
+    "u_xr2_rfq:r_smart_glasses_hmd",
+    "u_xr2_rfq:r_lifecycle_ownership",
+    "u_vision2_compositor_spec:r_av_soc_arch",
+    "u_vision2_compositor_spec:r_xr_sme",
+    "u_vision2_compositor_spec:r_smart_glasses_hmd",
+    "u_vision2_compositor_spec:r_research_translation",
+    "u_aria3_codec:r_smart_glasses_hmd",
+    "u_aria3_codec:r_spatial_audio",
+    "u_aria3_codec:r_soc_supplier_collab",
+    "u_atmos_headphones_cert:r_spatial_audio",
+    "u_atmos_headphones_cert:r_smart_glasses_hmd",
+    "u_auracast_ifa:r_smart_glasses_hmd",
+    "u_auracast_ifa:r_ecosystem_scaling",
+    "u_partner_defect_intake:r_soc_supplier_collab",
+    "u_partner_defect_intake:r_ecosystem_scaling",
+    "u_halberd_reference_design:r_av_soc_arch",
+    "u_halberd_reference_design:r_hdr_3d_video",
+    "u_av1_decode_rollout:r_ecosystem_scaling",
+    "u_av1_decode_rollout:r_av_soc_arch",
+    "u_isp_roadmap_negotiation:r_av_soc_arch",
+    "u_snapdragon_sound_colaunch:r_soc_supplier_collab",
+    "u_bt_le_audio_early:r_smart_glasses_hmd"
+  ]
+}
