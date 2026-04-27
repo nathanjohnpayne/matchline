@@ -8,17 +8,25 @@
  * See `specs/matchline.md § Success metrics` for the 80/80 quality
  * bar these score functions feed.
  *
- * **Summary scoring is token-Jaccard, not exact equality (#146).**
- * The first live `npm run eval` run against Nathan's resume + the
- * Google JD reported 3.3% extraction accuracy because
- * `unitSetAccuracy` was comparing summaries with `===`. LLMs
- * paraphrase — they essentially never reproduce a hand-labeled
- * summary verbatim — so the metric collapsed to 0 in nearly every
- * pair, even when the underlying claim was the same. Token-Jaccard
- * via `tokenize` + `tokenJaccard` (already battle-tested in
- * `mapping.ts::scoreUnitPair`) is the right primitive: paraphrased
- * summaries with the same factual content score in the 0.4–0.7
- * range; wholly unrelated content stays near 0.
+ * **Summary scoring evolution.** The first live `npm run eval` run
+ * (#146) reported 3.3% extraction accuracy because `unitSetAccuracy`
+ * was comparing summaries with `===` — LLMs paraphrase, so the
+ * metric collapsed to 0. PR #147 switched to `tokenJaccard`,
+ * which lifted extraction to 34% but still penalized the verbosity
+ * asymmetry between the runtime extractor's detailed summaries and
+ * the labeler's concise ones. PR #158 (this contract) switched to
+ * `tokenOverlapCoefficient` (`|A ∩ B| / min(|A|, |B|)`), which
+ * gives full credit when the smaller (labeled) set is fully covered
+ * by the larger (runtime) one — the asymmetry the fixture
+ * convention bakes in. Live extraction lifted to 50.3% and the
+ * matching pair this primitive enables (`u_kepler`) finally maps,
+ * unblocking match accuracy too.
+ *
+ * The empty-token-set fallback to trimmed-lowercase exact equality
+ * (added per Codex P2 on #147 for "AI ML"-shape short-token
+ * summaries) is preserved in this contract — `unitSetAccuracy`'s
+ * inner branch still falls back to exact equality when either side
+ * tokenizes empty.
  */
 
 import { tokenOverlapCoefficient, tokenize } from "./mapping.js";

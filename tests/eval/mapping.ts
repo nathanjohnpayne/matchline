@@ -151,15 +151,33 @@ export function tokenOverlapCoefficient(
  * `tokenOverlapCoefficient` docstring + #148 diagnostic.
  * Skills stay full-phrase Jaccard since both labeler and
  * extractor emit the same curated canonical-phrase shape.
+ *
+ * **Empty-token fallback (cursor on PR #158).** Mirrors
+ * `unitSetAccuracy` in `scoring.ts`: a summary made entirely
+ * of short tokens (e.g. "AI ML", "TV OS") tokenizes to empty
+ * under the >2-char filter, and `tokenOverlapCoefficient`
+ * returns 0 on empty-vs-empty by convention (mirrors
+ * `tokenJaccard`). Without the fallback, extraction-acc and
+ * mapping disagree for these edge cases — extraction gives
+ * full summary credit via the same fallback, but mapping
+ * would leave an exact-match short-token pair as
+ * `unmapped_<id>`. Fall back to trimmed-lowercase exact
+ * equality so an exact textual match still gets full summary
+ * credit at the mapping boundary.
  */
 export function scoreUnitPair(
   expected: ExpectedUnit,
   actual: ExperienceUnit,
 ): number {
-  const summaryScore = tokenOverlapCoefficient(
-    tokenize(expected.normalized_summary),
-    tokenize(actual.normalized_summary),
-  );
+  const expectedTokens = tokenize(expected.normalized_summary);
+  const actualTokens = tokenize(actual.normalized_summary);
+  const summaryScore =
+    expectedTokens.size === 0 || actualTokens.size === 0
+      ? expected.normalized_summary.trim().toLowerCase() ===
+        actual.normalized_summary.trim().toLowerCase()
+        ? 1
+        : 0
+      : tokenOverlapCoefficient(expectedTokens, actualTokens);
   const skillsScore = tokenJaccard(
     new Set(expected.skills.map((s) => s.toLowerCase())),
     new Set(actual.skills.map((s) => s.toLowerCase())),
