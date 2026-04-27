@@ -61,8 +61,6 @@
     { "canonical": "platform observability", "synonyms": ["observability products"] },
     { "canonical": "legal compliance", "synonyms": ["compliance products", "regulatory compliance"] },
     { "canonical": "digital media", "synonyms": ["digital media products", "digital publishing"] },
-    { "canonical": "entertainment technology", "synonyms": ["entertainment tech"] },
-    { "canonical": "product design", "synonyms": ["product design tools"] },
-    { "canonical": "software engineering", "synonyms": ["software dev", "software development"] }
+    { "canonical": "entertainment technology", "synonyms": ["entertainment tech"] }
   ]
 }
