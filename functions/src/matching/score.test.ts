@@ -130,13 +130,18 @@ describe("skillOverlap", () => {
     ).toBe(0);
   });
 
-  it("returns 1.0 when BOTH sides are empty (no constraint)", () => {
-    // Documented edge case in the score.ts docstring: both-empty
-    // means the dimension imposes no constraint → 1.0. The 0.20
-    // weight on skill_overlap means this contributes a flat 0.20
-    // to rule_score across all matches when the JD doesn't list
-    // skills.
-    expect(skillOverlap(makeUnit(), makeRequirement())).toBe(1);
+  it("returns 0.5 (neutral) when BOTH sides are empty (#148 ranking-pathology fix)", () => {
+    // Pre-#148 returned 1.0 ("no constraint on this dimension =
+    // perfect agreement on nothing"). The live matching trace
+    // captured in #148 showed that path firing on every (Unit,
+    // Requirement) pair where the seed ontology didn't recognize
+    // either side's vocabulary — so 14-year-old broadcast Units
+    // ranked above current streaming work because skill / tool /
+    // domain all flattened to 1.0 from "all-nulls vs. all-nulls."
+    // 0.5 (neutral) is the same fallback `seniorityAlignment`
+    // uses for unknown ladder terms — consistent semantics
+    // across the rule components.
+    expect(skillOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 
   it("normalizes both sides through the canonical ontology (synonyms match)", () => {
@@ -184,11 +189,24 @@ describe("toolOverlap", () => {
   });
 
   it("monotonic: partial overlap is between 0 and 1", () => {
-    const req = makeRequirement({ tools: ["jira", "linear", "notion"] });
-    const partial = makeUnit({ tools: ["jira"] });
-    const score = toolOverlap(partial, req);
+    const score = toolOverlap(
+      makeUnit({ tools: ["jira"] }),
+      makeRequirement({ tools: ["jira", "linear", "notion"] }),
+    );
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThan(1);
+  });
+
+  it("returns 0.5 (neutral) when BOTH sides are empty (#148)", () => {
+    // Mirrors the empty-empty regression tests on `skillOverlap`
+    // and `domainOverlap`. JD parser frequently emits empty
+    // `tools` on requirements that don't call out specific tools
+    // (live trace on Google Compute SPM: 14/15 reqs had
+    // `tools=[]`). With pre-#148 `1.0`, every Unit's
+    // `tool_overlap` flattened to 1.0 against those reqs, adding
+    // 0.10 of false-positive signal to rule_score. 0.5 keeps the
+    // dimension neutral when neither side asserts a constraint.
+    expect(toolOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 });
 
@@ -197,9 +215,9 @@ describe("toolOverlap", () => {
 describe("domainOverlap", () => {
   // Domain ontology may be sparse; test against the structural
   // contract (Jaccard on raw inputs after normalize, both-empty
-  // → 1.0).
-  it("returns 1.0 when both sides empty (no constraint)", () => {
-    expect(domainOverlap(makeUnit(), makeRequirement())).toBe(1);
+  // → 0.5 neutral, see skillOverlap test for #148 rationale).
+  it("returns 0.5 (neutral) when both sides empty (#148)", () => {
+    expect(domainOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 
   it("returns 0.0 when one side is non-empty and the other empty", () => {
@@ -345,9 +363,11 @@ describe("scopeAlignment", () => {
     expect(scopeAlignment(unit, req)).toBe(1);
   });
 
-  it("returns 1.0 when both sides are empty on a scope requirement", () => {
+  it("returns 0.5 (neutral) when both sides empty on a scope requirement (#148)", () => {
+    // Was 1.0 pre-#148 — see skillOverlap's empty-empty test
+    // for the ranking-pathology rationale. Same jaccard primitive.
     const req = makeRequirement({ category: "scope", keywords: [] });
-    expect(scopeAlignment(makeUnit(), req)).toBe(1);
+    expect(scopeAlignment(makeUnit(), req)).toBe(0.5);
   });
 
   it("returns 0 when only one side is non-empty on a scope requirement", () => {
