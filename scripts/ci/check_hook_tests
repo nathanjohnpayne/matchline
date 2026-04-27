@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# check_hook_tests
+#
+# Runs the bash test suite for scripts/hooks/gh-pr-guard.sh. The
+# hook is the PreToolUse merge-gate enforcer for Claude Code; a
+# regression in its exit-code contract would let an agent ship
+# a merge past the gate (the failure mode that #170 / #171
+# document for PR #165). Treating the test suite as a CI gate
+# closes the loop so a future hook edit can't pass review while
+# silently breaking the BLOCKED / DIRTY / UNSTABLE / BEHIND
+# refusal logic.
+#
+# Per #171 layer 2 acceptance criteria.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TEST="$REPO_ROOT/scripts/hooks/__tests__/gh-pr-guard.test.sh"
+
+if [[ ! -f "$TEST" ]]; then
+  echo "FAIL: Missing required hook test: scripts/hooks/__tests__/gh-pr-guard.test.sh"
+  exit 1
+fi
+
+if [[ ! -x "$TEST" ]]; then
+  echo "FAIL: Hook test is not executable: scripts/hooks/__tests__/gh-pr-guard.test.sh"
+  echo "      Fix with: chmod +x scripts/hooks/__tests__/gh-pr-guard.test.sh"
+  exit 1
+fi
+
+if ! "$TEST"; then
+  echo "check_hook_tests: FAIL"
+  exit 1
+fi
+
+echo "check_hook_tests: PASS"
+exit 0
