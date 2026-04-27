@@ -1,0 +1,128 @@
+{
+  "resume_fixture_id": "dimitri-wireless-ran-engineer-2026",
+  "jd_fixture_id": "nvidia-stpm-ran-digital-twin-2026",
+  "labeled_by": "claude",
+  "labeled_at": "2026-04-27",
+  "k": 24,
+  "notes": "Strong archetype-fit cell: pure RAN/wireless engineering archetype against an NVIDIA RAN Digital Twin TPM JD. Dimitri's resume has direct counterparts to nearly every JD requirement (RAN digital twin pipeline, channel models, MIMO/beamforming, NR/LTE protocol work, field deployments, peer-reviewed publications). Expected matches reflect that high overlap. Note: Dimitri is an engineer (no PM title arc), so expected weakness is around the JD's `8+ yrs PM in wireless` framing — engineering equivalence is the human-judgment bridge. Composite IDs use the labeler's stable mnemonic convention (see expected-matches/README.md).",
+
+  "expected_requirements": [
+    {
+      "id": "r_8yr_wireless_pm",
+      "text": "8+ years of PM experience in wireless communications industry",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_7yr_simulation_pm",
+      "text": "7+ years of PM experience in software simulation tools / HPC / SaaS tool development",
+      "must_have": true,
+      "category": "experience_level"
+    },
+    {
+      "id": "r_ee_cs_degree",
+      "text": "BS/MS or equivalent in Electrical Engineering, Computer Science, or related technical field",
+      "must_have": true,
+      "category": "education"
+    },
+    {
+      "id": "r_ran_dt_insights",
+      "text": "Deep customer insights and business perspective on RAN digital twins (researchers, developers, integrators, NEMs, telecom operators)",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_ai_native_ran",
+      "text": "Strong technical background in wireless communications and detailed understanding of AI-native RAN (HW + SW)",
+      "must_have": true,
+      "category": "domain"
+    },
+    {
+      "id": "r_pm_skills",
+      "text": "Outstanding communication and project management skills",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_nvidia_aerial",
+      "text": "Direct experience with NVIDIA software (Aerial, Omniverse) and SDKs",
+      "must_have": false,
+      "category": "tool"
+    },
+    {
+      "id": "r_large_sims",
+      "text": "Large-scale simulations and multi-sensor data",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_concept_to_launch",
+      "text": "Concept-to-launch product ownership",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_lifecycle_ownership",
+      "text": "Own the product lifecycle of the RAN Digital Twin portfolio, concept through launch and ongoing lifecycle management",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_dt_value_props",
+      "text": "Articulate the value props of different digital twin architectures and map them to specific workloads and telco use cases",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_prd_writing",
+      "text": "Define product requirements (PRDs) and prioritize reference architectures for key verticals",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_customer_roadmap",
+      "text": "Distill insights from strategic customers and partners to define, prioritize, and execute product roadmaps",
+      "must_have": true,
+      "category": "skill"
+    },
+    {
+      "id": "r_competitive",
+      "text": "Analyze competitive products; engage key opinion leaders on next-gen technology adoption",
+      "must_have": false,
+      "category": "skill"
+    },
+    {
+      "id": "r_gtm_sales",
+      "text": "Work with engineering, operations, and field teams on GTM plans and product positioning; partner with sales to drive adoption",
+      "must_have": false,
+      "category": "skill"
+    }
+  ],
+
+  "expected_top_matches": [
+    "u_ran_digital_twin:r_ran_dt_insights",
+    "u_ran_digital_twin:r_dt_value_props",
+    "u_ran_digital_twin:r_large_sims",
+    "u_ran_digital_twin:r_ai_native_ran",
+    "u_channel_model_library:r_dt_value_props",
+    "u_channel_model_library:r_ran_dt_insights",
+    "u_openchannelmodel:r_7yr_simulation_pm",
+    "u_openchannelmodel:r_dt_value_props",
+    "u_gnuradio_sounder:r_7yr_simulation_pm",
+    "u_gnuradio_sounder:r_large_sims",
+    "u_rf_impairments_lib:r_7yr_simulation_pm",
+    "u_rf_impairments_lib:r_ai_native_ran",
+    "u_type2_codebook:r_ai_native_ran",
+    "u_mu_mimo_scheduler:r_ai_native_ran",
+    "u_ssb_beam_mgmt:r_ai_native_ran",
+    "u_srs_channel_est:r_ai_native_ran",
+    "u_cbrs_sic_receiver:r_ai_native_ran",
+    "u_700mhz_field_debug:r_ran_dt_insights",
+    "u_700mhz_field_debug:r_concept_to_launch",
+    "u_private_5g_logistics:r_concept_to_launch",
+    "u_3gpp_csi_rs_crs:r_ai_native_ran",
+    "u_phd_testbed:r_ee_cs_degree",
+    "u_ldpc_decoder:r_ai_native_ran",
+    "u_polar_decoder:r_ai_native_ran"
+  ]
+}
