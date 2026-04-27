@@ -7,8 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   SMOKE_JD,
   SMOKE_RESUME,
+  aggregateSampledFixture,
   computeFlowCount,
+  estimatePlannedSpend,
   filterToLabeledPairs,
+  parseSamples,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -316,5 +319,252 @@ describe("filterToLabeledPairs", () => {
     const { labeled, skipped } = filterToLabeledPairs([], tempDir);
     expect(labeled).toEqual([]);
     expect(skipped).toEqual([]);
+  });
+});
+
+// -- parseSamples (multi-sample averaging, follow-up to #168) -----------
+
+describe("parseSamples", () => {
+  it("defaults to 1 when --samples is absent", () => {
+    expect(parseSamples([])).toBe(1);
+    expect(parseSamples(["--full"])).toBe(1);
+    expect(parseSamples(["--smoke", "--other"])).toBe(1);
+  });
+
+  it("parses --samples N (space-separated form)", () => {
+    expect(parseSamples(["--samples", "3"])).toBe(3);
+    expect(parseSamples(["--full", "--samples", "5"])).toBe(5);
+    expect(parseSamples(["--samples", "10", "--smoke"])).toBe(10);
+  });
+
+  it("parses --samples=N (equals-separated form)", () => {
+    expect(parseSamples(["--samples=3"])).toBe(3);
+    expect(parseSamples(["--full", "--samples=5"])).toBe(5);
+  });
+
+  it("rejects fractional values", () => {
+    expect(() => parseSamples(["--samples", "1.5"])).toThrow(
+      /positive integer/,
+    );
+    expect(() => parseSamples(["--samples=2.5"])).toThrow(/positive integer/);
+  });
+
+  it("rejects zero and negative values", () => {
+    // The regex `/^\d+$/` rejects negative numbers (the minus sign
+    // doesn't match), so this surfaces as the integer-format error;
+    // zero parses as integer but trips the >=1 floor.
+    expect(() => parseSamples(["--samples", "0"])).toThrow(/>= 1/);
+    expect(() => parseSamples(["--samples", "-3"])).toThrow(
+      /positive integer/,
+    );
+  });
+
+  it("rejects non-numeric values", () => {
+    expect(() => parseSamples(["--samples", "abc"])).toThrow(
+      /positive integer/,
+    );
+    expect(() => parseSamples(["--samples=NaN"])).toThrow(/positive integer/);
+  });
+
+  it("rejects --samples without a value", () => {
+    expect(() => parseSamples(["--samples"])).toThrow(/requires/);
+    expect(() => parseSamples(["--full", "--samples"])).toThrow(/requires/);
+  });
+});
+
+// -- aggregateSampledFixture (multi-sample averaging) -------------------
+
+describe("aggregateSampledFixture", () => {
+  it("single-sample mode produces the same notes shape as toFixtureResult (backward compat)", () => {
+    const r = makeOrchestratorResult({
+      extractionAccuracy: 0.5,
+      matchAccuracy: 0.2,
+    });
+    const agg = aggregateSampledFixture([r]);
+    const single = toFixtureResult(r);
+    // Same accuracy + cost + latency.
+    expect(agg.extractionAccuracy).toBe(single.extractionAccuracy);
+    expect(agg.matchAccuracy).toBe(single.matchAccuracy);
+    expect(agg.costUsd).toBe(single.costUsd);
+    // Same notes shape (the single-sample branch matches
+    // `toFixtureResult`'s exact format).
+    expect(agg.notes).toBe(single.notes);
+  });
+
+  it("aggregates 3 samples into mean accuracy + sum cost + range notes", () => {
+    const samples = [
+      makeOrchestratorResult({ extractionAccuracy: 0.4, matchAccuracy: 0.1, costUsd: 0.1 }),
+      makeOrchestratorResult({ extractionAccuracy: 0.5, matchAccuracy: 0.2, costUsd: 0.15 }),
+      makeOrchestratorResult({ extractionAccuracy: 0.6, matchAccuracy: 0.3, costUsd: 0.12 }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.extractionAccuracy).toBeCloseTo(0.5, 6); // mean
+    expect(r.matchAccuracy).toBeCloseTo(0.2, 6); // mean
+    expect(r.costUsd).toBeCloseTo(0.37, 6); // sum
+    expect(r.notes).toContain("3 samples");
+    expect(r.notes).toContain("extraction range 40.0–60.0%");
+    expect(r.notes).toContain("match range 10.0–30.0%");
+  });
+
+  it("failed samples contribute 0 to accuracy means + their partial cost to total", () => {
+    const samples = [
+      makeOrchestratorResult({ extractionAccuracy: 0.5, matchAccuracy: 0.2, costUsd: 0.1 }),
+      makeOrchestratorResult({
+        ok: false,
+        error: "Extraction failed",
+        extractionAccuracy: 0,
+        matchAccuracy: 0,
+        costUsd: 0.05, // partial cost from earlier API calls
+      }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    // Mean of [0.5, 0] = 0.25
+    expect(r.extractionAccuracy).toBeCloseTo(0.25, 6);
+    // Mean of [0.2, 0] = 0.10
+    expect(r.matchAccuracy).toBeCloseTo(0.1, 6);
+    // Sum: 0.10 + 0.05 = 0.15
+    expect(r.costUsd).toBeCloseTo(0.15, 6);
+    // Failure tally surfaced.
+    expect(r.notes).toContain("1/2 failed");
+  });
+
+  it("multi-sample notes use the first SUCCESSFUL run as exemplar for unit/req counts", () => {
+    // First sample failed — exemplar should fall through to the
+    // first successful one so the per-run counts in the report
+    // aren't 0.
+    const samples = [
+      makeOrchestratorResult({
+        ok: false,
+        error: "transport error",
+        extractedUnitCount: 0,
+        parsedRequirementCount: 0,
+        matchCount: 0,
+      }),
+      makeOrchestratorResult({
+        extractedUnitCount: 22,
+        parsedRequirementCount: 15,
+        matchCount: 330,
+      }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.notes).toContain("22 units / 15 reqs / 330 matches");
+  });
+
+  it("throws on empty samples array", () => {
+    expect(() => aggregateSampledFixture([])).toThrow(/empty/);
+  });
+
+  it("throws on heterogeneous samples (cursor invariant on #172)", () => {
+    // Pre-fix the aggregator silently averaged samples from
+    // different fixture pairs and labeled the result with the
+    // FIRST sample's IDs — a false-positive accuracy reading
+    // attributed to the wrong pair. Throw loudly so a caller
+    // bug surfaces at the boundary, not in a downstream report.
+    const a = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "role-x",
+      extractionAccuracy: 0.8,
+    });
+    const b = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "role-y", // different JD
+      extractionAccuracy: 0.2,
+    });
+    expect(() => aggregateSampledFixture([a, b])).toThrow(
+      /heterogeneous samples/,
+    );
+  });
+
+  it("heterogeneous-samples error includes both fixture IDs for diagnosis", () => {
+    const a = makeOrchestratorResult({
+      resumeFixtureId: "alice",
+      jdFixtureId: "google",
+    });
+    const b = makeOrchestratorResult({
+      resumeFixtureId: "bob", // different resume
+      jdFixtureId: "google",
+    });
+    try {
+      aggregateSampledFixture([a, b]);
+      throw new Error("expected throw");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("alice");
+      expect(msg).toContain("bob");
+      expect(msg).toContain("index 1");
+    }
+  });
+
+  it("accepts homogeneous samples even with content variance (extractedUnits, accuracy, etc.)", () => {
+    // The invariant check should ONLY guard fixture-ID equality.
+    // Per-sample variance in unit counts / accuracy / cost is
+    // expected (LLM stochasticity) and must NOT trip the throw.
+    const samples = [
+      makeOrchestratorResult({ extractedUnitCount: 22, extractionAccuracy: 0.4 }),
+      makeOrchestratorResult({ extractedUnitCount: 24, extractionAccuracy: 0.6 }),
+      makeOrchestratorResult({ extractedUnitCount: 23, extractionAccuracy: 0.5 }),
+    ];
+    expect(() => aggregateSampledFixture(samples)).not.toThrow();
+  });
+
+  it("computes mean latency across samples (rounded to integer ms)", () => {
+    const samples = [
+      makeOrchestratorResult({ latencyMs: 1000 }),
+      makeOrchestratorResult({ latencyMs: 2000 }),
+      makeOrchestratorResult({ latencyMs: 1500 }),
+    ];
+    const r = aggregateSampledFixture(samples);
+    expect(r.latencyMs).toBe(1500); // Math.round((1000+2000+1500)/3)
+  });
+});
+
+// -- estimatePlannedSpend (cursor on PR #172: smoke-mode samples-aware) --
+
+describe("estimatePlannedSpend", () => {
+  // Pin: per-flow $ estimate is mode-INDEPENDENT post-#172.
+  // Pre-#172 smoke returned $0 regardless of flowCount, which
+  // bypassed the cap guard for `--samples N` smoke runs.
+  const PER_FLOW = 0.75;
+
+  it("smoke and full both project the same per-flow cost (#172 cursor)", () => {
+    const smoke = estimatePlannedSpend("smoke", 10);
+    const full = estimatePlannedSpend("full", 10);
+    expect(smoke).toEqual(full);
+  });
+
+  it("scales linearly with flowCount", () => {
+    const small = estimatePlannedSpend("smoke", 1);
+    const large = estimatePlannedSpend("smoke", 100);
+    expect(large.anthropicUsd / small.anthropicUsd).toBeCloseTo(100, 6);
+    expect(large.openaiUsd / small.openaiUsd).toBeCloseTo(100, 6);
+  });
+
+  it("splits cost 70/30 between Anthropic and OpenAI", () => {
+    const r = estimatePlannedSpend("smoke", 10);
+    expect(r.anthropicUsd).toBeCloseTo(10 * PER_FLOW * 0.7, 6); // 5.25
+    expect(r.openaiUsd).toBeCloseTo(10 * PER_FLOW * 0.3, 6); // 2.25
+    expect(r.firebaseUsd).toBe(0);
+  });
+
+  it("zero flows → zero projection (no-op corpus)", () => {
+    expect(estimatePlannedSpend("full", 0)).toEqual({
+      anthropicUsd: 0,
+      openaiUsd: 0,
+      firebaseUsd: 0,
+    });
+  });
+
+  it("--samples 50 smoke would have projected $0 pre-#172; now projects $37.50 (cursor regression pin)", () => {
+    // The exact regression cursor caught: 1 fixture × 50 samples
+    // = 50 flows. Pre-fix: smoke returned $0, bypassing the cap
+    // guard. Post-fix: projects 50 × $0.75 = $37.50 split 70/30,
+    // which trips the $25 monthly Anthropic cap.
+    const flowCount = 1 * 50;
+    const r = estimatePlannedSpend("smoke", flowCount);
+    expect(r.anthropicUsd).toBeCloseTo(50 * PER_FLOW * 0.7, 6); // $26.25
+    expect(r.openaiUsd).toBeCloseTo(50 * PER_FLOW * 0.3, 6); // $11.25
+    // Total $37.50; Anthropic alone ($26.25) > $25 monthly cap →
+    // shouldBlock(checkCaps(...)) trips → harness refuses to run.
+    expect(r.anthropicUsd).toBeGreaterThan(25);
   });
 });
