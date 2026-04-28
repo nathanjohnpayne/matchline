@@ -22,6 +22,11 @@ import {
   anthropicForCli,
 } from "../../functions/src/llm/anthropic.ts";
 import { openaiForCli } from "../../functions/src/llm/openai.ts";
+import { PROMPT_CONFIG } from "../../functions/src/prompts/config.js";
+import {
+  getPromptVersionOverrides,
+  setPromptVersionOverrides,
+} from "../../functions/src/prompts/loader.js";
 
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
@@ -91,6 +96,66 @@ function validateSamples(raw: string): number {
   return n;
 }
 
+/**
+ * Parse `--prompt stage/name=version` arguments. Multi-arg friendly:
+ * `--prompt extraction/resume=v2 --prompt parsing/jd=v3` returns
+ * `{ "extraction/resume": "v2", "parsing/jd": "v3" }`. Also accepts
+ * the `--prompt=KEY=VALUE` form for parity with `--samples=` etc.
+ *
+ * Throws on malformed input (no slash, no equals, empty parts) so
+ * a typo fails loudly at startup instead of silently being ignored
+ * and producing a default-version run with the wrong report header.
+ *
+ * **Why a flag and not an env var.** The ad-hoc form
+ * `MATCHLINE_PROMPT_OVERRIDES="extraction/resume=v2"` is more
+ * discoverable in CI logs and shell history than the comma-blob
+ * form, plays nicely with shell completion, and the parse error
+ * surfaces at argv-parsing time rather than midway through the
+ * pipeline.
+ */
+export function parsePromptOverrides(
+  argv: readonly string[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    let raw: string | undefined;
+    if (arg === "--prompt") {
+      raw = argv[i + 1];
+      if (raw === undefined) {
+        throw new Error(
+          "--prompt requires a STAGE/NAME=VERSION argument (e.g. `--prompt extraction/resume=v2`)",
+        );
+      }
+      i += 1;
+    } else if (arg.startsWith("--prompt=")) {
+      raw = arg.slice("--prompt=".length);
+    } else {
+      continue;
+    }
+    const eqIdx = raw.indexOf("=");
+    if (eqIdx <= 0 || eqIdx === raw.length - 1) {
+      throw new Error(
+        `--prompt argument must be STAGE/NAME=VERSION with non-empty parts on both sides (got "${raw}")`,
+      );
+    }
+    const key = raw.slice(0, eqIdx);
+    const version = raw.slice(eqIdx + 1);
+    if (!key.includes("/") || key.startsWith("/") || key.endsWith("/")) {
+      throw new Error(
+        `--prompt key must be STAGE/NAME with non-empty parts on both sides of the slash (got "${key}")`,
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(out, key)) {
+      throw new Error(
+        `--prompt ${key} specified twice; pass each (stage, name) at most once per run`,
+      );
+    }
+    out[key] = version;
+  }
+  return out;
+}
+
 function listFixtures(dir: string, ext: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -136,6 +201,13 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const mode = parseMode(argv);
   const samples = parseSamples(argv);
+  // Apply `--prompt stage/name=version` overrides BEFORE any
+  // pipeline call. Production paths use the loader's default
+  // (PROMPT_CONFIG); the eval harness optionally swaps in a
+  // different prompt version per (stage, name) for A/B comparison.
+  // See functions/src/prompts/loader.ts § runtimeOverrides.
+  const promptOverrides = parsePromptOverrides(argv);
+  setPromptVersionOverrides(promptOverrides);
   const fixturesDir = join(process.cwd(), "tests", "fixtures");
   const resumeFixtures = listFixtures(join(fixturesDir, "resumes"), ".txt");
   const jdFixtures = listFixtures(join(fixturesDir, "jds"), ".txt");
@@ -440,6 +512,44 @@ export function toFixtureResult(r: RunForFixtureResult): FixtureResult {
   };
 }
 
+/**
+ * Build the report's `promptVersions` field. Walks every
+ * `(stage, name)` in `PROMPT_CONFIG`, marks each entry as `default`
+ * (resolved version === config) or `override` (active runtime
+ * override is winning), and returns them in stable
+ * `${stage}/${name}` order so the report is reproducible.
+ *
+ * Pure: takes the override snapshot as input rather than reading
+ * loader module state, so it's testable without setting overrides.
+ */
+export function resolvePromptVersionsForReport(
+  promptConfig: typeof PROMPT_CONFIG = PROMPT_CONFIG,
+  overrides: Readonly<Record<string, string>> = getPromptVersionOverrides(),
+): EvalReport["promptVersions"] {
+  const out: Array<{
+    key: string;
+    version: string;
+    source: "default" | "override";
+  }> = [];
+  for (const stage of Object.keys(promptConfig).sort()) {
+    const stageEntries = (promptConfig as Record<string, Record<string, string>>)[
+      stage
+    ];
+    if (!stageEntries) continue;
+    for (const name of Object.keys(stageEntries).sort()) {
+      const key = `${stage}/${name}`;
+      const override = overrides[key];
+      const defaultVersion = stageEntries[name]!;
+      out.push({
+        key,
+        version: override ?? defaultVersion,
+        source: override !== undefined ? "override" : "default",
+      });
+    }
+  }
+  return out;
+}
+
 function buildReport(
   mode: Mode,
   fixtureResults: readonly FixtureResult[],
@@ -474,6 +584,7 @@ function buildReport(
       costP95: percentile(costs, 95),
       totalCostUsd: costs.reduce((a, b) => a + b, 0),
     },
+    promptVersions: resolvePromptVersionsForReport(),
   };
 }
 

@@ -11,7 +11,9 @@ import {
   computeFlowCount,
   estimatePlannedSpend,
   filterToLabeledPairs,
+  parsePromptOverrides,
   parseSamples,
+  resolvePromptVersionsForReport,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -566,5 +568,126 @@ describe("estimatePlannedSpend", () => {
     // Total $37.50; Anthropic alone ($26.25) > $25 monthly cap →
     // shouldBlock(checkCaps(...)) trips → harness refuses to run.
     expect(r.anthropicUsd).toBeGreaterThan(25);
+  });
+});
+
+
+// -- parsePromptOverrides (#177 PR 1) ---------------------------------------
+
+describe("parsePromptOverrides", () => {
+  it("returns empty object when --prompt is absent", () => {
+    expect(parsePromptOverrides([])).toEqual({});
+    expect(parsePromptOverrides(["--samples", "3"])).toEqual({});
+  });
+
+  it("parses a single STAGE/NAME=VERSION via space-separated form", () => {
+    expect(parsePromptOverrides(["--prompt", "extraction/resume=v2"])).toEqual({
+      "extraction/resume": "v2",
+    });
+  });
+
+  it("parses the --prompt=KEY=VALUE form", () => {
+    expect(parsePromptOverrides(["--prompt=parsing/jd=v3"])).toEqual({
+      "parsing/jd": "v3",
+    });
+  });
+
+  it("accumulates multiple overrides into a single record", () => {
+    expect(
+      parsePromptOverrides([
+        "--prompt",
+        "extraction/resume=v2",
+        "--samples",
+        "3",
+        "--prompt=parsing/jd=v3",
+      ]),
+    ).toEqual({
+      "extraction/resume": "v2",
+      "parsing/jd": "v3",
+    });
+  });
+
+  it("throws when --prompt is the last token (no value follows)", () => {
+    expect(() => parsePromptOverrides(["--prompt"])).toThrow(/--prompt requires/);
+  });
+
+  it("throws when the argument has no =", () => {
+    expect(() => parsePromptOverrides(["--prompt", "extraction/resume"])).toThrow(
+      /STAGE\/NAME=VERSION/,
+    );
+  });
+
+  it("throws when STAGE or NAME is empty", () => {
+    expect(() => parsePromptOverrides(["--prompt", "/resume=v2"])).toThrow(
+      /non-empty parts on both sides of the slash/,
+    );
+    expect(() => parsePromptOverrides(["--prompt", "extraction/=v2"])).toThrow(
+      /non-empty parts on both sides of the slash/,
+    );
+  });
+
+  it("throws when VERSION is empty", () => {
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume="]),
+    ).toThrow(/non-empty parts on both sides/);
+  });
+
+  it("throws when the same stage/name is overridden twice", () => {
+    // Catches the silent-last-write-wins shape that would let a
+    // typo in the second invocation mask the intended first one.
+    expect(() =>
+      parsePromptOverrides([
+        "--prompt",
+        "extraction/resume=v2",
+        "--prompt",
+        "extraction/resume=v3",
+      ]),
+    ).toThrow(/specified twice/);
+  });
+});
+
+// -- resolvePromptVersionsForReport (#177 PR 1) -----------------------------
+
+describe("resolvePromptVersionsForReport", () => {
+  it("returns one entry per (stage, name) in PROMPT_CONFIG with stable ordering", () => {
+    const fakeConfig = {
+      extraction: { resume: "v1" },
+      parsing: { jd: "v1" },
+    } as never;
+    const r = resolvePromptVersionsForReport(fakeConfig, {});
+    expect(r).toEqual([
+      { key: "extraction/resume", version: "v1", source: "default" },
+      { key: "parsing/jd", version: "v1", source: "default" },
+    ]);
+  });
+
+  it("marks an entry as override when an override is present", () => {
+    const fakeConfig = {
+      extraction: { resume: "v1" },
+      parsing: { jd: "v1" },
+    } as never;
+    const r = resolvePromptVersionsForReport(fakeConfig, {
+      "extraction/resume": "v2",
+    });
+    expect(r).toEqual([
+      { key: "extraction/resume", version: "v2", source: "override" },
+      { key: "parsing/jd", version: "v1", source: "default" },
+    ]);
+  });
+
+  it("ignores override keys that don't match any (stage, name) — silent by design", () => {
+    // A typo'd override (e.g. extraction/resumee=v2) should simply
+    // not match any config entry. This is the right call because
+    // parsePromptOverrides already validates STAGE/NAME shape; the
+    // matchability check is a separate concern that the eval
+    // harness loudly reports via the report header (no `(override)`
+    // tag means the override didn't apply).
+    const fakeConfig = { extraction: { resume: "v1" } } as never;
+    const r = resolvePromptVersionsForReport(fakeConfig, {
+      "extraction/resumee": "v2",
+    });
+    expect(r).toEqual([
+      { key: "extraction/resume", version: "v1", source: "default" },
+    ]);
   });
 });

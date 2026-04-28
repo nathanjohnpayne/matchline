@@ -28,6 +28,20 @@ export interface EvalReport {
     readonly costP95: number | null;
     readonly totalCostUsd: number;
   };
+  /**
+   * Per-(stage,name) resolved prompt versions used during this run.
+   * Empty when no overrides are active (production-equivalent run);
+   * present when `--prompt stage/name=version` flags are passed so
+   * the report shows which prompt versions produced the numbers.
+   * Each entry includes whether it came from PROMPT_CONFIG (default)
+   * or a runtime override so an A/B comparison is unambiguous from
+   * the report alone.
+   */
+  readonly promptVersions?: ReadonlyArray<{
+    readonly key: string; // e.g. "extraction/resume"
+    readonly version: string; // e.g. "v2"
+    readonly source: "default" | "override";
+  }>;
 }
 
 /**
@@ -39,6 +53,15 @@ export interface EvalReport {
 export function formatReport(report: EvalReport): string {
   const lines: string[] = [];
   lines.push(`# Matchline eval — mode: ${report.mode}`);
+
+  if (report.promptVersions && report.promptVersions.length > 0) {
+    lines.push("");
+    lines.push("## Prompt versions");
+    for (const p of report.promptVersions) {
+      const tag = p.source === "override" ? " (override)" : "";
+      lines.push(`- ${p.key}: ${p.version}${tag}`);
+    }
+  }
 
   if (report.fixtureResults.length === 0) {
     lines.push("");
