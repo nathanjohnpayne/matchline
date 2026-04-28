@@ -53,15 +53,15 @@ But ask Nathan first if you have any doubt about scope — he may want to start 
 - [PR #178](https://github.com/nathanjohnpayne/matchline/pull/178) — eval `--prompt stage/name=version` override mechanism + `## Prompt versions` section in the report (#177 PR 1).
 - **Branch protection on `main`** is configured via API (#171 layer 1): 5 required status checks (`unit + build (node 20.19.0/22.12.0)`, `rules + integration (emulator, node 20.19.0/22.12.0)`, `lint`), `strict=true`, `required_conversation_resolution=true`, no force pushes / deletions, no PR-review gate (deliberately — the agent flow uses a single `nathanpayne-claude` review).
 
-### Workflow that works today
+### Workflow pointers (canonical sources, not duplicated here)
 
-If you've read [`AGENTS.md`](./AGENTS.md), [`CLAUDE.md`](./CLAUDE.md), and [`REVIEW_POLICY.md`](./REVIEW_POLICY.md), you have the full procedure. The session-tested specifics:
+The full procedure lives in [`AGENTS.md`](./AGENTS.md), [`CLAUDE.md`](./CLAUDE.md), and [`REVIEW_POLICY.md`](./REVIEW_POLICY.md) — read those for the binding rules, not this file. Brief pointers:
 
-- **Author identity:** PR commits as `nathanjohnpayne` (the human's GitHub identity); `Authoring-Agent: claude` in PR body marks the agent.
-- **Reviewer identities:** `nathanpayne-claude` (this agent's reviewer PAT, item ID `pvbq24vl2h6gl7yjclxy2hbote`), `nathanpayne-cursor` (`bslrih4spwxgookzfy6zedz5g4`), `nathanpayne-codex` (`o6ekjxjjl5gq6rmcneomrjahpu`). Use 1Password UUIDs, never titles.
-- **API keys:** `ChatGPT API Key (Test/Dev)` UUID `ooj5vq25ynj5n56mqm7xrmumsq` and `Claude API Key (Test/Dev)` UUID `ey6stbr75px3mx6nzthh6z54o4`. Read via `op read 'op://Private/{UUID}/credential'`. Both keys are required for `npm run eval` to leave stub mode.
-- **External review:** when a PR crosses 300 lines (the threshold), `needs-external-review` label fires; Codex (or the user via cursor) does the external review; Nathan has explicitly authorized me to remove the label after external approval to unblock auto-merge. Branch protection's "Require conversation resolution" can hold up merge if a Codex inline thread is unresolved — resolve via the `resolveReviewThread` GraphQL mutation if the bot doesn't do it itself.
-- **Auto-merge:** the `auto-merge-on-approval` workflow squash-merges on cursor APPROVED if `mergeStateStatus=CLEAN` and no `needs-external-review` / `needs-human-review` labels. It triggers on `pull_request_review` events, so removing a blocking label after approval doesn't re-fire it — manual `gh pr merge --squash --delete-branch` is fine in that case.
+- **Reviewer identities + PAT lookup:** [`REVIEW_POLICY.md` § PAT lookup table](./REVIEW_POLICY.md#pat-lookup-table). Use 1Password UUIDs from that table, never titles. Do not embed UUIDs in additional tracked files.
+- **API keys for `npm run eval`:** the harness needs both Anthropic and OpenAI keys present in `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. Retrieve via `op read 'op://Private/{UUID}/credential'`; the locators live in private 1Password docs, not in repo-tracked files. Without keys the harness falls back to stub mode.
+- **External review (`needs-external-review`):** [`REVIEW_POLICY.md` § Phase 4](./REVIEW_POLICY.md) is canonical. The standing rule for agent reviewers: never remove `needs-external-review` or `needs-human-review` labels. Any exception must come from an explicit, in-chat human authorization for that specific PR — confirm before acting; never extrapolate a prior one-time authorization into a standing policy.
+- **Conversation-resolution gate (mechanism note, not a policy override):** branch protection on `main` requires all review threads to be resolved before merge. If an external-reviewer bot leaves an inline thread unresolved after the agent has addressed the finding, the GitHub `resolveReviewThread` GraphQL mutation marks it resolved. This is purely an implementation detail; it does not override the review policy itself.
+- **Auto-merge behavior:** the `auto-merge-on-approval` workflow triggers on `pull_request_review` events. If a label changes after the approval event fired, the workflow doesn't re-trigger — see `AGENTS.md` / `REVIEW_POLICY.md` for the documented merge path in that case.
 
 ## When you're done with this file
 
