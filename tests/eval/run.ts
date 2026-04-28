@@ -141,9 +141,35 @@ export function parsePromptOverrides(
     }
     const key = raw.slice(0, eqIdx);
     const version = raw.slice(eqIdx + 1);
-    if (!key.includes("/") || key.startsWith("/") || key.endsWith("/")) {
+    // Codex P1 on PR #178: the prior shape (`includes("/") &&
+    // !startsWith("/") && !endsWith("/")`) accepted three-segment
+    // keys like `extraction/resume/typo=v2`, which never match a
+    // configured (stage, name) entry — the override silently
+    // invalidates the A/B run because nothing in PROMPT_CONFIG can
+    // ever be `extraction/resume/typo`. Require EXACTLY one slash
+    // with non-empty alphanumeric+`_`+`-` parts on both sides so a
+    // typo fails loudly here instead of silently producing a
+    // default-version run with the wrong report header.
+    if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(key)) {
       throw new Error(
-        `--prompt key must be STAGE/NAME with non-empty parts on both sides of the slash (got "${key}")`,
+        `--prompt key must be STAGE/NAME with exactly one slash and non-empty alphanumeric segments on both sides (got "${key}")`,
+      );
+    }
+    // Codex P1 on PR #178: version flows directly into
+    // `loadPromptText`'s `join(promptsRoot, stage, "${name}.${version}.md")`
+    // call. A version containing `/` or `..` would resolve outside
+    // `promptsRoot/<stage>/` (e.g. `version="../../outside"` →
+    // attempts to read a file outside the prompts tree). Restrict
+    // to alphanumeric + `_` + `-` so the version slot can never
+    // escape its directory by construction. Existing versions
+    // (`v1`) match; future `v2-rc1` / `v3` also match. A version
+    // that needs a `.` (e.g. `v1.0`) would require widening this
+    // regex AND adding an explicit `..` rejection — defer until
+    // someone actually wants that shape.
+    if (!/^[A-Za-z0-9_-]+$/.test(version)) {
+      throw new Error(
+        `--prompt VERSION must be alphanumeric + '_'/'-' only (got "${version}"). ` +
+          `Slashes and '..' are rejected to prevent path traversal in the prompt loader.`,
       );
     }
     if (Object.prototype.hasOwnProperty.call(out, key)) {

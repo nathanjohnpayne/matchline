@@ -619,17 +619,82 @@ describe("parsePromptOverrides", () => {
 
   it("throws when STAGE or NAME is empty", () => {
     expect(() => parsePromptOverrides(["--prompt", "/resume=v2"])).toThrow(
-      /non-empty parts on both sides of the slash/,
+      /STAGE\/NAME with exactly one slash/,
     );
     expect(() => parsePromptOverrides(["--prompt", "extraction/=v2"])).toThrow(
-      /non-empty parts on both sides of the slash/,
+      /STAGE\/NAME with exactly one slash/,
     );
   });
 
   it("throws when VERSION is empty", () => {
     expect(() =>
       parsePromptOverrides(["--prompt", "extraction/resume="]),
-    ).toThrow(/non-empty parts on both sides/);
+    ).toThrow(/STAGE\/NAME=VERSION with non-empty parts/);
+  });
+
+  // -- Codex P1 on PR #178: stricter key + version validation -----
+
+  it("rejects keys with more than one slash (silent-A/B-invalidation guard)", () => {
+    // `extraction/resume/typo=v2` looks plausible but never
+    // matches a (stage, name) entry in PROMPT_CONFIG, so the
+    // override would have no effect. Failing loudly here means
+    // a typo doesn't silently produce a default-version run with
+    // the wrong report header.
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume/typo=v2"]),
+    ).toThrow(/exactly one slash/);
+    expect(() =>
+      parsePromptOverrides(["--prompt", "a/b/c/d=v1"]),
+    ).toThrow(/exactly one slash/);
+  });
+
+  it("rejects keys with non-alphanumeric characters in either segment", () => {
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction.x/resume=v2"]),
+    ).toThrow(/exactly one slash and non-empty alphanumeric segments/);
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume.v2=v2"]),
+    ).toThrow(/exactly one slash and non-empty alphanumeric segments/);
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction /resume=v2"]),
+    ).toThrow(/exactly one slash/);
+  });
+
+  it("rejects versions containing a slash (path-traversal guard)", () => {
+    // version flows into `loadPromptText`'s
+    // `join(promptsRoot, stage, "${name}.${version}.md")`. A
+    // version with `/` would resolve outside the prompts tree.
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume=v1/extra"]),
+    ).toThrow(/VERSION must be alphanumeric/);
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume=../../outside"]),
+    ).toThrow(/VERSION must be alphanumeric/);
+  });
+
+  it("rejects versions containing '..' (path-traversal guard)", () => {
+    // Even without a slash, `..` could enable traversal if a
+    // future version syntax were introduced that allowed dots.
+    // The current regex blocks dots entirely; this test pins
+    // that intent so a future widening to allow dots can't
+    // silently re-introduce the traversal hole.
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume=.."]),
+    ).toThrow(/VERSION must be alphanumeric/);
+    expect(() =>
+      parsePromptOverrides(["--prompt", "extraction/resume=v1..2"]),
+    ).toThrow(/VERSION must be alphanumeric/);
+  });
+
+  it("accepts hyphenated and underscored versions (forward-compat)", () => {
+    // v2-rc1, v3_alpha, etc. — common shapes for pre-release
+    // prompt iterations. These must still pass the validator.
+    expect(parsePromptOverrides(["--prompt", "extraction/resume=v2-rc1"])).toEqual({
+      "extraction/resume": "v2-rc1",
+    });
+    expect(parsePromptOverrides(["--prompt", "parsing/jd=v3_alpha"])).toEqual({
+      "parsing/jd": "v3_alpha",
+    });
   });
 
   it("throws when the same stage/name is overridden twice", () => {
