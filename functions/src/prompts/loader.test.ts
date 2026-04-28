@@ -1,10 +1,15 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PROMPT_CONFIG, activeVersion } from "./config.ts";
 import {
   _clearCacheForTests,
+  clearPromptVersionOverrides,
+  getPromptVersionOverrides,
   loadPromptText,
   parsePromptSections,
+  promptOverrideKey,
+  resolvePromptVersion,
+  setPromptVersionOverrides,
 } from "./loader.ts";
 
 describe("activeVersion", () => {
@@ -278,5 +283,90 @@ describe("loadPromptText (integration with real prompt files)", () => {
     // Reference equality — the cached object is returned, not
     // reparsed.
     expect(second).toBe(first);
+  });
+});
+
+// -- Runtime version overrides (#177 PR 1) ----------------------------------
+
+describe("promptOverrideKey", () => {
+  it("returns `${stage}/${name}` (matches the --prompt CLI form)", () => {
+    expect(promptOverrideKey("extraction", "resume")).toBe("extraction/resume");
+    expect(promptOverrideKey("parsing", "jd")).toBe("parsing/jd");
+  });
+});
+
+describe("setPromptVersionOverrides + resolvePromptVersion", () => {
+  beforeEach(() => {
+    clearPromptVersionOverrides();
+  });
+  afterEach(() => {
+    clearPromptVersionOverrides();
+  });
+
+  it("falls through to PROMPT_CONFIG when no override is set", () => {
+    expect(resolvePromptVersion("extraction", "resume")).toBe(
+      String(activeVersion("extraction", "resume")),
+    );
+  });
+
+  it("override wins over PROMPT_CONFIG for the keyed (stage, name) only", () => {
+    setPromptVersionOverrides({ "extraction/resume": "v2" });
+    expect(resolvePromptVersion("extraction", "resume")).toBe("v2");
+    // Other entries unaffected.
+    expect(resolvePromptVersion("parsing", "jd")).toBe(
+      String(activeVersion("parsing", "jd")),
+    );
+  });
+
+  it("setPromptVersionOverrides replaces the full map (not a merge)", () => {
+    setPromptVersionOverrides({ "extraction/resume": "v2" });
+    setPromptVersionOverrides({ "parsing/jd": "v3" });
+    // First override is gone after the second call.
+    expect(resolvePromptVersion("extraction", "resume")).toBe(
+      String(activeVersion("extraction", "resume")),
+    );
+    expect(resolvePromptVersion("parsing", "jd")).toBe("v3");
+  });
+
+  it("clearPromptVersionOverrides drops all overrides", () => {
+    setPromptVersionOverrides({
+      "extraction/resume": "v2",
+      "parsing/jd": "v3",
+    });
+    clearPromptVersionOverrides();
+    expect(resolvePromptVersion("extraction", "resume")).toBe(
+      String(activeVersion("extraction", "resume")),
+    );
+    expect(resolvePromptVersion("parsing", "jd")).toBe(
+      String(activeVersion("parsing", "jd")),
+    );
+  });
+
+  it("getPromptVersionOverrides returns a frozen snapshot", () => {
+    setPromptVersionOverrides({ "extraction/resume": "v2" });
+    const snap = getPromptVersionOverrides();
+    expect(snap).toEqual({ "extraction/resume": "v2" });
+    // Snapshot is frozen — mutation throws in strict mode (no-op in
+    // sloppy mode); either way it must not affect loader state.
+    expect(() => {
+      (snap as Record<string, string>)["extraction/resume"] = "v99";
+    }).toThrow();
+    // Loader state still reads the originally-set override.
+    expect(resolvePromptVersion("extraction", "resume")).toBe("v2");
+  });
+
+  it("setPromptVersionOverrides clears the prompt cache (override takes effect on next load)", () => {
+    // Prime the cache with the v1 result.
+    const first = loadPromptText("extraction", "resume");
+    expect(first.version).toBe("v1");
+    // Set an override to a non-existent v999. The cache MUST be
+    // invalidated; otherwise the next load returns the cached v1
+    // entry and silently masks the override. We verify by asserting
+    // the loader now throws for the missing v999 file rather than
+    // returning a cached v1 LoadedPrompt.
+    setPromptVersionOverrides({ "extraction/resume": "v999" });
+    expect(() => loadPromptText("extraction", "resume")).toThrow(
+      /resume\.v999\.md/,
+    );
   });
 });

@@ -59,6 +59,101 @@ const promptsRoot = dirname(fileURLToPath(import.meta.url));
 const cache = new Map<string, LoadedPrompt>();
 
 /**
+ * Runtime per-(stage,name) version overrides. Empty by default.
+ *
+ * **Why this exists (#177 workstream B).** The eval harness needs
+ * to A/B compare prompt versions (e.g., extraction/resume v1 vs v2)
+ * without flipping `PROMPT_CONFIG`, which would change production
+ * behavior. The harness sets overrides via `setPromptVersionOverrides`
+ * before running pipelines; production paths leave the map empty
+ * and fall through to `activeVersion()` from `config.ts`.
+ *
+ * Module state is intentional: eval calls into the same extraction
+ * / parsing / generation modules that production uses, and those
+ * modules call `loadPromptText(stage, name)` without passing an
+ * options bag. Threading an override through every public API
+ * just for the eval harness would be invasive; a single
+ * "before any pipeline call, set the overrides for this run"
+ * inversion is much narrower.
+ *
+ * Always call `clearPromptVersionOverrides()` in test teardown
+ * if a test sets overrides — the cache is keyed on the resolved
+ * version, so leaving stale overrides in place can leak between
+ * tests.
+ */
+const runtimeOverrides = new Map<string, string>();
+
+/**
+ * Compose the canonical override key from a (stage, name) pair.
+ * Exported so tests and the eval harness build the same string
+ * the loader looks up. Format: `${stage}/${name}` (matches the
+ * `--prompt stage/name=version` CLI form).
+ */
+export function promptOverrideKey(stage: string, name: string): string {
+  return `${stage}/${name}`;
+}
+
+/**
+ * Replace the entire runtime-override map. Pass an empty object /
+ * `{}` to clear all overrides; pass partial maps to override
+ * specific entries. Does NOT merge with the existing map — full
+ * replacement, so a caller that hands `{ "extraction/resume": "v2" }`
+ * after a prior `{ "parsing/jd": "v3" }` will end with only the
+ * extraction override active.
+ *
+ * Side effect: clears the prompt cache so the next `loadPromptText`
+ * call resolves the new version. Without this, a cached v1 entry
+ * would mask a fresh v2 override on a hot-loaded process.
+ */
+export function setPromptVersionOverrides(
+  overrides: Readonly<Record<string, string>>,
+): void {
+  runtimeOverrides.clear();
+  for (const [k, v] of Object.entries(overrides)) {
+    runtimeOverrides.set(k, v);
+  }
+  cache.clear();
+}
+
+/**
+ * Clear all runtime overrides AND the prompt cache. Equivalent to
+ * `setPromptVersionOverrides({})`. Provided as a clearer name for
+ * test teardown and end-of-eval-run cleanup.
+ */
+export function clearPromptVersionOverrides(): void {
+  runtimeOverrides.clear();
+  cache.clear();
+}
+
+/**
+ * Read a snapshot of the current overrides. Returns a frozen object
+ * so callers can include it in eval-report metadata without
+ * accidentally mutating loader state.
+ */
+export function getPromptVersionOverrides(): Readonly<Record<string, string>> {
+  return Object.freeze(Object.fromEntries(runtimeOverrides));
+}
+
+/**
+ * Resolve the version to load for a (stage, name) pair. Override
+ * wins over the static `PROMPT_CONFIG` entry; both fall through to
+ * the loader's same `activeVersion` invariant (the configured
+ * default version must reference a file that exists; an override
+ * version not on disk fails loudly at `readFileSync`).
+ *
+ * Exported so the eval harness can include the resolved versions
+ * in its report header without re-implementing the lookup.
+ */
+export function resolvePromptVersion<
+  S extends PromptStage,
+  N extends PromptName<S>,
+>(stage: S, name: N): string {
+  const override = runtimeOverrides.get(promptOverrideKey(String(stage), String(name)));
+  if (override !== undefined) return override;
+  return String(activeVersion(stage, name));
+}
+
+/**
  * Load a prompt's Markdown body (without the schema). Exported
  * separately so callers that don't need the Zod schema (e.g.
  * documentation tooling) can skip the dynamic import.
@@ -67,7 +162,7 @@ export function loadPromptText<S extends PromptStage, N extends PromptName<S>>(
   stage: S,
   name: N,
 ): LoadedPrompt {
-  const version = activeVersion(stage, name);
+  const version = resolvePromptVersion(stage, name);
   const cacheKey = `${String(stage)}/${String(name)}/${String(version)}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
