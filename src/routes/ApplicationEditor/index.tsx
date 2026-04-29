@@ -279,7 +279,24 @@ function ApplicationEditorInner({
         );
       }
       // 3. Refetch so the editor reflects the fresh flags + status.
-      await refetchApplication();
+      //    Catch + log: the edit + validation already landed
+      //    server-side; a transient read failure here shouldn't
+      //    bubble up as a "save failed" error to BulletEditor
+      //    (it would flip the editor to error state, leave
+      //    `lastSavedRef` stale, and prompt the user to retry a
+      //    write that already succeeded — duplicate edit +
+      //    validation invocation). The next render that depends
+      //    on Application state will retry on its own. Codex P2
+      //    on PR #192.
+      try {
+        await refetchApplication();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "refetchApplication failed after successful edit; UI may be briefly stale",
+          err,
+        );
+      }
     },
     [applicationId, asset, refetchApplication],
   );
