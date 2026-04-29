@@ -131,7 +131,14 @@ export default function ApplicationEditorView({
   // allows legacy docs to omit the field. Mirror that defense
   // here so a pre-pipeline Application renders an empty Units
   // pane instead of crashing the route. Codex P1 on PR #181.
-  const applicationUnits = (application.approved_unit_ids ?? [])
+  //
+  // Dedupe via Set: nothing in the schema disallows duplicates in
+  // approved_unit_ids, and a duplicate would render duplicate
+  // `key={unit.id}` <li>s + inflate the count copy. CodeRabbit
+  // Minor on PR #181.
+  const applicationUnits = [
+    ...new Set(application.approved_unit_ids ?? []),
+  ]
     .map((id) => unitsById.get(id))
     .filter((u): u is ExperienceUnit => u !== undefined);
 

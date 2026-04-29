@@ -44,6 +44,28 @@ import { selectPrimaryResumeAsset } from "./selectPrimaryResumeAsset.ts";
 
 export default function ApplicationEditor(): ReactElement {
   const { applicationId } = useParams<{ applicationId: string }>();
+  // Key-based remount per applicationId — without this, navigating
+  // between two valid Application IDs paints the previous
+  // application's data + status under the new URL for one render
+  // before the inner effect resets state. CodeRabbit Major on
+  // PR #181. The "__missing__" sentinel keeps the key stable while
+  // the URL is empty/undefined so we don't mount-then-immediately-
+  // remount on the initial render.
+  return (
+    <ApplicationEditorInner
+      key={applicationId ?? "__missing__"}
+      applicationId={applicationId}
+    />
+  );
+}
+
+interface ApplicationEditorInnerProps {
+  readonly applicationId: string | undefined;
+}
+
+function ApplicationEditorInner({
+  applicationId,
+}: ApplicationEditorInnerProps): ReactElement {
   const [status, setStatus] = useState<LoadState>("loading");
   const [application, setApplication] = useState<Application | null>(null);
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
@@ -128,6 +150,17 @@ export default function ApplicationEditor(): ReactElement {
       } catch (err) {
         if (!active) return;
         failed = true;
+        // Tear down the Units subscription on Application fetch
+        // error too — symmetric with the not-found branch's early
+        // unsubscribe. Otherwise an owner-scoped realtime listener
+        // keeps consuming reads after the surface has terminated
+        // on an error, and a later listener payload can churn
+        // state behind the error banner. CodeRabbit Major on
+        // PR #181.
+        if (unsubUnits !== null) {
+          unsubUnits();
+          unsubUnits = null;
+        }
         setError(err instanceof Error ? err : new Error(String(err)));
         setStatus("error");
       }
@@ -135,7 +168,11 @@ export default function ApplicationEditor(): ReactElement {
 
     unsubUnits = subscribeUnitsByOwner(
       (next) => {
-        if (!active) return;
+        // The `failed` gate stops late Units snapshots from
+        // overwriting state once an error has latched (either via
+        // the Application catch above or this listener's own error
+        // branch below). CodeRabbit Major on PR #181.
+        if (!active || failed) return;
         setUnits(next);
         unitsFirstSnapshotReceived = true;
         maybeMarkReady();

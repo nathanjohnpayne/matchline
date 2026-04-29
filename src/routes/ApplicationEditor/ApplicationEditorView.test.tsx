@@ -353,6 +353,32 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("2 approved Units were used");
   });
 
+  it("de-duplicates approved_unit_ids before rendering the right pane (no duplicate keys, accurate count)", () => {
+    // CodeRabbit Minor on PR #181: nothing in the schema
+    // disallows duplicates in approved_unit_ids; without dedupe,
+    // the right pane would render duplicate `key={unit.id}` <li>s
+    // and the count copy would inflate.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application({
+          approved_unit_ids: ["unit-a", "unit-a", "unit-b"],
+        })}
+        asset={asset()}
+        units={[
+          unit({ id: "unit-a", normalized_summary: "Cited Unit A." }),
+          unit({ id: "unit-b", normalized_summary: "Cited Unit B." }),
+        ]}
+      />,
+    );
+    const aHits = html.match(/data-unit-id="unit-a"/g) ?? [];
+    const bHits = html.match(/data-unit-id="unit-b"/g) ?? [];
+    expect(aHits).toHaveLength(1);
+    expect(bHits).toHaveLength(1);
+    // Count copy reflects the deduped count, not the raw array length.
+    expect(html).toContain("2 approved Units were used");
+  });
+
   it("renders the empty Units pane when application is missing approved_unit_ids (legacy doc)", () => {
     // Legacy compatibility (Codex P1 on PR #181): the server-side
     // generation pipeline reads `approved_unit_ids` with `?? []`
