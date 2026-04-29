@@ -9,11 +9,11 @@
  * matching the convention used by UnitReview (#86) and
  * RoleDetail (#129).
  *
- * PR 1 scope (this file): two-pane shell + read-only bullets with
- * `source_unit_ids` chips. Validation flag badges, the resolution
- * popover, and the export-button gate land in PR 2. Inline edit +
- * autosave land in PR 3. The component is shaped so those
- * additions slot in without restructuring the layout.
+ * PR 1 scope: two-pane shell + read-only bullets with
+ * `source_unit_ids` chips. PR 2 (this commit) adds validation flag
+ * badges per item, a popover surfacing the rationale + three
+ * resolution paths, and the export-button gate. Inline edit +
+ * autosave land in PR 3.
  */
 
 import type { ReactElement } from "react";
@@ -23,7 +23,12 @@ import type {
   Application,
   AssetRef,
   GeneratedItem,
+  ValidationFlag,
 } from "../../types/crm.ts";
+
+import { exportGateState } from "./exportGate.ts";
+import FlagBadge from "./FlagBadge.tsx";
+import { flagsByBullet } from "./flagsByBullet.ts";
 
 /**
  * Subscription load state. Mirrors the three-way discriminator from
@@ -58,6 +63,32 @@ export interface ApplicationEditorViewProps {
   readonly units: readonly ExperienceUnit[];
   /** Subscription error, surfaced when `status === "error"`. */
   readonly error?: Error | null;
+  /**
+   * Click handler for "Remove this bullet" in a flag popover.
+   * Receives the offending item's id (the GeneratedItem.id, which
+   * is what ValidationFlag.bullet_id references). The container
+   * runs the service-layer `removeBulletFromAsset` and refetches.
+   * Optional so PR 1 callers (which have no flags to render) keep
+   * compiling.
+   */
+  readonly onRemoveBullet?: (bulletId: string) => void;
+  /**
+   * Click handler for "Add a supporting Unit" in a flag popover.
+   * Opens the manual-add modal. The popover doesn't pass any
+   * bullet context — PR 3 will wire the new Unit's id back into
+   * `source_unit_ids[]`; PR 2 just gets the user past the no-Unit
+   * deadlock by enabling them to create one.
+   */
+  readonly onAddSupportingUnit?: () => void;
+  /**
+   * Click handler for the Export button. Disabled state is
+   * computed in the view from `asset.validation_status` via
+   * `exportGateState`; the container only needs to provide a
+   * handler for the enabled case. Actual export (PDF/DOCX) is
+   * Phase 2 — PR 2 wires the gate, not the export. Optional so
+   * PR 1 callers keep compiling.
+   */
+  readonly onExport?: () => void;
 }
 
 export default function ApplicationEditorView({
@@ -66,6 +97,9 @@ export default function ApplicationEditorView({
   asset,
   units,
   error,
+  onRemoveBullet,
+  onAddSupportingUnit,
+  onExport,
 }: ApplicationEditorViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -161,6 +195,9 @@ export default function ApplicationEditorView({
         <ResumePane
           asset={asset}
           unitsById={unitsById}
+          onRemoveBullet={onRemoveBullet}
+          onAddSupportingUnit={onAddSupportingUnit}
+          onExport={onExport}
         />
         <UnitsPane units={applicationUnits} />
       </div>
@@ -171,9 +208,18 @@ export default function ApplicationEditorView({
 interface ResumePaneProps {
   readonly asset: AssetRef | null;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
+  readonly onRemoveBullet?: (bulletId: string) => void;
+  readonly onAddSupportingUnit?: () => void;
+  readonly onExport?: () => void;
 }
 
-function ResumePane({ asset, unitsById }: ResumePaneProps): ReactElement {
+function ResumePane({
+  asset,
+  unitsById,
+  onRemoveBullet,
+  onAddSupportingUnit,
+  onExport,
+}: ResumePaneProps): ReactElement {
   if (asset === null || asset.generated_content === undefined) {
     return (
       <article
@@ -188,14 +234,49 @@ function ResumePane({ asset, unitsById }: ResumePaneProps): ReactElement {
     );
   }
   const content = asset.generated_content;
+  // Flag lookup keyed by GeneratedItem id. The orchestrator emits
+  // flags for summary/bullets/skills/education uniformly, so a
+  // single map covers all four sections.
+  const flags = flagsByBullet(asset.validation_flags);
+  const gate = exportGateState(asset);
+  // The Remove resolution path is only valid for `bullets[]` —
+  // the schema forbids removing `summary`, and removing a single
+  // skill or education entry is structurally a bullet-removal too
+  // (the data shape is identical), so we extend Remove to those.
+  // Pre-compute the id sets for an O(1) check inside `BulletItem`.
+  const bulletIds = new Set<string>([
+    ...content.bullets.map((b) => b.id),
+    ...content.skills.map((s) => s.id),
+    ...(content.education ?? []).map((e) => e.id),
+  ]);
+  const renderItem = (
+    item: GeneratedItem,
+    keyPrefix: string,
+  ): ReactElement => (
+    <BulletItem
+      key={`${keyPrefix}:${item.id}`}
+      item={item}
+      unitsById={unitsById}
+      flags={flags.get(item.id)}
+      canRemove={bulletIds.has(item.id)}
+      onRemove={
+        onRemoveBullet === undefined
+          ? undefined
+          : () => onRemoveBullet(item.id)
+      }
+      onAddSupportingUnit={onAddSupportingUnit}
+    />
+  );
   return (
     <article
       className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 space-y-5"
       aria-label="Generated resume"
       data-testid="resume-pane"
     >
+      <ExportButton gate={gate} onExport={onExport} />
+
       <Section heading="Summary">
-        <BulletItem item={content.summary} unitsById={unitsById} />
+        {renderItem(content.summary, "summary")}
       </Section>
 
       <Section heading="Experience">
@@ -204,9 +285,7 @@ function ResumePane({ asset, unitsById }: ResumePaneProps): ReactElement {
         ) : (
           <ul className="space-y-3" data-testid="resume-bullets">
             {content.bullets.map((bullet) => (
-              <li key={bullet.id}>
-                <BulletItem item={bullet} unitsById={unitsById} />
-              </li>
+              <li key={bullet.id}>{renderItem(bullet, "bullet")}</li>
             ))}
           </ul>
         )}
@@ -216,9 +295,7 @@ function ResumePane({ asset, unitsById }: ResumePaneProps): ReactElement {
         <Section heading="Skills">
           <ul className="space-y-2" data-testid="resume-skills">
             {content.skills.map((skill) => (
-              <li key={skill.id}>
-                <BulletItem item={skill} unitsById={unitsById} />
-              </li>
+              <li key={skill.id}>{renderItem(skill, "skill")}</li>
             ))}
           </ul>
         </Section>
@@ -228,14 +305,53 @@ function ResumePane({ asset, unitsById }: ResumePaneProps): ReactElement {
         <Section heading="Education">
           <ul className="space-y-2" data-testid="resume-education">
             {content.education.map((edu) => (
-              <li key={edu.id}>
-                <BulletItem item={edu} unitsById={unitsById} />
-              </li>
+              <li key={edu.id}>{renderItem(edu, "education")}</li>
             ))}
           </ul>
         </Section>
       )}
     </article>
+  );
+}
+
+interface ExportButtonProps {
+  readonly gate: ReturnType<typeof exportGateState>;
+  readonly onExport?: () => void;
+}
+
+function ExportButton({ gate, onExport }: ExportButtonProps): ReactElement {
+  // Always render the button, never hide it — the user needs to see
+  // the gate's reason, not just an absent control. When disabled the
+  // tooltip explains what's blocking; when enabled, the click handler
+  // fires (or no-ops if the container hasn't wired one — actual
+  // export is Phase 2).
+  const enabled = gate.enabled;
+  return (
+    <div className="flex items-center justify-end gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-3 -mt-1">
+      {!enabled && (
+        <p
+          className="text-xs italic text-zinc-500"
+          data-testid="export-disabled-reason"
+        >
+          {gate.disabledReason}
+        </p>
+      )}
+      <button
+        type="button"
+        disabled={!enabled}
+        onClick={enabled && onExport !== undefined ? onExport : undefined}
+        title={enabled ? "Export this resume" : gate.disabledReason}
+        data-testid="export-button"
+        data-export-enabled={enabled ? "true" : "false"}
+        className={
+          enabled
+            ? "rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            : "rounded-md bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600"
+        }
+      >
+        Export
+      </button>
+    </div>
   );
 }
 
@@ -258,15 +374,55 @@ function Section({ heading, children }: SectionProps): ReactElement {
 interface BulletItemProps {
   readonly item: GeneratedItem;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
+  /**
+   * Validation flags on this item, if any. Caller pre-filters out
+   * `traced` flags (they passed validation; no badge needed).
+   * Undefined or empty means no badge renders.
+   */
+  readonly flags?: readonly ValidationFlag[];
+  /**
+   * True when "Remove" is a valid resolution path for this item.
+   * Bullets/skills/education yes, summary no — a missing summary
+   * would corrupt the asset shape. The badge hides Remove (rather
+   * than disabling) when false, so the user isn't faced with a
+   * non-functional control.
+   */
+  readonly canRemove: boolean;
+  /** Pre-bound to this item's id by the parent. */
+  readonly onRemove?: () => void;
+  /** Opens the manual-add modal in the container. */
+  readonly onAddSupportingUnit?: () => void;
 }
 
-function BulletItem({ item, unitsById }: BulletItemProps): ReactElement {
+function BulletItem({
+  item,
+  unitsById,
+  flags,
+  canRemove,
+  onRemove,
+  onAddSupportingUnit,
+}: BulletItemProps): ReactElement {
+  const hasFlags = flags !== undefined && flags.length > 0;
   return (
     <div
       className="space-y-1.5"
       data-bullet-id={item.id}
     >
-      <p className="text-sm text-zinc-900 dark:text-zinc-100">{item.text}</p>
+      <div className="flex items-start gap-2">
+        <p className="flex-1 text-sm text-zinc-900 dark:text-zinc-100">
+          {item.text}
+        </p>
+        {hasFlags && (
+          <FlagBadge
+            flags={flags}
+            canRemove={canRemove}
+            onRemove={onRemove ?? (() => undefined)}
+            onAddSupportingUnit={
+              onAddSupportingUnit ?? (() => undefined)
+            }
+          />
+        )}
+      </div>
       {item.source_unit_ids.length > 0 && (
         <ul
           className="flex flex-wrap gap-1.5"
