@@ -136,7 +136,19 @@ export default function ClaimAnnotation({
         // `decoration-1 underline-offset-2` would be the more
         // semantic choice but border-b composes more cleanly with
         // the hover saturation.
-        className="border-b border-zinc-300/60 hover:border-zinc-500 focus:border-zinc-500 dark:border-zinc-600/60 dark:hover:border-zinc-400 dark:focus:border-zinc-400 transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 text-left focus:outline-none"
+        //
+        // Focus indicator: a visible ring per the UI guidance
+        // accessibility baseline ("Every interactive element has a
+        // visible focus ring"). `focus:outline-none` clears the
+        // browser default; `focus:ring-2` + `focus:ring-zinc-500`
+        // + a small offset supplies a replacement that survives
+        // both light and dark backgrounds. Keyboard users see
+        // which claim is focused; click users don't get a sticky
+        // ring (focus-visible would be cleaner but isn't a
+        // Tailwind-default variant; the current shape is OK
+        // because clicking a button gives it focus by spec). See
+        // Codex P2 on PR #190.
+        className="border-b border-zinc-300/60 hover:border-zinc-500 focus:border-zinc-500 dark:border-zinc-600/60 dark:hover:border-zinc-400 dark:focus:border-zinc-400 transition-colors duration-150 text-sm text-zinc-900 dark:text-zinc-100 text-left rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
       >
         {text}
       </button>
