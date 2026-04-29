@@ -98,10 +98,16 @@ export default function BulletEditor({
 
   // Debounced autosave — fires `autosaveMs` after the last
   // keystroke when the draft differs from the last-saved snapshot
-  // AND we aren't already saving. Cleanup clears the timer on
-  // every keystroke so it always tracks the LATEST keystroke.
+  // AND status is "editing" (not "saving" or "error"). The
+  // status === "editing" gate prevents an automatic retry loop:
+  // after a failed save flips status to "error", we wait for the
+  // user's next keystroke to clear the error (handled in
+  // onChangeDraft) before re-arming autosave. Without this, the
+  // effect would re-run when status flipped to "error" and
+  // schedule another autosave, hammering Firestore on persistent
+  // failures. Codex P1 on PR #192.
   useEffect(() => {
-    if (status === "saving") return;
+    if (status !== "editing") return;
     if (draft === lastSavedRef.current) return;
     if (draft.trim().length === 0) return;
     const handle = setTimeout(async () => {
@@ -169,7 +175,19 @@ export default function BulletEditor({
     // newline (default browser behavior). Escape cancels. Both
     // shortcuts match the UnitReview precedent + the UI
     // guidance rule 4 spec ("Enter commits, Escape cancels").
+    //
+    // IME guard: when an IME composition is active (Japanese /
+    // Chinese / Korean / etc.), Enter confirms the candidate
+    // selection — NOT a submit. The browser fires keydown for
+    // Enter both during composition (with isComposing=true or
+    // the legacy keyCode 229) and for the post-confirm keydown.
+    // We only commit on the post-confirm event. Codex P2 on
+    // PR #192.
     if (e.key === "Enter" && !e.shiftKey) {
+      const native = e.nativeEvent as KeyboardEvent["nativeEvent"] & {
+        isComposing?: boolean;
+      };
+      if (native.isComposing === true || e.keyCode === 229) return;
       e.preventDefault();
       void commitDraft();
       return;
