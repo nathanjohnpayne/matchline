@@ -84,6 +84,17 @@ export default function BulletEditor({
   // Track the last text we successfully saved so autosave doesn't
   // re-fire for the same value (idempotent debounce).
   const lastSavedRef = useRef(initialText);
+  // `unmountedRef` guards state-update-after-unmount when an
+  // autosave (or explicit save) is in flight and the user
+  // dismisses the editor mid-save. Without it React logs a
+  // "can't perform state update on unmounted component" warning
+  // in dev. CodeRabbit Trivial on PR #192.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
 
   // Debounced autosave — fires `autosaveMs` after the last
   // keystroke when the draft differs from the last-saved snapshot
@@ -98,13 +109,16 @@ export default function BulletEditor({
       // during the wait that brought draft back to the saved
       // value.
       if (draft === lastSavedRef.current) return;
+      if (unmountedRef.current) return;
       setStatus("saving");
       setError(null);
       try {
         await onSave(draft);
+        if (unmountedRef.current) return;
         lastSavedRef.current = draft;
         setStatus("editing");
       } catch (err) {
+        if (unmountedRef.current) return;
         setStatus("error");
         setError(err instanceof Error ? err : new Error(String(err)));
       }
@@ -135,9 +149,11 @@ export default function BulletEditor({
     setError(null);
     try {
       await onSave(draft);
+      if (unmountedRef.current) return;
       lastSavedRef.current = draft;
       onCancel(); // explicit save exits edit mode
     } catch (err) {
+      if (unmountedRef.current) return;
       setStatus("error");
       setError(err instanceof Error ? err : new Error(String(err)));
     }
