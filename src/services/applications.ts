@@ -1,3 +1,4 @@
+import { FirebaseError } from "firebase/app";
 import {
   getDoc,
   getDocs,
@@ -30,11 +31,39 @@ export async function listApplicationsByStage(
   return listApplications(where("stage", "==", stage));
 }
 
+/**
+ * Fetch an Application doc by id. Returns `undefined` for BOTH
+ * "doc doesn't exist" AND "doc exists but caller doesn't own it"
+ * — anti-enumeration mirror of `getRole` (and the server-side
+ * pattern at #109 / #120).
+ *
+ * The Firestore rules layer rejects cross-owner reads with
+ * `permission-denied`. Without this catch, a foreign Application
+ * id would surface as a thrown error that the ApplicationEditor
+ * container would route to its "error" state — leaking that the
+ * doc EXISTS (a missing doc would just return
+ * `snap.exists() === false`, a different code path). Collapsing
+ * both shapes to `undefined` means the caller can't distinguish
+ * the two, matching the not-found surface the editor renders.
+ *
+ * Codex P2 on PR #181 caught the inconsistency with `getRole`.
+ *
+ * Other error codes (transport, unauthenticated, etc.) propagate
+ * normally so the container's error state still fires for genuine
+ * failures.
+ */
 export async function getApplication(
   id: string,
 ): Promise<Application | undefined> {
-  const snap = await getDoc(ref(id));
-  return snap.exists() ? snap.data() : undefined;
+  try {
+    const snap = await getDoc(ref(id));
+    return snap.exists() ? snap.data() : undefined;
+  } catch (err) {
+    if (err instanceof FirebaseError && err.code === "permission-denied") {
+      return undefined;
+    }
+    throw err;
+  }
 }
 
 /** See `upsertExperienceUnit` for the owner_uid-stamping rationale. */
