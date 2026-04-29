@@ -65,7 +65,12 @@ export default function ApplicationEditor(): ReactElement {
 
     // Stale-closure guard — same shape as RoleDetail's `active` flag.
     let active = true;
-    let unsubUnits: (() => void) | null = null;
+    // The `as` cast prevents TS5's control-flow analysis from
+    // narrowing the variable to `null` inside the async IIFE below
+    // (where it can't see the synchronous reassignment past the
+    // first `await`). Without it, the early-unsubscribe branch
+    // narrows to `never` and the function call type-errors.
+    let unsubUnits = null as (() => void) | null;
     let appResolved = false;
     let unitsFirstSnapshotReceived = false;
     // `failed` latches when EITHER the Application fetch or the Units
@@ -99,6 +104,24 @@ export default function ApplicationEditor(): ReactElement {
           // on Units. But only if no prior error has latched (e.g.
           // a Units subscription error that landed first).
           if (!failed) setStatus("ready");
+          // And tear down the Units subscription early — without
+          // this, a foreign / not-found applicationId leaves an
+          // owner-wide realtime listener open for the lifetime of
+          // the route mount (extra reads/cost), and a later listener
+          // error could flip the surface from not-found to error.
+          // Codex P2 on PR #181.
+          //
+          // Explicit `if (unsubUnits !== null)` rather than `?.()`:
+          // TS5 control-flow narrowing inside this async IIFE looks
+          // at the lexical declaration (let ... = null) and infers
+          // the variable is still null here, even though the
+          // synchronous line below the IIFE assigns it before the
+          // microtask resumes. The `if` re-widens the type via the
+          // null check.
+          if (unsubUnits !== null) {
+            unsubUnits();
+            unsubUnits = null;
+          }
           return;
         }
         maybeMarkReady();
