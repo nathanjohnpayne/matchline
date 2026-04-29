@@ -421,6 +421,16 @@ function ResumePane({
   // second row dismisses the first cleanly. `null` means no
   // row is editing.
   const [editingBulletId, setEditingBulletId] = useState<string | null>(null);
+  // Mirror the state into a ref so switchToEditMode can read the
+  // LATEST committed value when it runs after an await — closures
+  // capture the value at handler-creation time, which would be
+  // stale across rapid back-to-back Add clicks. Codex P2 round 2
+  // on PR #194: without this, two quick Adds resolve in sequence
+  // and the second's switchToEditMode reads `editingBulletId =
+  // null` from a stale closure, skipping cleanup of the first
+  // empty bullet.
+  const editingBulletIdRef = useRef<string | null>(null);
+  editingBulletIdRef.current = editingBulletId;
   // Track ids that were just added via the Add CTA. If the user
   // cancels an edit on one of these without saving, we remove the
   // empty bullet so the asset doesn't accumulate orphan empty
@@ -439,9 +449,12 @@ function ResumePane({
   //   - Edit → Cancel (no cleanup)
   // Without this, transitions other than the explicit Cancel path
   // would leave orphan empty bullets persisted in Firestore.
-  // Codex P2 on PR #194.
+  // Codex P2 round 1 on PR #194.
   const switchToEditMode = (next: string | null): void => {
-    const previous = editingBulletId;
+    // Read the ref, NOT the closure-captured state — the ref
+    // reflects the latest commit even when this handler fires
+    // after an await.
+    const previous = editingBulletIdRef.current;
     if (
       previous !== null &&
       newlyAddedRef.current.has(previous) &&
@@ -450,6 +463,10 @@ function ResumePane({
       newlyAddedRef.current.delete(previous);
       onRemoveBullet(previous);
     }
+    // Update ref synchronously so back-to-back calls within the
+    // same tick (before re-render commits the setState) see the
+    // updated value too.
+    editingBulletIdRef.current = next;
     setEditingBulletId(next);
   };
 
