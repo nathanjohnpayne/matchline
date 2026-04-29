@@ -34,9 +34,11 @@ import {
 import { useParams } from "react-router-dom";
 
 import {
+  addBulletToAsset,
   editBulletInAsset,
   getApplication,
   removeBulletFromAsset,
+  type AddableSection,
 } from "../../services/applications.ts";
 import {
   manualInsert,
@@ -234,6 +236,38 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
+  const onAddBullet = useCallback(
+    async (section: AddableSection): Promise<string | null> => {
+      if (asset === null || applicationId === undefined) return null;
+      try {
+        const result = await addBulletToAsset(
+          applicationId,
+          asset.id,
+          section,
+        );
+        if (result.status !== "added") {
+          // application-not-found / asset-not-found shouldn't
+          // happen from the editor's UI (we just loaded both).
+          // eslint-disable-next-line no-console
+          console.warn("addBulletToAsset returned", result.status);
+          return null;
+        }
+        // Fresh bullet — just persisted to Firestore. Skip the
+        // validateAsset round-trip (an empty bullet has nothing
+        // to validate; status is already "stale" which the export
+        // gate respects). Refetch so the pane sees the new id +
+        // can auto-enter edit mode for it.
+        await refetchApplication();
+        return result.bulletId;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("addBulletToAsset failed", err);
+        return null;
+      }
+    },
+    [applicationId, asset, refetchApplication],
+  );
+
   const onSaveBulletEdit = useCallback(
     async (bulletId: string, newText: string): Promise<void> => {
       if (asset === null || applicationId === undefined) return;
@@ -387,6 +421,7 @@ function ApplicationEditorInner({
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
+        onAddBullet={onAddBullet}
       />
       {manualAddOpen && (
         <ManualAddForm
