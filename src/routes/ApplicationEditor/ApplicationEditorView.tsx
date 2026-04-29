@@ -427,30 +427,43 @@ function ResumePane({
   // items. Sub-issue #193.
   const newlyAddedRef = useRef(new Set<string>());
 
+  // Switch the pane's edit target. Before changing, if the
+  // currently-editing bullet is one we just added (still empty,
+  // never saved), remove it. This single helper covers all
+  // transition shapes:
+  //   - Add → Add (clicking + Add bullet twice)
+  //   - Add → Edit on a different row
+  //   - Add → Cancel (target=null)
+  //   - Edit → Edit on a different row (no cleanup if previous
+  //     wasn't newly-added)
+  //   - Edit → Cancel (no cleanup)
+  // Without this, transitions other than the explicit Cancel path
+  // would leave orphan empty bullets persisted in Firestore.
+  // Codex P2 on PR #194.
+  const switchToEditMode = (next: string | null): void => {
+    const previous = editingBulletId;
+    if (
+      previous !== null &&
+      newlyAddedRef.current.has(previous) &&
+      onRemoveBullet !== undefined
+    ) {
+      newlyAddedRef.current.delete(previous);
+      onRemoveBullet(previous);
+    }
+    setEditingBulletId(next);
+  };
+
   const onAddBulletClick = async (section: AddableSection): Promise<void> => {
     if (onAddBullet === undefined) return;
     const newId = await onAddBullet(section);
     if (newId === null) return;
     newlyAddedRef.current.add(newId);
-    setEditingBulletId(newId);
-  };
-
-  const onCancelEditFor = (bulletId: string): void => {
-    setEditingBulletId(null);
-    // Cancel-on-empty-new-bullet → remove. The container's
-    // onRemoveBullet expects an id; we already have it. Don't
-    // trigger remove if the bullet was successfully saved (in
-    // that case `editBulletInAsset` would have populated text);
-    // newlyAddedRef is cleared on save below.
-    if (newlyAddedRef.current.has(bulletId) && onRemoveBullet !== undefined) {
-      newlyAddedRef.current.delete(bulletId);
-      onRemoveBullet(bulletId);
-    }
+    switchToEditMode(newId);
   };
 
   // When a save lands successfully, the bullet is no longer
   // "empty / pending" — drop it from the newly-added set so
-  // future cancels don't trigger removal.
+  // future cancels / switches don't trigger removal.
   const onAfterSaveSuccess = (bulletId: string): void => {
     newlyAddedRef.current.delete(bulletId);
   };
@@ -512,9 +525,9 @@ function ResumePane({
       onEnterEdit={
         onSaveBulletEdit === undefined
           ? undefined
-          : () => setEditingBulletId(item.id)
+          : () => switchToEditMode(item.id)
       }
-      onCancelEdit={() => onCancelEditFor(item.id)}
+      onCancelEdit={() => switchToEditMode(null)}
       onSaveEdit={
         onSaveBulletEdit === undefined
           ? undefined
