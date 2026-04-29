@@ -68,9 +68,17 @@ export default function ApplicationEditor(): ReactElement {
     let unsubUnits: (() => void) | null = null;
     let appResolved = false;
     let unitsFirstSnapshotReceived = false;
+    // `failed` latches when EITHER the Application fetch or the Units
+    // subscription terminates with an error. Without it, a Units
+    // listener error followed by `getApplication()` resolving to
+    // `undefined` (or the symmetric Units-success-after-Units-error
+    // pseudo-recovery) would let `setStatus("ready")` overwrite the
+    // error surface, producing a false not-found render. Pin per
+    // CodeRabbit Major on PR 181.
+    let failed = false;
 
     const maybeMarkReady = () => {
-      if (!active) return;
+      if (!active || failed) return;
       if (appResolved && unitsFirstSnapshotReceived) {
         setStatus("ready");
       }
@@ -88,13 +96,15 @@ export default function ApplicationEditor(): ReactElement {
         if (a === undefined) {
           // No Application means there's nothing for the right pane
           // to gate on — flip ready immediately rather than waiting
-          // on Units.
-          setStatus("ready");
+          // on Units. But only if no prior error has latched (e.g.
+          // a Units subscription error that landed first).
+          if (!failed) setStatus("ready");
           return;
         }
         maybeMarkReady();
       } catch (err) {
         if (!active) return;
+        failed = true;
         setError(err instanceof Error ? err : new Error(String(err)));
         setStatus("error");
       }
@@ -109,6 +119,7 @@ export default function ApplicationEditor(): ReactElement {
       },
       (err) => {
         if (!active) return;
+        failed = true;
         setUnits([]);
         setError(err);
         setStatus("error");

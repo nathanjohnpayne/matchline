@@ -258,12 +258,17 @@ function BulletItem({ item, unitsById }: BulletItemProps): ReactElement {
           className="flex flex-wrap gap-1.5"
           aria-label="Source Units"
         >
-          {item.source_unit_ids.map((unitId) => {
+          {item.source_unit_ids.map((unitId, index) => {
             const unit = unitsById.get(unitId);
             const label = unit?.normalized_summary ?? "(missing Unit)";
             const resolved = unit !== undefined;
+            // Composite key: a generator could in principle ground a
+            // bullet on the same Unit twice (the `source_unit_ids: UUID[]`
+            // type doesn't disallow duplicates), in which case
+            // `key={unitId}` collides and React's reconciliation goes
+            // unstable. CodeRabbit Major on PR 181.
             return (
-              <li key={unitId}>
+              <li key={`${item.id}:${unitId}:${index}`}>
                 <span
                   className={
                     resolved
@@ -301,8 +306,8 @@ function UnitsPane({ units }: UnitsPaneProps): ReactElement {
           Source Units
         </h2>
         <p className="text-xs text-zinc-500">
-          {units.length} approved Unit{units.length === 1 ? "" : "s"} were used
-          to ground this Application.
+          {units.length} approved Unit{units.length === 1 ? "" : "s"}{" "}
+          {units.length === 1 ? "was" : "were"} used to ground this Application.
         </p>
       </header>
       {units.length === 0 ? (

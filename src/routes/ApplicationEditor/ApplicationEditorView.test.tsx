@@ -324,8 +324,10 @@ describe("ApplicationEditorView", () => {
     expect(html).not.toContain('data-testid="units-list"');
   });
 
-  it("uses a singular 'Unit' label when exactly one Unit is linked", () => {
-    // Pluralization correctness: "1 approved Unit" not "1 approved Units".
+  it("uses singular noun + verb agreement when exactly one Unit is linked", () => {
+    // Pluralization + verb agreement: "1 approved Unit was used"
+    // (CodeRabbit Minor on PR 181: prior copy rendered "1 approved
+    // Unit were used" with mismatched verb).
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -334,8 +336,21 @@ describe("ApplicationEditorView", () => {
         units={[unit({ id: "unit-a" })]}
       />,
     );
-    expect(html).toContain("1 approved Unit ");
+    expect(html).toContain("1 approved Unit was used");
     expect(html).not.toMatch(/1 approved Units/);
+    expect(html).not.toMatch(/1 approved Unit\s+were used/);
+  });
+
+  it("uses plural noun + verb agreement when multiple Units are linked", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application({ approved_unit_ids: ["unit-a", "unit-b"] })}
+        asset={asset()}
+        units={[unit({ id: "unit-a" }), unit({ id: "unit-b" })]}
+      />,
+    );
+    expect(html).toContain("2 approved Units were used");
   });
 
   it("falls back to a generic error message when status is 'error' but error is null", () => {
