@@ -6,6 +6,7 @@ import type {
   Application,
   AssetRef,
   GeneratedAssetContent,
+  ValidationFlag,
 } from "../../types/crm.ts";
 
 import ApplicationEditorView from "./ApplicationEditorView.tsx";
@@ -400,6 +401,354 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain('data-testid="application-editor"');
     expect(html).toContain("No Units linked to this Application yet.");
     expect(html).not.toContain('data-testid="units-list"');
+  });
+
+  // ── PR 2: validation flag badges, popover, export gate ──────────
+
+  function flag(
+    partial: Partial<ValidationFlag> & { id: string },
+  ): ValidationFlag {
+    return {
+      asset_id: "asset",
+      bullet_id: "bullet-1",
+      claim_id: "claim",
+      status: "untraceable",
+      rationale: "no supporting Unit",
+      created_at: "2026-04-01T00:00:00.000Z",
+      ...partial,
+    };
+  }
+
+  it("renders a flag badge on a flagged bullet, with the rationale visible in the popover markup", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({
+              id: "f1",
+              bullet_id: "b1",
+              status: "untraceable",
+              rationale: "Bullet references a Unit no longer present.",
+            }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged bullet.", source_unit_ids: [] },
+              { id: "b2", text: "Clean bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    // Badge rendered for the flagged bullet only.
+    const badges = html.match(/data-testid="flag-badge"/g) ?? [];
+    expect(badges).toHaveLength(1);
+    expect(html).toContain('data-flag-status="untraceable"');
+    expect(html).toContain("Bullet references a Unit no longer present.");
+    // The popover always present in the DOM (CSS visibility, not
+    // conditional render) so screen readers and tests can find it.
+    expect(html).toContain('data-testid="flag-popover"');
+  });
+
+  it("surfaces the worst flag status when a single bullet has both untraceable and specificity", () => {
+    // Specificity (red) beats untraceable (amber) — the badge
+    // shows the harder problem so the user attends to that first.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1", status: "untraceable" }),
+            flag({ id: "f2", bullet_id: "b1", status: "specificity" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Multi-flag bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).toContain('data-flag-status="specificity"');
+    expect(html).toContain('data-flag-count="2"');
+  });
+
+  it("renders Remove on bullet/skill/education badges and hides Remove on the summary badge", () => {
+    // Removing the summary would corrupt the asset shape; the badge
+    // hides the button rather than disabling it (a non-functional
+    // control would just confuse the user).
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f-sum", bullet_id: "summary" }),
+            flag({ id: "f-bul", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            summary: {
+              id: "summary",
+              text: "Flagged summary.",
+              source_unit_ids: [],
+            },
+            bullets: [
+              { id: "b1", text: "Flagged bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onRemoveBullet={() => undefined}
+        onAddSupportingUnit={() => undefined}
+      />,
+    );
+    // Both badges present (summary + bullet).
+    const badges = html.match(/data-testid="flag-badge"/g) ?? [];
+    expect(badges).toHaveLength(2);
+    // Remove button appears for the bullet badge but not the
+    // summary badge — count occurrences of the action attribute.
+    const removeButtons = html.match(/data-action="remove-bullet"/g) ?? [];
+    expect(removeButtons).toHaveLength(1);
+    // Add-Unit appears on every flagged item.
+    const addButtons =
+      html.match(/data-action="add-supporting-unit"/g) ?? [];
+    expect(addButtons).toHaveLength(2);
+  });
+
+  it("does not render flag badges on items that have no flags", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "passed",
+          validation_flags: [],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Clean bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-testid="flag-badge"');
+  });
+
+  it("does not render badges for 'traced' flags (those passed validation)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "passed",
+          validation_flags: [
+            flag({
+              id: "f-traced",
+              bullet_id: "b1",
+              status: "traced",
+              supporting_unit_id: "unit-x",
+            }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Successfully traced.", source_unit_ids: ["unit-x"] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-testid="flag-badge"');
+  });
+
+  it("renders the export button DISABLED with a flag-count tooltip when validation_status === 'failed'", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1", status: "untraceable" }),
+            flag({ id: "f2", bullet_id: "b2", status: "specificity" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Bullet 1.", source_unit_ids: [] },
+              { id: "b2", text: "Bullet 2.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).toContain('data-testid="export-button"');
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("disabled=");
+    expect(html).toContain("Resolve 2 validation flags");
+  });
+
+  it("renders the export button ENABLED when validation_status === 'passed' AND onExport is wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        units={[]}
+        onExport={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="true"');
+    expect(html).not.toContain("Resolve 0 validation flags");
+    expect(html).not.toContain("Export is not available yet.");
+  });
+
+  it("export button is disabled for pending and stale states with appropriate copy", () => {
+    const pending = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "pending" })}
+        units={[]}
+      />,
+    );
+    expect(pending).toContain('data-export-enabled="false"');
+    expect(pending).toContain("Validation hasn");
+
+    const stale = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+      />,
+    );
+    expect(stale).toContain('data-export-enabled="false"');
+    expect(stale).toContain("Re-run validation");
+  });
+
+  it("renders the export button DISABLED when validation passes but no onExport handler is wired", () => {
+    // Defense against silent-no-op primary action: even with
+    // status="passed", the button must NOT look enabled if the
+    // container hasn't wired a click handler. CodeRabbit Major
+    // on PR #182.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        units={[]}
+        // onExport intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("Export is not available yet.");
+  });
+
+  it("hides Remove on the popover when onRemoveBullet handler is absent (no silent no-ops)", () => {
+    // A bullet/skill/education flag could be rendered without a
+    // wired onRemoveBullet (legacy view callers). The popover must
+    // not render a functional-looking Remove button in that case.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onRemoveBullet intentionally omitted
+        onAddSupportingUnit={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-action="remove-bullet"');
+  });
+
+  it("hides Add a supporting Unit on the popover when handler is absent", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onAddSupportingUnit intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-action="add-supporting-unit"');
+  });
+
+  it("uses role='dialog' (not role='tooltip') on the flag popover so interactive controls inside are ARIA-valid", () => {
+    // WAI-ARIA APG forbids interactive controls inside role=tooltip;
+    // the popover hosts three resolution buttons. CodeRabbit Major
+    // on PR #182.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [flag({ id: "f1", bullet_id: "b1" })],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onRemoveBullet={() => undefined}
+        onAddSupportingUnit={() => undefined}
+      />,
+    );
+    // Popover present with the dialog role + aria-modal="false".
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="false"');
+    // No tooltip role on the popover (MatchScoreBadge legitimately
+    // uses role=tooltip; this surface specifically must not).
+    expect(html).not.toMatch(
+      /data-testid="flag-popover"[^>]*role="tooltip"/,
+    );
+  });
+
+  it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={null}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-testid="export-button"');
+    expect(html).toContain('data-testid="resume-pane-empty"');
   });
 
   it("falls back to a generic error message when status is 'error' but error is null", () => {

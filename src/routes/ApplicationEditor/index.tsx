@@ -26,20 +26,29 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useState,
   type ReactElement,
 } from "react";
 import { useParams } from "react-router-dom";
 
-import { getApplication } from "../../services/applications.ts";
-import { subscribeByOwner as subscribeUnitsByOwner } from "../../services/experienceUnits.ts";
+import {
+  getApplication,
+  removeBulletFromAsset,
+} from "../../services/applications.ts";
+import {
+  manualInsert,
+  subscribeByOwner as subscribeUnitsByOwner,
+} from "../../services/experienceUnits.ts";
+import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
 
 import ApplicationEditorView, {
   type LoadState,
 } from "./ApplicationEditorView.tsx";
+import ManualAddForm from "../UnitReview/ManualAddForm.tsx";
 import { selectPrimaryResumeAsset } from "./selectPrimaryResumeAsset.ts";
 
 export default function ApplicationEditor(): ReactElement {
@@ -204,13 +213,117 @@ function ApplicationEditorInner({
       ? selectPrimaryResumeAsset(application.generated_assets ?? [])
       : null;
 
+  // Manual-add modal state for the "Add a supporting Unit" resolution
+  // path (#24, PR 2). Opens the existing UnitReview ManualAddForm in
+  // a modal overlay; on submit, calls `manualInsert` and closes. The
+  // new Unit appears in the right pane via the Units subscription.
+  // PR 3 will wire the new Unit's id back into the offending bullet's
+  // `source_unit_ids[]` — for PR 2 the user closes the deadlock by
+  // creating the Unit, then re-runs validation.
+  const [manualAddOpen, setManualAddOpen] = useState(false);
+
+  // One-shot refetch of the Application after a mutation (e.g. bullet
+  // removal). PR 1 fetches once on mount; PR 2's mutations need an
+  // explicit refresh because we don't subscribe. PR 3 may switch to
+  // a subscription if mutation churn warrants it.
+  const refetchApplication = useCallback(async () => {
+    if (applicationId === undefined || applicationId === "") return;
+    const next = await getApplication(applicationId);
+    setApplication(next ?? null);
+  }, [applicationId]);
+
+  const onRemoveBullet = useCallback(
+    async (bulletId: string) => {
+      if (asset === null) return;
+      try {
+        const result = await removeBulletFromAsset(
+          applicationId ?? "",
+          asset.id,
+          bulletId,
+        );
+        if (result.status === "removed") {
+          await refetchApplication();
+        }
+        // Other result statuses are silent for now — application-/
+        // asset-not-found shouldn't happen from the editor's UI (we
+        // just loaded both), and bullet-not-found means a concurrent
+        // edit already removed it. PR 3's autosave + edit flow will
+        // surface these via inline errors when there's a real input
+        // surface for them to attach to.
+      } catch (err) {
+        // Swallow + log so the caller's onClick promise doesn't
+        // surface as an unhandled rejection. PR 2 has no toast UI;
+        // a future visible error surface will replace this log.
+        // CodeRabbit Major on PR #182.
+        // eslint-disable-next-line no-console
+        console.warn("removeBulletFromAsset failed", err);
+      }
+    },
+    [applicationId, asset, refetchApplication],
+  );
+
+  const onAddSupportingUnit = useCallback(() => {
+    setManualAddOpen(true);
+  }, []);
+
+  const onSubmitManualAdd = useCallback(
+    async (input: ManualUnitInput) => {
+      // `manualInsert` stamps source_type:"manual",
+      // user_approved:true, etc. via experienceUnits-state.ts's
+      // `buildManualUnit`. The Units subscription delivers the new
+      // Unit on the next snapshot, so the right pane and chip
+      // lookup pick it up automatically.
+      //
+      // ManualAddForm catches and inlines submit errors via its own
+      // try/catch; rethrow keeps that in-form error surface working
+      // (the user sees a message and can adjust + retry without
+      // losing their input). Don't close the modal on rejection.
+      // CodeRabbit Major on PR #182.
+      try {
+        await manualInsert(input);
+        setManualAddOpen(false);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("manualInsert failed", err);
+        throw err;
+      }
+    },
+    [],
+  );
+
+  const onCloseManualAdd = useCallback(() => setManualAddOpen(false), []);
+
+  // Export action — Phase 2 (PDF/DOCX) per the issue spec is a
+  // non-goal for #24. PR 2 wires the gate; the click handler is a
+  // placeholder that logs, so a future hookup can replace this
+  // single line. Disabled state is computed in the view from the
+  // asset's `validation_status`.
+  const onExport = useCallback(() => {
+    // eslint-disable-next-line no-console
+    console.info("Export not yet implemented (Phase 2)", {
+      applicationId,
+      assetId: asset?.id,
+    });
+  }, [applicationId, asset]);
+
   return (
-    <ApplicationEditorView
-      status={status}
-      application={application}
-      asset={asset}
-      units={units}
-      error={error}
-    />
+    <>
+      <ApplicationEditorView
+        status={status}
+        application={application}
+        asset={asset}
+        units={units}
+        error={error}
+        onRemoveBullet={onRemoveBullet}
+        onAddSupportingUnit={onAddSupportingUnit}
+        onExport={onExport}
+      />
+      {manualAddOpen && (
+        <ManualAddForm
+          onSubmit={onSubmitManualAdd}
+          onClose={onCloseManualAdd}
+        />
+      )}
+    </>
   );
 }
