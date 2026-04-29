@@ -16,7 +16,13 @@
  * autosave land in PR 3.
  */
 
-import type { ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type {
@@ -26,6 +32,7 @@ import type {
   ValidationFlag,
 } from "../../types/crm.ts";
 
+import ClaimAnnotation from "./ClaimAnnotation.tsx";
 import { exportGateState } from "./exportGate.ts";
 import FlagBadge from "./FlagBadge.tsx";
 import { flagsByBullet } from "./flagsByBullet.ts";
@@ -191,23 +198,115 @@ export default function ApplicationEditorView({
         </p>
       </header>
 
-      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
-        <ResumePane
-          asset={asset}
-          unitsById={unitsById}
-          onRemoveBullet={onRemoveBullet}
-          onAddSupportingUnit={onAddSupportingUnit}
-          onExport={onExport}
-        />
-        <UnitsPane units={applicationUnits} />
-      </div>
+      <TwoPaneLayout
+        asset={asset}
+        unitsById={unitsById}
+        applicationUnits={applicationUnits}
+        onRemoveBullet={onRemoveBullet}
+        onAddSupportingUnit={onAddSupportingUnit}
+        onExport={onExport}
+      />
     </section>
+  );
+}
+
+interface TwoPaneLayoutProps {
+  readonly asset: AssetRef | null;
+  readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
+  readonly applicationUnits: readonly ExperienceUnit[];
+  readonly onRemoveBullet?: (bulletId: string) => void;
+  readonly onAddSupportingUnit?: () => void;
+  readonly onExport?: () => void;
+}
+
+/**
+ * Wraps ResumePane + UnitsPane and owns the shared state that
+ * makes the bidirectional hover-highlight work (#24, sub-issue
+ * #185):
+ *
+ *   - `hoveredUnitIds`: which Units the user is currently hovering
+ *     a relationship with. Populated from EITHER pane:
+ *       • Hover a left-pane claim → set to that claim's
+ *         `source_unit_ids`. The right pane highlights matching
+ *         Unit rows.
+ *       • Hover a right-pane Unit row → set to `[unit.id]`. The
+ *         left pane highlights bullets that reference it.
+ *     Mouse leave / blur clears to `[]`.
+ *   - `scrollToUnitId`: when a user clicks a Unit summary inside
+ *     the ClaimAnnotation popover, the right pane scrolls that
+ *     row into view + briefly highlights it. The state is set,
+ *     consumed by UnitsPane's useEffect (which calls
+ *     `scrollIntoView`), and cleared after a short window so
+ *     repeat clicks re-fire.
+ *
+ * Lifting these to a wrapper rather than putting them on
+ * ApplicationEditorView keeps the load-state branches above clean
+ * and means `useState` only runs in the ready branch.
+ */
+function TwoPaneLayout({
+  asset,
+  unitsById,
+  applicationUnits,
+  onRemoveBullet,
+  onAddSupportingUnit,
+  onExport,
+}: TwoPaneLayoutProps): ReactElement {
+  const [hoveredUnitIds, setHoveredUnitIds] = useState<readonly string[]>([]);
+  const [scrollToUnitId, setScrollToUnitId] = useState<string | null>(null);
+
+  const onHoverUnits = useCallback(
+    (next: readonly string[]) => setHoveredUnitIds(next),
+    [],
+  );
+  const onScrollToUnit = useCallback((unitId: string) => {
+    setScrollToUnitId(unitId);
+  }, []);
+  const onScrollHandled = useCallback(() => setScrollToUnitId(null), []);
+
+  return (
+    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
+      <ResumePane
+        asset={asset}
+        unitsById={unitsById}
+        hoveredUnitIds={hoveredUnitIds}
+        onHoverUnits={onHoverUnits}
+        onScrollToUnit={onScrollToUnit}
+        onRemoveBullet={onRemoveBullet}
+        onAddSupportingUnit={onAddSupportingUnit}
+        onExport={onExport}
+      />
+      <UnitsPane
+        units={applicationUnits}
+        hoveredUnitIds={hoveredUnitIds}
+        onHoverUnits={onHoverUnits}
+        scrollToUnitId={scrollToUnitId}
+        onScrollHandled={onScrollHandled}
+      />
+    </div>
   );
 }
 
 interface ResumePaneProps {
   readonly asset: AssetRef | null;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
+  /**
+   * Currently-hovered Unit ids (from either pane). When non-empty,
+   * bullets whose `source_unit_ids` intersect this set get a
+   * highlight tint. This is the right-pane → left-pane direction
+   * of the bidirectional hover.
+   */
+  readonly hoveredUnitIds: readonly string[];
+  /**
+   * Set the hover state when a left-pane claim is hovered/focused.
+   * Called with the claim's `source_unit_ids` on enter/focus and
+   * `[]` on leave/blur. The right pane reads this to highlight.
+   */
+  readonly onHoverUnits: (unitIds: readonly string[]) => void;
+  /**
+   * Triggered when a Unit summary in a ClaimAnnotation popover is
+   * clicked. The right pane scrolls + highlights that row.
+   */
+  readonly onScrollToUnit: (unitId: string) => void;
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
   readonly onExport?: () => void;
@@ -216,6 +315,9 @@ interface ResumePaneProps {
 function ResumePane({
   asset,
   unitsById,
+  hoveredUnitIds,
+  onHoverUnits,
+  onScrollToUnit,
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
@@ -257,6 +359,9 @@ function ResumePane({
       key={`${keyPrefix}:${item.id}`}
       item={item}
       unitsById={unitsById}
+      hoveredUnitIds={hoveredUnitIds}
+      onHoverUnits={onHoverUnits}
+      onScrollToUnit={onScrollToUnit}
       flags={flags.get(item.id)}
       // Gate Remove on BOTH item type AND handler presence — a
       // bullet/skill/education could be flagged but the container
@@ -387,6 +492,24 @@ interface BulletItemProps {
   readonly item: GeneratedItem;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
   /**
+   * Currently-hovered Unit ids (from either pane). Bullets whose
+   * `source_unit_ids` intersect this set get a highlight tint —
+   * the right-pane → left-pane direction of the bidirectional
+   * hover.
+   */
+  readonly hoveredUnitIds: readonly string[];
+  /**
+   * Set the hover state when this bullet's claim is hovered/
+   * focused. Threaded down to ClaimAnnotation. The left-pane →
+   * right-pane direction.
+   */
+  readonly onHoverUnits: (unitIds: readonly string[]) => void;
+  /**
+   * Trigger right-pane scroll-to-Unit when a Unit summary is
+   * clicked inside the ClaimAnnotation popover.
+   */
+  readonly onScrollToUnit: (unitId: string) => void;
+  /**
    * Validation flags on this item, if any. Caller pre-filters out
    * `traced` flags (they passed validation; no badge needed).
    * Undefined or empty means no badge renders.
@@ -409,21 +532,43 @@ interface BulletItemProps {
 function BulletItem({
   item,
   unitsById,
+  hoveredUnitIds,
+  onHoverUnits,
+  onScrollToUnit,
   flags,
   canRemove,
   onRemove,
   onAddSupportingUnit,
 }: BulletItemProps): ReactElement {
   const hasFlags = flags !== undefined && flags.length > 0;
+  // Highlight this bullet when the right pane is hovering one of
+  // its source Units. Empty source_unit_ids → never highlights
+  // (the bullet has no traceability link to surface). The class
+  // is a subtle background tint matching the right pane's
+  // mirror class for consistent feel across the bidirectional
+  // hover.
+  const isHighlighted =
+    hoveredUnitIds.length > 0 &&
+    item.source_unit_ids.some((id) => hoveredUnitIds.includes(id));
   return (
     <div
-      className="space-y-1.5"
+      className={
+        "space-y-1.5 rounded px-2 -mx-2 py-1 -my-1 transition-colors duration-150 " +
+        (isHighlighted ? "bg-zinc-100 dark:bg-zinc-800/60" : "")
+      }
       data-bullet-id={item.id}
+      data-bullet-highlighted={isHighlighted ? "true" : "false"}
     >
       <div className="flex items-start gap-2">
-        <p className="flex-1 text-sm text-zinc-900 dark:text-zinc-100">
-          {item.text}
-        </p>
+        <div className="flex-1">
+          <ClaimAnnotation
+            text={item.text}
+            sourceUnitIds={item.source_unit_ids}
+            unitsById={unitsById}
+            onHoverUnits={onHoverUnits}
+            onScrollToUnit={onScrollToUnit}
+          />
+        </div>
         {hasFlags && (
           <FlagBadge
             flags={flags}
@@ -433,48 +578,57 @@ function BulletItem({
           />
         )}
       </div>
-      {item.source_unit_ids.length > 0 && (
-        <ul
-          className="flex flex-wrap gap-1.5"
-          aria-label="Source Units"
-        >
-          {item.source_unit_ids.map((unitId, index) => {
-            const unit = unitsById.get(unitId);
-            const label = unit?.normalized_summary ?? "(missing Unit)";
-            const resolved = unit !== undefined;
-            // Composite key: a generator could in principle ground a
-            // bullet on the same Unit twice (the `source_unit_ids: UUID[]`
-            // type doesn't disallow duplicates), in which case
-            // `key={unitId}` collides and React's reconciliation goes
-            // unstable. CodeRabbit Major on PR 181.
-            return (
-              <li key={`${item.id}:${unitId}:${index}`}>
-                <span
-                  className={
-                    resolved
-                      ? "inline-block max-w-[28ch] truncate rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                      : "inline-block max-w-[28ch] truncate rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                  }
-                  title={label}
-                  data-source-unit-id={unitId}
-                  data-source-resolved={resolved ? "true" : "false"}
-                >
-                  {label}
-                </span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
     </div>
   );
 }
 
 interface UnitsPaneProps {
   readonly units: readonly ExperienceUnit[];
+  /**
+   * Currently-hovered Unit ids from EITHER pane. Right-pane rows
+   * whose id appears here get a highlight tint. Empty → no
+   * highlight.
+   */
+  readonly hoveredUnitIds: readonly string[];
+  /**
+   * Set the hover state when a right-pane Unit row is hovered/
+   * focused. This is the right-pane → left-pane direction of the
+   * bidirectional hover.
+   */
+  readonly onHoverUnits: (unitIds: readonly string[]) => void;
+  /**
+   * When non-null, the matching Unit row is scrolled into view
+   * and briefly highlighted. The pane fires `onScrollHandled`
+   * after the scroll lands so the parent can clear the trigger
+   * (allowing a repeat click on the same Unit to re-fire).
+   */
+  readonly scrollToUnitId: string | null;
+  /** Called once the scroll has been dispatched. */
+  readonly onScrollHandled: () => void;
 }
 
-function UnitsPane({ units }: UnitsPaneProps): ReactElement {
+function UnitsPane({
+  units,
+  hoveredUnitIds,
+  onHoverUnits,
+  scrollToUnitId,
+  onScrollHandled,
+}: UnitsPaneProps): ReactElement {
+  // Per-Unit row refs for scroll-into-view. Built fresh per render
+  // (cheap — typical Application has <30 Units in the right pane);
+  // kept in a ref so the useEffect's dependency array can stay
+  // narrow (just the trigger id).
+  const rowRefs = useRef(new Map<string, HTMLLIElement | null>());
+
+  useEffect(() => {
+    if (scrollToUnitId === null) return;
+    const el = rowRefs.current.get(scrollToUnitId);
+    if (el !== null && el !== undefined) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    onScrollHandled();
+  }, [scrollToUnitId, onScrollHandled]);
+
   return (
     <aside
       className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3"
@@ -496,20 +650,45 @@ function UnitsPane({ units }: UnitsPaneProps): ReactElement {
         </p>
       ) : (
         <ul className="space-y-2" data-testid="units-list">
-          {units.map((unit) => (
-            <li
-              key={unit.id}
-              className="rounded border border-zinc-200 dark:border-zinc-800 px-2 py-1.5 text-xs text-zinc-700 dark:text-zinc-300"
-              data-unit-id={unit.id}
-            >
-              <p
-                className="truncate"
-                title={unit.normalized_summary}
+          {units.map((unit) => {
+            const isHighlighted = hoveredUnitIds.includes(unit.id);
+            return (
+              <li
+                key={unit.id}
+                ref={(el) => {
+                  // Track each row's element so the
+                  // scroll-to-Unit useEffect above can call
+                  // scrollIntoView on the matching id. Setting
+                  // null on unmount cleans the entry.
+                  if (el === null) {
+                    rowRefs.current.delete(unit.id);
+                  } else {
+                    rowRefs.current.set(unit.id, el);
+                  }
+                }}
+                onMouseEnter={() => onHoverUnits([unit.id])}
+                onMouseLeave={() => onHoverUnits([])}
+                onFocus={() => onHoverUnits([unit.id])}
+                onBlur={() => onHoverUnits([])}
+                tabIndex={0}
+                className={
+                  "rounded border px-2 py-1.5 text-xs transition-colors duration-150 " +
+                  (isHighlighted
+                    ? "border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-500 dark:bg-zinc-800 dark:text-zinc-100"
+                    : "border-zinc-200 text-zinc-700 dark:border-zinc-800 dark:text-zinc-300")
+                }
+                data-unit-id={unit.id}
+                data-unit-highlighted={isHighlighted ? "true" : "false"}
               >
-                {unit.normalized_summary}
-              </p>
-            </li>
-          ))}
+                <p
+                  className="truncate"
+                  title={unit.normalized_summary}
+                >
+                  {unit.normalized_summary}
+                </p>
+              </li>
+            );
+          })}
         </ul>
       )}
     </aside>

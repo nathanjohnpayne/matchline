@@ -226,11 +226,14 @@ describe("ApplicationEditorView", () => {
     expect(html).not.toContain('data-testid="resume-education"');
   });
 
-  it("renders source_unit_ids chips with the matched Unit's normalized_summary", () => {
-    // Core PR-1 contract: every fact-bearing item on the resume
-    // carries `source_unit_ids`; the editor renders them as chips
-    // labeled with the Unit's normalized_summary so the user can
-    // see provenance at a glance. PR 2 adds hover/click interaction.
+  it("renders bullets as ClaimAnnotations with a 1px underline + closed popover when source_unit_ids is non-empty (sub-issue #185 design refactor)", () => {
+    // Per `docs/design/ui-guidance.md` § Application Editor: claims
+    // are subtly underlined where a source-Unit reference is
+    // attached. The pre-#185 chip-pill rendering is replaced by
+    // ClaimAnnotation: an underlined inline span that opens a
+    // popover on click. Popover is always in DOM (visibility
+    // gated by React state via class) so static markup can find
+    // the closed-state attributes.
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -252,6 +255,13 @@ describe("ApplicationEditorView", () => {
         ]}
       />,
     );
+    // ClaimAnnotation present with the right source-unit count.
+    expect(html).toContain('data-testid="claim-annotation"');
+    expect(html).toContain('data-source-unit-count="2"');
+    // Popover always rendered in DOM (closed-state visibility);
+    // contains the source Unit summaries even before click.
+    expect(html).toContain('data-popover-open="false"');
+    expect(html).toContain('aria-hidden="true"');
     expect(html).toContain('data-source-unit-id="unit-a"');
     expect(html).toContain('data-source-unit-id="unit-b"');
     expect(html).toContain('data-source-resolved="true"');
@@ -259,13 +269,61 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("Rebuffer reduction work.");
   });
 
-  it("falls back to a missing-Unit chip when source_unit_ids reference deleted Units", () => {
+  it("wires bidirectional hover-highlight attributes (sub-issue #185 design AC)", () => {
+    // On a fresh mount, no claim is hovered and no Unit is hovered.
+    // Both panes should expose `data-bullet-highlighted="false"`
+    // and `data-unit-highlighted="false"` so the highlight
+    // mechanism is observable + testable. The actual hover
+    // event behavior is exercised via hand-testing per the route
+    // convention.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application({ approved_unit_ids: ["u-a"] })}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Bullet.", source_unit_ids: ["u-a"] },
+            ],
+          }),
+        })}
+        units={[unit({ id: "u-a", normalized_summary: "Cited." })]}
+      />,
+    );
+    expect(html).toContain('data-bullet-highlighted="false"');
+    expect(html).toContain('data-unit-highlighted="false"');
+    // The right-pane row is keyboard-focusable so the
+    // bidirectional hover works for keyboard users too
+    // (focus = hover for the highlight purpose).
+    expect(html).toMatch(/data-unit-id="u-a"[^>]*tabIndex="0"|tabindex="0"/i);
+  });
+
+  it("renders plain text without an annotation when source_unit_ids is empty", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Ungrounded bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).toContain("Ungrounded bullet.");
+    expect(html).not.toContain('data-testid="claim-annotation"');
+  });
+
+  it("falls back to a missing-Unit popover entry when source_unit_ids reference deleted Units", () => {
     // Defense against "Unit deleted post-generation" — the
-    // generated content still references the id, and the chip
-    // surface must be honest about the dangling reference rather
-    // than silently dropping it. PR 2's validation layer will
-    // separately render a flag on the bullet itself; this is the
-    // chip-level fallback.
+    // generated content still references the id, and the
+    // ClaimAnnotation popover must be honest about the dangling
+    // reference rather than silently dropping it. Sub-issue #186
+    // (flag underlines) will separately surface a flag on the
+    // bullet itself; this is the popover-level fallback.
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
