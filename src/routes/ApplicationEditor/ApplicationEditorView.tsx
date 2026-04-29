@@ -243,6 +243,14 @@ interface TwoPaneLayoutProps {
  * ApplicationEditorView keeps the load-state branches above clean
  * and means `useState` only runs in the ready branch.
  */
+/**
+ * Window during which a click-to-scroll Unit stays "pinned" as
+ * highlighted in the right pane, even though the user's hover may
+ * have moved elsewhere. Long enough for the eye to land + read,
+ * short enough that the highlight doesn't feel sticky.
+ */
+export const SCROLL_PIN_MS = 2000;
+
 function TwoPaneLayout({
   asset,
   unitsById,
@@ -253,6 +261,13 @@ function TwoPaneLayout({
 }: TwoPaneLayoutProps): ReactElement {
   const [hoveredUnitIds, setHoveredUnitIds] = useState<readonly string[]>([]);
   const [scrollToUnitId, setScrollToUnitId] = useState<string | null>(null);
+  // Separate pinned-id state from hovered: clicking a source Unit in
+  // the ClaimAnnotation popover scrolls the right pane to that row,
+  // but in the common path the popover-close blurs the underline
+  // trigger which would clear `hoveredUnitIds` before the user even
+  // sees the destination. The pinned id keeps the destination
+  // highlighted for `SCROLL_PIN_MS`. Codex P2 on PR #190.
+  const [pinnedUnitId, setPinnedUnitId] = useState<string | null>(null);
 
   const onHoverUnits = useCallback(
     (next: readonly string[]) => setHoveredUnitIds(next),
@@ -260,15 +275,35 @@ function TwoPaneLayout({
   );
   const onScrollToUnit = useCallback((unitId: string) => {
     setScrollToUnitId(unitId);
+    setPinnedUnitId(unitId);
   }, []);
   const onScrollHandled = useCallback(() => setScrollToUnitId(null), []);
+
+  // Auto-clear the pin after the window. If the user clicks a
+  // different Unit during the window the pin updates to the new id
+  // and the timer restarts (effect re-runs on `pinnedUnitId`
+  // change). Cleanup clears the timer on unmount or new click.
+  useEffect(() => {
+    if (pinnedUnitId === null) return;
+    const handle = setTimeout(() => setPinnedUnitId(null), SCROLL_PIN_MS);
+    return () => clearTimeout(handle);
+  }, [pinnedUnitId]);
+
+  // The visible-highlight set is the union of hover-driven and
+  // pin-driven ids. Both panes read this combined set.
+  const highlightedUnitIds: readonly string[] =
+    pinnedUnitId === null
+      ? hoveredUnitIds
+      : hoveredUnitIds.includes(pinnedUnitId)
+        ? hoveredUnitIds
+        : [...hoveredUnitIds, pinnedUnitId];
 
   return (
     <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,360px)]">
       <ResumePane
         asset={asset}
         unitsById={unitsById}
-        hoveredUnitIds={hoveredUnitIds}
+        hoveredUnitIds={highlightedUnitIds}
         onHoverUnits={onHoverUnits}
         onScrollToUnit={onScrollToUnit}
         onRemoveBullet={onRemoveBullet}
@@ -277,7 +312,7 @@ function TwoPaneLayout({
       />
       <UnitsPane
         units={applicationUnits}
-        hoveredUnitIds={hoveredUnitIds}
+        hoveredUnitIds={highlightedUnitIds}
         onHoverUnits={onHoverUnits}
         scrollToUnitId={scrollToUnitId}
         onScrollHandled={onScrollHandled}
