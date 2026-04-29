@@ -839,6 +839,82 @@ describe("ApplicationEditorView", () => {
     );
   });
 
+  // ── sub-issue #188: inline edit mode ────────────────────────────
+
+  it("does NOT render the Edit popover button when onSaveBulletEdit handler is absent", () => {
+    // Read-only view path (no inline edit wired). The
+    // ClaimAnnotation popover hides Edit cleanly rather than
+    // rendering a no-op button.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [flag({ id: "f1", bullet_id: "b1" })],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onAddSupportingUnit={() => undefined}
+        // onSaveBulletEdit intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-testid="claim-annotation"');
+    expect(html).not.toContain('data-action="edit-bullet"');
+  });
+
+  it("renders the Edit popover button when onSaveBulletEdit is wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [flag({ id: "f1", bullet_id: "b1" })],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onSaveBulletEdit={async () => undefined}
+      />,
+    );
+    expect(html).toContain('data-action="edit-bullet"');
+  });
+
+  it("renders the static ClaimAnnotation on a fresh mount, not the BulletEditor (no row in edit mode)", () => {
+    // Click-to-edit is single-row state managed inside ResumePane.
+    // On a fresh mount, no row is in edit mode — the editor
+    // textarea should not render until the user clicks Edit.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Static.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onSaveBulletEdit={async () => undefined}
+      />,
+    );
+    expect(html).toContain("Static.");
+    // BulletEditor textarea NOT in the static markup.
+    expect(html).not.toContain('data-testid="bullet-editor-textarea"');
+    expect(html).not.toContain('data-testid="bullet-editor"');
+    // Edit-mode marker absent.
+    expect(html).not.toContain('data-bullet-editing="true"');
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

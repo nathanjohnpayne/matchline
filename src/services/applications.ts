@@ -168,6 +168,185 @@ export async function removeBulletFromAsset(
 }
 
 /**
+ * Outcome of an `editBulletInAsset` call. Mirrors the
+ * `RemoveBulletResult` shape so the editor's UI surface can apply
+ * one decision pattern across both mutation paths.
+ *
+ * `no-change` is a separate status from `edited` so the UI can
+ * skip the validation re-run + refetch when the user opened an
+ * editor and saved without modifying the text — the post-edit
+ * orchestrator round-trip would be a no-op write + a wasted
+ * validation invocation otherwise.
+ */
+export type EditBulletResult =
+  | { readonly status: "edited" }
+  | { readonly status: "no-change" }
+  | { readonly status: "application-not-found" }
+  | { readonly status: "asset-not-found" }
+  | { readonly status: "bullet-not-found" }
+  | { readonly status: "empty-text" };
+
+/**
+ * Replace a bullet's text in an Application's generated asset.
+ * Wired from the Application Editor's inline-edit row (#24,
+ * sub-issue #188).
+ *
+ * Side effects on success (`status === "edited"`):
+ *   1. The bullet's `text` is replaced with `newText`.
+ *   2. The bullet's `source_unit_ids` is cleared. The prior
+ *      groundings were established by the generator against the
+ *      OLD text; new text may make claims those Units don't
+ *      support. Clearing forces explicit re-grounding via the
+ *      flag popover's "Add a supporting Unit" path or accepts
+ *      the resulting "untraceable" flags. Honest-by-default —
+ *      the alternative (preserve groundings) silently keeps
+ *      stale evidence on rewritten claims.
+ *   3. The asset's `validation_status` flips to `"stale"` (per
+ *      the type contract: any post-validation edit). The
+ *      Application Editor's export gate refuses to export stale
+ *      assets; the user must re-run validation (the route does
+ *      this automatically post-edit via `invokeValidateAsset`).
+ *
+ * `summary`, `bullets`, `skills`, and `education` items are all
+ * editable via this path — every GeneratedItem carries a stable
+ * id, and the validation orchestrator iterates all four
+ * uniformly. Summary is allowed here (unlike
+ * `removeBulletFromAsset`'s summary refusal): editing the
+ * summary's text is a normal operation; removing it would
+ * corrupt the shape.
+ *
+ * Empty / whitespace-only text is rejected with `empty-text`.
+ * Bullets with no content can't be validated meaningfully and
+ * would just generate noise. The user should use Remove
+ * instead.
+ */
+export async function editBulletInAsset(
+  applicationId: string,
+  assetId: string,
+  bulletId: string,
+  newText: string,
+): Promise<EditBulletResult> {
+  if (newText.trim().length === 0) return { status: "empty-text" };
+
+  const app = await getApplication(applicationId);
+  if (app === undefined) return { status: "application-not-found" };
+
+  const assets = app.generated_assets ?? [];
+  const assetIndex = assets.findIndex((a) => a.id === assetId);
+  if (assetIndex === -1) return { status: "asset-not-found" };
+  const target = assets[assetIndex];
+  const content = target.generated_content;
+  if (content === undefined) return { status: "asset-not-found" };
+
+  const result = editBulletInContent(content, bulletId, newText);
+  if (!result.found) return { status: "bullet-not-found" };
+  if (!result.changed) return { status: "no-change" };
+
+  const nextAsset: AssetRef = {
+    ...target,
+    generated_content: result.content,
+    validation_status: "stale",
+  };
+  const nextAssets = [...assets];
+  nextAssets[assetIndex] = nextAsset;
+
+  await updateDoc(ref(applicationId), {
+    generated_assets: nextAssets,
+  });
+  return { status: "edited" };
+}
+
+/**
+ * Pure helper: walk the four GeneratedItem locations in
+ * `GeneratedAssetContent` (summary + bullets + skills + education)
+ * and replace the matching entry's `text` with `newText`, clearing
+ * its `source_unit_ids`. Returns the new content + a `found` flag
+ * (id matched something) and a `changed` flag (text actually
+ * differed). Callers short-circuit no-op writes via `changed`.
+ *
+ * Exported so the unit tests can pin the walk order + edit shape
+ * without mocking Firestore. Used by `editBulletInAsset`.
+ */
+export function editBulletInContent(
+  content: GeneratedAssetContent,
+  bulletId: string,
+  newText: string,
+): {
+  readonly content: GeneratedAssetContent;
+  readonly found: boolean;
+  readonly changed: boolean;
+} {
+  // Summary is a single item, not an array — handle separately.
+  if (content.summary.id === bulletId) {
+    if (content.summary.text === newText) {
+      return { content, found: true, changed: false };
+    }
+    return {
+      content: {
+        ...content,
+        summary: {
+          ...content.summary,
+          text: newText,
+          source_unit_ids: [],
+        },
+      },
+      found: true,
+      changed: true,
+    };
+  }
+  // Bullets / skills / education share the same array shape.
+  const editList = (
+    list: readonly GeneratedItem[] | undefined,
+  ): {
+    readonly list: GeneratedItem[];
+    readonly found: boolean;
+    readonly changed: boolean;
+  } => {
+    if (list === undefined) {
+      return { list: [], found: false, changed: false };
+    }
+    let found = false;
+    let changed = false;
+    const out = list.map((item) => {
+      if (item.id !== bulletId) return item;
+      found = true;
+      if (item.text === newText) return item;
+      changed = true;
+      return { ...item, text: newText, source_unit_ids: [] };
+    });
+    return { list: out, found, changed };
+  };
+  const bullets = editList(content.bullets);
+  if (bullets.found) {
+    if (!bullets.changed) return { content, found: true, changed: false };
+    return {
+      content: { ...content, bullets: bullets.list },
+      found: true,
+      changed: true,
+    };
+  }
+  const skills = editList(content.skills);
+  if (skills.found) {
+    if (!skills.changed) return { content, found: true, changed: false };
+    return {
+      content: { ...content, skills: skills.list },
+      found: true,
+      changed: true,
+    };
+  }
+  const education = editList(content.education);
+  if (education.found) {
+    if (!education.changed) return { content, found: true, changed: false };
+    return {
+      content: { ...content, education: education.list },
+      found: true,
+      changed: true,
+    };
+  }
+  return { content, found: false, changed: false };
+}
+
+/**
  * Pure helper: walk the four GeneratedItem arrays in
  * `GeneratedAssetContent` and remove any entry whose `id` matches
  * `bulletId`. Returns the new content + a `found` flag so callers
