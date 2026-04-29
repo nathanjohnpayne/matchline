@@ -124,7 +124,14 @@ export default function ApplicationEditorView({
   // against — the snapshot of approved-at-generation-time. The full
   // owner-scoped set is the source for chip lookup, but cluttering
   // the right pane with un-cited Units would obscure traceability.
-  const applicationUnits = application.approved_unit_ids
+  //
+  // `approved_unit_ids` is typed as required on `Application`, but
+  // the server-side generation pipeline reads it with `?? []`
+  // (functions/src/generation/pipeline.ts) — i.e. the runtime
+  // allows legacy docs to omit the field. Mirror that defense
+  // here so a pre-pipeline Application renders an empty Units
+  // pane instead of crashing the route. Codex P1 on PR #181.
+  const applicationUnits = (application.approved_unit_ids ?? [])
     .map((id) => unitsById.get(id))
     .filter((u): u is ExperienceUnit => u !== undefined);
 

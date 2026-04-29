@@ -353,6 +353,29 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("2 approved Units were used");
   });
 
+  it("renders the empty Units pane when application is missing approved_unit_ids (legacy doc)", () => {
+    // Legacy compatibility (Codex P1 on PR #181): the server-side
+    // generation pipeline reads `approved_unit_ids` with `?? []`
+    // because pre-pipeline Application docs may omit the field.
+    // The view must defend at the read site so the route doesn't
+    // crash with `undefined.map is not a function`.
+    const legacy = {
+      ...application(),
+      approved_unit_ids: undefined as unknown as string[],
+    };
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={legacy}
+        asset={asset()}
+        units={[unit({ id: "unit-a" })]}
+      />,
+    );
+    expect(html).toContain('data-testid="application-editor"');
+    expect(html).toContain("No Units linked to this Application yet.");
+    expect(html).not.toContain('data-testid="units-list"');
+  });
+
   it("falls back to a generic error message when status is 'error' but error is null", () => {
     // Defensive: if the container fires setStatus("error") without
     // also setting an error object, the alert still renders rather

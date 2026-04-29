@@ -132,9 +132,16 @@ export default function ApplicationEditor(): ReactElement {
     };
   }, [applicationId]);
 
+  // `generated_assets` is typed as required on `Application`, but the
+  // server-side generation + validation paths read it with `?? []`
+  // (functions/src/generation/runGenerateResume.ts and
+  // functions/src/validation/validate.ts) — i.e. the runtime allows
+  // legacy docs to omit the field. Mirror that defense here so a
+  // pre-#22 / pre-pipeline Application doesn't crash the editor.
+  // Codex P1 on PR #181.
   const asset =
     application !== null
-      ? selectPrimaryResumeAsset(application.generated_assets)
+      ? selectPrimaryResumeAsset(application.generated_assets ?? [])
       : null;
 
   return (
