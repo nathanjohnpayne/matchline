@@ -58,6 +58,7 @@ const {
   removeBulletFromContent,
   editBulletInAsset,
   editBulletInContent,
+  addBulletToAsset,
 } = await import("./applications.ts");
 
 import type {
@@ -618,5 +619,158 @@ describe("editBulletInAsset (Firestore-mocked, sub-issue #188)", () => {
     expect(
       writePayload.generated_assets[0].generated_content?.summary.text,
     ).toBe("New summary text.");
+  });
+});
+
+describe("addBulletToAsset (Firestore-mocked, sub-issue #193)", () => {
+  it("returns 'application-not-found' when the application doesn't exist", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => false,
+      data: () => undefined,
+    });
+    const r = await addBulletToAsset("missing", "asset-1", "bullets");
+    expect(r.status).toBe("application-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'application-not-found' on permission-denied (anti-enumeration parity)", async () => {
+    getDoc.mockRejectedValueOnce(
+      new FirebaseError("permission-denied", "denied"),
+    );
+    const r = await addBulletToAsset("foreign", "asset-1", "bullets");
+    expect(r.status).toBe("application-not-found");
+  });
+
+  it("returns 'asset-not-found' when the asset id is unknown", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await addBulletToAsset("app-1", "wrong-asset", "bullets");
+    expect(r.status).toBe("asset-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'asset-not-found' when the asset has no generated_content", async () => {
+    const a = asset({ generated_content: undefined });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    const r = await addBulletToAsset("app-1", "asset-1", "bullets");
+    expect(r.status).toBe("asset-not-found");
+  });
+
+  it("appends to bullets[] with a fresh id, empty text + source_unit_ids, flips status to stale", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    const r = await addBulletToAsset("app-1", "asset-1", "bullets", {
+      generateId: () => "fresh-id",
+    });
+    expect(r.status).toBe("added");
+    expect(r.status === "added" ? r.bulletId : null).toBe("fresh-id");
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const writtenAsset = writePayload.generated_assets[0];
+    expect(writtenAsset.validation_status).toBe("stale");
+    const bullets = writtenAsset.generated_content?.bullets ?? [];
+    expect(bullets).toHaveLength(3);
+    const newBullet = bullets[2];
+    expect(newBullet.id).toBe("fresh-id");
+    expect(newBullet.text).toBe("");
+    expect(newBullet.source_unit_ids).toEqual([]);
+  });
+
+  it("appends to skills[] when section='skills'", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await addBulletToAsset("app-1", "asset-1", "skills", {
+      generateId: () => "new-skill",
+    });
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const skills =
+      writePayload.generated_assets[0].generated_content?.skills ?? [];
+    expect(skills).toHaveLength(2);
+    expect(skills[1].id).toBe("new-skill");
+  });
+
+  it("initializes education[] when undefined and section='education'", async () => {
+    // Pre-pipeline assets may omit education entirely. Adding to
+    // an education-less asset creates the section as [newBullet].
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await addBulletToAsset("app-1", "asset-1", "education", {
+      generateId: () => "new-edu",
+    });
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const education =
+      writePayload.generated_assets[0].generated_content?.education ?? [];
+    expect(education).toHaveLength(1);
+    expect(education[0].id).toBe("new-edu");
+  });
+
+  it("appends to existing education[] when present", async () => {
+    const a = asset({
+      generated_content: {
+        summary: { id: "s", text: "summary", source_unit_ids: [] },
+        bullets: [],
+        skills: [],
+        education: [{ id: "e1", text: "BS", source_unit_ids: [] }],
+      },
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await addBulletToAsset("app-1", "asset-1", "education", {
+      generateId: () => "e2",
+    });
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const education =
+      writePayload.generated_assets[0].generated_content?.education ?? [];
+    expect(education).toHaveLength(2);
+    expect(education[1].id).toBe("e2");
+  });
+
+  it("does not flip an unrelated asset's status to stale when adding to a specific asset", async () => {
+    const otherAsset = asset({
+      id: "asset-2",
+      kind: "cover_letter",
+      validation_status: "passed",
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () =>
+        application({ generated_assets: [asset(), otherAsset] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await addBulletToAsset("app-1", "asset-1", "bullets", {
+      generateId: () => "x",
+    });
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const untouched = writePayload.generated_assets.find(
+      (a) => a.id === "asset-2",
+    );
+    expect(untouched?.validation_status).toBe("passed");
   });
 });

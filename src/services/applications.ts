@@ -168,6 +168,101 @@ export async function removeBulletFromAsset(
 }
 
 /**
+ * Section a new bullet can be added to. Summary is intentionally
+ * NOT a section in this enum: the asset has exactly one summary
+ * and adding a second would corrupt the shape. Matches the four
+ * places `editBulletInContent` walks (excluding summary).
+ */
+export type AddableSection = "bullets" | "skills" | "education";
+
+/**
+ * Outcome of an `addBulletToAsset` call.
+ */
+export type AddBulletResult =
+  | {
+      readonly status: "added";
+      /** Id of the newly-appended GeneratedItem; use to auto-enter edit mode. */
+      readonly bulletId: string;
+    }
+  | { readonly status: "application-not-found" }
+  | { readonly status: "asset-not-found" };
+
+/**
+ * Append a new empty `GeneratedItem` to one of the editable sections
+ * of an Application's generated asset (sub-issue #193, parent
+ * #189 / #24).
+ *
+ * On success: stamps a new id (caller's `generateId` or
+ * `crypto.randomUUID()`), empty `text`, empty `source_unit_ids`.
+ * Flips `validation_status` to `"stale"` (matches edit / remove
+ * behavior — the asset content changed). Returns the new id so
+ * the route can immediately enter edit mode for the bullet.
+ *
+ * Adding to `summary` is unsupported: the asset has exactly one
+ * summary and a second one would corrupt the shape. Callers
+ * specify one of `"bullets"` / `"skills"` / `"education"` per the
+ * `AddableSection` type.
+ *
+ * For `education`, if the section is currently `undefined` (some
+ * pre-pipeline assets omit it), the helper initializes it to
+ * `[newBullet]`. This means adding to an education-less asset
+ * creates the section; consistent with how the validator
+ * iterates `content.education ?? []` server-side.
+ */
+export interface AddBulletDeps {
+  readonly generateId?: () => string;
+}
+
+export async function addBulletToAsset(
+  applicationId: string,
+  assetId: string,
+  section: AddableSection,
+  deps: AddBulletDeps = {},
+): Promise<AddBulletResult> {
+  const generateId = deps.generateId ?? (() => globalThis.crypto.randomUUID());
+
+  const app = await getApplication(applicationId);
+  if (app === undefined) return { status: "application-not-found" };
+
+  const assets = app.generated_assets ?? [];
+  const assetIndex = assets.findIndex((a) => a.id === assetId);
+  if (assetIndex === -1) return { status: "asset-not-found" };
+  const target = assets[assetIndex];
+  const content = target.generated_content;
+  if (content === undefined) return { status: "asset-not-found" };
+
+  const newBullet: GeneratedItem = {
+    id: generateId(),
+    text: "",
+    source_unit_ids: [],
+  };
+
+  let nextContent: GeneratedAssetContent;
+  if (section === "bullets") {
+    nextContent = { ...content, bullets: [...content.bullets, newBullet] };
+  } else if (section === "skills") {
+    nextContent = { ...content, skills: [...content.skills, newBullet] };
+  } else {
+    // education: initialize to [newBullet] when undefined.
+    const prev = content.education ?? [];
+    nextContent = { ...content, education: [...prev, newBullet] };
+  }
+
+  const nextAsset: AssetRef = {
+    ...target,
+    generated_content: nextContent,
+    validation_status: "stale",
+  };
+  const nextAssets = [...assets];
+  nextAssets[assetIndex] = nextAsset;
+
+  await updateDoc(ref(applicationId), {
+    generated_assets: nextAssets,
+  });
+  return { status: "added", bulletId: newBullet.id };
+}
+
+/**
  * Outcome of an `editBulletInAsset` call. Mirrors the
  * `RemoveBulletResult` shape so the editor's UI surface can apply
  * one decision pattern across both mutation paths.

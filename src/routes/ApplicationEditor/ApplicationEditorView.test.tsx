@@ -915,6 +915,87 @@ describe("ApplicationEditorView", () => {
     expect(html).not.toContain('data-bullet-editing="true"');
   });
 
+  // ── sub-issue #193: Add bullet CTA ──────────────────────────────
+
+  it("does NOT render Add CTAs when onAddBullet is absent (read-only context)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onAddBullet intentionally omitted
+      />,
+    );
+    expect(html).not.toContain('data-action="add-bullet"');
+  });
+
+  it("renders an Add CTA at the end of each editable section when onAddBullet is wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+            ],
+            skills: [
+              { id: "sk1", text: "Skill one.", source_unit_ids: [] },
+            ],
+            education: [
+              { id: "e1", text: "BS.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onAddBullet={async () => "new-id"}
+      />,
+    );
+    // One CTA per section: Experience / Skills / Education = 3.
+    const ctas = html.match(/data-action="add-bullet"/g) ?? [];
+    expect(ctas).toHaveLength(3);
+    expect(html).toContain('data-add-bullet-section="bullets"');
+    expect(html).toContain('data-add-bullet-section="skills"');
+    expect(html).toContain('data-add-bullet-section="education"');
+    // Section-appropriate copy.
+    expect(html).toContain("+ Add bullet");
+    expect(html).toContain("+ Add skill");
+    expect(html).toContain("+ Add education entry");
+  });
+
+  it("renders the Skills + Education section headers + Add CTAs even when those sections are empty (so users can start them)", () => {
+    // Pre-pipeline / minimally-generated assets may have empty
+    // skills[] and undefined education. The Add CTA should still
+    // render (it's the entry point for the user to populate the
+    // section).
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [{ id: "b1", text: "One.", source_unit_ids: [] }],
+            skills: [],
+            education: undefined,
+          }),
+        })}
+        units={[]}
+        onAddBullet={async () => "new-id"}
+      />,
+    );
+    expect(html).toContain("Skills");
+    expect(html).toContain("Education");
+    expect(html).toContain('data-add-bullet-section="skills"');
+    expect(html).toContain('data-add-bullet-section="education"');
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

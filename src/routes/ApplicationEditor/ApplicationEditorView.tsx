@@ -22,6 +22,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
 import type { ExperienceUnit } from "../../types/capability.ts";
@@ -31,6 +32,7 @@ import type {
   GeneratedItem,
   ValidationFlag,
 } from "../../types/crm.ts";
+import type { AddableSection } from "../../services/applications.ts";
 
 import BulletEditor from "./BulletEditor.tsx";
 import ClaimAnnotation from "./ClaimAnnotation.tsx";
@@ -108,6 +110,16 @@ export interface ApplicationEditorViewProps {
     bulletId: string,
     newText: string,
   ) => Promise<void>;
+  /**
+   * Add-bullet handler (#24, sub-issue #193). Receives the section
+   * to append to; resolves with the new bullet's id (or null if
+   * the add failed). The pane uses the returned id to auto-enter
+   * edit mode for the fresh bullet. Optional — Add CTAs hide
+   * when absent (read-only contexts).
+   */
+  readonly onAddBullet?: (
+    section: AddableSection,
+  ) => Promise<string | null>;
 }
 
 export default function ApplicationEditorView({
@@ -120,6 +132,7 @@ export default function ApplicationEditorView({
   onAddSupportingUnit,
   onExport,
   onSaveBulletEdit,
+  onAddBullet,
 }: ApplicationEditorViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -219,6 +232,7 @@ export default function ApplicationEditorView({
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
+        onAddBullet={onAddBullet}
       />
     </section>
   );
@@ -235,6 +249,9 @@ interface TwoPaneLayoutProps {
     bulletId: string,
     newText: string,
   ) => Promise<void>;
+  readonly onAddBullet?: (
+    section: AddableSection,
+  ) => Promise<string | null>;
 }
 
 /**
@@ -277,6 +294,7 @@ function TwoPaneLayout({
   onAddSupportingUnit,
   onExport,
   onSaveBulletEdit,
+  onAddBullet,
 }: TwoPaneLayoutProps): ReactElement {
   const [hoveredUnitIds, setHoveredUnitIds] = useState<readonly string[]>([]);
   const [scrollToUnitId, setScrollToUnitId] = useState<string | null>(null);
@@ -329,6 +347,7 @@ function TwoPaneLayout({
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
+        onAddBullet={onAddBullet}
       />
       <UnitsPane
         units={applicationUnits}
@@ -374,6 +393,14 @@ interface ResumePaneProps {
     bulletId: string,
     newText: string,
   ) => Promise<void>;
+  /**
+   * Sub-issue #193 add-bullet handler. Returns the new bullet's
+   * id so the pane can auto-enter edit mode. Optional: Add CTAs
+   * hide when absent.
+   */
+  readonly onAddBullet?: (
+    section: AddableSection,
+  ) => Promise<string | null>;
 }
 
 function ResumePane({
@@ -386,6 +413,7 @@ function ResumePane({
   onAddSupportingUnit,
   onExport,
   onSaveBulletEdit,
+  onAddBullet,
 }: ResumePaneProps): ReactElement {
   // Single-bullet edit mode at the pane level: at most one
   // GeneratedItem is in edit mode at a time. Storing the editing
@@ -393,6 +421,69 @@ function ResumePane({
   // second row dismisses the first cleanly. `null` means no
   // row is editing.
   const [editingBulletId, setEditingBulletId] = useState<string | null>(null);
+  // Mirror the state into a ref so switchToEditMode can read the
+  // LATEST committed value when it runs after an await — closures
+  // capture the value at handler-creation time, which would be
+  // stale across rapid back-to-back Add clicks. Codex P2 round 2
+  // on PR #194: without this, two quick Adds resolve in sequence
+  // and the second's switchToEditMode reads `editingBulletId =
+  // null` from a stale closure, skipping cleanup of the first
+  // empty bullet.
+  const editingBulletIdRef = useRef<string | null>(null);
+  editingBulletIdRef.current = editingBulletId;
+  // Track ids that were just added via the Add CTA. If the user
+  // cancels an edit on one of these without saving, we remove the
+  // empty bullet so the asset doesn't accumulate orphan empty
+  // items. Sub-issue #193.
+  const newlyAddedRef = useRef(new Set<string>());
+
+  // Switch the pane's edit target. Before changing, if the
+  // currently-editing bullet is one we just added (still empty,
+  // never saved), remove it. This single helper covers all
+  // transition shapes:
+  //   - Add → Add (clicking + Add bullet twice)
+  //   - Add → Edit on a different row
+  //   - Add → Cancel (target=null)
+  //   - Edit → Edit on a different row (no cleanup if previous
+  //     wasn't newly-added)
+  //   - Edit → Cancel (no cleanup)
+  // Without this, transitions other than the explicit Cancel path
+  // would leave orphan empty bullets persisted in Firestore.
+  // Codex P2 round 1 on PR #194.
+  const switchToEditMode = (next: string | null): void => {
+    // Read the ref, NOT the closure-captured state — the ref
+    // reflects the latest commit even when this handler fires
+    // after an await.
+    const previous = editingBulletIdRef.current;
+    if (
+      previous !== null &&
+      newlyAddedRef.current.has(previous) &&
+      onRemoveBullet !== undefined
+    ) {
+      newlyAddedRef.current.delete(previous);
+      onRemoveBullet(previous);
+    }
+    // Update ref synchronously so back-to-back calls within the
+    // same tick (before re-render commits the setState) see the
+    // updated value too.
+    editingBulletIdRef.current = next;
+    setEditingBulletId(next);
+  };
+
+  const onAddBulletClick = async (section: AddableSection): Promise<void> => {
+    if (onAddBullet === undefined) return;
+    const newId = await onAddBullet(section);
+    if (newId === null) return;
+    newlyAddedRef.current.add(newId);
+    switchToEditMode(newId);
+  };
+
+  // When a save lands successfully, the bullet is no longer
+  // "empty / pending" — drop it from the newly-added set so
+  // future cancels / switches don't trigger removal.
+  const onAfterSaveSuccess = (bulletId: string): void => {
+    newlyAddedRef.current.delete(bulletId);
+  };
   if (asset === null || asset.generated_content === undefined) {
     return (
       <article
@@ -451,14 +542,15 @@ function ResumePane({
       onEnterEdit={
         onSaveBulletEdit === undefined
           ? undefined
-          : () => setEditingBulletId(item.id)
+          : () => switchToEditMode(item.id)
       }
-      onCancelEdit={() => setEditingBulletId(null)}
+      onCancelEdit={() => switchToEditMode(null)}
       onSaveEdit={
         onSaveBulletEdit === undefined
           ? undefined
           : async (newText) => {
               await onSaveBulletEdit(item.id, newText);
+              onAfterSaveSuccess(item.id);
             }
       }
     />
@@ -485,28 +577,99 @@ function ResumePane({
             ))}
           </ul>
         )}
+        <AddBulletCTA
+          section="bullets"
+          onAddBullet={onAddBullet}
+          onClick={onAddBulletClick}
+        />
       </Section>
 
-      {content.skills.length > 0 && (
+      {(content.skills.length > 0 || onAddBullet !== undefined) && (
         <Section heading="Skills">
-          <ul className="space-y-2" data-testid="resume-skills">
-            {content.skills.map((skill) => (
-              <li key={skill.id}>{renderItem(skill, "skill")}</li>
-            ))}
-          </ul>
+          {content.skills.length > 0 && (
+            <ul className="space-y-2" data-testid="resume-skills">
+              {content.skills.map((skill) => (
+                <li key={skill.id}>{renderItem(skill, "skill")}</li>
+              ))}
+            </ul>
+          )}
+          <AddBulletCTA
+            section="skills"
+            onAddBullet={onAddBullet}
+            onClick={onAddBulletClick}
+          />
         </Section>
       )}
 
-      {content.education !== undefined && content.education.length > 0 && (
+      {((content.education !== undefined && content.education.length > 0) ||
+        onAddBullet !== undefined) && (
         <Section heading="Education">
-          <ul className="space-y-2" data-testid="resume-education">
-            {content.education.map((edu) => (
-              <li key={edu.id}>{renderItem(edu, "education")}</li>
-            ))}
-          </ul>
+          {content.education !== undefined && content.education.length > 0 && (
+            <ul className="space-y-2" data-testid="resume-education">
+              {content.education.map((edu) => (
+                <li key={edu.id}>{renderItem(edu, "education")}</li>
+              ))}
+            </ul>
+          )}
+          <AddBulletCTA
+            section="education"
+            onAddBullet={onAddBullet}
+            onClick={onAddBulletClick}
+          />
         </Section>
       )}
     </article>
+  );
+}
+
+interface AddBulletCTAProps {
+  readonly section: AddableSection;
+  readonly onAddBullet?: (
+    section: AddableSection,
+  ) => Promise<string | null>;
+  /**
+   * Wrapped click handler from ResumePane (handles edit-mode +
+   * newly-added tracking). Receives the section so a single
+   * shared click handler can serve all three CTAs.
+   */
+  readonly onClick: (section: AddableSection) => Promise<void>;
+}
+
+/**
+ * "+ Add bullet" CTA at the end of an editable section.
+ *
+ * Hides when `onAddBullet` is absent (read-only contexts) — same
+ * shape as the resolution-path buttons in ClaimAnnotation.
+ *
+ * Per the UI guidance § Application Editor + the section's
+ * "Standard editing" item in #24: the CTA is a small ghost
+ * button, neutral tone, no over-emphasis. Click → service helper
+ * appends + the pane auto-enters edit mode.
+ */
+function AddBulletCTA({
+  section,
+  onAddBullet,
+  onClick,
+}: AddBulletCTAProps): ReactElement | null {
+  if (onAddBullet === undefined) return null;
+  const label =
+    section === "bullets"
+      ? "+ Add bullet"
+      : section === "skills"
+        ? "+ Add skill"
+        : "+ Add education entry";
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void onClick(section);
+      }}
+      data-action="add-bullet"
+      data-add-bullet-section={section}
+      className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 transition-colors duration-150 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -559,7 +722,10 @@ function ExportButton({ gate, onExport }: ExportButtonProps): ReactElement {
 
 interface SectionProps {
   readonly heading: string;
-  readonly children: ReactElement | ReactElement[];
+  // ReactNode rather than ReactElement to allow conditional
+  // children (`{cond && <X/>}` short-circuits to `false`,
+  // which is a valid ReactNode but not a ReactElement).
+  readonly children: ReactNode;
 }
 
 function Section({ heading, children }: SectionProps): ReactElement {
