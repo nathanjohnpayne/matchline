@@ -258,7 +258,13 @@ function ResumePane({
       item={item}
       unitsById={unitsById}
       flags={flags.get(item.id)}
-      canRemove={bulletIds.has(item.id)}
+      // Gate Remove on BOTH item type AND handler presence — a
+      // bullet/skill/education could be flagged but the container
+      // hasn't wired `onRemoveBullet` (e.g. legacy view callers).
+      // Without the handler check, the popover would render a
+      // functional-looking Remove button that no-ops on click.
+      // CodeRabbit Major on PR #182.
+      canRemove={bulletIds.has(item.id) && onRemoveBullet !== undefined}
       onRemove={
         onRemoveBullet === undefined
           ? undefined
@@ -321,26 +327,32 @@ interface ExportButtonProps {
 
 function ExportButton({ gate, onExport }: ExportButtonProps): ReactElement {
   // Always render the button, never hide it — the user needs to see
-  // the gate's reason, not just an absent control. When disabled the
-  // tooltip explains what's blocking; when enabled, the click handler
-  // fires (or no-ops if the container hasn't wired one — actual
-  // export is Phase 2).
-  const enabled = gate.enabled;
+  // the gate's reason, not just an absent control. Gate enables iff
+  // BOTH the validation gate passes AND a click handler is wired —
+  // an enabled-looking button with no onClick is a broken primary
+  // action. CodeRabbit Major on PR #182. The "no handler wired"
+  // disabled reason is distinct from the validation reasons so the
+  // user (and tests) can tell them apart.
+  const enabled = gate.enabled && onExport !== undefined;
+  const disabledReason =
+    gate.enabled && onExport === undefined
+      ? "Export is not available yet."
+      : gate.disabledReason;
   return (
     <div className="flex items-center justify-end gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-3 -mt-1">
-      {!enabled && (
+      {!enabled && disabledReason !== null && (
         <p
           className="text-xs italic text-zinc-500"
           data-testid="export-disabled-reason"
         >
-          {gate.disabledReason}
+          {disabledReason}
         </p>
       )}
       <button
         type="button"
         disabled={!enabled}
-        onClick={enabled && onExport !== undefined ? onExport : undefined}
-        title={enabled ? "Export this resume" : gate.disabledReason}
+        onClick={enabled ? onExport : undefined}
+        title={enabled ? "Export this resume" : disabledReason ?? undefined}
         data-testid="export-button"
         data-export-enabled={enabled ? "true" : "false"}
         className={
@@ -416,10 +428,8 @@ function BulletItem({
           <FlagBadge
             flags={flags}
             canRemove={canRemove}
-            onRemove={onRemove ?? (() => undefined)}
-            onAddSupportingUnit={
-              onAddSupportingUnit ?? (() => undefined)
-            }
+            onRemove={onRemove}
+            onAddSupportingUnit={onAddSupportingUnit}
           />
         )}
       </div>

@@ -58,16 +58,20 @@ export interface FlagBadgeProps {
    * service-layer mutation talks to Firestore; the badge surfaces
    * a brief "Removing…" pending state inline if needed (deferred
    * — V1 latency is low enough that no spinner shows in practice).
+   * Optional so callers can opt out of the resolution path entirely
+   * (e.g. read-only contexts) — the button hides when undefined,
+   * never renders as a no-op control. CodeRabbit Major on PR #182
+   * (caught the same shape on `onAddSupportingUnit`).
    */
-  readonly onRemove: () => void;
+  readonly onRemove?: () => void;
   /**
    * Click handler for "Add a supporting Unit". Opens the manual-
    * add modal in the container. The new Unit's id is NOT yet
    * wired back into the bullet's `source_unit_ids[]` — PR 3 owns
    * that bridge; PR 2 just gets the user past the "I don't have
-   * a Unit yet" deadlock.
+   * a Unit yet" deadlock. Optional: button hides when absent.
    */
-  readonly onAddSupportingUnit: () => void;
+  readonly onAddSupportingUnit?: () => void;
 }
 
 /**
@@ -130,7 +134,16 @@ export default function FlagBadge({
       </button>
       <span
         id={popoverId}
-        role="tooltip"
+        // role="dialog" + aria-modal="false" rather than role="tooltip":
+        // WAI-ARIA APG forbids interactive controls inside a tooltip
+        // (tooltips don't take focus and are for non-interactive
+        // contextual info). Our popover surfaces the three resolution
+        // path BUTTONS, so it has to be a non-modal dialog.
+        // CodeRabbit Major on PR #182. (MatchScoreBadge legitimately
+        // uses role="tooltip" because its popover is text-only.)
+        role="dialog"
+        aria-modal="false"
+        aria-label="Validation flag details and resolution paths"
         data-testid="flag-popover"
         className="invisible group-hover:visible group-focus-within:visible absolute z-10 left-0 top-full mt-1 w-80 rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-3 shadow-lg text-xs space-y-2"
       >
@@ -169,7 +182,7 @@ export default function FlagBadge({
           >
             Edit this bullet (PR 3)
           </button>
-          {canRemove && (
+          {canRemove && onRemove !== undefined && (
             <button
               type="button"
               onClick={onRemove}
@@ -179,14 +192,16 @@ export default function FlagBadge({
               Remove this bullet
             </button>
           )}
-          <button
-            type="button"
-            onClick={onAddSupportingUnit}
-            data-action="add-supporting-unit"
-            className="block w-full text-left px-2 py-1 rounded text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Add a supporting Unit&hellip;
-          </button>
+          {onAddSupportingUnit !== undefined && (
+            <button
+              type="button"
+              onClick={onAddSupportingUnit}
+              data-action="add-supporting-unit"
+              className="block w-full text-left px-2 py-1 rounded text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Add a supporting Unit&hellip;
+            </button>
+          )}
         </div>
       </span>
     </span>

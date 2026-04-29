@@ -597,17 +597,19 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("Resolve 2 validation flags");
   });
 
-  it("renders the export button ENABLED when validation_status === 'passed'", () => {
+  it("renders the export button ENABLED when validation_status === 'passed' AND onExport is wired", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
         application={application()}
         asset={asset({ validation_status: "passed", validation_flags: [] })}
         units={[]}
+        onExport={() => undefined}
       />,
     );
     expect(html).toContain('data-export-enabled="true"');
     expect(html).not.toContain("Resolve 0 validation flags");
+    expect(html).not.toContain("Export is not available yet.");
   });
 
   it("export button is disabled for pending and stale states with appropriate copy", () => {
@@ -632,6 +634,108 @@ describe("ApplicationEditorView", () => {
     );
     expect(stale).toContain('data-export-enabled="false"');
     expect(stale).toContain("Re-run validation");
+  });
+
+  it("renders the export button DISABLED when validation passes but no onExport handler is wired", () => {
+    // Defense against silent-no-op primary action: even with
+    // status="passed", the button must NOT look enabled if the
+    // container hasn't wired a click handler. CodeRabbit Major
+    // on PR #182.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        units={[]}
+        // onExport intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("Export is not available yet.");
+  });
+
+  it("hides Remove on the popover when onRemoveBullet handler is absent (no silent no-ops)", () => {
+    // A bullet/skill/education flag could be rendered without a
+    // wired onRemoveBullet (legacy view callers). The popover must
+    // not render a functional-looking Remove button in that case.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onRemoveBullet intentionally omitted
+        onAddSupportingUnit={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-action="remove-bullet"');
+  });
+
+  it("hides Add a supporting Unit on the popover when handler is absent", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onAddSupportingUnit intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-action="add-supporting-unit"');
+  });
+
+  it("uses role='dialog' (not role='tooltip') on the flag popover so interactive controls inside are ARIA-valid", () => {
+    // WAI-ARIA APG forbids interactive controls inside role=tooltip;
+    // the popover hosts three resolution buttons. CodeRabbit Major
+    // on PR #182.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [flag({ id: "f1", bullet_id: "b1" })],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onRemoveBullet={() => undefined}
+        onAddSupportingUnit={() => undefined}
+      />,
+    );
+    // Popover present with the dialog role + aria-modal="false".
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="false"');
+    // No tooltip role on the popover (MatchScoreBadge legitimately
+    // uses role=tooltip; this surface specifically must not).
+    expect(html).not.toMatch(
+      /data-testid="flag-popover"[^>]*role="tooltip"/,
+    );
   });
 
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {

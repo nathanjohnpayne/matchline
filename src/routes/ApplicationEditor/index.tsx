@@ -235,20 +235,29 @@ function ApplicationEditorInner({
   const onRemoveBullet = useCallback(
     async (bulletId: string) => {
       if (asset === null) return;
-      const result = await removeBulletFromAsset(
-        applicationId ?? "",
-        asset.id,
-        bulletId,
-      );
-      if (result.status === "removed") {
-        await refetchApplication();
+      try {
+        const result = await removeBulletFromAsset(
+          applicationId ?? "",
+          asset.id,
+          bulletId,
+        );
+        if (result.status === "removed") {
+          await refetchApplication();
+        }
+        // Other result statuses are silent for now — application-/
+        // asset-not-found shouldn't happen from the editor's UI (we
+        // just loaded both), and bullet-not-found means a concurrent
+        // edit already removed it. PR 3's autosave + edit flow will
+        // surface these via inline errors when there's a real input
+        // surface for them to attach to.
+      } catch (err) {
+        // Swallow + log so the caller's onClick promise doesn't
+        // surface as an unhandled rejection. PR 2 has no toast UI;
+        // a future visible error surface will replace this log.
+        // CodeRabbit Major on PR #182.
+        // eslint-disable-next-line no-console
+        console.warn("removeBulletFromAsset failed", err);
       }
-      // Other result statuses are silent for now — application-/asset-
-      // not-found shouldn't happen from the editor's UI (we just
-      // loaded both), and bullet-not-found means a concurrent edit
-      // already removed it. PR 3's autosave + edit flow will surface
-      // these via inline errors when there's a real input surface
-      // for them to attach to.
     },
     [applicationId, asset, refetchApplication],
   );
@@ -264,8 +273,20 @@ function ApplicationEditorInner({
       // `buildManualUnit`. The Units subscription delivers the new
       // Unit on the next snapshot, so the right pane and chip
       // lookup pick it up automatically.
-      await manualInsert(input);
-      setManualAddOpen(false);
+      //
+      // ManualAddForm catches and inlines submit errors via its own
+      // try/catch; rethrow keeps that in-form error surface working
+      // (the user sees a message and can adjust + retry without
+      // losing their input). Don't close the modal on rejection.
+      // CodeRabbit Major on PR #182.
+      try {
+        await manualInsert(input);
+        setManualAddOpen(false);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("manualInsert failed", err);
+        throw err;
+      }
     },
     [],
   );
