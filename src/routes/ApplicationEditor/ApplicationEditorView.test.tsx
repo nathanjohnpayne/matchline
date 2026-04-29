@@ -477,7 +477,7 @@ describe("ApplicationEditorView", () => {
     };
   }
 
-  it("renders a flag badge on a flagged bullet, with the rationale visible in the popover markup", () => {
+  it("renders an underline annotation on a flagged bullet, with the rationale present in the popover markup (sub-issue #186)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -502,18 +502,22 @@ describe("ApplicationEditorView", () => {
         units={[]}
       />,
     );
-    // Badge rendered for the flagged bullet only.
-    const badges = html.match(/data-testid="flag-badge"/g) ?? [];
-    expect(badges).toHaveLength(1);
+    // ClaimAnnotation rendered for the flagged bullet only (the
+    // clean bullet has no source_unit_ids and no flags, so it's
+    // plain text — no annotation).
+    const annotations = html.match(/data-testid="claim-annotation"/g) ?? [];
+    expect(annotations).toHaveLength(1);
+    expect(html).toContain('data-annotation-severity="untraceable"');
+    expect(html).toContain('data-flag-count="1"');
     expect(html).toContain('data-flag-status="untraceable"');
     expect(html).toContain("Bullet references a Unit no longer present.");
-    // The popover always present in the DOM (CSS visibility, not
-    // conditional render) so screen readers and tests can find it.
-    expect(html).toContain('data-testid="flag-popover"');
+    // Popover always present in the DOM with closed-state attrs.
+    expect(html).toContain('data-testid="claim-popover"');
+    expect(html).toContain('data-popover-open="false"');
   });
 
-  it("surfaces the worst flag status when a single bullet has both untraceable and specificity", () => {
-    // Specificity (red) beats untraceable (amber) — the badge
+  it("surfaces the worst flag severity (specificity > untraceable) when a single bullet has both", () => {
+    // Specificity (red) beats untraceable (amber) — the underline
     // shows the harder problem so the user attends to that first.
     const html = renderToStaticMarkup(
       <ApplicationEditorView
@@ -534,13 +538,17 @@ describe("ApplicationEditorView", () => {
         units={[]}
       />,
     );
-    expect(html).toContain('data-flag-status="specificity"');
+    expect(html).toContain('data-annotation-severity="specificity"');
     expect(html).toContain('data-flag-count="2"');
+    // Both flag rationales rendered in the popover.
+    expect(html).toContain('data-flag-id="f1"');
+    expect(html).toContain('data-flag-id="f2"');
   });
 
-  it("renders Remove on bullet/skill/education badges and hides Remove on the summary badge", () => {
-    // Removing the summary would corrupt the asset shape; the badge
-    // hides the button rather than disabling it (a non-functional
+  it("renders Remove on bullet/skill/education annotations and hides Remove on summary annotations", () => {
+    // Removing the summary would corrupt the asset shape; the
+    // popover hides the Remove button on summary-flag
+    // annotations rather than disabling it (a non-functional
     // control would just confuse the user).
     const html = renderToStaticMarkup(
       <ApplicationEditorView
@@ -568,11 +576,10 @@ describe("ApplicationEditorView", () => {
         onAddSupportingUnit={() => undefined}
       />,
     );
-    // Both badges present (summary + bullet).
-    const badges = html.match(/data-testid="flag-badge"/g) ?? [];
-    expect(badges).toHaveLength(2);
-    // Remove button appears for the bullet badge but not the
-    // summary badge — count occurrences of the action attribute.
+    // Both annotations present (summary + bullet).
+    const annotations = html.match(/data-testid="claim-annotation"/g) ?? [];
+    expect(annotations).toHaveLength(2);
+    // Remove appears for the bullet only, not the summary.
     const removeButtons = html.match(/data-action="remove-bullet"/g) ?? [];
     expect(removeButtons).toHaveLength(1);
     // Add-Unit appears on every flagged item.
@@ -581,7 +588,7 @@ describe("ApplicationEditorView", () => {
     expect(addButtons).toHaveLength(2);
   });
 
-  it("does not render flag badges on items that have no flags", () => {
+  it("does not render an annotation on items that have no flags AND no source_unit_ids", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -591,17 +598,45 @@ describe("ApplicationEditorView", () => {
           validation_flags: [],
           generated_content: content({
             bullets: [
-              { id: "b1", text: "Clean bullet.", source_unit_ids: [] },
+              { id: "b1", text: "Clean ungrounded bullet.", source_unit_ids: [] },
             ],
           }),
         })}
         units={[]}
       />,
     );
-    expect(html).not.toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-testid="claim-annotation"');
+    // Plain text rendered.
+    expect(html).toContain("Clean ungrounded bullet.");
   });
 
-  it("does not render badges for 'traced' flags (those passed validation)", () => {
+  it("renders a NEUTRAL underline (not red/amber) on bullets with source_unit_ids and no flags", () => {
+    // The annotation is still shown — it's the click-to-popover
+    // entry point for inspecting which Units grounded the claim.
+    // Severity = neutral; underline color = zinc.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "passed",
+          validation_flags: [],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Grounded.", source_unit_ids: ["u-a"] },
+            ],
+          }),
+        })}
+        units={[unit({ id: "u-a", normalized_summary: "Cited." })]}
+      />,
+    );
+    expect(html).toContain('data-annotation-severity="neutral"');
+    expect(html).toContain('data-flag-count="0"');
+    // Underline color is zinc (no red / amber border classes).
+    expect(html).not.toMatch(/border-(?:red|amber)-/);
+  });
+
+  it("does not render annotations for 'traced' flags alone (those passed validation; no surfacing needed)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -618,14 +653,22 @@ describe("ApplicationEditorView", () => {
           ],
           generated_content: content({
             bullets: [
-              { id: "b1", text: "Successfully traced.", source_unit_ids: ["unit-x"] },
+              {
+                id: "b1",
+                text: "Successfully traced.",
+                source_unit_ids: ["unit-x"],
+              },
             ],
           }),
         })}
-        units={[]}
+        units={[unit({ id: "unit-x", normalized_summary: "Cited." })]}
       />,
     );
-    expect(html).not.toContain('data-testid="flag-badge"');
+    // The bullet has source_unit_ids → annotation renders, but
+    // severity is neutral (the traced flag alone doesn't warrant
+    // red/amber).
+    expect(html).toContain('data-annotation-severity="neutral"');
+    expect(html).toContain('data-flag-count="0"');
   });
 
   it("renders the export button DISABLED with a flag-count tooltip when validation_status === 'failed'", () => {
@@ -736,7 +779,7 @@ describe("ApplicationEditorView", () => {
         onAddSupportingUnit={() => undefined}
       />,
     );
-    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).toContain('data-testid="claim-annotation"');
     expect(html).not.toContain('data-action="remove-bullet"');
   });
 
@@ -760,7 +803,7 @@ describe("ApplicationEditorView", () => {
         // onAddSupportingUnit intentionally omitted
       />,
     );
-    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).toContain('data-testid="claim-annotation"');
     expect(html).not.toContain('data-action="add-supporting-unit"');
   });
 
@@ -792,7 +835,7 @@ describe("ApplicationEditorView", () => {
     // No tooltip role on the popover (MatchScoreBadge legitimately
     // uses role=tooltip; this surface specifically must not).
     expect(html).not.toMatch(
-      /data-testid="flag-popover"[^>]*role="tooltip"/,
+      /data-testid="claim-popover"[^>]*role="tooltip"/,
     );
   });
 

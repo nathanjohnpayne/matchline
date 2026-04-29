@@ -34,7 +34,6 @@ import type {
 
 import ClaimAnnotation from "./ClaimAnnotation.tsx";
 import { exportGateState } from "./exportGate.ts";
-import FlagBadge from "./FlagBadge.tsx";
 import { flagsByBullet } from "./flagsByBullet.ts";
 
 /**
@@ -575,7 +574,6 @@ function BulletItem({
   onRemove,
   onAddSupportingUnit,
 }: BulletItemProps): ReactElement {
-  const hasFlags = flags !== undefined && flags.length > 0;
   // Highlight this bullet when the right pane is hovering one of
   // its source Units. Empty source_unit_ids → never highlights
   // (the bullet has no traceability link to surface). The class
@@ -594,25 +592,17 @@ function BulletItem({
       data-bullet-id={item.id}
       data-bullet-highlighted={isHighlighted ? "true" : "false"}
     >
-      <div className="flex items-start gap-2">
-        <div className="flex-1">
-          <ClaimAnnotation
-            text={item.text}
-            sourceUnitIds={item.source_unit_ids}
-            unitsById={unitsById}
-            onHoverUnits={onHoverUnits}
-            onScrollToUnit={onScrollToUnit}
-          />
-        </div>
-        {hasFlags && (
-          <FlagBadge
-            flags={flags}
-            canRemove={canRemove}
-            onRemove={onRemove}
-            onAddSupportingUnit={onAddSupportingUnit}
-          />
-        )}
-      </div>
+      <ClaimAnnotation
+        text={item.text}
+        sourceUnitIds={item.source_unit_ids}
+        unitsById={unitsById}
+        flags={flags}
+        canRemove={canRemove}
+        onRemove={onRemove}
+        onAddSupportingUnit={onAddSupportingUnit}
+        onHoverUnits={onHoverUnits}
+        onScrollToUnit={onScrollToUnit}
+      />
     </div>
   );
 }
