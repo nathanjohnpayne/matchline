@@ -738,6 +738,90 @@ describe("ApplicationEditorView", () => {
     );
   });
 
+  // ── PR 3: inline edit, Edit popover button, edit-mode rendering ─
+
+  it("does NOT render the Edit button on the popover when onSaveBulletEdit is absent", () => {
+    // Read-only view path: PR 1 / PR 2 callers don't wire
+    // onSaveBulletEdit. Without it, the FlagBadge popover hides
+    // the Edit affordance rather than rendering a no-op button.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onAddSupportingUnit={() => undefined}
+        // onSaveBulletEdit intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-testid="flag-badge"');
+    expect(html).not.toContain('data-action="edit-bullet"');
+  });
+
+  it("renders the Edit button on the popover when onSaveBulletEdit is wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          validation_status: "failed",
+          validation_flags: [
+            flag({ id: "f1", bullet_id: "b1" }),
+          ],
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Flagged.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onSaveBulletEdit={async () => undefined}
+      />,
+    );
+    expect(html).toContain('data-action="edit-bullet"');
+    // No "PR 3" placeholder copy lingering from the prior
+    // disabled-button label.
+    expect(html).not.toContain("(PR 3)");
+  });
+
+  it("renders the BulletEditor inline when onSaveBulletEdit is wired and initial render is static (no edit mode at mount)", () => {
+    // Click-to-edit is single-row state managed inside
+    // ResumePane. On a fresh mount, no row is in edit mode — the
+    // editor textarea should not render until the user clicks
+    // Edit. Pin that initial state so the static markup snapshot
+    // matches what the user sees on landing.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Static.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onSaveBulletEdit={async () => undefined}
+      />,
+    );
+    // Static bullet text rendered.
+    expect(html).toContain("Static.");
+    // The editor's textarea is NOT in the static markup.
+    expect(html).not.toContain('data-testid="bullet-editor-textarea"');
+    expect(html).not.toContain('data-testid="bullet-editor"');
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

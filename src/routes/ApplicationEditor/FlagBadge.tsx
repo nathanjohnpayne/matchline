@@ -72,6 +72,14 @@ export interface FlagBadgeProps {
    * a Unit yet" deadlock. Optional: button hides when absent.
    */
   readonly onAddSupportingUnit?: () => void;
+  /**
+   * Click handler for "Edit this bullet" — switches the row to
+   * inline-edit mode. PR 3 wires this to `BulletEditor`; before
+   * PR 3 the button rendered disabled with a "lands in PR 3"
+   * tooltip. Optional so callers can omit edit affordance (and
+   * the button hides) for read-only contexts.
+   */
+  readonly onEdit?: () => void;
 }
 
 /**
@@ -107,6 +115,7 @@ export default function FlagBadge({
   canRemove,
   onRemove,
   onAddSupportingUnit,
+  onEdit,
 }: FlagBadgeProps): ReactElement {
   const popoverId = useId();
   const worst = worstFlagStatus(flags);
@@ -173,15 +182,16 @@ export default function FlagBadge({
           className="border-t border-zinc-200 dark:border-zinc-700 pt-2 space-y-1"
           aria-label="Resolution paths"
         >
-          <button
-            type="button"
-            disabled
-            title="Inline edit lands in PR 3 of #24."
-            data-action="edit-bullet"
-            className="block w-full text-left px-2 py-1 rounded text-xs text-zinc-400 dark:text-zinc-600 cursor-not-allowed"
-          >
-            Edit this bullet (PR 3)
-          </button>
+          {onEdit !== undefined && (
+            <button
+              type="button"
+              onClick={onEdit}
+              data-action="edit-bullet"
+              className="block w-full text-left px-2 py-1 rounded text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Edit this bullet&hellip;
+            </button>
+          )}
           {canRemove && onRemove !== undefined && (
             <button
               type="button"

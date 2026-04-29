@@ -34,6 +34,7 @@ import {
 import { useParams } from "react-router-dom";
 
 import {
+  editBulletInAsset,
   getApplication,
   removeBulletFromAsset,
 } from "../../services/applications.ts";
@@ -42,6 +43,7 @@ import {
   subscribeByOwner as subscribeUnitsByOwner,
 } from "../../services/experienceUnits.ts";
 import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
+import { invokeValidateAsset } from "../../services/validation.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
 
@@ -232,6 +234,59 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
+  const onSaveBulletEdit = useCallback(
+    async (bulletId: string, newText: string): Promise<void> => {
+      if (asset === null || applicationId === undefined) return;
+      // 1. Patch the Application doc — flips validation_status to
+      //    "stale" + clears the bullet's source_unit_ids on success.
+      const result = await editBulletInAsset(
+        applicationId,
+        asset.id,
+        bulletId,
+        newText,
+      );
+      if (result.status !== "edited") {
+        // No-change is a quiet success (no orchestrator round-trip
+        // needed). Other statuses (application-/asset-/bullet-not-
+        // found, empty-text) shouldn't happen from the editor's UI
+        // — the editor's textarea blocks empty submits client-side
+        // before this call fires, and the editor only renders for
+        // bullets it just rendered. Surface unexpected statuses to
+        // the editor inline by throwing; BulletEditor catches and
+        // shows the message.
+        if (
+          result.status === "application-not-found" ||
+          result.status === "asset-not-found" ||
+          result.status === "bullet-not-found"
+        ) {
+          throw new Error(
+            `Couldn't save edit: ${result.status}. Refresh to reload the latest state.`,
+          );
+        }
+        // empty-text + no-change are silent.
+        return;
+      }
+      // 2. Re-run validation server-side. This atomically writes
+      //    fresh flags + flips validation_status to passed/failed.
+      //    Errors here are non-fatal for the edit itself — the
+      //    edit landed; validation just couldn't run. Surface as
+      //    a console warning + leave the UI in stale state until
+      //    the user retries.
+      try {
+        await invokeValidateAsset(applicationId, asset.id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "validateAsset failed after edit; asset remains in stale state",
+          err,
+        );
+      }
+      // 3. Refetch so the editor reflects the fresh flags + status.
+      await refetchApplication();
+    },
+    [applicationId, asset, refetchApplication],
+  );
+
   const onRemoveBullet = useCallback(
     async (bulletId: string) => {
       if (asset === null) return;
@@ -317,6 +372,7 @@ function ApplicationEditorInner({
         onRemoveBullet={onRemoveBullet}
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
+        onSaveBulletEdit={onSaveBulletEdit}
       />
       {manualAddOpen && (
         <ManualAddForm

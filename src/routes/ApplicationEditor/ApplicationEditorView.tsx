@@ -10,13 +10,14 @@
  * RoleDetail (#129).
  *
  * PR 1 scope: two-pane shell + read-only bullets with
- * `source_unit_ids` chips. PR 2 (this commit) adds validation flag
- * badges per item, a popover surfacing the rationale + three
- * resolution paths, and the export-button gate. Inline edit +
- * autosave land in PR 3.
+ * `source_unit_ids` chips. PR 2: validation flag badges per item,
+ * a popover surfacing the rationale + three resolution paths, and
+ * the export-button gate. PR 3 (this commit): inline edit on
+ * bullets via `BulletEditor`, with autosave + claim re-extraction
+ * on save (server-side validateAsset orchestrator).
  */
 
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type {
@@ -26,6 +27,7 @@ import type {
   ValidationFlag,
 } from "../../types/crm.ts";
 
+import BulletEditor from "./BulletEditor.tsx";
 import { exportGateState } from "./exportGate.ts";
 import FlagBadge from "./FlagBadge.tsx";
 import { flagsByBullet } from "./flagsByBullet.ts";
@@ -89,6 +91,19 @@ export interface ApplicationEditorViewProps {
    * PR 1 callers keep compiling.
    */
   readonly onExport?: () => void;
+  /**
+   * Save handler for an inline bullet edit (#24, PR 3). Receives
+   * the offending item's id (the GeneratedItem.id, same shape as
+   * `onRemoveBullet`) and the new text. Container runs the
+   * service-layer `editBulletInAsset` + the validation re-run
+   * callable + refetch. Optional so the inline-edit affordance
+   * hides cleanly in read-only contexts (the view falls back to
+   * static rendering when this prop is absent).
+   */
+  readonly onSaveBulletEdit?: (
+    bulletId: string,
+    newText: string,
+  ) => Promise<void>;
 }
 
 export default function ApplicationEditorView({
@@ -100,6 +115,7 @@ export default function ApplicationEditorView({
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
+  onSaveBulletEdit,
 }: ApplicationEditorViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -198,6 +214,7 @@ export default function ApplicationEditorView({
           onRemoveBullet={onRemoveBullet}
           onAddSupportingUnit={onAddSupportingUnit}
           onExport={onExport}
+          onSaveBulletEdit={onSaveBulletEdit}
         />
         <UnitsPane units={applicationUnits} />
       </div>
@@ -211,6 +228,10 @@ interface ResumePaneProps {
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
   readonly onExport?: () => void;
+  readonly onSaveBulletEdit?: (
+    bulletId: string,
+    newText: string,
+  ) => Promise<void>;
 }
 
 function ResumePane({
@@ -219,7 +240,13 @@ function ResumePane({
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
+  onSaveBulletEdit,
 }: ResumePaneProps): ReactElement {
+  // Single-bullet edit mode: at most one item is in edit mode at a
+  // time. Storing the editing item's id at the pane level (rather
+  // than per-row) ensures clicking Edit on a second row dismisses
+  // the first cleanly. `null` means no row is in edit mode.
+  const [editingBulletId, setEditingBulletId] = useState<string | null>(null);
   if (asset === null || asset.generated_content === undefined) {
     return (
       <article
@@ -271,6 +298,23 @@ function ResumePane({
           : () => onRemoveBullet(item.id)
       }
       onAddSupportingUnit={onAddSupportingUnit}
+      // Edit mode is single-row at the pane level. The popover's
+      // Edit button only appears when `onSaveBulletEdit` is wired
+      // by the container (read-only contexts hide it).
+      isEditing={editingBulletId === item.id}
+      onEnterEdit={
+        onSaveBulletEdit === undefined
+          ? undefined
+          : () => setEditingBulletId(item.id)
+      }
+      onCancelEdit={() => setEditingBulletId(null)}
+      onSaveEdit={
+        onSaveBulletEdit === undefined
+          ? undefined
+          : async (newText) => {
+              await onSaveBulletEdit(item.id, newText);
+            }
+      }
     />
   );
   return (
@@ -404,6 +448,27 @@ interface BulletItemProps {
   readonly onRemove?: () => void;
   /** Opens the manual-add modal in the container. */
   readonly onAddSupportingUnit?: () => void;
+  /**
+   * True when this row is in inline-edit mode. The pane component
+   * (ResumePane) tracks single-bullet edit state and threads this
+   * boolean per-row. PR 3.
+   */
+  readonly isEditing: boolean;
+  /**
+   * Switch this row into edit mode. Wired through `FlagBadge`'s
+   * "Edit this bullet" button. Optional: when undefined (read-only
+   * context), the FlagBadge hides the Edit affordance.
+   */
+  readonly onEnterEdit?: () => void;
+  /** Exit edit mode without saving. */
+  readonly onCancelEdit: () => void;
+  /**
+   * Save handler for an inline edit. Async because the underlying
+   * service write + validation re-run callable round-trips. The
+   * editor surfaces the in-flight + error states inline. Optional
+   * matching `onEnterEdit`'s read-only-context contract.
+   */
+  readonly onSaveEdit?: (newText: string) => Promise<void>;
 }
 
 function BulletItem({
@@ -413,8 +478,41 @@ function BulletItem({
   canRemove,
   onRemove,
   onAddSupportingUnit,
+  isEditing,
+  onEnterEdit,
+  onCancelEdit,
+  onSaveEdit,
 }: BulletItemProps): ReactElement {
   const hasFlags = flags !== undefined && flags.length > 0;
+  // In edit mode, swap the static text + chips for `BulletEditor`.
+  // The badge stays visible above so the user can still see the
+  // flag they're resolving while typing.
+  if (isEditing && onSaveEdit !== undefined) {
+    return (
+      <div
+        className="space-y-1.5"
+        data-bullet-id={item.id}
+      >
+        {hasFlags && (
+          <div className="flex justify-end">
+            <FlagBadge
+              flags={flags}
+              canRemove={canRemove}
+              onRemove={onRemove}
+              onAddSupportingUnit={onAddSupportingUnit}
+              // Don't show Edit while already editing.
+              onEdit={undefined}
+            />
+          </div>
+        )}
+        <BulletEditor
+          initialText={item.text}
+          onSave={onSaveEdit}
+          onCancel={onCancelEdit}
+        />
+      </div>
+    );
+  }
   return (
     <div
       className="space-y-1.5"
@@ -430,6 +528,7 @@ function BulletItem({
             canRemove={canRemove}
             onRemove={onRemove}
             onAddSupportingUnit={onAddSupportingUnit}
+            onEdit={onEnterEdit}
           />
         )}
       </div>
