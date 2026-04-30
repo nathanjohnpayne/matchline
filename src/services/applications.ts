@@ -15,6 +15,8 @@ import type {
   AssetRef,
   GeneratedAssetContent,
   GeneratedItem,
+  ValidationFlag,
+  ValidationStatus,
 } from "../types/crm.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
@@ -260,6 +262,82 @@ export async function addBulletToAsset(
     generated_assets: nextAssets,
   });
   return { status: "added", bulletId: newBullet.id };
+}
+
+/**
+ * Snapshot used by the editor's undo stack (sub-issue #197). Captured
+ * before each user-initiated mutation so the route can write it back
+ * via `restoreAssetState` on undo.
+ *
+ * Carries the three pieces that mutations touch:
+ *   - `generated_content`: the asset content (summary + bullets +
+ *     skills + education).
+ *   - `validation_status`: passed / failed / pending / stale at
+ *     snapshot time.
+ *   - `validation_flags`: the per-claim flag list at snapshot time
+ *     (may be undefined for legacy assets).
+ *
+ * Other AssetRef fields (`owner_uid`, `application_id`, `kind`,
+ * `format`, `storage_path`, `created_at`, validated_at, cost_usd,
+ * latency_ms, etc.) are NOT in the snapshot — they're either
+ * immutable or unrelated to undoable user actions.
+ */
+export interface AssetUndoSnapshot {
+  readonly content: GeneratedAssetContent;
+  readonly validation_status: ValidationStatus;
+  readonly validation_flags?: readonly ValidationFlag[];
+}
+
+/**
+ * Outcome of a `restoreAssetState` call. Mirrors the existing
+ * mutation-result shape (anti-enumeration parity, application-/
+ * asset-not-found collapse).
+ */
+export type RestoreAssetResult =
+  | { readonly status: "restored" }
+  | { readonly status: "application-not-found" }
+  | { readonly status: "asset-not-found" };
+
+/**
+ * Write a previous asset snapshot back into Firestore (sub-issue
+ * #197). Called by the editor's undo stack: pop the most recent
+ * snapshot + write it back. The write replaces
+ * `generated_content` + `validation_status` + `validation_flags`
+ * atomically; the asset's other fields are preserved unchanged.
+ *
+ * Anti-enumeration parity with the other mutation helpers:
+ * foreign / permission-denied / missing collapse to
+ * `application-not-found`.
+ */
+export async function restoreAssetState(
+  applicationId: string,
+  assetId: string,
+  snapshot: AssetUndoSnapshot,
+): Promise<RestoreAssetResult> {
+  const app = await getApplication(applicationId);
+  if (app === undefined) return { status: "application-not-found" };
+
+  const assets = app.generated_assets ?? [];
+  const assetIndex = assets.findIndex((a) => a.id === assetId);
+  if (assetIndex === -1) return { status: "asset-not-found" };
+  const target = assets[assetIndex];
+
+  const nextAsset: AssetRef = {
+    ...target,
+    generated_content: snapshot.content,
+    validation_status: snapshot.validation_status,
+    validation_flags:
+      snapshot.validation_flags === undefined
+        ? undefined
+        : [...snapshot.validation_flags],
+  };
+  const nextAssets = [...assets];
+  nextAssets[assetIndex] = nextAsset;
+
+  await updateDoc(ref(applicationId), {
+    generated_assets: nextAssets,
+  });
+  return { status: "restored" };
 }
 
 /**
