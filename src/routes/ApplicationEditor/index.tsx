@@ -28,6 +28,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
@@ -38,6 +39,7 @@ import {
   editBulletInAsset,
   getApplication,
   removeBulletFromAsset,
+  reorderBulletsInAsset,
   type AddableSection,
 } from "../../services/applications.ts";
 import {
@@ -236,6 +238,64 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
+  // Serialize reorder requests. Holding ArrowDown on the
+  // keyboard handle fires onKeyDown repeatedly before the first
+  // round-trip's refetch updates indices; each call uses the
+  // stale `index` captured from the current render, so concurrent
+  // requests would move the wrong row after the first mutation
+  // landed. Drop overlapping calls — the user can re-press once
+  // the in-flight round-trip lands. Codex P2 round 3 on PR #196.
+  const reorderInFlightRef = useRef(false);
+
+  const onReorderBullet = useCallback(
+    async (
+      section: AddableSection,
+      fromIndex: number,
+      toIndex: number,
+    ): Promise<void> => {
+      if (asset === null || applicationId === undefined) return;
+      if (reorderInFlightRef.current) return;
+      reorderInFlightRef.current = true;
+      try {
+        const result = await reorderBulletsInAsset(
+          applicationId,
+          asset.id,
+          section,
+          fromIndex,
+          toIndex,
+        );
+        if (result.status !== "reordered") {
+          // no-change / index-not-found / *-not-found are silent;
+          // shouldn't happen from the UI in normal flow (the drag
+          // handler bounds-checks before calling).
+          return;
+        }
+        // Refetch so the pane sees the new order. Skip the
+        // validateAsset round-trip — reorder is a position-only
+        // change, so existing flags remain valid + the asset's
+        // `validation_status` is preserved by the service helper
+        // (Codex P1 round 2 on PR #196: marking stale here would
+        // permanently block export until the user made an
+        // unrelated text edit).
+        try {
+          await refetchApplication();
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "refetchApplication failed after successful reorder",
+            err,
+          );
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("reorderBulletsInAsset failed", err);
+      } finally {
+        reorderInFlightRef.current = false;
+      }
+    },
+    [applicationId, asset, refetchApplication],
+  );
+
   const onAddBullet = useCallback(
     async (section: AddableSection): Promise<string | null> => {
       if (asset === null || applicationId === undefined) return null;
@@ -422,6 +482,7 @@ function ApplicationEditorInner({
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
+        onReorderBullet={onReorderBullet}
       />
       {manualAddOpen && (
         <ManualAddForm

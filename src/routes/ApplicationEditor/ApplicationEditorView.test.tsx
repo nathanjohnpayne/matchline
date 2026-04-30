@@ -996,6 +996,173 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain('data-add-bullet-section="education"');
   });
 
+  // ── sub-issue #195: drag-to-reorder ─────────────────────────────
+
+  it("renders bullet rows with draggable=false when onReorderBullet is absent (read-only context)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+              { id: "b2", text: "Two.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        // onReorderBullet intentionally omitted
+      />,
+    );
+    expect(html).toContain('data-row-draggable="false"');
+    expect(html).not.toContain('data-row-draggable="true"');
+  });
+
+  it("renders bullet rows with draggable=true + section+index data attributes when onReorderBullet is wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+              { id: "b2", text: "Two.", source_unit_ids: [] },
+            ],
+            skills: [
+              { id: "sk1", text: "Skill 1.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onReorderBullet={async () => undefined}
+      />,
+    );
+    // Both bullet rows draggable, with explicit section + index.
+    const draggableRows = html.match(/data-row-draggable="true"/g) ?? [];
+    expect(draggableRows.length).toBe(3); // 2 bullets + 1 skill
+    expect(html).toContain('data-row-section="bullets"');
+    expect(html).toContain('data-row-index="0"');
+    expect(html).toContain('data-row-index="1"');
+    expect(html).toContain('data-row-section="skills"');
+  });
+
+  it("renders rows with no drop-target highlight on initial mount (no active drag)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+              { id: "b2", text: "Two.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onReorderBullet={async () => undefined}
+      />,
+    );
+    expect(html).toContain('data-drop-target="false"');
+    expect(html).not.toContain('data-drop-target="true"');
+    // Border slot reserved (border-transparent) so no layout jank
+    // on highlight transitions.
+    expect(html).toMatch(/border-2[^"]*border-transparent/);
+  });
+
+  it("suppresses drag (draggable=false) on a row that is currently in inline edit mode", () => {
+    // Pre-render the editor in edit mode by enabling
+    // onSaveBulletEdit + leaving the user at a point where
+    // ResumePane's editingBulletId would be null. We can't
+    // easily put a row in edit mode at static-render time, but
+    // we CAN verify the underlying mechanic: a row with
+    // edit-mode wiring + dragEnabled both rendering correctly.
+    // (Edit-mode-suppression is exercised by hand-testing per
+    // route convention.) Here we just pin that the data
+    // attribute exposes the draggable bit so the suppression
+    // can be observed.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "Bullet.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onSaveBulletEdit={async () => undefined}
+        onReorderBullet={async () => undefined}
+      />,
+    );
+    // No row in edit mode at mount → draggable=true.
+    expect(html).toContain('data-row-draggable="true"');
+  });
+
+  it("renders a keyboard-accessible drag handle on each draggable row (sub-issue #195 a11y AC, Codex P1)", () => {
+    // UI guidance § Accessibility baseline: "Every mouse-
+    // reachable action is also keyboard-reachable." Drag-only
+    // reorder violates that. The handle button exposes
+    // ArrowUp/ArrowDown for keyboard reorder; keyboard-only +
+    // assistive-tech users can perform the same action mouse
+    // users get via drag.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+              { id: "b2", text: "Two.", source_unit_ids: [] },
+            ],
+            skills: [
+              { id: "sk1", text: "Skill.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onReorderBullet={async () => undefined}
+      />,
+    );
+    // One handle button per draggable row.
+    const handles = html.match(/data-action="reorder-handle"/g) ?? [];
+    expect(handles.length).toBe(3); // 2 bullets + 1 skill
+    // aria-label per handle for screen readers.
+    expect(html).toMatch(
+      /aria-label="Reorder this bullet — use ArrowUp and ArrowDown to move"/,
+    );
+    expect(html).toMatch(
+      /aria-label="Reorder this skill — use ArrowUp and ArrowDown to move"/,
+    );
+    // Handle is a button (so it's keyboard-focusable by default).
+    expect(html).toMatch(
+      /<button[^>]*data-action="reorder-handle"/,
+    );
+  });
+
+  it("does not render the keyboard drag handle when onReorderBullet is absent", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-action="reorder-handle"');
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

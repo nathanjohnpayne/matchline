@@ -120,6 +120,16 @@ export interface ApplicationEditorViewProps {
   readonly onAddBullet?: (
     section: AddableSection,
   ) => Promise<string | null>;
+  /**
+   * Sub-issue #195 drag-to-reorder handler. Splices the bullet at
+   * `fromIndex` to `toIndex` within the targeted section.
+   * Optional — drag affordances hide when absent.
+   */
+  readonly onReorderBullet?: (
+    section: AddableSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => Promise<void>;
 }
 
 export default function ApplicationEditorView({
@@ -133,6 +143,7 @@ export default function ApplicationEditorView({
   onExport,
   onSaveBulletEdit,
   onAddBullet,
+  onReorderBullet,
 }: ApplicationEditorViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -233,6 +244,7 @@ export default function ApplicationEditorView({
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
+        onReorderBullet={onReorderBullet}
       />
     </section>
   );
@@ -252,6 +264,11 @@ interface TwoPaneLayoutProps {
   readonly onAddBullet?: (
     section: AddableSection,
   ) => Promise<string | null>;
+  readonly onReorderBullet?: (
+    section: AddableSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => Promise<void>;
 }
 
 /**
@@ -295,6 +312,7 @@ function TwoPaneLayout({
   onExport,
   onSaveBulletEdit,
   onAddBullet,
+  onReorderBullet,
 }: TwoPaneLayoutProps): ReactElement {
   const [hoveredUnitIds, setHoveredUnitIds] = useState<readonly string[]>([]);
   const [scrollToUnitId, setScrollToUnitId] = useState<string | null>(null);
@@ -348,6 +366,7 @@ function TwoPaneLayout({
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
+        onReorderBullet={onReorderBullet}
       />
       <UnitsPane
         units={applicationUnits}
@@ -401,6 +420,18 @@ interface ResumePaneProps {
   readonly onAddBullet?: (
     section: AddableSection,
   ) => Promise<string | null>;
+  /**
+   * Sub-issue #195 drag-to-reorder handler. The pane installs
+   * native HTML5 drag wiring on each section's bullet rows when
+   * this is wired; rows are draggable + drop-target highlighted;
+   * drag is suppressed during inline-edit (would conflict with
+   * text selection inside the textarea).
+   */
+  readonly onReorderBullet?: (
+    section: AddableSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => Promise<void>;
 }
 
 function ResumePane({
@@ -414,6 +445,7 @@ function ResumePane({
   onExport,
   onSaveBulletEdit,
   onAddBullet,
+  onReorderBullet,
 }: ResumePaneProps): ReactElement {
   // Single-bullet edit mode at the pane level: at most one
   // GeneratedItem is in edit mode at a time. Storing the editing
@@ -436,6 +468,24 @@ function ResumePane({
   // empty bullet so the asset doesn't accumulate orphan empty
   // items. Sub-issue #193.
   const newlyAddedRef = useRef(new Set<string>());
+
+  // Drag-to-reorder state (sub-issue #195). Single drag at a time
+  // — `dragSource` records which section + index the drag started
+  // from; `dropOver` records the row currently under the drag for
+  // the 2px border highlight. Both clear on drop / dragend / leave.
+  // Section-scoped so a drag within Bullets doesn't visually
+  // highlight a target in Skills.
+  interface DragSource {
+    readonly section: AddableSection;
+    readonly fromIndex: number;
+  }
+  interface DropTarget {
+    readonly section: AddableSection;
+    readonly index: number;
+  }
+  const [dragSource, setDragSource] = useState<DragSource | null>(null);
+  const [dropOver, setDropOver] = useState<DropTarget | null>(null);
+  const dragEnabled = onReorderBullet !== undefined;
 
   // Switch the pane's edit target. Before changing, if the
   // currently-editing bullet is one we just added (still empty,
@@ -571,9 +621,48 @@ function ResumePane({
         {content.bullets.length === 0 ? (
           <p className="text-sm italic text-zinc-500">No bullets generated.</p>
         ) : (
-          <ul className="space-y-3" data-testid="resume-bullets">
-            {content.bullets.map((bullet) => (
-              <li key={bullet.id}>{renderItem(bullet, "bullet")}</li>
+          <ul
+            className="space-y-3"
+            data-testid="resume-bullets"
+          >
+            {content.bullets.map((bullet, index) => (
+              <DraggableRow
+                key={bullet.id}
+                section="bullets"
+                index={index}
+                listLength={content.bullets.length}
+                bulletId={bullet.id}
+                isEditing={editingBulletId === bullet.id}
+                dragEnabled={dragEnabled}
+                dragSource={dragSource}
+                dropOver={dropOver}
+                onDragStart={(s, i) => setDragSource({ section: s, fromIndex: i })}
+                onDragOver={(s, i) => setDropOver({ section: s, index: i })}
+                onDragLeaveContainer={() => setDropOver(null)}
+                onDrop={async (s, i) => {
+                  const src = dragSource;
+                  setDragSource(null);
+                  setDropOver(null);
+                  if (
+                    src === null ||
+                    src.section !== s ||
+                    onReorderBullet === undefined
+                  )
+                    return;
+                  if (src.fromIndex === i) return;
+                  await onReorderBullet(s, src.fromIndex, i);
+                }}
+                onDragEnd={() => {
+                  setDragSource(null);
+                  setDropOver(null);
+                }}
+                onKeyboardReorder={async (s, from, to) => {
+                  if (onReorderBullet === undefined) return;
+                  await onReorderBullet(s, from, to);
+                }}
+              >
+                {renderItem(bullet, "bullet")}
+              </DraggableRow>
             ))}
           </ul>
         )}
@@ -587,9 +676,48 @@ function ResumePane({
       {(content.skills.length > 0 || onAddBullet !== undefined) && (
         <Section heading="Skills">
           {content.skills.length > 0 && (
-            <ul className="space-y-2" data-testid="resume-skills">
-              {content.skills.map((skill) => (
-                <li key={skill.id}>{renderItem(skill, "skill")}</li>
+            <ul
+              className="space-y-2"
+              data-testid="resume-skills"
+            >
+              {content.skills.map((skill, index) => (
+                <DraggableRow
+                  key={skill.id}
+                  section="skills"
+                  index={index}
+                  listLength={content.skills.length}
+                  bulletId={skill.id}
+                  isEditing={editingBulletId === skill.id}
+                  dragEnabled={dragEnabled}
+                  dragSource={dragSource}
+                  dropOver={dropOver}
+                  onDragStart={(s, i) => setDragSource({ section: s, fromIndex: i })}
+                  onDragOver={(s, i) => setDropOver({ section: s, index: i })}
+                  onDragLeaveContainer={() => setDropOver(null)}
+                  onDrop={async (s, i) => {
+                    const src = dragSource;
+                    setDragSource(null);
+                    setDropOver(null);
+                    if (
+                      src === null ||
+                      src.section !== s ||
+                      onReorderBullet === undefined
+                    )
+                      return;
+                    if (src.fromIndex === i) return;
+                    await onReorderBullet(s, src.fromIndex, i);
+                  }}
+                  onDragEnd={() => {
+                    setDragSource(null);
+                    setDropOver(null);
+                  }}
+                  onKeyboardReorder={async (s, from, to) => {
+                    if (onReorderBullet === undefined) return;
+                    await onReorderBullet(s, from, to);
+                  }}
+                >
+                  {renderItem(skill, "skill")}
+                </DraggableRow>
               ))}
             </ul>
           )}
@@ -605,9 +733,48 @@ function ResumePane({
         onAddBullet !== undefined) && (
         <Section heading="Education">
           {content.education !== undefined && content.education.length > 0 && (
-            <ul className="space-y-2" data-testid="resume-education">
-              {content.education.map((edu) => (
-                <li key={edu.id}>{renderItem(edu, "education")}</li>
+            <ul
+              className="space-y-2"
+              data-testid="resume-education"
+            >
+              {content.education.map((edu, index) => (
+                <DraggableRow
+                  key={edu.id}
+                  section="education"
+                  index={index}
+                  listLength={content.education?.length ?? 0}
+                  bulletId={edu.id}
+                  isEditing={editingBulletId === edu.id}
+                  dragEnabled={dragEnabled}
+                  dragSource={dragSource}
+                  dropOver={dropOver}
+                  onDragStart={(s, i) => setDragSource({ section: s, fromIndex: i })}
+                  onDragOver={(s, i) => setDropOver({ section: s, index: i })}
+                  onDragLeaveContainer={() => setDropOver(null)}
+                  onDrop={async (s, i) => {
+                    const src = dragSource;
+                    setDragSource(null);
+                    setDropOver(null);
+                    if (
+                      src === null ||
+                      src.section !== s ||
+                      onReorderBullet === undefined
+                    )
+                      return;
+                    if (src.fromIndex === i) return;
+                    await onReorderBullet(s, src.fromIndex, i);
+                  }}
+                  onDragEnd={() => {
+                    setDragSource(null);
+                    setDropOver(null);
+                  }}
+                  onKeyboardReorder={async (s, from, to) => {
+                    if (onReorderBullet === undefined) return;
+                    await onReorderBullet(s, from, to);
+                  }}
+                >
+                  {renderItem(edu, "education")}
+                </DraggableRow>
               ))}
             </ul>
           )}
@@ -619,6 +786,194 @@ function ResumePane({
         </Section>
       )}
     </article>
+  );
+}
+
+interface DraggableRowProps {
+  readonly section: AddableSection;
+  readonly index: number;
+  readonly listLength: number;
+  readonly bulletId: string;
+  /**
+   * True when this row is in inline-edit mode; drag is suppressed
+   * to avoid conflict with text-selection inside the textarea.
+   */
+  readonly isEditing: boolean;
+  /** False in read-only contexts; row renders without drag wiring. */
+  readonly dragEnabled: boolean;
+  readonly dragSource: { readonly section: AddableSection; readonly fromIndex: number } | null;
+  readonly dropOver: { readonly section: AddableSection; readonly index: number } | null;
+  readonly onDragStart: (section: AddableSection, fromIndex: number) => void;
+  readonly onDragOver: (section: AddableSection, index: number) => void;
+  readonly onDragLeaveContainer: () => void;
+  readonly onDrop: (section: AddableSection, index: number) => void | Promise<void>;
+  readonly onDragEnd: () => void;
+  /**
+   * Keyboard-accessible reorder. Receives the section + the new
+   * index (clamped to [0, listLength-1]). Per UI guidance § ten
+   * rules: "Every mouse-reachable action is also keyboard-
+   * reachable." The drag handle exposes ArrowUp / ArrowDown
+   * shortcuts that fire this. Codex P1 on PR #196.
+   */
+  readonly onKeyboardReorder: (
+    section: AddableSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => void | Promise<void>;
+  readonly children: ReactNode;
+}
+
+/**
+ * `<li>` wrapper that adds native HTML5 drag wiring + the drop-
+ * target border highlight for sub-issue #195. Per UI guidance §
+ * Pipeline: "subtle 2px border highlight on the drop target. No
+ * physics, no bounce." `transition-colors duration-150` covers
+ * the highlight in/out.
+ *
+ * Drag is disabled when `dragEnabled === false` (read-only) or
+ * `isEditing === true` (in-flight inline edit). The non-drag
+ * path renders a plain `<li>` so legacy tests + read-only
+ * callers see no behavioral change.
+ */
+function DraggableRow({
+  section,
+  index,
+  listLength,
+  bulletId,
+  isEditing,
+  dragEnabled,
+  dragSource,
+  dropOver,
+  onDragStart,
+  onDragOver,
+  onDragLeaveContainer,
+  onDrop,
+  onDragEnd,
+  onKeyboardReorder,
+  children,
+}: DraggableRowProps): ReactElement {
+  const draggable = dragEnabled && !isEditing;
+  const isDropTarget =
+    dragSource !== null &&
+    dragSource.section === section &&
+    dropOver !== null &&
+    dropOver.section === section &&
+    dropOver.index === index &&
+    dragSource.fromIndex !== index;
+  const isBeingDragged =
+    dragSource !== null &&
+    dragSource.section === section &&
+    dragSource.fromIndex === index;
+
+  return (
+    <li
+      data-bullet-id={bulletId}
+      data-row-section={section}
+      data-row-index={index}
+      data-row-draggable={draggable ? "true" : "false"}
+      data-drop-target={isDropTarget ? "true" : "false"}
+      draggable={draggable}
+      onDragStart={
+        draggable
+          ? (e) => {
+              // Required for Firefox to actually start the drag.
+              // The data string is unused — section + fromIndex
+              // travel via React state, not the DataTransfer.
+              e.dataTransfer.setData("text/plain", bulletId);
+              e.dataTransfer.effectAllowed = "move";
+              onDragStart(section, index);
+            }
+          : undefined
+      }
+      onDragOver={
+        draggable
+          ? (e) => {
+              // preventDefault is REQUIRED on dragover for the
+              // `drop` event to fire on the target.
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              onDragOver(section, index);
+            }
+          : undefined
+      }
+      onDragLeave={
+        draggable
+          ? () => {
+              // Clear if leaving THIS row was the most recent
+              // dragover; the parent's per-section state
+              // self-corrects on the next dragover.
+              onDragLeaveContainer();
+            }
+          : undefined
+      }
+      onDrop={
+        draggable
+          ? (e) => {
+              e.preventDefault();
+              void onDrop(section, index);
+            }
+          : undefined
+      }
+      onDragEnd={draggable ? onDragEnd : undefined}
+      className={
+        // 2px border ring on the drop target; transparent border
+        // takes up the same 2px so the row doesn't shift on
+        // hover (avoids the layout-jank UI guidance rule 6
+        // explicitly forbids).
+        "rounded transition-colors duration-150 border-2 " +
+        (isDropTarget
+          ? "border-zinc-400 dark:border-zinc-500 "
+          : "border-transparent ") +
+        (isBeingDragged ? "opacity-60 " : "")
+      }
+    >
+      {draggable ? (
+        <div className="flex items-start gap-2">
+          {/*
+            Keyboard-accessible drag handle. Per UI guidance §
+            Accessibility baseline: "Every mouse-reachable action
+            is also keyboard-reachable." Mouse drag goes through
+            the parent `<li>`'s `draggable` attribute; keyboard
+            users tab here and use ArrowUp/ArrowDown to reorder.
+            Codex P1 on PR #196.
+          */}
+          <button
+            type="button"
+            aria-label={`Reorder this ${
+              section === "bullets"
+                ? "bullet"
+                : section === "skills"
+                  ? "skill"
+                  : "education entry"
+            } — use ArrowUp and ArrowDown to move`}
+            data-action="reorder-handle"
+            data-row-section={section}
+            data-row-index={index}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowUp") {
+                if (index === 0) return;
+                e.preventDefault();
+                void onKeyboardReorder(section, index, index - 1);
+                return;
+              }
+              if (e.key === "ArrowDown") {
+                if (index >= listLength - 1) return;
+                e.preventDefault();
+                void onKeyboardReorder(section, index, index + 1);
+              }
+            }}
+            // Vertical ellipsis grip ⋮⋮ in zinc — neutral tone,
+            // hover/focus saturates per the design baseline.
+            className="mt-1 cursor-grab select-none rounded px-1 py-0.5 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 dark:text-zinc-600 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+          >
+            <span aria-hidden="true">⋮⋮</span>
+          </button>
+          <div className="flex-1 min-w-0">{children}</div>
+        </div>
+      ) : (
+        children
+      )}
+    </li>
   );
 }
 

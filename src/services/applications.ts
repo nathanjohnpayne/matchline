@@ -263,6 +263,137 @@ export async function addBulletToAsset(
 }
 
 /**
+ * Outcome of a `reorderBulletsInAsset` call.
+ *
+ * `no-change` is distinct from `reordered` so the route can skip
+ * the post-mutation refetch + (eventual) validateAsset round-trip
+ * when the from/to indices are equal — a no-op write.
+ */
+export type ReorderBulletResult =
+  | { readonly status: "reordered" }
+  | { readonly status: "no-change" }
+  | { readonly status: "application-not-found" }
+  | { readonly status: "asset-not-found" }
+  | { readonly status: "index-not-found" };
+
+/**
+ * Reorder a bullet within a section by splicing it from `fromIndex`
+ * to `toIndex` (sub-issue #195, parent #189 / #24).
+ *
+ * **Preserves `validation_status` + `validation_flags`.** Reorder
+ * is a position-only change — it doesn't alter any claim's text
+ * or `source_unit_ids`. The validator's output is keyed by
+ * `bullet_id` (which is stable across reorder), so existing
+ * flags remain semantically correct AND the validator would
+ * produce an identical result if re-run. Marking the asset
+ * stale on reorder would block export forever (the route's
+ * reorder flow doesn't call `validateAsset` to recover), so
+ * keep the status untouched. Codex P1 round 2 on PR #196.
+ *
+ * Index bounds are checked against the targeted section's
+ * current length; out-of-range indices reject with
+ * `index-not-found`. `fromIndex === toIndex` short-circuits
+ * with `no-change` to avoid a no-op Firestore write.
+ *
+ * Cross-section reorder is intentionally NOT supported: a bullet
+ * written for the Bullets section doesn't translate cleanly to a
+ * skill or education entry. Callers that want cross-section
+ * movement should remove + add (or wait for a future feature).
+ */
+export async function reorderBulletsInAsset(
+  applicationId: string,
+  assetId: string,
+  section: AddableSection,
+  fromIndex: number,
+  toIndex: number,
+): Promise<ReorderBulletResult> {
+  if (fromIndex === toIndex) return { status: "no-change" };
+
+  const app = await getApplication(applicationId);
+  if (app === undefined) return { status: "application-not-found" };
+
+  const assets = app.generated_assets ?? [];
+  const assetIndex = assets.findIndex((a) => a.id === assetId);
+  if (assetIndex === -1) return { status: "asset-not-found" };
+  const target = assets[assetIndex];
+  const content = target.generated_content;
+  if (content === undefined) return { status: "asset-not-found" };
+
+  const list = sectionList(content, section);
+  if (
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= list.length ||
+    toIndex >= list.length
+  ) {
+    return { status: "index-not-found" };
+  }
+
+  const next = reorderArray(list, fromIndex, toIndex);
+  const nextContent = withSectionList(content, section, next);
+
+  // Preserve validation_status + validation_flags from the prior
+  // asset — see docstring above.
+  const nextAsset: AssetRef = {
+    ...target,
+    generated_content: nextContent,
+  };
+  const nextAssets = [...assets];
+  nextAssets[assetIndex] = nextAsset;
+
+  await updateDoc(ref(applicationId), {
+    generated_assets: nextAssets,
+  });
+  return { status: "reordered" };
+}
+
+/**
+ * Pure helper: return the array at `content[section]`, or `[]` for
+ * `education` when undefined. Exported so the unit tests can
+ * exercise the section-dispatch + reorder math without mocking
+ * Firestore.
+ */
+export function sectionList(
+  content: GeneratedAssetContent,
+  section: AddableSection,
+): readonly GeneratedItem[] {
+  if (section === "bullets") return content.bullets;
+  if (section === "skills") return content.skills;
+  return content.education ?? [];
+}
+
+/**
+ * Pure helper: replace a single section list, leaving the other
+ * three (summary / the other two arrays) untouched. Mirrors the
+ * spread shape used by add / remove / edit. Exported for tests.
+ */
+export function withSectionList(
+  content: GeneratedAssetContent,
+  section: AddableSection,
+  list: readonly GeneratedItem[],
+): GeneratedAssetContent {
+  if (section === "bullets") return { ...content, bullets: [...list] };
+  if (section === "skills") return { ...content, skills: [...list] };
+  return { ...content, education: [...list] };
+}
+
+/**
+ * Pure helper: return a new array with the element at `from`
+ * spliced into the position `to`. Caller bounds-checks. Exported
+ * so the reorder math is unit-testable in isolation.
+ */
+export function reorderArray<T>(
+  list: readonly T[],
+  fromIndex: number,
+  toIndex: number,
+): T[] {
+  const out = [...list];
+  const [moved] = out.splice(fromIndex, 1);
+  out.splice(toIndex, 0, moved);
+  return out;
+}
+
+/**
  * Outcome of an `editBulletInAsset` call. Mirrors the
  * `RemoveBulletResult` shape so the editor's UI surface can apply
  * one decision pattern across both mutation paths.
