@@ -28,6 +28,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
@@ -237,6 +238,15 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
+  // Serialize reorder requests. Holding ArrowDown on the
+  // keyboard handle fires onKeyDown repeatedly before the first
+  // round-trip's refetch updates indices; each call uses the
+  // stale `index` captured from the current render, so concurrent
+  // requests would move the wrong row after the first mutation
+  // landed. Drop overlapping calls — the user can re-press once
+  // the in-flight round-trip lands. Codex P2 round 3 on PR #196.
+  const reorderInFlightRef = useRef(false);
+
   const onReorderBullet = useCallback(
     async (
       section: AddableSection,
@@ -244,6 +254,8 @@ function ApplicationEditorInner({
       toIndex: number,
     ): Promise<void> => {
       if (asset === null || applicationId === undefined) return;
+      if (reorderInFlightRef.current) return;
+      reorderInFlightRef.current = true;
       try {
         const result = await reorderBulletsInAsset(
           applicationId,
@@ -277,6 +289,8 @@ function ApplicationEditorInner({
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("reorderBulletsInAsset failed", err);
+      } finally {
+        reorderInFlightRef.current = false;
       }
     },
     [applicationId, asset, refetchApplication],
