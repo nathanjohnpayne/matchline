@@ -259,12 +259,12 @@ function ApplicationEditorInner({
           return;
         }
         // Refetch so the pane sees the new order. Skip the
-        // validateAsset round-trip — reorder doesn't change any
-        // claim text or grounding, so existing flags remain valid.
-        // Status stays stale until the user saves an edit (which
-        // does run validateAsset) or the orchestrator is called
-        // out-of-band; export gate respects the stale state in
-        // either case.
+        // validateAsset round-trip — reorder is a position-only
+        // change, so existing flags remain valid + the asset's
+        // `validation_status` is preserved by the service helper
+        // (Codex P1 round 2 on PR #196: marking stale here would
+        // permanently block export until the user made an
+        // unrelated text edit).
         try {
           await refetchApplication();
         } catch (err) {

@@ -280,19 +280,25 @@ export type ReorderBulletResult =
  * Reorder a bullet within a section by splicing it from `fromIndex`
  * to `toIndex` (sub-issue #195, parent #189 / #24).
  *
- * On success: flips `validation_status` to `"stale"` (same shape
- * as edit / remove / add — any post-validation content change
- * leaves validation in a stale state until re-run). Index bounds
- * are checked against the targeted section's current length;
- * out-of-range indices reject with `index-not-found`.
+ * **Preserves `validation_status` + `validation_flags`.** Reorder
+ * is a position-only change — it doesn't alter any claim's text
+ * or `source_unit_ids`. The validator's output is keyed by
+ * `bullet_id` (which is stable across reorder), so existing
+ * flags remain semantically correct AND the validator would
+ * produce an identical result if re-run. Marking the asset
+ * stale on reorder would block export forever (the route's
+ * reorder flow doesn't call `validateAsset` to recover), so
+ * keep the status untouched. Codex P1 round 2 on PR #196.
+ *
+ * Index bounds are checked against the targeted section's
+ * current length; out-of-range indices reject with
+ * `index-not-found`. `fromIndex === toIndex` short-circuits
+ * with `no-change` to avoid a no-op Firestore write.
  *
  * Cross-section reorder is intentionally NOT supported: a bullet
  * written for the Bullets section doesn't translate cleanly to a
  * skill or education entry. Callers that want cross-section
  * movement should remove + add (or wait for a future feature).
- *
- * `fromIndex === toIndex` short-circuits with `no-change` to
- * avoid a no-op Firestore write.
  */
 export async function reorderBulletsInAsset(
   applicationId: string,
@@ -326,10 +332,11 @@ export async function reorderBulletsInAsset(
   const next = reorderArray(list, fromIndex, toIndex);
   const nextContent = withSectionList(content, section, next);
 
+  // Preserve validation_status + validation_flags from the prior
+  // asset — see docstring above.
   const nextAsset: AssetRef = {
     ...target,
     generated_content: nextContent,
-    validation_status: "stale",
   };
   const nextAssets = [...assets];
   nextAssets[assetIndex] = nextAsset;

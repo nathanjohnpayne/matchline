@@ -944,10 +944,30 @@ describe("reorderBulletsInAsset (Firestore-mocked, sub-issue #195)", () => {
     expect(r.status).toBe("index-not-found");
   });
 
-  it("reorders bullets within a section, flips status to stale, writes the patched generated_assets", async () => {
+  it("reorders bullets within a section, PRESERVES validation_status + flags, writes the patched generated_assets", async () => {
+    // Codex P1 on PR #196: reorder is a position-only change.
+    // It doesn't alter any claim text or grounding, so flags
+    // remain semantically correct — and the export gate must
+    // not block on a pure reorder. validation_status is preserved
+    // (a "passed" asset stays passable; a "failed" asset's flags
+    // remain).
+    const a = asset({
+      validation_status: "passed",
+      validation_flags: [
+        {
+          id: "f1",
+          asset_id: "asset-1",
+          bullet_id: "b1",
+          claim_id: "c1",
+          status: "traced",
+          rationale: "ok",
+          created_at: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+    });
     getDoc.mockResolvedValueOnce({
       exists: () => true,
-      data: () => application(),
+      data: () => application({ generated_assets: [a] }),
     });
     updateDoc.mockResolvedValueOnce(undefined);
     const r = await reorderBulletsInAsset(
@@ -963,10 +983,44 @@ describe("reorderBulletsInAsset (Firestore-mocked, sub-issue #195)", () => {
       generated_assets: AssetRef[];
     };
     const writtenAsset = writePayload.generated_assets[0];
-    expect(writtenAsset.validation_status).toBe("stale");
+    // Status preserved, NOT flipped to stale.
+    expect(writtenAsset.validation_status).toBe("passed");
+    // Flags preserved (bullet_id stable across reorder so they
+    // remain valid).
+    expect(writtenAsset.validation_flags).toHaveLength(1);
+    expect(writtenAsset.validation_flags?.[0]?.id).toBe("f1");
     const bullets = writtenAsset.generated_content?.bullets ?? [];
     // Fixture order [b1, b2]; reorder 0 → 1 produces [b2, b1].
     expect(bullets.map((b) => b.id)).toEqual(["b2", "b1"]);
+  });
+
+  it("preserves a 'failed' status (with its flags) on reorder — export gate stays in its prior state", async () => {
+    const a = asset({
+      validation_status: "failed",
+      validation_flags: [
+        {
+          id: "f1",
+          asset_id: "asset-1",
+          bullet_id: "b1",
+          claim_id: "c1",
+          status: "untraceable",
+          rationale: "no source",
+          created_at: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await reorderBulletsInAsset("app-1", "asset-1", "bullets", 0, 1);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const writtenAsset = writePayload.generated_assets[0];
+    expect(writtenAsset.validation_status).toBe("failed");
+    expect(writtenAsset.validation_flags).toHaveLength(1);
   });
 
   it("reorders skills when section='skills'", async () => {
