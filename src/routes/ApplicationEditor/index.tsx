@@ -38,6 +38,7 @@ import {
   editBulletInAsset,
   getApplication,
   removeBulletFromAsset,
+  reorderBulletsInAsset,
   type AddableSection,
 } from "../../services/applications.ts";
 import {
@@ -236,6 +237,51 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
+  const onReorderBullet = useCallback(
+    async (
+      section: AddableSection,
+      fromIndex: number,
+      toIndex: number,
+    ): Promise<void> => {
+      if (asset === null || applicationId === undefined) return;
+      try {
+        const result = await reorderBulletsInAsset(
+          applicationId,
+          asset.id,
+          section,
+          fromIndex,
+          toIndex,
+        );
+        if (result.status !== "reordered") {
+          // no-change / index-not-found / *-not-found are silent;
+          // shouldn't happen from the UI in normal flow (the drag
+          // handler bounds-checks before calling).
+          return;
+        }
+        // Refetch so the pane sees the new order. Skip the
+        // validateAsset round-trip — reorder doesn't change any
+        // claim text or grounding, so existing flags remain valid.
+        // Status stays stale until the user saves an edit (which
+        // does run validateAsset) or the orchestrator is called
+        // out-of-band; export gate respects the stale state in
+        // either case.
+        try {
+          await refetchApplication();
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "refetchApplication failed after successful reorder",
+            err,
+          );
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("reorderBulletsInAsset failed", err);
+      }
+    },
+    [applicationId, asset, refetchApplication],
+  );
+
   const onAddBullet = useCallback(
     async (section: AddableSection): Promise<string | null> => {
       if (asset === null || applicationId === undefined) return null;
@@ -422,6 +468,7 @@ function ApplicationEditorInner({
         onExport={onExport}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
+        onReorderBullet={onReorderBullet}
       />
       {manualAddOpen && (
         <ManualAddForm

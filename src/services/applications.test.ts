@@ -59,6 +59,10 @@ const {
   editBulletInAsset,
   editBulletInContent,
   addBulletToAsset,
+  reorderBulletsInAsset,
+  reorderArray,
+  sectionList,
+  withSectionList,
 } = await import("./applications.ts");
 
 import type {
@@ -765,6 +769,253 @@ describe("addBulletToAsset (Firestore-mocked, sub-issue #193)", () => {
     await addBulletToAsset("app-1", "asset-1", "bullets", {
       generateId: () => "x",
     });
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const untouched = writePayload.generated_assets.find(
+      (a) => a.id === "asset-2",
+    );
+    expect(untouched?.validation_status).toBe("passed");
+  });
+});
+
+describe("reorderArray (pure helper)", () => {
+  it("moves an element forward (lower index → higher)", () => {
+    expect(reorderArray(["a", "b", "c", "d"], 0, 2)).toEqual([
+      "b",
+      "c",
+      "a",
+      "d",
+    ]);
+  });
+
+  it("moves an element backward (higher index → lower)", () => {
+    expect(reorderArray(["a", "b", "c", "d"], 3, 1)).toEqual([
+      "a",
+      "d",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("returns a new array reference (immutable)", () => {
+    const input = ["a", "b"];
+    const out = reorderArray(input, 0, 1);
+    expect(out).not.toBe(input);
+    expect(input).toEqual(["a", "b"]);
+  });
+});
+
+describe("sectionList + withSectionList (pure helpers)", () => {
+  it("sectionList returns bullets / skills / education", () => {
+    const c: GeneratedAssetContent = {
+      summary: { id: "s", text: "summary", source_unit_ids: [] },
+      bullets: [{ id: "b", text: "b", source_unit_ids: [] }],
+      skills: [{ id: "sk", text: "sk", source_unit_ids: [] }],
+      education: [{ id: "e", text: "e", source_unit_ids: [] }],
+    };
+    expect(sectionList(c, "bullets").map((x) => x.id)).toEqual(["b"]);
+    expect(sectionList(c, "skills").map((x) => x.id)).toEqual(["sk"]);
+    expect(sectionList(c, "education").map((x) => x.id)).toEqual(["e"]);
+  });
+
+  it("sectionList returns [] for education when undefined", () => {
+    const c: GeneratedAssetContent = {
+      summary: { id: "s", text: "summary", source_unit_ids: [] },
+      bullets: [],
+      skills: [],
+    };
+    expect(sectionList(c, "education")).toEqual([]);
+  });
+
+  it("withSectionList replaces only the targeted section, leaves others untouched", () => {
+    const c: GeneratedAssetContent = {
+      summary: { id: "s", text: "summary", source_unit_ids: [] },
+      bullets: [{ id: "b1", text: "b1", source_unit_ids: [] }],
+      skills: [{ id: "sk1", text: "sk1", source_unit_ids: [] }],
+    };
+    const next = withSectionList(c, "bullets", [
+      { id: "b2", text: "b2", source_unit_ids: [] },
+    ]);
+    expect(next.bullets.map((b) => b.id)).toEqual(["b2"]);
+    expect(next.skills).toBe(c.skills);
+    expect(next.summary).toBe(c.summary);
+  });
+});
+
+describe("reorderBulletsInAsset (Firestore-mocked, sub-issue #195)", () => {
+  it("returns 'no-change' when fromIndex === toIndex (no Firestore work)", async () => {
+    const r = await reorderBulletsInAsset("app-1", "asset-1", "bullets", 0, 0);
+    expect(r.status).toBe("no-change");
+    expect(getDoc).not.toHaveBeenCalled();
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'application-not-found' when the application doesn't exist", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => false,
+      data: () => undefined,
+    });
+    const r = await reorderBulletsInAsset(
+      "missing",
+      "asset-1",
+      "bullets",
+      0,
+      1,
+    );
+    expect(r.status).toBe("application-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'application-not-found' on permission-denied (anti-enumeration parity)", async () => {
+    getDoc.mockRejectedValueOnce(
+      new FirebaseError("permission-denied", "denied"),
+    );
+    const r = await reorderBulletsInAsset(
+      "foreign",
+      "asset-1",
+      "bullets",
+      0,
+      1,
+    );
+    expect(r.status).toBe("application-not-found");
+  });
+
+  it("returns 'asset-not-found' when the asset id is unknown", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "wrong-asset",
+      "bullets",
+      0,
+      1,
+    );
+    expect(r.status).toBe("asset-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'index-not-found' when fromIndex is out of range", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "asset-1",
+      "bullets",
+      99,
+      0,
+    );
+    expect(r.status).toBe("index-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'index-not-found' when toIndex is out of range", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "asset-1",
+      "bullets",
+      0,
+      99,
+    );
+    expect(r.status).toBe("index-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'index-not-found' for negative indices (distinct values to avoid the equal short-circuit)", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "asset-1",
+      "bullets",
+      -1,
+      0,
+    );
+    expect(r.status).toBe("index-not-found");
+  });
+
+  it("reorders bullets within a section, flips status to stale, writes the patched generated_assets", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "asset-1",
+      "bullets",
+      0,
+      1,
+    );
+    expect(r.status).toBe("reordered");
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const writtenAsset = writePayload.generated_assets[0];
+    expect(writtenAsset.validation_status).toBe("stale");
+    const bullets = writtenAsset.generated_content?.bullets ?? [];
+    // Fixture order [b1, b2]; reorder 0 → 1 produces [b2, b1].
+    expect(bullets.map((b) => b.id)).toEqual(["b2", "b1"]);
+  });
+
+  it("reorders skills when section='skills'", async () => {
+    const a = asset({
+      generated_content: {
+        summary: { id: "s", text: "summary", source_unit_ids: [] },
+        bullets: [],
+        skills: [
+          { id: "sk1", text: "skill 1", source_unit_ids: [] },
+          { id: "sk2", text: "skill 2", source_unit_ids: [] },
+          { id: "sk3", text: "skill 3", source_unit_ids: [] },
+        ],
+      },
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    const r = await reorderBulletsInAsset(
+      "app-1",
+      "asset-1",
+      "skills",
+      2,
+      0,
+    );
+    expect(r.status).toBe("reordered");
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const skills =
+      writePayload.generated_assets[0].generated_content?.skills ?? [];
+    // Reorder 2 → 0: [sk1, sk2, sk3] → [sk3, sk1, sk2].
+    expect(skills.map((s) => s.id)).toEqual(["sk3", "sk1", "sk2"]);
+  });
+
+  it("does not flip an unrelated asset's status to stale when reordering a specific asset", async () => {
+    const otherAsset = asset({
+      id: "asset-2",
+      kind: "cover_letter",
+      validation_status: "passed",
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () =>
+        application({ generated_assets: [asset(), otherAsset] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await reorderBulletsInAsset("app-1", "asset-1", "bullets", 0, 1);
     const writePayload = updateDoc.mock.calls[0]?.[1] as {
       generated_assets: AssetRef[];
     };
