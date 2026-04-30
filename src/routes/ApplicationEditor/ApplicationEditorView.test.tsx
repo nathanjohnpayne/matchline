@@ -1103,6 +1103,66 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain('data-row-draggable="true"');
   });
 
+  it("renders a keyboard-accessible drag handle on each draggable row (sub-issue #195 a11y AC, Codex P1)", () => {
+    // UI guidance § Accessibility baseline: "Every mouse-
+    // reachable action is also keyboard-reachable." Drag-only
+    // reorder violates that. The handle button exposes
+    // ArrowUp/ArrowDown for keyboard reorder; keyboard-only +
+    // assistive-tech users can perform the same action mouse
+    // users get via drag.
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+              { id: "b2", text: "Two.", source_unit_ids: [] },
+            ],
+            skills: [
+              { id: "sk1", text: "Skill.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+        onReorderBullet={async () => undefined}
+      />,
+    );
+    // One handle button per draggable row.
+    const handles = html.match(/data-action="reorder-handle"/g) ?? [];
+    expect(handles.length).toBe(3); // 2 bullets + 1 skill
+    // aria-label per handle for screen readers.
+    expect(html).toMatch(
+      /aria-label="Reorder this bullet — use ArrowUp and ArrowDown to move"/,
+    );
+    expect(html).toMatch(
+      /aria-label="Reorder this skill — use ArrowUp and ArrowDown to move"/,
+    );
+    // Handle is a button (so it's keyboard-focusable by default).
+    expect(html).toMatch(
+      /<button[^>]*data-action="reorder-handle"/,
+    );
+  });
+
+  it("does not render the keyboard drag handle when onReorderBullet is absent", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({
+          generated_content: content({
+            bullets: [
+              { id: "b1", text: "One.", source_unit_ids: [] },
+            ],
+          }),
+        })}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-action="reorder-handle"');
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

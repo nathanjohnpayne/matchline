@@ -656,6 +656,10 @@ function ResumePane({
                   setDragSource(null);
                   setDropOver(null);
                 }}
+                onKeyboardReorder={async (s, from, to) => {
+                  if (onReorderBullet === undefined) return;
+                  await onReorderBullet(s, from, to);
+                }}
               >
                 {renderItem(bullet, "bullet")}
               </DraggableRow>
@@ -706,6 +710,10 @@ function ResumePane({
                   onDragEnd={() => {
                     setDragSource(null);
                     setDropOver(null);
+                  }}
+                  onKeyboardReorder={async (s, from, to) => {
+                    if (onReorderBullet === undefined) return;
+                    await onReorderBullet(s, from, to);
                   }}
                 >
                   {renderItem(skill, "skill")}
@@ -760,6 +768,10 @@ function ResumePane({
                     setDragSource(null);
                     setDropOver(null);
                   }}
+                  onKeyboardReorder={async (s, from, to) => {
+                    if (onReorderBullet === undefined) return;
+                    await onReorderBullet(s, from, to);
+                  }}
                 >
                   {renderItem(edu, "education")}
                 </DraggableRow>
@@ -796,6 +808,18 @@ interface DraggableRowProps {
   readonly onDragLeaveContainer: () => void;
   readonly onDrop: (section: AddableSection, index: number) => void | Promise<void>;
   readonly onDragEnd: () => void;
+  /**
+   * Keyboard-accessible reorder. Receives the section + the new
+   * index (clamped to [0, listLength-1]). Per UI guidance § ten
+   * rules: "Every mouse-reachable action is also keyboard-
+   * reachable." The drag handle exposes ArrowUp / ArrowDown
+   * shortcuts that fire this. Codex P1 on PR #196.
+   */
+  readonly onKeyboardReorder: (
+    section: AddableSection,
+    fromIndex: number,
+    toIndex: number,
+  ) => void | Promise<void>;
   readonly children: ReactNode;
 }
 
@@ -814,6 +838,7 @@ interface DraggableRowProps {
 function DraggableRow({
   section,
   index,
+  listLength,
   bulletId,
   isEditing,
   dragEnabled,
@@ -824,6 +849,7 @@ function DraggableRow({
   onDragLeaveContainer,
   onDrop,
   onDragEnd,
+  onKeyboardReorder,
   children,
 }: DraggableRowProps): ReactElement {
   const draggable = dragEnabled && !isEditing;
@@ -901,7 +927,52 @@ function DraggableRow({
         (isBeingDragged ? "opacity-60 " : "")
       }
     >
-      {children}
+      {draggable ? (
+        <div className="flex items-start gap-2">
+          {/*
+            Keyboard-accessible drag handle. Per UI guidance §
+            Accessibility baseline: "Every mouse-reachable action
+            is also keyboard-reachable." Mouse drag goes through
+            the parent `<li>`'s `draggable` attribute; keyboard
+            users tab here and use ArrowUp/ArrowDown to reorder.
+            Codex P1 on PR #196.
+          */}
+          <button
+            type="button"
+            aria-label={`Reorder this ${
+              section === "bullets"
+                ? "bullet"
+                : section === "skills"
+                  ? "skill"
+                  : "education entry"
+            } — use ArrowUp and ArrowDown to move`}
+            data-action="reorder-handle"
+            data-row-section={section}
+            data-row-index={index}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowUp") {
+                if (index === 0) return;
+                e.preventDefault();
+                void onKeyboardReorder(section, index, index - 1);
+                return;
+              }
+              if (e.key === "ArrowDown") {
+                if (index >= listLength - 1) return;
+                e.preventDefault();
+                void onKeyboardReorder(section, index, index + 1);
+              }
+            }}
+            // Vertical ellipsis grip ⋮⋮ in zinc — neutral tone,
+            // hover/focus saturates per the design baseline.
+            className="mt-1 cursor-grab select-none rounded px-1 py-0.5 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 dark:text-zinc-600 dark:hover:text-zinc-200 dark:hover:bg-zinc-800 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+          >
+            <span aria-hidden="true">⋮⋮</span>
+          </button>
+          <div className="flex-1 min-w-0">{children}</div>
+        </div>
+      ) : (
+        children
+      )}
     </li>
   );
 }
