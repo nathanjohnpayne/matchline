@@ -291,23 +291,14 @@ function ApplicationEditorInner({
     [asset],
   );
 
-  // Serialize undo restores. Each onUndo call kicks off an async
-  // restore round-trip; without a gate, holding Cmd+Z fires
-  // multiple concurrent restores. Out-of-order network completion
-  // could land Firestore on the wrong snapshot. Drop overlapping
-  // calls (and don't pop the stack) until the in-flight restore
-  // lands. Codex P1 on PR #198. Same shape as
-  // `reorderInFlightRef` for keyboard-repeat reorder.
-  const undoInFlightRef = useRef(false);
-
   const onUndo = useCallback(async (): Promise<void> => {
     if (applicationId === undefined) return;
-    if (undoInFlightRef.current) return;
+    if (mutationInFlightRef.current) return;
     // Read the current top of the stack BEFORE pop so the gated
     // call can reject without mutating state.
     const top = undoStack[undoStack.length - 1];
     if (top === undefined) return;
-    undoInFlightRef.current = true;
+    mutationInFlightRef.current = true;
     // Pop optimistically — the affordance updates immediately so
     // the user sees the stack shrink. If the restore fails, we
     // re-push to keep the stack consistent (the Firestore state
@@ -339,18 +330,26 @@ function ApplicationEditorInner({
       // Re-push on transport failure too so the user can retry.
       setUndoStack((prev) => [...prev, top]);
     } finally {
-      undoInFlightRef.current = false;
+      mutationInFlightRef.current = false;
     }
   }, [applicationId, refetchApplication, undoStack]);
 
-  // Serialize reorder requests. Holding ArrowDown on the
-  // keyboard handle fires onKeyDown repeatedly before the first
-  // round-trip's refetch updates indices; each call uses the
-  // stale `index` captured from the current render, so concurrent
-  // requests would move the wrong row after the first mutation
-  // landed. Drop overlapping calls — the user can re-press once
-  // the in-flight round-trip lands. Codex P2 round 3 on PR #196.
-  const reorderInFlightRef = useRef(false);
+  // Serialize all asset mutations (edit / remove / add / reorder).
+  // Originally a per-handler gate (reorderInFlightRef on PR #196,
+  // undoInFlightRef on PR #198), but Codex P1 round 3 on PR #198
+  // surfaced a cross-handler bug: two rapid Add clicks before
+  // the first refetch both captured the same pre-mutation
+  // `asset` from the closure, so both pushed the SAME undo
+  // snapshot. The undo stack then collapsed both actions into
+  // one revert. Same shape applies to any cross-handler
+  // overlap: Edit → Add, Reorder → Edit, etc.
+  //
+  // Single in-flight ref gates EVERY mutation: pushUndo + service
+  // call + refetch run as one atomic unit; subsequent mutations
+  // wait for the in-flight one to finish (their click is dropped
+  // — the user can re-press). The gate replaces the per-handler
+  // reorderInFlightRef + undoInFlightRef.
+  const mutationInFlightRef = useRef(false);
 
   const onReorderBullet = useCallback(
     async (
@@ -359,8 +358,8 @@ function ApplicationEditorInner({
       toIndex: number,
     ): Promise<void> => {
       if (asset === null || applicationId === undefined) return;
-      if (reorderInFlightRef.current) return;
-      reorderInFlightRef.current = true;
+      if (mutationInFlightRef.current) return;
+      mutationInFlightRef.current = true;
       // Push the pre-mutation snapshot before the round-trip so
       // undo restores the original order. If the mutation
       // returns "no-change" / errors, we leave the snapshot in
@@ -401,7 +400,7 @@ function ApplicationEditorInner({
         // eslint-disable-next-line no-console
         console.warn("reorderBulletsInAsset failed", err);
       } finally {
-        reorderInFlightRef.current = false;
+        mutationInFlightRef.current = false;
       }
     },
     [applicationId, asset, refetchApplication, pushUndo],
@@ -410,6 +409,8 @@ function ApplicationEditorInner({
   const onAddBullet = useCallback(
     async (section: AddableSection): Promise<string | null> => {
       if (asset === null || applicationId === undefined) return null;
+      if (mutationInFlightRef.current) return null;
+      mutationInFlightRef.current = true;
       // Snapshot before the add. Undo will pop the new bullet
       // (the snapshot restores the asset to the pre-add state,
       // which has neither the new bullet nor any of its edits).
@@ -438,6 +439,8 @@ function ApplicationEditorInner({
         // eslint-disable-next-line no-console
         console.warn("addBulletToAsset failed", err);
         return null;
+      } finally {
+        mutationInFlightRef.current = false;
       }
     },
     [applicationId, asset, refetchApplication, pushUndo],
@@ -446,12 +449,15 @@ function ApplicationEditorInner({
   const onSaveBulletEdit = useCallback(
     async (bulletId: string, newText: string): Promise<void> => {
       if (asset === null || applicationId === undefined) return;
+      if (mutationInFlightRef.current) return;
+      mutationInFlightRef.current = true;
       // Snapshot before the edit. Restoration via undo gets the
       // bullet back to its prior text + source_unit_ids + the
       // validation flags as they were. Pushed before the round-
       // trip; if the save returns no-change the snapshot is
       // wasteful but harmless (undo is a no-op write).
       pushUndo("edit");
+      try {
       // 1. Patch the Application doc — flips validation_status to
       //    "stale" + clears the bullet's source_unit_ids on success.
       const result = await editBulletInAsset(
@@ -512,6 +518,15 @@ function ApplicationEditorInner({
           err,
         );
       }
+      } finally {
+        // Outer try/finally wraps the whole post-pushUndo flow so
+        // the gate clears on every exit path (success, throw on
+        // unexpected status, no-change return, validateAsset
+        // error, refetch error). Without this, an early
+        // `throw new Error("Couldn't save edit: ...")` would
+        // leave the gate locked indefinitely.
+        mutationInFlightRef.current = false;
+      }
     },
     [applicationId, asset, refetchApplication, pushUndo],
   );
@@ -519,6 +534,8 @@ function ApplicationEditorInner({
   const onRemoveBullet = useCallback(
     async (bulletId: string) => {
       if (asset === null) return;
+      if (mutationInFlightRef.current) return;
+      mutationInFlightRef.current = true;
       // Snapshot before remove. Undo restores the deleted bullet
       // (and any flags attached to it) to their pre-remove state.
       pushUndo("remove");
@@ -544,6 +561,8 @@ function ApplicationEditorInner({
         // CodeRabbit Major on PR #182.
         // eslint-disable-next-line no-console
         console.warn("removeBulletFromAsset failed", err);
+      } finally {
+        mutationInFlightRef.current = false;
       }
     },
     [applicationId, asset, refetchApplication, pushUndo],
