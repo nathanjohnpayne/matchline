@@ -1,5 +1,6 @@
 import { FirebaseError } from "firebase/app";
 import {
+  deleteField,
   getDoc,
   getDocs,
   query,
@@ -322,17 +323,41 @@ export async function restoreAssetState(
   if (assetIndex === -1) return { status: "asset-not-found" };
   const target = assets[assetIndex];
 
-  const nextAsset: AssetRef = {
-    ...target,
-    generated_content: snapshot.content,
-    validation_status: snapshot.validation_status,
-    validation_flags:
-      snapshot.validation_flags === undefined
-        ? undefined
-        : [...snapshot.validation_flags],
-  };
+  // Build the restored AssetRef. validation_flags handling:
+  //   - Snapshot has flags: write them back as an array.
+  //   - Snapshot has undefined: use Firestore's `deleteField()`
+  //     sentinel to REMOVE the existing field. Writing
+  //     `validation_flags: undefined` would either be rejected
+  //     (Firestore rejects raw undefined unless
+  //     `ignoreUndefinedProperties` is set, which this client
+  //     does not) or silently leave the existing array in place
+  //     — neither matches the snapshot's intent (the asset had
+  //     no flags at snapshot time; restore should clear).
+  //     Codex P2 on PR #198.
+  //
+  // The cast through `unknown` is necessary because
+  // `validation_flags` is typed as `ValidationFlag[] | undefined`
+  // but at the Firestore-write level we're substituting
+  // `FieldValue` for the undefined case. Other consumers (the
+  // returned object, tests reading the write payload) see the
+  // ValidationFlag[] case through this cast — they pin the
+  // semantic shape, not the raw value.
   const nextAssets = [...assets];
-  nextAssets[assetIndex] = nextAsset;
+  if (snapshot.validation_flags === undefined) {
+    nextAssets[assetIndex] = {
+      ...target,
+      generated_content: snapshot.content,
+      validation_status: snapshot.validation_status,
+      validation_flags: deleteField() as unknown as undefined,
+    };
+  } else {
+    nextAssets[assetIndex] = {
+      ...target,
+      generated_content: snapshot.content,
+      validation_status: snapshot.validation_status,
+      validation_flags: [...snapshot.validation_flags],
+    };
+  }
 
   await updateDoc(ref(applicationId), {
     generated_assets: nextAssets,

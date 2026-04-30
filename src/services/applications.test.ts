@@ -22,6 +22,14 @@ const getDoc = vi.fn();
 
 const updateDoc = vi.fn();
 
+// Sentinel returned by the mocked `deleteField()`. The
+// restoreAssetState helper uses it to clear validation_flags
+// when the snapshot's flags are undefined (Firestore rejects
+// raw undefined; deleteField is the documented sentinel).
+// Tests can `===`-compare against this to verify the helper
+// uses the sentinel rather than writing undefined.
+const DELETE_FIELD_SENTINEL = Symbol("deleteField");
+
 vi.mock("firebase/firestore", () => ({
   getDoc: (...args: unknown[]) => getDoc(...args),
   getDocs: () => {
@@ -35,6 +43,7 @@ vi.mock("firebase/firestore", () => ({
     throw new Error("setDoc not mocked in applications.test.ts");
   },
   updateDoc: (...args: unknown[]) => updateDoc(...args),
+  deleteField: () => DELETE_FIELD_SENTINEL,
   where: () => undefined,
 }));
 
@@ -1209,7 +1218,14 @@ describe("restoreAssetState (Firestore-mocked, sub-issue #197)", () => {
     expect(untouched?.validation_status).toBe("failed");
   });
 
-  it("supports a snapshot with undefined validation_flags (legacy assets)", async () => {
+  it("uses Firestore's deleteField() sentinel for an undefined-flags snapshot (Codex P2 on PR #198)", async () => {
+    // Firestore rejects raw `undefined` field values unless
+    // `ignoreUndefinedProperties` is set on the client (this
+    // client does not). The right primitive for "remove this
+    // field" is the deleteField() sentinel. Without it, restore
+    // for legacy snapshots either fails at runtime OR silently
+    // leaves the existing flags in place — neither matches the
+    // snapshot's intent.
     const legacySnapshot = {
       content: snapshot.content,
       validation_status: "pending" as const,
@@ -1222,10 +1238,12 @@ describe("restoreAssetState (Firestore-mocked, sub-issue #197)", () => {
     updateDoc.mockResolvedValueOnce(undefined);
     await restoreAssetState("app-1", "asset-1", legacySnapshot);
     const writePayload = updateDoc.mock.calls[0]?.[1] as {
-      generated_assets: AssetRef[];
+      generated_assets: { validation_flags: unknown }[];
     };
-    const written = writePayload.generated_assets[0];
-    expect(written.validation_status).toBe("pending");
-    expect(written.validation_flags).toBeUndefined();
+    const writtenFlags = writePayload.generated_assets[0].validation_flags;
+    // The helper writes the deleteField() sentinel (mocked above
+    // as a Symbol) — NOT raw undefined.
+    expect(writtenFlags).toBe(DELETE_FIELD_SENTINEL);
+    expect(writtenFlags).not.toBeUndefined();
   });
 });

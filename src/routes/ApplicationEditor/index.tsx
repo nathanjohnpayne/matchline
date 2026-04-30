@@ -291,36 +291,57 @@ function ApplicationEditorInner({
     [asset],
   );
 
+  // Serialize undo restores. Each onUndo call kicks off an async
+  // restore round-trip; without a gate, holding Cmd+Z fires
+  // multiple concurrent restores. Out-of-order network completion
+  // could land Firestore on the wrong snapshot. Drop overlapping
+  // calls (and don't pop the stack) until the in-flight restore
+  // lands. Codex P1 on PR #198. Same shape as
+  // `reorderInFlightRef` for keyboard-repeat reorder.
+  const undoInFlightRef = useRef(false);
+
   const onUndo = useCallback(async (): Promise<void> => {
     if (applicationId === undefined) return;
-    setUndoStack((prev) => {
-      const last = prev[prev.length - 1];
-      if (last === undefined) return prev;
-      // Fire the restore + refetch as a side effect of the
-      // pop. Errors logged but non-fatal.
-      void (async () => {
-        try {
-          const r = await restoreAssetState(
-            applicationId,
-            last.assetId,
-            last.snapshot,
-          );
-          if (r.status === "restored") {
-            try {
-              await refetchApplication();
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.warn("refetchApplication failed after undo", err);
-            }
-          }
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("restoreAssetState failed during undo", err);
-        }
-      })();
-      return prev.slice(0, prev.length - 1);
-    });
-  }, [applicationId, refetchApplication]);
+    if (undoInFlightRef.current) return;
+    // Read the current top of the stack BEFORE pop so the gated
+    // call can reject without mutating state.
+    const top = undoStack[undoStack.length - 1];
+    if (top === undefined) return;
+    undoInFlightRef.current = true;
+    // Pop optimistically — the affordance updates immediately so
+    // the user sees the stack shrink. If the restore fails, we
+    // re-push to keep the stack consistent (the Firestore state
+    // didn't change, so the snapshot is still the right next-undo
+    // target).
+    setUndoStack((prev) => prev.slice(0, prev.length - 1));
+    try {
+      const r = await restoreAssetState(
+        applicationId,
+        top.assetId,
+        top.snapshot,
+      );
+      if (r.status !== "restored") {
+        // application-/asset-not-found: re-push so the user can
+        // retry. Doc layer hasn't changed — same snapshot still
+        // applies.
+        setUndoStack((prev) => [...prev, top]);
+        return;
+      }
+      try {
+        await refetchApplication();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("refetchApplication failed after undo", err);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("restoreAssetState failed during undo", err);
+      // Re-push on transport failure too so the user can retry.
+      setUndoStack((prev) => [...prev, top]);
+    } finally {
+      undoInFlightRef.current = false;
+    }
+  }, [applicationId, refetchApplication, undoStack]);
 
   // Serialize reorder requests. Holding ArrowDown on the
   // keyboard handle fires onKeyDown repeatedly before the first
