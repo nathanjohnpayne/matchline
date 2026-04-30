@@ -1,6 +1,5 @@
 import { FirebaseError } from "firebase/app";
 import {
-  deleteField,
   getDoc,
   getDocs,
   query,
@@ -325,34 +324,34 @@ export async function restoreAssetState(
 
   // Build the restored AssetRef. validation_flags handling:
   //   - Snapshot has flags: write them back as an array.
-  //   - Snapshot has undefined: use Firestore's `deleteField()`
-  //     sentinel to REMOVE the existing field. Writing
-  //     `validation_flags: undefined` would either be rejected
-  //     (Firestore rejects raw undefined unless
-  //     `ignoreUndefinedProperties` is set, which this client
-  //     does not) or silently leave the existing array in place
-  //     — neither matches the snapshot's intent (the asset had
-  //     no flags at snapshot time; restore should clear).
-  //     Codex P2 on PR #198.
+  //   - Snapshot has undefined: omit the key entirely. Writing
+  //     `validation_flags: undefined` is rejected by Firestore
+  //     (no `ignoreUndefinedProperties`); writing
+  //     `deleteField()` is rejected inside ARRAY elements —
+  //     "deleteField() is not currently supported inside arrays"
+  //     (Codex P1 round 2 on PR #198). Since `updateDoc` writes
+  //     the whole `generated_assets` array (not a partial path),
+  //     the absence of the key in the array element is the
+  //     correct way to express "no flags": the new
+  //     `generated_assets[assetIndex]` object simply doesn't
+  //     contain `validation_flags`, matching the snapshot.
   //
-  // The cast through `unknown` is necessary because
-  // `validation_flags` is typed as `ValidationFlag[] | undefined`
-  // but at the Firestore-write level we're substituting
-  // `FieldValue` for the undefined case. Other consumers (the
-  // returned object, tests reading the write payload) see the
-  // ValidationFlag[] case through this cast — they pin the
-  // semantic shape, not the raw value.
+  // `target.validation_flags` is excluded via destructuring so
+  // the spread doesn't carry the prior asset's flags forward when
+  // the snapshot says they should be absent.
   const nextAssets = [...assets];
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { validation_flags: _existingFlags, ...targetWithoutFlags } = target;
   if (snapshot.validation_flags === undefined) {
     nextAssets[assetIndex] = {
-      ...target,
+      ...targetWithoutFlags,
       generated_content: snapshot.content,
       validation_status: snapshot.validation_status,
-      validation_flags: deleteField() as unknown as undefined,
+      // validation_flags key intentionally omitted.
     };
   } else {
     nextAssets[assetIndex] = {
-      ...target,
+      ...targetWithoutFlags,
       generated_content: snapshot.content,
       validation_status: snapshot.validation_status,
       validation_flags: [...snapshot.validation_flags],
