@@ -19,8 +19,11 @@
 import type { ReactElement } from "react";
 
 import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
-import type { Role } from "../../types/crm.ts";
+import type { Application, Role } from "../../types/crm.ts";
 
+import ApplicationsTab, {
+  type ApplicationsTabStatus,
+} from "./ApplicationsTab.tsx";
 import MatchesTab from "./MatchesTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
@@ -66,6 +69,16 @@ export interface RoleDetailViewProps {
    * regardless, so this is purely a UX signal.
    */
   readonly computingMatches: boolean;
+  /**
+   * Applications tab state (#202). Container holds the
+   * subscription + the in-flight generate call so a tab
+   * switch round-trip preserves them.
+   */
+  readonly applications: readonly Application[];
+  readonly hasApprovedMatches: boolean;
+  readonly generationStatus: ApplicationsTabStatus;
+  readonly generationError: Error | null;
+  readonly onGenerate: () => void;
 }
 
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -85,6 +98,11 @@ export default function RoleDetailView({
   onTabChange,
   onApprovalStateChange,
   computingMatches,
+  applications,
+  hasApprovedMatches,
+  generationStatus,
+  generationError,
+  onGenerate,
 }: RoleDetailViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -193,14 +211,13 @@ export default function RoleDetailView({
           />
         )}
         {activeTab === "applications" && (
-          <p
-            className="text-sm text-zinc-500"
-            data-testid="applications-tab-placeholder"
-          >
-            Applications listing ships in a later phase. Generation
-            shells through `generateResume` (#121) once the editor
-            surface (#24) lands.
-          </p>
+          <ApplicationsTab
+            applications={applications}
+            hasApprovedMatches={hasApprovedMatches}
+            status={generationStatus}
+            error={generationError}
+            onGenerate={onGenerate}
+          />
         )}
       </div>
     </section>

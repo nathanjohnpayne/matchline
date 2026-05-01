@@ -107,6 +107,20 @@ function makeUnit(id: string, summary: string): ExperienceUnit {
 const NOOP = (): void => {};
 const NOOP_STATE_CHANGE = (): void => {};
 
+/**
+ * Defaults for the Applications-tab props added in #202.
+ * Spread into every test so the existing tests don't have
+ * to repeat them. Tests that exercise the Applications tab
+ * directly override these inline.
+ */
+const APPS_TAB_DEFAULTS = {
+  applications: [] as readonly import("../../types/crm.ts").Application[],
+  hasApprovedMatches: false,
+  generationStatus: "editing" as const,
+  generationError: null as Error | null,
+  onGenerate: NOOP,
+};
+
 describe("RoleDetailView", () => {
   it("LOADING: renders a loading placeholder before the first snapshot", () => {
     const html = renderToStaticMarkup(
@@ -121,6 +135,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-loading\"");
@@ -140,6 +155,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-error\"");
@@ -159,6 +175,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("data-testid=\"role-detail-not-found\"");
@@ -178,6 +195,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("Director of Platform");
@@ -210,6 +228,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("data-testid=\"matches-tab\"");
@@ -241,6 +260,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("Req r-empty");
@@ -264,6 +284,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("Unit no longer available");
@@ -283,6 +304,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("must-have");
@@ -303,13 +325,16 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("data-testid=\"requirements-tab-placeholder\"");
     expect(html).toContain("3 requirements parsed");
   });
 
-  it("APPLICATIONS TAB: renders the placeholder when active", () => {
+  // -- #202: Applications tab (Generate resume CTA + list) -----
+
+  it("APPLICATIONS TAB: renders the live tab (not the old placeholder) when active", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView
         status="ready"
@@ -322,9 +347,237 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
-    expect(html).toContain("data-testid=\"applications-tab-placeholder\"");
+    expect(html).toContain('data-testid="applications-tab"');
+    expect(html).toContain('data-applications-tab-status="editing"');
+    // Old placeholder testid is gone — confirms the swap landed.
+    expect(html).not.toContain('data-testid="applications-tab-placeholder"');
+    // Generate button is always present (it's the primary CTA).
+    expect(html).toMatch(
+      /<button[^>]*data-action="applications-generate"[^>]*>/,
+    );
+  });
+
+  it("APPLICATIONS TAB: no approved matches → Generate disabled with 'Approve at least one match first'", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        hasApprovedMatches={false}
+      />,
+    );
+    expect(html).toContain("Approve at least one match first");
+    // HTML attribute disabled present on the button (anchor on
+    // \sdisabled[\s=>] so Tailwind's disabled:* utilities don't
+    // false-positive — same pattern as #201 / #200).
+    const btn = html.match(
+      /<button[^>]*data-action="applications-generate"[^>]*>/,
+    );
+    expect(btn).not.toBeNull();
+    expect(btn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+    expect(btn?.[0]).toContain('aria-disabled="true"');
+  });
+
+  it("APPLICATIONS TAB: approved matches present → Generate enabled, no list yet", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        hasApprovedMatches={true}
+      />,
+    );
+    const btn = html.match(
+      /<button[^>]*data-action="applications-generate"[^>]*>[^<]*<\/button>/,
+    );
+    expect(btn).not.toBeNull();
+    expect(btn?.[0]).not.toMatch(/\sdisabled(?:=|>|\s)/);
+    expect(btn?.[0]).toContain(">Generate resume<");
+    expect(html).toContain('data-testid="applications-tab-empty"');
+    expect(html).toContain("No Applications yet");
+  });
+
+  it("APPLICATIONS TAB: existing Applications render with stage badge + Open link", () => {
+    const apps = [
+      {
+        id: "app-old",
+        owner_uid: ALICE,
+        role_id: "role-1",
+        stage: "drafting" as const,
+        last_activity_at: "2026-04-01T00:00:00.000Z",
+        generated_assets: [],
+        approved_unit_ids: [],
+      },
+      {
+        id: "app-new",
+        owner_uid: ALICE,
+        role_id: "role-1",
+        stage: "applied" as const,
+        last_activity_at: "2026-05-01T00:00:00.000Z",
+        generated_assets: [
+          {
+            id: "asset-1",
+            owner_uid: ALICE,
+            application_id: "app-new",
+            kind: "resume" as const,
+            format: "json" as const,
+            storage_path: "",
+            validation_status: "passed" as const,
+            created_at: "2026-05-01T00:00:00.000Z",
+            updated_at: "2026-05-01T00:00:00.000Z",
+          },
+        ],
+        approved_unit_ids: ["u1"],
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        applications={apps}
+        hasApprovedMatches={true}
+      />,
+    );
+    expect(html).toContain('data-testid="applications-tab-list"');
+    // Both rows render.
+    expect(html).toContain("app-old");
+    expect(html).toContain("app-new");
+    // Stage badges visible.
+    expect(html).toMatch(/data-testid="applications-tab-stage"[^>]*>drafting</);
+    expect(html).toMatch(/data-testid="applications-tab-stage"[^>]*>applied</);
+    // Open link points at the right route.
+    expect(html).toMatch(/href="\/applications\/app-old"/);
+    expect(html).toMatch(/href="\/applications\/app-new"/);
+    // Sort order: most recent first (app-new before app-old).
+    const newIdx = html.indexOf("app-new");
+    const oldIdx = html.indexOf("app-old");
+    expect(newIdx).toBeGreaterThan(0);
+    expect(oldIdx).toBeGreaterThan(newIdx);
+    // Asset count rendered for the row that has assets.
+    expect(html).toContain("1 asset");
+    // Empty-state copy ("No assets yet") for the row that doesn't.
+    expect(html).toContain("No assets yet");
+  });
+
+  it("APPLICATIONS TAB: legacy doc with missing generated_assets renders without crashing", () => {
+    // Pre-pipeline / legacy Applications may be missing
+    // `generated_assets`. The runtime helpers in
+    // `services/applications.ts` already treat the field as
+    // optional via `?? []`; the tab's render must too. Codex
+    // Phase 4b finding on PR #207. We construct the doc with
+    // an `as unknown as Application` cast because the type
+    // marks the field required — this reproduces the legacy
+    // shape that arrives over the wire from older docs.
+    const legacyApp = {
+      id: "app-legacy",
+      owner_uid: ALICE,
+      role_id: "role-1",
+      stage: "drafting" as const,
+      last_activity_at: "2026-04-01T00:00:00.000Z",
+      // generated_assets intentionally omitted.
+      approved_unit_ids: [],
+    } as unknown as import("../../types/crm.ts").Application;
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        applications={[legacyApp]}
+        hasApprovedMatches={true}
+      />,
+    );
+    expect(html).toContain('data-testid="applications-tab-row"');
+    expect(html).toContain("app-legacy");
+    // Falls back to the empty-assets copy.
+    expect(html).toContain("No assets yet");
+  });
+
+  it("APPLICATIONS TAB: generating status renders the thin progress bar (UI rule 6)", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        hasApprovedMatches={true}
+        generationStatus="generating"
+      />,
+    );
+    expect(html).toContain('data-testid="applications-tab-progress"');
+    expect(html).toContain('role="progressbar"');
+    // Generate button disabled while in flight + label flips to Generating…
+    const btn = html.match(
+      /<button[^>]*data-action="applications-generate"[^>]*>[^<]*<\/button>/,
+    );
+    expect(btn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+    expect(btn?.[0]).toContain("Generating");
+  });
+
+  it("APPLICATIONS TAB: error status renders the error banner with the message", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        hasApprovedMatches={true}
+        generationStatus="error"
+        generationError={new Error("Resume generation failed after retries.")}
+      />,
+    );
+    expect(html).toContain('data-testid="applications-tab-error"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("Resume generation failed");
   });
 
   it("ARIA: tabs render with role=tablist + role=tab + aria-selected on the active tab", () => {
@@ -340,6 +593,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('role="tablist"');
@@ -370,6 +624,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="match-approve-button"');
@@ -403,6 +658,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("Approved ✓");
@@ -431,6 +687,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain("Rejected ✗");
@@ -454,6 +711,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="gaps-view-empty"');
@@ -492,6 +750,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="match-score-badge"');
@@ -530,6 +789,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="match-score-breakdown-unavailable"');
@@ -565,6 +825,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="match-score-confidence-missing"');
@@ -584,6 +845,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={true}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="matches-computing"');
@@ -605,6 +867,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).not.toContain('data-testid="matches-computing"');
@@ -634,6 +897,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
       />,
     );
     expect(html).toContain('data-testid="gaps-view"');
