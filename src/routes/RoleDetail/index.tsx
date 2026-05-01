@@ -38,8 +38,12 @@ import {
   useState,
   type ReactElement,
 } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
+import {
+  subscribeApplicationsForRole,
+  upsertApplication,
+} from "../../services/applications.ts";
 import { subscribeByOwner as subscribeUnitsByOwner } from "../../services/experienceUnits.ts";
 import {
   subscribeRequirementsForRole,
@@ -51,25 +55,48 @@ import {
   subscribeMatchesByRole,
   type MatchApprovalState,
 } from "../../services/matches.ts";
+import { invokeGenerateResume } from "../../services/generation.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
   UnitMatch,
 } from "../../types/capability.ts";
-import type { Role } from "../../types/crm.ts";
+import type { Application, Role } from "../../types/crm.ts";
 
 import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
+import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<LoadState>("loading");
   const [role, setRole] = useState<Role | null>(null);
   const [requirements, setRequirements] = useState<readonly JobRequirementUnit[]>([]);
   const [matches, setMatches] = useState<readonly UnitMatch[]>([]);
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
+  const [applications, setApplications] = useState<readonly Application[]>([]);
   const [error, setError] = useState<Error | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("matches");
+
+  // Applications tab state (#202). Held at the container so a
+  // tab switch + return doesn't drop the in-flight or error
+  // state. Same shape as the auto-trigger UX state — a state
+  // machine + an optional Error.
+  const [generationStatus, setGenerationStatus] =
+    useState<ApplicationsTabStatus>("editing");
+  const [generationError, setGenerationError] = useState<Error | null>(null);
+  // Stale-closure guard for the async generate path. Mirrors
+  // the `active` flag pattern used in the main subscription
+  // effect — but ref-based so the resolved promise reads the
+  // LATEST roleId across renders, not the closure's captured
+  // value. Without this, the in-flight call for Role A would
+  // navigate to /applications/:newAppId on completion even
+  // after the user navigated to Role B.
+  const currentRoleIdRef = useRef<string | undefined>(roleId);
+  useEffect(() => {
+    currentRoleIdRef.current = roleId;
+  }, [roleId]);
   // Auto-trigger state (#131). Distinguishes the
   // pre-first-snapshot wait, the in-flight matching call,
   // and the post-completion subscription delivery.
@@ -130,7 +157,12 @@ export default function RoleDetail(): ReactElement {
     setRole(null);
     setRequirements([]);
     setMatches([]);
+    setApplications([]);
     setError(null);
+    // Reset Applications-tab UX state too so Role B doesn't
+    // briefly show Role A's terminal generation outcome.
+    setGenerationStatus("editing");
+    setGenerationError(null);
     // Reset auto-trigger guards so a new Role gets its own
     // first-empty-snapshot trigger evaluation. Both the
     // idempotency ref and the matches-first-snapshot gate
@@ -149,6 +181,7 @@ export default function RoleDetail(): ReactElement {
     let unsubReqs: (() => void) | null = null;
     let unsubMatches: (() => void) | null = null;
     let unsubUnits: (() => void) | null = null;
+    let unsubApplications: (() => void) | null = null;
 
     void (async () => {
       try {
@@ -221,6 +254,26 @@ export default function RoleDetail(): ReactElement {
             setStatus("error");
           },
         );
+        unsubApplications = subscribeApplicationsForRole(
+          roleId,
+          (next) => {
+            if (!active) return;
+            setApplications(next);
+          },
+          (err) => {
+            if (!active) return;
+            setApplications([]);
+            // Surfacing the error through the top-level
+            // status would block the whole page — but the
+            // Applications tab subscription is non-load-
+            // bearing for Requirements / Matches. Log + keep
+            // the rest of the page rendering. The tab will
+            // show no Applications; user can click Generate
+            // to retry the path.
+            // eslint-disable-next-line no-console
+            console.warn("subscribeApplicationsForRole failed", err);
+          },
+        );
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err : new Error(String(err)));
@@ -233,6 +286,7 @@ export default function RoleDetail(): ReactElement {
       unsubReqs?.();
       unsubMatches?.();
       unsubUnits?.();
+      unsubApplications?.();
     };
   }, [roleId]);
 
@@ -308,6 +362,86 @@ export default function RoleDetail(): ReactElement {
     units.map((u) => [u.id, u]),
   );
 
+  // Approved-match gate for the Generate CTA. The server-side
+  // `generateResume` callable would reject with
+  // `failed-precondition` if the Application's Role has no
+  // approved UnitMatches; surfacing the gate at the CTA means
+  // the user understands the prerequisite up front rather
+  // than clicking and seeing an error.
+  //
+  // `approved_for_use` is the canonical approval flag (set by
+  // the Matches tab's Approve button); `user_rejected` is the
+  // separate reject flag and doesn't preclude approval — but
+  // we only count rows with approved=true && rejected=false
+  // so a rejected-then-re-approved row is counted (the click
+  // sequence sets approved=true and clears user_rejected per
+  // the single-setter approval handler).
+  const hasApprovedMatches = matches.some(
+    (m) => m.approved_for_use && !m.user_rejected,
+  );
+
+  /**
+   * Generate a new resume for this Role. Steps:
+   *   1. Create a fresh Application doc linked to the Role.
+   *   2. Invoke the `generateResume` callable; orchestrator
+   *      writes the asset under the Application.
+   *   3. Navigate to `/applications/:newAppId` so the
+   *      ApplicationEditor (#24) takes over.
+   *
+   * Stale-closure-guarded against role navigation. If the
+   * user moves to Role B between step 1 and the navigate,
+   * we abort the navigate (Role B's Applications tab is
+   * unrelated; the Application created for Role A still
+   * persists on the server but the user won't be redirected
+   * away from B).
+   */
+  const onGenerate = useCallback((): void => {
+    if (roleId === undefined || roleId === "") return;
+    if (generationStatus === "generating") return;
+    if (!hasApprovedMatches) return;
+
+    const issuedAgainst = roleId;
+    const newAppId = globalThis.crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+
+    setGenerationStatus("generating");
+    setGenerationError(null);
+
+    void (async () => {
+      try {
+        // Build the Application payload with the conditional-
+        // spread pattern from #200 — Firestore rejects
+        // `undefined` so optional fields (applied_at) are
+        // omitted entirely rather than written as undefined.
+        await upsertApplication({
+          id: newAppId,
+          role_id: roleId,
+          stage: "drafting",
+          last_activity_at: nowIso,
+          generated_assets: [],
+          approved_unit_ids: [],
+        });
+        if (currentRoleIdRef.current !== issuedAgainst) return;
+
+        await invokeGenerateResume(newAppId);
+        if (currentRoleIdRef.current !== issuedAgainst) return;
+
+        // Success: clear status + navigate. The
+        // ApplicationEditor's container subscribes to its
+        // own Application + asset state.
+        setGenerationStatus("editing");
+        setGenerationError(null);
+        navigate(`/applications/${newAppId}`);
+      } catch (err) {
+        if (currentRoleIdRef.current !== issuedAgainst) return;
+        setGenerationError(
+          err instanceof Error ? err : new Error(String(err)),
+        );
+        setGenerationStatus("error");
+      }
+    })();
+  }, [generationStatus, hasApprovedMatches, navigate, roleId]);
+
   return (
     <RoleDetailView
       status={status}
@@ -320,6 +454,11 @@ export default function RoleDetail(): ReactElement {
       onTabChange={onTabChange}
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
+      applications={applications}
+      hasApprovedMatches={hasApprovedMatches}
+      generationStatus={generationStatus}
+      generationError={generationError}
+      onGenerate={onGenerate}
     />
   );
 }

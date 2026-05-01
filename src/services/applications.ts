@@ -2,11 +2,13 @@ import { FirebaseError } from "firebase/app";
 import {
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   setDoc,
   updateDoc,
   where,
   type QueryConstraint,
+  type Unsubscribe,
 } from "firebase/firestore";
 
 import type {
@@ -38,6 +40,33 @@ export async function listApplicationsByStage(
   stage: ApplicationStage,
 ): Promise<Application[]> {
   return listApplications(where("stage", "==", stage));
+}
+
+/**
+ * Subscribe to Applications for a Role. Powers the Role
+ * Detail Applications tab (#202) — the user can see all
+ * existing Applications under the Role, click "Open" to
+ * route to `/applications/:id`, and watch the list grow as
+ * new Applications are generated. Returns the Firestore
+ * `Unsubscribe` cleanup function — caller (a React effect)
+ * must invoke it on unmount.
+ *
+ * Same owner_uid + role_id query shape as
+ * `subscribeRequirementsForRole` in `roles.ts`. The rules
+ * layer enforces ownership; the where-clause restricts to
+ * the relevant Role.
+ */
+export function subscribeApplicationsForRole(
+  roleId: string,
+  callback: (applications: Application[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const q = query(col(), ...ownerScope(), where("role_id", "==", roleId));
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => d.data())),
+    onError,
+  );
 }
 
 /**
