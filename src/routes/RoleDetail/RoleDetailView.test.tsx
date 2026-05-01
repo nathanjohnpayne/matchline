@@ -487,6 +487,47 @@ describe("RoleDetailView", () => {
     expect(html).toContain("No assets yet");
   });
 
+  it("APPLICATIONS TAB: legacy doc with missing generated_assets renders without crashing", () => {
+    // Pre-pipeline / legacy Applications may be missing
+    // `generated_assets`. The runtime helpers in
+    // `services/applications.ts` already treat the field as
+    // optional via `?? []`; the tab's render must too. Codex
+    // Phase 4b finding on PR #207. We construct the doc with
+    // an `as unknown as Application` cast because the type
+    // marks the field required — this reproduces the legacy
+    // shape that arrives over the wire from older docs.
+    const legacyApp = {
+      id: "app-legacy",
+      owner_uid: ALICE,
+      role_id: "role-1",
+      stage: "drafting" as const,
+      last_activity_at: "2026-04-01T00:00:00.000Z",
+      // generated_assets intentionally omitted.
+      approved_unit_ids: [],
+    } as unknown as import("../../types/crm.ts").Application;
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="applications"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...APPS_TAB_DEFAULTS}
+        applications={[legacyApp]}
+        hasApprovedMatches={true}
+      />,
+    );
+    expect(html).toContain('data-testid="applications-tab-row"');
+    expect(html).toContain("app-legacy");
+    // Falls back to the empty-assets copy.
+    expect(html).toContain("No assets yet");
+  });
+
   it("APPLICATIONS TAB: generating status renders the thin progress bar (UI rule 6)", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView

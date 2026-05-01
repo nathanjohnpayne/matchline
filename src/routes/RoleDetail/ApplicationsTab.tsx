@@ -194,55 +194,65 @@ export default function ApplicationsTab({
           data-testid="applications-tab-list"
           className="space-y-2 border-t border-zinc-200 pt-4 dark:border-zinc-800"
         >
-          {sortApplications(applications).map((app) => (
-            <li
-              key={app.id}
-              data-testid="applications-tab-row"
-              data-application-id={app.id}
-              className="flex items-center justify-between rounded border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
-            >
-              <div className="min-w-0 flex-1 space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span
-                    data-testid="applications-tab-stage"
-                    className={
-                      "rounded px-1.5 py-0.5 text-xs font-medium " +
-                      STAGE_BADGE_CLASS[app.stage]
-                    }
-                  >
-                    {app.stage}
-                  </span>
-                  <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
-                    {app.id}
-                  </span>
-                </div>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  {app.generated_assets.length === 0
-                    ? "No assets yet"
-                    : `${app.generated_assets.length} asset${
-                        app.generated_assets.length === 1 ? "" : "s"
-                      }`}
-                  {" · last activity "}
-                  <time dateTime={app.last_activity_at}>
-                    {app.last_activity_at}
-                  </time>
-                </p>
-              </div>
-              {/* Plain anchor + href so the link is keyboard-
-                  reachable and shows the URL in the status
-                  bar. SPA hydration takes over via React
-                  Router's NavLink/Link further up the tree;
-                  here we just need the destination. */}
-              <a
-                href={`/applications/${app.id}`}
-                data-action="applications-open"
+          {sortApplications(applications).map((app) => {
+            // Normalize generated_assets — the type marks it
+            // required, but the runtime helpers (e.g.,
+            // `removeBulletFromAsset` in services/applications.ts:143)
+            // treat it as optional for legacy / pre-pipeline docs.
+            // A pre-pipeline Application missing the field would
+            // otherwise crash the Role Detail render. Codex Phase
+            // 4b finding on PR #207.
+            const assets = app.generated_assets ?? [];
+            return (
+              <li
+                key={app.id}
+                data-testid="applications-tab-row"
                 data-application-id={app.id}
-                className="ml-3 shrink-0 rounded px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                className="flex items-center justify-between rounded border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
               >
-                Open
-              </a>
-            </li>
-          ))}
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      data-testid="applications-tab-stage"
+                      className={
+                        "rounded px-1.5 py-0.5 text-xs font-medium " +
+                        STAGE_BADGE_CLASS[app.stage]
+                      }
+                    >
+                      {app.stage}
+                    </span>
+                    <span className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                      {app.id}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    {assets.length === 0
+                      ? "No assets yet"
+                      : `${assets.length} asset${
+                          assets.length === 1 ? "" : "s"
+                        }`}
+                    {" · last activity "}
+                    <time dateTime={app.last_activity_at}>
+                      {app.last_activity_at}
+                    </time>
+                  </p>
+                </div>
+                {/* Plain anchor + href so the link is keyboard-
+                    reachable and shows the URL in the status
+                    bar. SPA hydration takes over via React
+                    Router's NavLink/Link further up the tree;
+                    here we just need the destination. */}
+                <a
+                  href={`/applications/${app.id}`}
+                  data-action="applications-open"
+                  data-application-id={app.id}
+                  className="ml-3 shrink-0 rounded px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  Open
+                </a>
+              </li>
+            );
+          })}
         </ol>
       ) : (
         <p
