@@ -263,13 +263,23 @@ function ApplicationEditorInner({
     setApplication(next ?? null);
   }, [applicationId]);
 
-  // Snapshot the current asset state into the undo stack before a
-  // mutation. No-op if there's no current asset. Caps the stack at
-  // UNDO_STACK_LIMIT entries; oldest evicts.
-  const pushUndo = useCallback(
-    (label: string): void => {
-      if (asset === null || asset.generated_content === undefined) return;
-      const entry: UndoEntry = {
+  // Capture-then-commit pattern (Codex P2 round 4 on PR #198).
+  // The handlers used to push the undo entry BEFORE the service
+  // call landed, but `editBulletInAsset` (and `reorderBulletsInAsset`)
+  // can return `no-change` for a no-op write. Pushing on the
+  // pre-call path meant repeated no-op saves filled the 10-entry
+  // cap with junk entries and evicted real history — Cmd+Z then
+  // popped no-op snapshots before reaching a real mutation.
+  //
+  // Now: handlers call `snapshotAsset(label)` BEFORE the call to
+  // capture the pre-mutation state into a local entry, then call
+  // `commitUndo(entry)` only after the service confirms an actual
+  // change. Returns null when there's no current asset (handler
+  // bypasses commit too).
+  const snapshotAsset = useCallback(
+    (label: string): UndoEntry | null => {
+      if (asset === null || asset.generated_content === undefined) return null;
+      return {
         label,
         assetId: asset.id,
         snapshot: {
@@ -281,15 +291,18 @@ function ApplicationEditorInner({
               : [...asset.validation_flags],
         },
       };
-      setUndoStack((prev) => {
-        const next = [...prev, entry];
-        return next.length > UNDO_STACK_LIMIT
-          ? next.slice(next.length - UNDO_STACK_LIMIT)
-          : next;
-      });
     },
     [asset],
   );
+
+  const commitUndo = useCallback((entry: UndoEntry): void => {
+    setUndoStack((prev) => {
+      const next = [...prev, entry];
+      return next.length > UNDO_STACK_LIMIT
+        ? next.slice(next.length - UNDO_STACK_LIMIT)
+        : next;
+    });
+  }, []);
 
   const onUndo = useCallback(async (): Promise<void> => {
     if (applicationId === undefined) return;
@@ -360,12 +373,11 @@ function ApplicationEditorInner({
       if (asset === null || applicationId === undefined) return;
       if (mutationInFlightRef.current) return;
       mutationInFlightRef.current = true;
-      // Push the pre-mutation snapshot before the round-trip so
-      // undo restores the original order. If the mutation
-      // returns "no-change" / errors, we leave the snapshot in
-      // place; the user can still undo, the restore is a no-op
-      // write, no harm.
-      pushUndo("reorder");
+      // Capture pre-mutation snapshot up front (so we capture
+      // the state BEFORE refetch races); only commit to the
+      // stack if the service confirms a real reorder happened.
+      // Codex P2 round 4 on PR #198.
+      const undoEntry = snapshotAsset("reorder");
       try {
         const result = await reorderBulletsInAsset(
           applicationId,
@@ -377,9 +389,11 @@ function ApplicationEditorInner({
         if (result.status !== "reordered") {
           // no-change / index-not-found / *-not-found are silent;
           // shouldn't happen from the UI in normal flow (the drag
-          // handler bounds-checks before calling).
+          // handler bounds-checks before calling). Don't commit
+          // the undo snapshot — the asset didn't change.
           return;
         }
+        if (undoEntry !== null) commitUndo(undoEntry);
         // Refetch so the pane sees the new order. Skip the
         // validateAsset round-trip — reorder is a position-only
         // change, so existing flags remain valid + the asset's
@@ -403,7 +417,7 @@ function ApplicationEditorInner({
         mutationInFlightRef.current = false;
       }
     },
-    [applicationId, asset, refetchApplication, pushUndo],
+    [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
   );
 
   const onAddBullet = useCallback(
@@ -411,10 +425,8 @@ function ApplicationEditorInner({
       if (asset === null || applicationId === undefined) return null;
       if (mutationInFlightRef.current) return null;
       mutationInFlightRef.current = true;
-      // Snapshot before the add. Undo will pop the new bullet
-      // (the snapshot restores the asset to the pre-add state,
-      // which has neither the new bullet nor any of its edits).
-      pushUndo("add");
+      // Capture pre-mutation snapshot; commit only on success.
+      const undoEntry = snapshotAsset("add");
       try {
         const result = await addBulletToAsset(
           applicationId,
@@ -428,6 +440,7 @@ function ApplicationEditorInner({
           console.warn("addBulletToAsset returned", result.status);
           return null;
         }
+        if (undoEntry !== null) commitUndo(undoEntry);
         // Fresh bullet — just persisted to Firestore. Skip the
         // validateAsset round-trip (an empty bullet has nothing
         // to validate; status is already "stale" which the export
@@ -443,7 +456,7 @@ function ApplicationEditorInner({
         mutationInFlightRef.current = false;
       }
     },
-    [applicationId, asset, refetchApplication, pushUndo],
+    [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
   );
 
   const onSaveBulletEdit = useCallback(
@@ -451,12 +464,11 @@ function ApplicationEditorInner({
       if (asset === null || applicationId === undefined) return;
       if (mutationInFlightRef.current) return;
       mutationInFlightRef.current = true;
-      // Snapshot before the edit. Restoration via undo gets the
-      // bullet back to its prior text + source_unit_ids + the
-      // validation flags as they were. Pushed before the round-
-      // trip; if the save returns no-change the snapshot is
-      // wasteful but harmless (undo is a no-op write).
-      pushUndo("edit");
+      // Capture pre-mutation snapshot up front; commit only on
+      // a real "edited" result. no-change / empty-text / *-not-
+      // found short-circuit without filling the undo cap with
+      // junk. Codex P2 round 4 on PR #198.
+      const undoEntry = snapshotAsset("edit");
       try {
       // 1. Patch the Application doc — flips validation_status to
       //    "stale" + clears the bullet's source_unit_ids on success.
@@ -481,9 +493,12 @@ function ApplicationEditorInner({
             `Couldn't save edit: ${result.status}. Refresh to reload the latest state.`,
           );
         }
-        // empty-text + no-change are silent.
+        // empty-text + no-change are silent. Don't commit
+        // the undo snapshot — the asset didn't change.
         return;
       }
+      // Mutation landed — commit the snapshot now.
+      if (undoEntry !== null) commitUndo(undoEntry);
       // 2. Re-run validation server-side. This atomically writes
       //    fresh flags + flips validation_status to passed/failed.
       //    Errors here are non-fatal for the edit itself — the
@@ -528,7 +543,7 @@ function ApplicationEditorInner({
         mutationInFlightRef.current = false;
       }
     },
-    [applicationId, asset, refetchApplication, pushUndo],
+    [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
   );
 
   const onRemoveBullet = useCallback(
@@ -536,9 +551,8 @@ function ApplicationEditorInner({
       if (asset === null) return;
       if (mutationInFlightRef.current) return;
       mutationInFlightRef.current = true;
-      // Snapshot before remove. Undo restores the deleted bullet
-      // (and any flags attached to it) to their pre-remove state.
-      pushUndo("remove");
+      // Capture pre-mutation snapshot; commit only on success.
+      const undoEntry = snapshotAsset("remove");
       try {
         const result = await removeBulletFromAsset(
           applicationId ?? "",
@@ -546,6 +560,7 @@ function ApplicationEditorInner({
           bulletId,
         );
         if (result.status === "removed") {
+          if (undoEntry !== null) commitUndo(undoEntry);
           await refetchApplication();
         }
         // Other result statuses are silent for now — application-/
@@ -565,7 +580,7 @@ function ApplicationEditorInner({
         mutationInFlightRef.current = false;
       }
     },
-    [applicationId, asset, refetchApplication, pushUndo],
+    [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
   );
 
   const onAddSupportingUnit = useCallback(() => {
