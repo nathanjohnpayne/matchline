@@ -31,7 +31,6 @@
  */
 
 import {
-  useEffect,
   useState,
   type ChangeEvent,
   type ReactElement,
@@ -44,6 +43,16 @@ export type RequirementsTabStatus = "editing" | "parsing" | "error";
 export interface RequirementsTabProps {
   /** Current persisted Role.jd_raw (may be ""). */
   readonly jdRaw: string;
+  /**
+   * Current draft contents of the JD textarea. Lifted to the
+   * container (nathanpayne-codex Phase 4b P1 on PR #206) so a
+   * tab switch (which unmounts RequirementsTab via the
+   * activeTab conditional render) doesn't lose the user's
+   * unsaved paste / edits.
+   */
+  readonly draft: string;
+  /** Update the draft. Same shape as React's setState setter. */
+  readonly onDraftChange: (next: string) => void;
   /** Current persisted Requirements (subscription-delivered). */
   readonly requirements: readonly JobRequirementUnit[];
   /** Parse-call status. */
@@ -105,6 +114,8 @@ function sortRequirements(
 
 export default function RequirementsTab({
   jdRaw,
+  draft,
+  onDraftChange,
   requirements,
   status,
   error,
@@ -113,30 +124,10 @@ export default function RequirementsTab({
   onSaveJd,
   onParseJd,
 }: RequirementsTabProps): ReactElement {
-  // Local draft state for the JD textarea so the user can edit
-  // without each keystroke triggering an upsertRole. Sync
-  // upstream changes (e.g., the role doc snapshot updates)
-  // into the draft when the persisted prop changes AND the
-  // user hasn't started editing yet — but don't clobber an
-  // active edit. The simplest signal: only re-sync when the
-  // persisted prop changes (effect dep) AND the draft equals
-  // the previous persisted value. We approximate that with a
-  // "lastSyncedPersisted" ref: if the user's draft matches
-  // what we last synced down, the user hasn't diverged, so
-  // adopt the new persisted value.
-  const [draft, setDraft] = useState(jdRaw);
-  const [lastSyncedPersisted, setLastSyncedPersisted] = useState(jdRaw);
-  useEffect(() => {
-    if (draft === lastSyncedPersisted) {
-      setDraft(jdRaw);
-    }
-    setLastSyncedPersisted(jdRaw);
-    // Intentionally only re-run when the persisted JD changes;
-    // we read draft + lastSyncedPersisted as a dirty-check at
-    // sync-time. Including them in deps would create a feedback
-    // loop. Same pattern as InlineEditForm (#81).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jdRaw]);
+  // Draft is lifted to the container so tab switches don't
+  // unmount the user's unsaved JD edit. The dirty-check + the
+  // sync-on-persisted-change behavior also lives upstream;
+  // this component is a controlled-input shell.
 
   // Confirmation gate for the destructive Re-parse path. Two-
   // click consent: first click flips this state, second click
@@ -167,7 +158,7 @@ export default function RequirementsTab({
   const busy = parsing || savingJd || computingMatches;
 
   const onChangeText = (e: ChangeEvent<HTMLTextAreaElement>): void => {
-    setDraft(e.target.value);
+    onDraftChange(e.target.value);
     // Clicking back into edit mode after triggering re-parse
     // should silently abort the confirm flow — the user
     // changed their mind.

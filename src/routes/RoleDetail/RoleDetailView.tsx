@@ -81,6 +81,8 @@ export interface RoleDetailViewProps {
   readonly parsingStatus: RequirementsTabStatus;
   readonly parseError: Error | null;
   readonly savingJd: boolean;
+  readonly jdDraft: string;
+  readonly onJdDraftChange: (next: string) => void;
   readonly onSaveJd: (text: string) => void;
   readonly onParseJd: (text: string) => void;
   /**
@@ -115,6 +117,8 @@ export default function RoleDetailView({
   parsingStatus,
   parseError,
   savingJd,
+  jdDraft,
+  onJdDraftChange,
   onSaveJd,
   onParseJd,
   applications,
@@ -213,6 +217,8 @@ export default function RoleDetailView({
         {activeTab === "requirements" && (
           <RequirementsTab
             jdRaw={role.jd_raw}
+            draft={jdDraft}
+            onDraftChange={onJdDraftChange}
             requirements={requirements}
             status={parsingStatus}
             error={parseError}

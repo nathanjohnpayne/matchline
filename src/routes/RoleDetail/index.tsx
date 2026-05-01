@@ -152,6 +152,30 @@ export default function RoleDetail(): ReactElement {
     useState<RequirementsTabStatus>("editing");
   const [parseError, setParseError] = useState<Error | null>(null);
   const [savingJd, setSavingJd] = useState(false);
+  // JD textarea draft, lifted from RequirementsTab so a tab
+  // switch (which unmounts RequirementsTab via the activeTab
+  // conditional render) doesn't lose unsaved paste / edits
+  // (nathanpayne-codex Phase 4b P1 on PR #206). Sync rule:
+  // adopt the persisted `role.jd_raw` whenever it changes
+  // AND the user hasn't started editing (draft equals the
+  // last value we synced down). The roleId reset effect
+  // below also resets the draft so a different Role doesn't
+  // inherit the previous Role's draft.
+  const [jdDraft, setJdDraft] = useState("");
+  const lastSyncedJdRawRef = useRef<string>("");
+  // Sync persisted → draft when persisted changes and the
+  // user's draft hasn't diverged from the last value we
+  // pushed in. Same `lastSyncedPersisted` pattern that lived
+  // inside RequirementsTab pre-lift; same comment about
+  // intentional dep omission to avoid a feedback loop.
+  useEffect(() => {
+    const persisted = role?.jd_raw ?? "";
+    if (jdDraft === lastSyncedJdRawRef.current) {
+      setJdDraft(persisted);
+    }
+    lastSyncedJdRawRef.current = persisted;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role?.jd_raw]);
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
 
@@ -358,6 +382,12 @@ export default function RoleDetail(): ReactElement {
     setParsingStatus("editing");
     setParseError(null);
     setSavingJd(false);
+    // Reset the JD draft + the persisted-sync ref so Role B
+    // doesn't inherit Role A's unsaved draft. The Role-fetch
+    // resolution below will re-sync via the persisted-jd_raw
+    // effect once the new role lands.
+    setJdDraft("");
+    lastSyncedJdRawRef.current = "";
     // Reset Applications-tab UX state too so Role B doesn't
     // briefly show Role A's terminal generation outcome.
     setGenerationStatus("editing");
@@ -695,6 +725,8 @@ export default function RoleDetail(): ReactElement {
       parsingStatus={parsingStatus}
       parseError={parseError}
       savingJd={savingJd}
+      jdDraft={jdDraft}
+      onJdDraftChange={setJdDraft}
       onSaveJd={onSaveJd}
       onParseJd={onParseJd}
       applications={applications}

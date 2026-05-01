@@ -117,6 +117,8 @@ const REQS_TAB_DEFAULTS = {
   parsingStatus: "editing" as const,
   parseError: null as Error | null,
   savingJd: false,
+  jdDraft: "",
+  onJdDraftChange: NOOP as (next: string) => void,
   onSaveJd: NOOP as (text: string) => void,
   onParseJd: NOOP as (text: string) => void,
 };
@@ -391,6 +393,11 @@ describe("RoleDetailView", () => {
   });
 
   it("REQUIREMENTS TAB: jd_raw set + requirements empty renders Parse JD enabled, no list yet", () => {
+    // jdDraft override: simulates the user having the persisted
+    // JD loaded into the textarea (the container's sync effect
+    // adopts persisted into draft on roleId change). With the
+    // draft-driven empty-state copy, "JD ready" requires the
+    // draft to be non-empty too.
     const html = renderToStaticMarkup(
       <RoleDetailView
         status="ready"
@@ -405,6 +412,7 @@ describe("RoleDetailView", () => {
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
+        jdDraft="Build great things."
       />,
     );
     expect(html).toContain('data-testid="requirements-tab-empty"');
