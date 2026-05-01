@@ -112,8 +112,15 @@ export default function RoleNew(): ReactElement {
   };
 
   const onCancel = (): void => {
-    // No back-stack tracking in V1; the user came from somewhere
-    // — Unit Review is a reasonable default landing page.
+    // Prefer router-back so the user lands where they came from
+    // (e.g., the Pipeline view, an existing Role detail). When
+    // there's no history (the user landed here via a direct URL
+    // or a fresh tab), fall back to /units. CodeRabbit Minor on
+    // PR #205.
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
     navigate("/units");
   };
 
