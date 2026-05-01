@@ -404,6 +404,25 @@ export default function RoleDetail(): ReactElement {
     const newAppId = globalThis.crypto.randomUUID();
     const nowIso = new Date().toISOString();
 
+    // Seed approved_unit_ids from the currently-approved
+    // matches before creating the Application (Codex P1 on
+    // PR #207). The orchestrator's `defaultLoadInputs`
+    // filters Units via `application.approved_unit_ids`
+    // (`functions/src/generation/pipeline.ts:497`); if we
+    // leave it empty, the generation pipeline's eligible-
+    // Units filter collapses to zero and throws
+    // GenerationNoApprovedUnitsError. Dedupe via Set in
+    // case multiple approved matches reference the same
+    // Unit (the matcher's top-K can produce that — distinct
+    // Requirements scoring against the same Unit).
+    const approvedUnitIds = Array.from(
+      new Set(
+        matches
+          .filter((m) => m.approved_for_use && !m.user_rejected)
+          .map((m) => m.experience_unit_id),
+      ),
+    );
+
     setGenerationStatus("generating");
     setGenerationError(null);
 
@@ -419,7 +438,7 @@ export default function RoleDetail(): ReactElement {
           stage: "drafting",
           last_activity_at: nowIso,
           generated_assets: [],
-          approved_unit_ids: [],
+          approved_unit_ids: approvedUnitIds,
         });
         if (currentRoleIdRef.current !== issuedAgainst) return;
 
@@ -440,7 +459,7 @@ export default function RoleDetail(): ReactElement {
         setGenerationStatus("error");
       }
     })();
-  }, [generationStatus, hasApprovedMatches, navigate, roleId]);
+  }, [generationStatus, hasApprovedMatches, matches, navigate, roleId]);
 
   return (
     <RoleDetailView
