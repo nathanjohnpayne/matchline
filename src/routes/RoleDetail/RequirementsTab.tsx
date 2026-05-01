@@ -53,6 +53,18 @@ export interface RequirementsTabProps {
   /** True while an upsertRole(jd_raw) save is in flight. */
   readonly savingJd: boolean;
   /**
+   * True while the auto-trigger or post-parse `runMatching`
+   * callable is in flight. Required to block a second
+   * re-parse while matching is still computing — without
+   * this, two concurrent matching runs could interleave and
+   * the older one's transactional `replaceMatchesForRole`
+   * could land last with matches against deleted requirement
+   * IDs (nathanpayne-codex Phase 4b P1 on PR #206). The
+   * `matches.length > 0` short-circuit in the auto-trigger
+   * gate (#131) would then prevent recovery.
+   */
+  readonly computingMatches: boolean;
+  /**
    * Save the current textarea contents to Role.jd_raw via
    * `upsertRole`. Container fires-and-forgets; failures are
    * console-logged. UI surfaces success via the textarea
@@ -97,6 +109,7 @@ export default function RequirementsTab({
   status,
   error,
   savingJd,
+  computingMatches,
   onSaveJd,
   onParseJd,
 }: RequirementsTabProps): ReactElement {
@@ -137,10 +150,21 @@ export default function RequirementsTab({
   const hasRequirements = requirements.length > 0;
   const parsing = status === "parsing";
   // Disable destructive / mutating affordances while either
-  // an upsertRole save or a parse is in flight to prevent
-  // overlapping writes (the pipeline's clear-and-replace
-  // assumes a single in-flight parse per Role).
-  const busy = parsing || savingJd;
+  // an upsertRole save, a parse, OR a runMatching is in
+  // flight. Blocking on `computingMatches` is load-bearing
+  // for a re-parse race (nathanpayne-codex Phase 4b P1 on
+  // PR #206): the parse-success path flips parsingStatus
+  // back to "editing" while invokeRunMatching is still
+  // settling. Without this gate, a second re-parse could
+  // launch a fresh requirements set + matching run while
+  // the older matching run is still in flight, and an
+  // out-of-order commit would leave matches referencing
+  // deleted requirement IDs. The `matches.length > 0`
+  // short-circuit in the auto-trigger gate (#131) wouldn't
+  // recover. Disabling parse until matching settles closes
+  // the race at the UI layer; a server-side requirements-
+  // version guard is the deeper fix and is out of scope here.
+  const busy = parsing || savingJd || computingMatches;
 
   const onChangeText = (e: ChangeEvent<HTMLTextAreaElement>): void => {
     setDraft(e.target.value);

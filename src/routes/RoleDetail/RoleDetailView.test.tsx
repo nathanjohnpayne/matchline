@@ -510,6 +510,41 @@ describe("RoleDetailView", () => {
     expect(mhIdx).toBeLessThan(lowIdx);
   });
 
+  it("REQUIREMENTS TAB: Parse JD disabled while computingMatches is in flight (re-parse race)", () => {
+    // Pin the nathanpayne-codex Phase 4b P1 fix: a second
+    // re-parse must be blocked while invokeRunMatching from the
+    // prior parse is still settling, otherwise two matching
+    // runs could race and the older `replaceMatchesForRole`
+    // could land last with matches against deleted requirement
+    // IDs.
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[makeReq("r1")]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={true}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    const parseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>/,
+    );
+    expect(parseBtn).not.toBeNull();
+    expect(parseBtn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+    // Textarea also disabled — busy gate covers all inputs.
+    const ta = html.match(
+      /<textarea[^>]*data-testid="requirements-tab-jd-textarea"[^>]*>/,
+    );
+    expect(ta?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
   it("REQUIREMENTS TAB: parsing status renders the thin progress bar (UI rule 6)", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView

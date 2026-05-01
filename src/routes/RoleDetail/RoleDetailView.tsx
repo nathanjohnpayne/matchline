@@ -217,6 +217,7 @@ export default function RoleDetailView({
             status={parsingStatus}
             error={parseError}
             savingJd={savingJd}
+            computingMatches={computingMatches}
             onSaveJd={onSaveJd}
             onParseJd={onParseJd}
           />
