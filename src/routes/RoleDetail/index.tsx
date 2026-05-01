@@ -89,16 +89,34 @@ export default function RoleDetail(): ReactElement {
   const [generationStatus, setGenerationStatus] =
     useState<ApplicationsTabStatus>("editing");
   const [generationError, setGenerationError] = useState<Error | null>(null);
-  // Stale-closure guard for the async generate path. Mirrors
-  // the `active` flag pattern used in the main subscription
-  // effect — but ref-based so the resolved promise reads the
-  // LATEST roleId across renders, not the closure's captured
-  // value. Without this, the in-flight call for Role A would
-  // navigate to /applications/:newAppId on completion even
-  // after the user navigated to Role B.
+  // Stale-closure guard for the async parse / save / generate
+  // paths. Mirrors the `active` flag pattern used in the main
+  // subscription effect, but ref-based so the resolved promise
+  // reads the LATEST visit token across renders rather than the
+  // captured-stale closure value.
+  //
+  // Two pieces:
+  //   - `currentRoleIdRef` — the roleId of the active visit.
+  //     Useful for fast-path comparisons in the simple A → B
+  //     case.
+  //   - `visitTokenRef` — a monotonic counter bumped on every
+  //     roleId change. Closes the A → B → A race that a plain
+  //     roleId comparison can't see: in that sequence the
+  //     in-flight callback for the FIRST A would otherwise
+  //     resolve and pass the `currentRoleIdRef.current === A`
+  //     check even though the user is now on a fresh A visit.
+  //     The token comparison fails because each visit gets its
+  //     own integer (CodeRabbit P1 on PR #206).
+  //
+  // The pattern: capture both `issuedAgainst = roleId` and
+  // `issuedToken = visitTokenRef.current` at call time, then
+  // every async continuation checks the token; mismatch =>
+  // bail out before any state writes.
   const currentRoleIdRef = useRef<string | undefined>(roleId);
+  const visitTokenRef = useRef(0);
   useEffect(() => {
     currentRoleIdRef.current = roleId;
+    visitTokenRef.current += 1;
   }, [roleId]);
   // Auto-trigger state (#131). Distinguishes the
   // pre-first-snapshot wait, the in-flight matching call,
@@ -169,17 +187,22 @@ export default function RoleDetail(): ReactElement {
     (text: string): void => {
       if (role === null) return;
       const next: Role = { ...role, jd_raw: text };
-      // Capture the role id this save was issued against.
-      // If the user navigates away before upsertRole resolves,
-      // the stale-closure check below skips the state writes
-      // so Role B doesn't inherit Role A's save error.
+      // Capture both the role id AND the visit token this save
+      // was issued against. The token closes the A → B → A race
+      // (CodeRabbit P1 on PR #206): plain roleId comparison
+      // would let the FIRST A's continuation pass through after
+      // the user came back to A, because roleId === A both times.
       const issuedAgainst = role.id;
+      const issuedToken = visitTokenRef.current;
+      const isStale = (): boolean =>
+        currentRoleIdRef.current !== issuedAgainst ||
+        visitTokenRef.current !== issuedToken;
       setSavingJd(true);
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { owner_uid: _ownerUid, ...rest } = next;
       void upsertRole(rest)
         .then(() => {
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           setRole(next);
           // Clear any prior parse/save error so a successful
           // retry doesn't leave the inline banner visible
@@ -191,7 +214,7 @@ export default function RoleDetail(): ReactElement {
         .catch((err: unknown) => {
           // eslint-disable-next-line no-console
           console.warn("upsertRole failed", err);
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           // Prefix the message so the inline error banner makes
           // it clear the save failed, not a parse — same banner
           // surface, but the user knows which action errored
@@ -204,7 +227,7 @@ export default function RoleDetail(): ReactElement {
           setParsingStatus("error");
         })
         .finally(() => {
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           setSavingJd(false);
         });
     },
@@ -219,12 +242,15 @@ export default function RoleDetail(): ReactElement {
   const onParseJd = useCallback(
     (text: string): void => {
       if (roleId === undefined || roleId === "" || role === null) return;
-      // Capture the role this parse was issued against. If
-      // the user navigates to a different Role before the
-      // callable resolves, the comparisons below skip the
-      // state writes so the new Role's view doesn't show
-      // the old Role's parse outcome (Codex P2 on PR #206).
+      // Capture both the role this parse was issued against AND
+      // the visit token. Token check closes the A → B → A race
+      // (CodeRabbit P1 on PR #206) — see the visitTokenRef
+      // declaration above for the full pattern.
       const issuedAgainst = roleId;
+      const issuedToken = visitTokenRef.current;
+      const isStale = (): boolean =>
+        currentRoleIdRef.current !== issuedAgainst ||
+        visitTokenRef.current !== issuedToken;
       setParsingStatus("parsing");
       setParseError(null);
       const trimmed = text.trim();
@@ -238,7 +264,7 @@ export default function RoleDetail(): ReactElement {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { owner_uid: _o, ...rest } = next;
             await upsertRole(rest);
-            if (currentRoleIdRef.current === issuedAgainst) {
+            if (!isStale()) {
               setRole(next);
             }
           }
@@ -247,7 +273,7 @@ export default function RoleDetail(): ReactElement {
           // flip back to editing on success and clear any
           // prior error so a successful retry hides the
           // inline banner.
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           setParseError(null);
           setParsingStatus("editing");
 
@@ -279,7 +305,7 @@ export default function RoleDetail(): ReactElement {
           // computingMatches UX hint stays on for the
           // duration so the user knows new matches are
           // computing.
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           triggeredRef.current = true;
           setComputingMatches(true);
           void invokeRunMatching(roleId)
@@ -288,11 +314,11 @@ export default function RoleDetail(): ReactElement {
               console.warn("invokeRunMatching after re-parse failed", err);
             })
             .finally(() => {
-              if (currentRoleIdRef.current !== issuedAgainst) return;
+              if (isStale()) return;
               setComputingMatches(false);
             });
         } catch (err) {
-          if (currentRoleIdRef.current !== issuedAgainst) return;
+          if (isStale()) return;
           setParseError(err instanceof Error ? err : new Error(String(err)));
           setParsingStatus("error");
         }
@@ -568,6 +594,13 @@ export default function RoleDetail(): ReactElement {
     if (!hasApprovedMatches) return;
 
     const issuedAgainst = roleId;
+    // Same A → B → A race protection as parse/save (CodeRabbit
+    // P1 on PR #206) — capture the visit token at issue time
+    // and check both pieces in every continuation.
+    const issuedToken = visitTokenRef.current;
+    const isStale = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainst ||
+      visitTokenRef.current !== issuedToken;
     const newAppId = globalThis.crypto.randomUUID();
     const nowIso = new Date().toISOString();
 
@@ -607,10 +640,10 @@ export default function RoleDetail(): ReactElement {
           generated_assets: [],
           approved_unit_ids: approvedUnitIds,
         });
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
 
         await invokeGenerateResume(newAppId);
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
 
         // Success: clear status + navigate. The
         // ApplicationEditor's container subscribes to its
@@ -619,7 +652,7 @@ export default function RoleDetail(): ReactElement {
         setGenerationError(null);
         navigate(`/applications/${newAppId}`);
       } catch (err) {
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
         setGenerationError(
           err instanceof Error ? err : new Error(String(err)),
         );
