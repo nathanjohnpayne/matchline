@@ -87,6 +87,16 @@ export default function RoleNew(): ReactElement {
     setError(null);
     try {
       const id = globalThis.crypto.randomUUID();
+      // Build the role payload with CONDITIONAL SPREADS for the
+      // optional fields. Writing `undefined` values would be
+      // rejected by Firestore — this client doesn't set
+      // `ignoreUndefinedProperties` (same quirk that bit PR #198
+      // on `validation_flags`). Omitting the key entirely is the
+      // documented way to express "absent" on a setDoc write.
+      // Codex P1 on PR #205.
+      const trimmedUrl = form.jdUrl.trim();
+      const trimmedLocation = form.location.trim();
+      const trimmedComp = form.compRange.trim();
       await upsertRole({
         id,
         // Phase 2 will introduce a real Company link UI; for now
@@ -96,13 +106,11 @@ export default function RoleNew(): ReactElement {
         company_id: globalThis.crypto.randomUUID(),
         title: form.title.trim(),
         jd_raw: form.jdRaw,
-        jd_url: form.jdUrl.trim() === "" ? undefined : form.jdUrl.trim(),
-        location:
-          form.location.trim() === "" ? undefined : form.location.trim(),
-        remote_policy: form.remotePolicy === "" ? undefined : form.remotePolicy,
-        comp_range:
-          form.compRange.trim() === "" ? undefined : form.compRange.trim(),
         discovered_at: new Date().toISOString(),
+        ...(trimmedUrl !== "" && { jd_url: trimmedUrl }),
+        ...(trimmedLocation !== "" && { location: trimmedLocation }),
+        ...(form.remotePolicy !== "" && { remote_policy: form.remotePolicy }),
+        ...(trimmedComp !== "" && { comp_range: trimmedComp }),
       });
       navigate(`/roles/${id}`);
     } catch (err) {
