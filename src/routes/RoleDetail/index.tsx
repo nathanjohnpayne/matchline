@@ -268,6 +268,12 @@ export default function RoleDetail(): ReactElement {
               setRole(next);
             }
           }
+          // Bail out before the parse callable if the user
+          // has navigated away mid-await (CodeRabbit P1
+          // round 3 on PR #206). Otherwise a stale visit
+          // would still hit the LLM pipeline + write
+          // Requirements that the user no longer cares about.
+          if (isStale()) return;
           await invokeParseJobRequirements(roleId, trimmed);
           // Subscription delivers the parsed Requirements;
           // flip back to editing on success and clear any
