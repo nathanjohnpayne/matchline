@@ -63,6 +63,7 @@ const {
   reorderArray,
   sectionList,
   withSectionList,
+  restoreAssetState,
 } = await import("./applications.ts");
 
 import type {
@@ -1077,5 +1078,180 @@ describe("reorderBulletsInAsset (Firestore-mocked, sub-issue #195)", () => {
       (a) => a.id === "asset-2",
     );
     expect(untouched?.validation_status).toBe("passed");
+  });
+});
+
+describe("restoreAssetState (Firestore-mocked, sub-issue #197)", () => {
+  const snapshot = {
+    content: {
+      summary: { id: "summary", text: "snap-summary", source_unit_ids: [] },
+      bullets: [
+        { id: "bA", text: "snap-A", source_unit_ids: ["unit-x"] },
+      ],
+      skills: [],
+    },
+    validation_status: "passed" as const,
+    validation_flags: [
+      {
+        id: "f-pre",
+        asset_id: "asset-1",
+        bullet_id: "bA",
+        claim_id: "c1",
+        status: "traced" as const,
+        rationale: "ok",
+        created_at: "2026-04-01T00:00:00.000Z",
+      },
+    ],
+  };
+
+  it("returns 'application-not-found' when the application doesn't exist", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => false,
+      data: () => undefined,
+    });
+    const r = await restoreAssetState("missing", "asset-1", snapshot);
+    expect(r.status).toBe("application-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("returns 'application-not-found' on permission-denied (anti-enumeration parity)", async () => {
+    getDoc.mockRejectedValueOnce(
+      new FirebaseError("permission-denied", "denied"),
+    );
+    const r = await restoreAssetState("foreign", "asset-1", snapshot);
+    expect(r.status).toBe("application-not-found");
+  });
+
+  it("returns 'asset-not-found' when the asset id is unknown", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    const r = await restoreAssetState("app-1", "wrong-asset", snapshot);
+    expect(r.status).toBe("asset-not-found");
+    expect(updateDoc).not.toHaveBeenCalled();
+  });
+
+  it("writes the snapshot's content + validation_status + validation_flags to the targeted asset", async () => {
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application(),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    const r = await restoreAssetState("app-1", "asset-1", snapshot);
+    expect(r.status).toBe("restored");
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const written = writePayload.generated_assets[0];
+    // Content restored from snapshot.
+    expect(written.generated_content?.summary.text).toBe("snap-summary");
+    expect(written.generated_content?.bullets[0]?.id).toBe("bA");
+    expect(written.generated_content?.bullets[0]?.source_unit_ids).toEqual([
+      "unit-x",
+    ]);
+    // Validation state restored.
+    expect(written.validation_status).toBe("passed");
+    expect(written.validation_flags).toHaveLength(1);
+    expect(written.validation_flags?.[0]?.id).toBe("f-pre");
+  });
+
+  it("preserves the asset's other fields (id, owner_uid, kind, format, created_at, etc.) on restore", async () => {
+    const a = asset({
+      id: "asset-1",
+      owner_uid: "u",
+      kind: "resume",
+      format: "json",
+      cost_usd: 0.42,
+      latency_ms: 1200,
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await restoreAssetState("app-1", "asset-1", snapshot);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const written = writePayload.generated_assets[0];
+    // Identity + cost-tracking fields preserved.
+    expect(written.id).toBe("asset-1");
+    expect(written.owner_uid).toBe("u");
+    expect(written.kind).toBe("resume");
+    expect(written.format).toBe("json");
+    expect(written.cost_usd).toBe(0.42);
+    expect(written.latency_ms).toBe(1200);
+  });
+
+  it("does not flip an unrelated asset's state when restoring a specific asset", async () => {
+    const otherAsset = asset({
+      id: "asset-2",
+      kind: "cover_letter",
+      validation_status: "failed",
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () =>
+        application({ generated_assets: [asset(), otherAsset] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await restoreAssetState("app-1", "asset-1", snapshot);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: AssetRef[];
+    };
+    const untouched = writePayload.generated_assets.find(
+      (a) => a.id === "asset-2",
+    );
+    // Untouched asset's status is whatever it was — NOT
+    // overwritten by the snapshot's status.
+    expect(untouched?.validation_status).toBe("failed");
+  });
+
+  it("omits validation_flags entirely from the array element when the snapshot's flags are undefined (Codex P1+P2 on PR #198)", async () => {
+    // Firestore rejects raw `undefined` field values, AND
+    // `deleteField()` is rejected inside array elements
+    // ("deleteField() is not currently supported inside arrays").
+    // The right approach for `updateDoc({ generated_assets:
+    // wholeArray })`: omit the key entirely from the array
+    // element. The resulting Firestore document's
+    // `generated_assets[i]` simply doesn't contain
+    // `validation_flags`, matching the snapshot.
+    const legacySnapshot = {
+      content: snapshot.content,
+      validation_status: "pending" as const,
+      validation_flags: undefined,
+    };
+    // Fixture asset starts WITH flags so we can verify they're
+    // dropped on restore (the assertion would pass trivially if
+    // the prior asset also lacked flags).
+    const a = asset({
+      validation_flags: [
+        {
+          id: "f-existing",
+          asset_id: "asset-1",
+          bullet_id: "b1",
+          claim_id: "c1",
+          status: "untraceable",
+          rationale: "before undo",
+          created_at: "2026-04-01T00:00:00.000Z",
+        },
+      ],
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [a] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await restoreAssetState("app-1", "asset-1", legacySnapshot);
+    const writePayload = updateDoc.mock.calls[0]?.[1] as {
+      generated_assets: Array<Record<string, unknown>>;
+    };
+    const writtenAsset = writePayload.generated_assets[0];
+    // Key is NOT present on the written array element.
+    expect("validation_flags" in writtenAsset).toBe(false);
+    // Sanity: status was preserved from snapshot.
+    expect(writtenAsset.validation_status).toBe("pending");
   });
 });

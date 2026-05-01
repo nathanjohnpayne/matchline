@@ -1163,6 +1163,71 @@ describe("ApplicationEditorView", () => {
     expect(html).not.toContain('data-action="reorder-handle"');
   });
 
+  // ── sub-issue #197: undo affordance + Cmd+Z keybinding ────────
+
+  it("does NOT render the Undo affordance when onUndo is absent (read-only context)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset()}
+        units={[]}
+      />,
+    );
+    expect(html).not.toContain('data-testid="undo-affordance"');
+    expect(html).not.toContain('data-action="undo"');
+  });
+
+  it("does NOT render the Undo affordance when undoLabel is absent (empty stack)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset()}
+        units={[]}
+        onUndo={async () => undefined}
+        // undoLabel intentionally omitted (stack empty)
+      />,
+    );
+    expect(html).not.toContain('data-testid="undo-affordance"');
+  });
+
+  it("renders the Undo affordance with the action's label when both onUndo + undoLabel are wired", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset()}
+        units={[]}
+        onUndo={async () => undefined}
+        undoLabel="edit"
+      />,
+    );
+    expect(html).toContain('data-testid="undo-affordance"');
+    expect(html).toContain('data-action="undo"');
+    expect(html).toContain("Undo edit");
+    // Keyboard shortcut visible to the user.
+    expect(html).toContain("⌘Z");
+    // aria-keyshortcuts surfaces the binding to assistive tech.
+    expect(html).toContain('aria-keyshortcuts="Meta+z Control+z"');
+  });
+
+  it("renders different copy per action label (edit / remove / add / reorder)", () => {
+    for (const label of ["edit", "remove", "add", "reorder"]) {
+      const html = renderToStaticMarkup(
+        <ApplicationEditorView
+          status="ready"
+          application={application()}
+          asset={asset()}
+          units={[]}
+          onUndo={async () => undefined}
+          undoLabel={label}
+        />,
+      );
+      expect(html).toContain(`Undo ${label}`);
+    }
+  });
+
   it("does not render the export button when there is no asset (the empty resume pane has nothing to export)", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

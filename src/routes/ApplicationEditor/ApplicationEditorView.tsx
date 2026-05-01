@@ -130,6 +130,21 @@ export interface ApplicationEditorViewProps {
     fromIndex: number,
     toIndex: number,
   ) => Promise<void>;
+  /**
+   * Sub-issue #197 undo handler. The container manages the
+   * snapshot stack + pop semantics; the view just exposes the
+   * affordance + the keyboard binding. Optional — affordance +
+   * keybinding hide when undefined (empty stack OR read-only
+   * context).
+   */
+  readonly onUndo?: () => Promise<void>;
+  /**
+   * Label for the most recent action on the undo stack — used in
+   * the affordance copy ("Undo edit", "Undo remove", etc.) and
+   * in the screen-reader tooltip on Cmd+Z. Undefined when the
+   * stack is empty.
+   */
+  readonly undoLabel?: string;
 }
 
 export default function ApplicationEditorView({
@@ -144,6 +159,8 @@ export default function ApplicationEditorView({
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
+  onUndo,
+  undoLabel,
 }: ApplicationEditorViewProps): ReactElement {
   if (status === "loading") {
     return (
@@ -225,6 +242,30 @@ export default function ApplicationEditorView({
       className="mx-auto max-w-6xl space-y-4"
       data-testid="application-editor"
       data-load-state="ready"
+      onKeyDown={(e) => {
+        // Cmd+Z (Mac) / Ctrl+Z (other) → undo. Sub-issue #197.
+        // Skip when Cmd+Shift+Z (which on most platforms means
+        // redo — not implemented in V1; let the browser handle).
+        // Skip when the focused element is an input / textarea /
+        // contenteditable: the browser's native text-undo should
+        // win for those (the user is trying to undo characters,
+        // not a bullet mutation).
+        if (e.key !== "z" && e.key !== "Z") return;
+        if (!(e.metaKey || e.ctrlKey)) return;
+        if (e.shiftKey) return; // redo — V1 out of scope
+        if (onUndo === undefined) return;
+        const target = e.target as HTMLElement | null;
+        const tagName = target?.tagName.toLowerCase() ?? "";
+        if (
+          tagName === "input" ||
+          tagName === "textarea" ||
+          target?.isContentEditable === true
+        ) {
+          return;
+        }
+        e.preventDefault();
+        void onUndo();
+      }}
     >
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
@@ -246,7 +287,56 @@ export default function ApplicationEditorView({
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}
       />
+
+      <UndoAffordance onUndo={onUndo} undoLabel={undoLabel} />
     </section>
+  );
+}
+
+interface UndoAffordanceProps {
+  readonly onUndo?: () => Promise<void>;
+  readonly undoLabel?: string;
+}
+
+/**
+ * Inline "Undo X" affordance below the resume pane (sub-issue
+ * #197). Per UI guidance rule 10 ("Fail visibly, still quietly")
+ * + § Application Editor's tone for ancillary controls — small
+ * neutral ghost button, displayed inline rather than as a toast.
+ *
+ * Hidden when the undo stack is empty (`onUndo === undefined`)
+ * or in read-only contexts. Copy reflects the most recent
+ * action's label so the user knows what would be reverted.
+ *
+ * Keyboard equivalent (Cmd/Ctrl+Z) is bound at the parent
+ * section's onKeyDown — see ApplicationEditorView's return.
+ */
+function UndoAffordance({
+  onUndo,
+  undoLabel,
+}: UndoAffordanceProps): ReactElement | null {
+  if (onUndo === undefined || undoLabel === undefined) return null;
+  return (
+    <div
+      className="flex justify-end"
+      data-testid="undo-affordance"
+    >
+      <button
+        type="button"
+        onClick={() => {
+          void onUndo();
+        }}
+        data-action="undo"
+        title="Cmd/Ctrl+Z"
+        aria-keyshortcuts="Meta+z Control+z"
+        className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 transition-colors duration-150 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+      >
+        ↶ Undo {undoLabel}{" "}
+        <span className="text-zinc-400 dark:text-zinc-600 ml-1">
+          (⌘Z)
+        </span>
+      </button>
+    </div>
   );
 }
 
