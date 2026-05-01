@@ -1,0 +1,58 @@
+/**
+ * Client-side wrapper around the `extractFromResume` callable
+ * (`functions/src/callables/extractFromResume.ts`, registered as
+ * `extractFromResume` per `functions/src/index.ts:16`).
+ *
+ * Wraps `httpsCallable` with the response shape the Onboarding
+ * route cares about (the persisted Units). The callable's pipeline
+ * does Step 1 of the core loop end-to-end: extract → embed →
+ * persist → return. By the time this resolves, the Units are in
+ * Firestore + the Unit Review subscription will deliver them to
+ * `/units`.
+ *
+ * Why a thin wrapper rather than calling httpsCallable inline at
+ * the route: the callable name + response shape are the contract
+ * with the server-side function; centralizing here means a future
+ * rename or shape change touches one file. Mirrors
+ * `invokeRunMatching` in `matches.ts` and `invokeValidateAsset`
+ * in `validation.ts`.
+ *
+ * Sub-issue #199 (front-end for #17). Onboarding's paste-resume
+ * UI is the primary caller.
+ */
+
+import { httpsCallable } from "firebase/functions";
+
+import { getFunctionsClient } from "../firebase.ts";
+import type { ExperienceUnit } from "../types/capability.ts";
+
+export interface ExtractFromResumeResponse {
+  readonly units: readonly ExperienceUnit[];
+}
+
+/**
+ * Invoke the server-side extraction pipeline. Resolves to the
+ * persisted Units on success (the pipeline writes them to
+ * Firestore before returning, so a follow-up Unit Review
+ * subscription will see them).
+ *
+ * Server-side error mapping (see `extractFromResumeCallable`):
+ *   - `unauthenticated` if no auth context.
+ *   - `invalid-argument` for empty / non-string text.
+ *   - `failed-precondition` if the extraction pipeline exhausted
+ *     its retry budget. Carries `details.failures` with per-
+ *     attempt diagnostics.
+ *
+ * Client surfaces these via the rejection path; the Onboarding
+ * route decides whether to log + retry or surface inline.
+ */
+export async function invokeExtractFromResume(
+  text: string,
+): Promise<ExtractFromResumeResponse> {
+  const fn = httpsCallable<{ text: string }, ExtractFromResumeResponse>(
+    getFunctionsClient(),
+    "extractFromResume",
+  );
+  const result = await fn({ text });
+  return result.data;
+}
