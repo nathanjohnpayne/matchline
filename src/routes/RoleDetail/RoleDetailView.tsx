@@ -25,6 +25,9 @@ import ApplicationsTab, {
   type ApplicationsTabStatus,
 } from "./ApplicationsTab.tsx";
 import MatchesTab from "./MatchesTab.tsx";
+import RequirementsTab, {
+  type RequirementsTabStatus,
+} from "./RequirementsTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
@@ -70,6 +73,17 @@ export interface RoleDetailViewProps {
    */
   readonly computingMatches: boolean;
   /**
+   * Requirements tab parse state (#201). The container holds
+   * `parseJobRequirements`-call state + the in-flight save
+   * for the JD textarea so re-renders don't drop them on
+   * tab switches.
+   */
+  readonly parsingStatus: RequirementsTabStatus;
+  readonly parseError: Error | null;
+  readonly savingJd: boolean;
+  readonly onSaveJd: (text: string) => void;
+  readonly onParseJd: (text: string) => void;
+  /**
    * Applications tab state (#202). Container holds the
    * subscription + the in-flight generate call so a tab
    * switch round-trip preserves them.
@@ -98,6 +112,11 @@ export default function RoleDetailView({
   onTabChange,
   onApprovalStateChange,
   computingMatches,
+  parsingStatus,
+  parseError,
+  savingJd,
+  onSaveJd,
+  onParseJd,
   applications,
   hasApprovedMatches,
   generationStatus,
@@ -192,14 +211,15 @@ export default function RoleDetailView({
         aria-labelledby={`role-detail-tab-${activeTab}`}
       >
         {activeTab === "requirements" && (
-          <p
-            className="text-sm text-zinc-500"
-            data-testid="requirements-tab-placeholder"
-          >
-            Requirements editing ships under #15. This tab currently
-            shows a read-only summary count: {requirements.length}{" "}
-            requirement{requirements.length === 1 ? "" : "s"} parsed.
-          </p>
+          <RequirementsTab
+            jdRaw={role.jd_raw}
+            requirements={requirements}
+            status={parsingStatus}
+            error={parseError}
+            savingJd={savingJd}
+            onSaveJd={onSaveJd}
+            onParseJd={onParseJd}
+          />
         )}
         {activeTab === "matches" && (
           <MatchesTab

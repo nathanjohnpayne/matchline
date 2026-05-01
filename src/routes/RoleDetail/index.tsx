@@ -48,6 +48,7 @@ import { subscribeByOwner as subscribeUnitsByOwner } from "../../services/experi
 import {
   subscribeRequirementsForRole,
   getRole,
+  upsertRole,
 } from "../../services/roles.ts";
 import {
   invokeRunMatching,
@@ -56,6 +57,7 @@ import {
   type MatchApprovalState,
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
+import { invokeParseJobRequirements } from "../../services/requirements.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -65,6 +67,7 @@ import type { Application, Role } from "../../types/crm.ts";
 
 import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
 import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
+import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 
 export default function RoleDetail(): ReactElement {
@@ -119,6 +122,19 @@ export default function RoleDetail(): ReactElement {
     useState(false);
   const triggeredRef = useRef(false);
 
+  // Requirements tab parse state (#201). Held at the
+  // container so a tab switch + return doesn't drop the
+  // in-flight or error state. The `currentRoleIdRef` above
+  // serves both #201 (parse + save stale-closure guard) and
+  // #202 (generate stale-closure guard) — same shape, one
+  // ref tracks the CURRENT roleId across renders so any
+  // resolved callback can compare against the latest target
+  // rather than the captured-stale closure value.
+  const [parsingStatus, setParsingStatus] =
+    useState<RequirementsTabStatus>("editing");
+  const [parseError, setParseError] = useState<Error | null>(null);
+  const [savingJd, setSavingJd] = useState(false);
+
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
 
   // Single-setter approval handler (#130 + cursor #133 r1).
@@ -143,6 +159,148 @@ export default function RoleDetail(): ReactElement {
     [],
   );
 
+  // Save the textarea contents to Role.jd_raw via upsertRole.
+  // Optimistically update local Role state so the textarea
+  // dirty-check (draft === jd_raw) clears immediately; the
+  // Role doc is one-shot fetched (not subscribed) so we need
+  // to keep our local copy in sync after a save. Same shape
+  // as inline-edit elsewhere in the app.
+  const onSaveJd = useCallback(
+    (text: string): void => {
+      if (role === null) return;
+      const next: Role = { ...role, jd_raw: text };
+      // Capture the role id this save was issued against.
+      // If the user navigates away before upsertRole resolves,
+      // the stale-closure check below skips the state writes
+      // so Role B doesn't inherit Role A's save error.
+      const issuedAgainst = role.id;
+      setSavingJd(true);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { owner_uid: _ownerUid, ...rest } = next;
+      void upsertRole(rest)
+        .then(() => {
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          setRole(next);
+          // Clear any prior parse/save error so a successful
+          // retry doesn't leave the inline banner visible
+          // forever (Codex P2 round 2 on PR #206). The same
+          // pattern applies inside onParseJd's success path.
+          setParseError(null);
+          setParsingStatus("editing");
+        })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn("upsertRole failed", err);
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          // Prefix the message so the inline error banner makes
+          // it clear the save failed, not a parse — same banner
+          // surface, but the user knows which action errored
+          // (CodeRabbit nit on PR #206). A separate `saveError`
+          // state is cleaner but the unified banner keeps the
+          // tab's footer simple at V1; revisit if save failures
+          // become common enough to warrant their own surface.
+          const message = err instanceof Error ? err.message : String(err);
+          setParseError(new Error(`Save failed: ${message}`));
+          setParsingStatus("error");
+        })
+        .finally(() => {
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          setSavingJd(false);
+        });
+    },
+    [role],
+  );
+
+  // Persist the textarea contents (so the user's edits are
+  // durable) THEN call the parse callable. The callable
+  // reads owned-Role + applies its own retry budget, so on
+  // success the subscription delivers the new Requirements;
+  // failures surface inline + leave the user free to retry.
+  const onParseJd = useCallback(
+    (text: string): void => {
+      if (roleId === undefined || roleId === "" || role === null) return;
+      // Capture the role this parse was issued against. If
+      // the user navigates to a different Role before the
+      // callable resolves, the comparisons below skip the
+      // state writes so the new Role's view doesn't show
+      // the old Role's parse outcome (Codex P2 on PR #206).
+      const issuedAgainst = roleId;
+      setParsingStatus("parsing");
+      setParseError(null);
+      const trimmed = text.trim();
+      const next: Role = { ...role, jd_raw: text };
+      void (async () => {
+        try {
+          // Persist the JD first so a parse failure doesn't
+          // strand the user's edits. upsertRole is a merge
+          // setDoc, so the rest of the Role doc is unchanged.
+          if (text !== role.jd_raw) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { owner_uid: _o, ...rest } = next;
+            await upsertRole(rest);
+            if (currentRoleIdRef.current === issuedAgainst) {
+              setRole(next);
+            }
+          }
+          await invokeParseJobRequirements(roleId, trimmed);
+          // Subscription delivers the parsed Requirements;
+          // flip back to editing on success and clear any
+          // prior error so a successful retry hides the
+          // inline banner.
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          setParseError(null);
+          setParsingStatus("editing");
+
+          // Re-parse replaces Requirements atomically (the
+          // pipeline's clear-and-replace at
+          // `functions/src/parsing/pipeline.ts:83` drops the
+          // prior set) — but existing UnitMatches still
+          // reference the OLD requirement IDs and remain in
+          // Firestore. The auto-trigger gate (#131) is closed
+          // because matches.length > 0 (stale rows), so
+          // matching wouldn't recompute on its own. Fire a
+          // fresh `runMatching` here so the matcher's
+          // replace-by-(role,owner) (#99) drops the orphans
+          // and lands matches against the new requirement
+          // IDs. Codex Phase 4b finding on PR #206.
+          //
+          // Set `triggeredRef.current = true` BEFORE invoking
+          // so the auto-trigger effect (#131) doesn't also
+          // fire when the new Requirements snapshot lands
+          // with `matches.length === 0` (first-parse case:
+          // no prior matches existed, so the gate would
+          // otherwise see an empty match set + non-empty
+          // requirements and launch a duplicate call). Codex
+          // round 2 Phase 4b on PR #206.
+          //
+          // Fire-and-forget — the matches subscription
+          // delivers the result; failures log + the user can
+          // re-trigger from the Matches tab affordances. The
+          // computingMatches UX hint stays on for the
+          // duration so the user knows new matches are
+          // computing.
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          triggeredRef.current = true;
+          setComputingMatches(true);
+          void invokeRunMatching(roleId)
+            .catch((err: unknown) => {
+              // eslint-disable-next-line no-console
+              console.warn("invokeRunMatching after re-parse failed", err);
+            })
+            .finally(() => {
+              if (currentRoleIdRef.current !== issuedAgainst) return;
+              setComputingMatches(false);
+            });
+        } catch (err) {
+          if (currentRoleIdRef.current !== issuedAgainst) return;
+          setParseError(err instanceof Error ? err : new Error(String(err)));
+          setParsingStatus("error");
+        }
+      })();
+    },
+    [role, roleId],
+  );
+
   useEffect(() => {
     if (roleId === undefined || roleId === "") {
       // No id in the URL — treat as not-found rather than
@@ -159,6 +317,15 @@ export default function RoleDetail(): ReactElement {
     setMatches([]);
     setApplications([]);
     setError(null);
+    // Reset Requirements-tab parse state too so Role B
+    // doesn't briefly show Role A's parsing/error UX
+    // before the user interacts. The stale-closure guards
+    // in onSaveJd / onParseJd already prevent A's in-flight
+    // promises from writing into B; this reset is the
+    // mirror for any state that's already committed.
+    setParsingStatus("editing");
+    setParseError(null);
+    setSavingJd(false);
     // Reset Applications-tab UX state too so Role B doesn't
     // briefly show Role A's terminal generation outcome.
     setGenerationStatus("editing");
@@ -473,6 +640,11 @@ export default function RoleDetail(): ReactElement {
       onTabChange={onTabChange}
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
+      parsingStatus={parsingStatus}
+      parseError={parseError}
+      savingJd={savingJd}
+      onSaveJd={onSaveJd}
+      onParseJd={onParseJd}
       applications={applications}
       hasApprovedMatches={hasApprovedMatches}
       generationStatus={generationStatus}
