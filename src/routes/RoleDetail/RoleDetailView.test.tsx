@@ -150,10 +150,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -175,10 +171,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -200,10 +192,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -225,10 +213,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -263,10 +247,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -300,10 +280,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -329,10 +305,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -354,10 +326,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -381,7 +349,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -407,7 +374,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -438,7 +404,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -485,10 +450,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -537,7 +498,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -564,7 +524,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         parsingStatus="parsing"
       />,
@@ -593,7 +552,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         parsingStatus="error"
         parseError={new Error("JD parsing failed after retries.")}
@@ -618,7 +576,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         savingJd={true}
       />,
@@ -649,7 +606,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -674,10 +630,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -705,7 +657,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={false}
       />,
@@ -736,7 +687,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
       />,
@@ -797,7 +747,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         applications={apps}
         hasApprovedMatches={true}
@@ -855,7 +804,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         applications={[legacyApp]}
         hasApprovedMatches={true}
@@ -881,7 +829,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
         generationStatus="generating"
@@ -911,7 +858,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
         generationStatus="error"
@@ -937,10 +883,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -973,10 +915,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1012,10 +950,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1046,10 +980,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1075,10 +1005,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1119,10 +1045,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1163,10 +1085,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1204,10 +1122,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1229,10 +1143,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={true}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1256,10 +1166,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -1291,10 +1197,6 @@ describe("RoleDetailView", () => {
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
         {...REQS_TAB_DEFAULTS}
-
-        {...APPS_TAB_DEFAULTS}
-        {...REQS_TAB_DEFAULTS}
-
         {...APPS_TAB_DEFAULTS}
       />,
     );
