@@ -8,13 +8,14 @@ import ApplicationEditor from "./routes/ApplicationEditor/index.tsx";
 import Onboarding from "./routes/Onboarding.tsx";
 import Pipeline from "./routes/Pipeline.tsx";
 import RoleDetail from "./routes/RoleDetail/index.tsx";
+import RoleNew from "./routes/RoleNew.tsx";
 import SignIn from "./routes/SignIn.tsx";
 import UnitReview from "./routes/UnitReview/index.tsx";
 
 const navItems = [
   { to: "/onboarding", label: "Onboarding" },
   { to: "/units", label: "Unit Review" },
-  { to: "/roles/example", label: "Role Detail" },
+  { to: "/roles/new", label: "+ New Role" },
   { to: "/applications/example", label: "Application Editor" },
   { to: "/pipeline", label: "Pipeline" },
 ] as const;
@@ -91,6 +92,7 @@ export default function App() {
           <Route path="/sign-in" element={<Navigate to="/units" replace />} />
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/units" element={<UnitReview />} />
+          <Route path="/roles/new" element={<RoleNew />} />
           <Route path="/roles/:roleId" element={<RoleDetail />} />
           <Route
             path="/applications/:applicationId"
