@@ -134,7 +134,6 @@ export default function RequirementsTab({
 
   const dirty = draft !== jdRaw;
   const draftEmpty = draft.trim().length === 0;
-  const jdRawEmpty = jdRaw.trim().length === 0;
   const hasRequirements = requirements.length > 0;
   const parsing = status === "parsing";
   // Disable destructive / mutating affordances while either
@@ -220,7 +219,7 @@ export default function RequirementsTab({
             className="text-xs font-medium text-zinc-600 dark:text-zinc-400"
           >
             JD source{" "}
-            {jdRawEmpty && (
+            {draftEmpty && (
               <span className="text-zinc-400 dark:text-zinc-600">
                 (paste JD text first)
               </span>
@@ -391,7 +390,7 @@ export default function RequirementsTab({
           className="border-t border-zinc-200 pt-4 text-sm text-zinc-500 dark:border-zinc-800"
           data-testid="requirements-tab-empty"
         >
-          {jdRawEmpty
+          {draftEmpty
             ? "Paste JD text above, then click Parse JD."
             : "JD ready. Click Parse JD to extract structured Requirements."}
         </p>

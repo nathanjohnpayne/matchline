@@ -532,6 +532,13 @@ export default function RoleDetail(): ReactElement {
       return;
     }
 
+    // Capture visit token so a slow runMatching from Role A
+    // doesn't clear `computingMatches` after the user has
+    // navigated to Role B (CodeRabbit P1 round 4 on PR #206).
+    // Without this, B's own auto-trigger hint could be
+    // wiped by A's stale finally callback.
+    const issuedAgainstAuto = roleId;
+    const issuedTokenAuto = visitTokenRef.current;
     triggeredRef.current = true;
     setComputingMatches(true);
     void invokeRunMatching(roleId)
@@ -543,6 +550,12 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeRunMatching failed", err);
       })
       .finally(() => {
+        if (
+          currentRoleIdRef.current !== issuedAgainstAuto ||
+          visitTokenRef.current !== issuedTokenAuto
+        ) {
+          return;
+        }
         setComputingMatches(false);
       });
   }, [
