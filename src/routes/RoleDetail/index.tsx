@@ -48,6 +48,7 @@ import { subscribeByOwner as subscribeUnitsByOwner } from "../../services/experi
 import {
   subscribeRequirementsForRole,
   getRole,
+  upsertRole,
 } from "../../services/roles.ts";
 import {
   invokeRunMatching,
@@ -56,6 +57,7 @@ import {
   type MatchApprovalState,
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
+import { invokeParseJobRequirements } from "../../services/requirements.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -65,6 +67,7 @@ import type { Application, Role } from "../../types/crm.ts";
 
 import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
 import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
+import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 
 export default function RoleDetail(): ReactElement {
@@ -86,16 +89,34 @@ export default function RoleDetail(): ReactElement {
   const [generationStatus, setGenerationStatus] =
     useState<ApplicationsTabStatus>("editing");
   const [generationError, setGenerationError] = useState<Error | null>(null);
-  // Stale-closure guard for the async generate path. Mirrors
-  // the `active` flag pattern used in the main subscription
-  // effect — but ref-based so the resolved promise reads the
-  // LATEST roleId across renders, not the closure's captured
-  // value. Without this, the in-flight call for Role A would
-  // navigate to /applications/:newAppId on completion even
-  // after the user navigated to Role B.
+  // Stale-closure guard for the async parse / save / generate
+  // paths. Mirrors the `active` flag pattern used in the main
+  // subscription effect, but ref-based so the resolved promise
+  // reads the LATEST visit token across renders rather than the
+  // captured-stale closure value.
+  //
+  // Two pieces:
+  //   - `currentRoleIdRef` — the roleId of the active visit.
+  //     Useful for fast-path comparisons in the simple A → B
+  //     case.
+  //   - `visitTokenRef` — a monotonic counter bumped on every
+  //     roleId change. Closes the A → B → A race that a plain
+  //     roleId comparison can't see: in that sequence the
+  //     in-flight callback for the FIRST A would otherwise
+  //     resolve and pass the `currentRoleIdRef.current === A`
+  //     check even though the user is now on a fresh A visit.
+  //     The token comparison fails because each visit gets its
+  //     own integer (CodeRabbit P1 on PR #206).
+  //
+  // The pattern: capture both `issuedAgainst = roleId` and
+  // `issuedToken = visitTokenRef.current` at call time, then
+  // every async continuation checks the token; mismatch =>
+  // bail out before any state writes.
   const currentRoleIdRef = useRef<string | undefined>(roleId);
+  const visitTokenRef = useRef(0);
   useEffect(() => {
     currentRoleIdRef.current = roleId;
+    visitTokenRef.current += 1;
   }, [roleId]);
   // Auto-trigger state (#131). Distinguishes the
   // pre-first-snapshot wait, the in-flight matching call,
@@ -118,6 +139,43 @@ export default function RoleDetail(): ReactElement {
   const [matchesFirstSnapshotReceived, setMatchesFirstSnapshotReceived] =
     useState(false);
   const triggeredRef = useRef(false);
+
+  // Requirements tab parse state (#201). Held at the
+  // container so a tab switch + return doesn't drop the
+  // in-flight or error state. The `currentRoleIdRef` above
+  // serves both #201 (parse + save stale-closure guard) and
+  // #202 (generate stale-closure guard) — same shape, one
+  // ref tracks the CURRENT roleId across renders so any
+  // resolved callback can compare against the latest target
+  // rather than the captured-stale closure value.
+  const [parsingStatus, setParsingStatus] =
+    useState<RequirementsTabStatus>("editing");
+  const [parseError, setParseError] = useState<Error | null>(null);
+  const [savingJd, setSavingJd] = useState(false);
+  // JD textarea draft, lifted from RequirementsTab so a tab
+  // switch (which unmounts RequirementsTab via the activeTab
+  // conditional render) doesn't lose unsaved paste / edits
+  // (nathanpayne-codex Phase 4b P1 on PR #206). Sync rule:
+  // adopt the persisted `role.jd_raw` whenever it changes
+  // AND the user hasn't started editing (draft equals the
+  // last value we synced down). The roleId reset effect
+  // below also resets the draft so a different Role doesn't
+  // inherit the previous Role's draft.
+  const [jdDraft, setJdDraft] = useState("");
+  const lastSyncedJdRawRef = useRef<string>("");
+  // Sync persisted → draft when persisted changes and the
+  // user's draft hasn't diverged from the last value we
+  // pushed in. Same `lastSyncedPersisted` pattern that lived
+  // inside RequirementsTab pre-lift; same comment about
+  // intentional dep omission to avoid a feedback loop.
+  useEffect(() => {
+    const persisted = role?.jd_raw ?? "";
+    if (jdDraft === lastSyncedJdRawRef.current) {
+      setJdDraft(persisted);
+    }
+    lastSyncedJdRawRef.current = persisted;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role?.jd_raw]);
 
   const onTabChange = useCallback((tab: Tab) => setActiveTab(tab), []);
 
@@ -143,6 +201,162 @@ export default function RoleDetail(): ReactElement {
     [],
   );
 
+  // Save the textarea contents to Role.jd_raw via upsertRole.
+  // Optimistically update local Role state so the textarea
+  // dirty-check (draft === jd_raw) clears immediately; the
+  // Role doc is one-shot fetched (not subscribed) so we need
+  // to keep our local copy in sync after a save. Same shape
+  // as inline-edit elsewhere in the app.
+  const onSaveJd = useCallback(
+    (text: string): void => {
+      if (role === null) return;
+      const next: Role = { ...role, jd_raw: text };
+      // Capture both the role id AND the visit token this save
+      // was issued against. The token closes the A → B → A race
+      // (CodeRabbit P1 on PR #206): plain roleId comparison
+      // would let the FIRST A's continuation pass through after
+      // the user came back to A, because roleId === A both times.
+      const issuedAgainst = role.id;
+      const issuedToken = visitTokenRef.current;
+      const isStale = (): boolean =>
+        currentRoleIdRef.current !== issuedAgainst ||
+        visitTokenRef.current !== issuedToken;
+      setSavingJd(true);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { owner_uid: _ownerUid, ...rest } = next;
+      void upsertRole(rest)
+        .then(() => {
+          if (isStale()) return;
+          setRole(next);
+          // Clear any prior parse/save error so a successful
+          // retry doesn't leave the inline banner visible
+          // forever (Codex P2 round 2 on PR #206). The same
+          // pattern applies inside onParseJd's success path.
+          setParseError(null);
+          setParsingStatus("editing");
+        })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn("upsertRole failed", err);
+          if (isStale()) return;
+          // Prefix the message so the inline error banner makes
+          // it clear the save failed, not a parse — same banner
+          // surface, but the user knows which action errored
+          // (CodeRabbit nit on PR #206). A separate `saveError`
+          // state is cleaner but the unified banner keeps the
+          // tab's footer simple at V1; revisit if save failures
+          // become common enough to warrant their own surface.
+          const message = err instanceof Error ? err.message : String(err);
+          setParseError(new Error(`Save failed: ${message}`));
+          setParsingStatus("error");
+        })
+        .finally(() => {
+          if (isStale()) return;
+          setSavingJd(false);
+        });
+    },
+    [role],
+  );
+
+  // Persist the textarea contents (so the user's edits are
+  // durable) THEN call the parse callable. The callable
+  // reads owned-Role + applies its own retry budget, so on
+  // success the subscription delivers the new Requirements;
+  // failures surface inline + leave the user free to retry.
+  const onParseJd = useCallback(
+    (text: string): void => {
+      if (roleId === undefined || roleId === "" || role === null) return;
+      // Capture both the role this parse was issued against AND
+      // the visit token. Token check closes the A → B → A race
+      // (CodeRabbit P1 on PR #206) — see the visitTokenRef
+      // declaration above for the full pattern.
+      const issuedAgainst = roleId;
+      const issuedToken = visitTokenRef.current;
+      const isStale = (): boolean =>
+        currentRoleIdRef.current !== issuedAgainst ||
+        visitTokenRef.current !== issuedToken;
+      setParsingStatus("parsing");
+      setParseError(null);
+      const trimmed = text.trim();
+      const next: Role = { ...role, jd_raw: text };
+      void (async () => {
+        try {
+          // Persist the JD first so a parse failure doesn't
+          // strand the user's edits. upsertRole is a merge
+          // setDoc, so the rest of the Role doc is unchanged.
+          if (text !== role.jd_raw) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { owner_uid: _o, ...rest } = next;
+            await upsertRole(rest);
+            if (!isStale()) {
+              setRole(next);
+            }
+          }
+          // Bail out before the parse callable if the user
+          // has navigated away mid-await (CodeRabbit P1
+          // round 3 on PR #206). Otherwise a stale visit
+          // would still hit the LLM pipeline + write
+          // Requirements that the user no longer cares about.
+          if (isStale()) return;
+          await invokeParseJobRequirements(roleId, trimmed);
+          // Subscription delivers the parsed Requirements;
+          // flip back to editing on success and clear any
+          // prior error so a successful retry hides the
+          // inline banner.
+          if (isStale()) return;
+          setParseError(null);
+          setParsingStatus("editing");
+
+          // Re-parse replaces Requirements atomically (the
+          // pipeline's clear-and-replace at
+          // `functions/src/parsing/pipeline.ts:83` drops the
+          // prior set) — but existing UnitMatches still
+          // reference the OLD requirement IDs and remain in
+          // Firestore. The auto-trigger gate (#131) is closed
+          // because matches.length > 0 (stale rows), so
+          // matching wouldn't recompute on its own. Fire a
+          // fresh `runMatching` here so the matcher's
+          // replace-by-(role,owner) (#99) drops the orphans
+          // and lands matches against the new requirement
+          // IDs. Codex Phase 4b finding on PR #206.
+          //
+          // Set `triggeredRef.current = true` BEFORE invoking
+          // so the auto-trigger effect (#131) doesn't also
+          // fire when the new Requirements snapshot lands
+          // with `matches.length === 0` (first-parse case:
+          // no prior matches existed, so the gate would
+          // otherwise see an empty match set + non-empty
+          // requirements and launch a duplicate call). Codex
+          // round 2 Phase 4b on PR #206.
+          //
+          // Fire-and-forget — the matches subscription
+          // delivers the result; failures log + the user can
+          // re-trigger from the Matches tab affordances. The
+          // computingMatches UX hint stays on for the
+          // duration so the user knows new matches are
+          // computing.
+          if (isStale()) return;
+          triggeredRef.current = true;
+          setComputingMatches(true);
+          void invokeRunMatching(roleId)
+            .catch((err: unknown) => {
+              // eslint-disable-next-line no-console
+              console.warn("invokeRunMatching after re-parse failed", err);
+            })
+            .finally(() => {
+              if (isStale()) return;
+              setComputingMatches(false);
+            });
+        } catch (err) {
+          if (isStale()) return;
+          setParseError(err instanceof Error ? err : new Error(String(err)));
+          setParsingStatus("error");
+        }
+      })();
+    },
+    [role, roleId],
+  );
+
   useEffect(() => {
     if (roleId === undefined || roleId === "") {
       // No id in the URL — treat as not-found rather than
@@ -159,6 +373,21 @@ export default function RoleDetail(): ReactElement {
     setMatches([]);
     setApplications([]);
     setError(null);
+    // Reset Requirements-tab parse state too so Role B
+    // doesn't briefly show Role A's parsing/error UX
+    // before the user interacts. The stale-closure guards
+    // in onSaveJd / onParseJd already prevent A's in-flight
+    // promises from writing into B; this reset is the
+    // mirror for any state that's already committed.
+    setParsingStatus("editing");
+    setParseError(null);
+    setSavingJd(false);
+    // Reset the JD draft + the persisted-sync ref so Role B
+    // doesn't inherit Role A's unsaved draft. The Role-fetch
+    // resolution below will re-sync via the persisted-jd_raw
+    // effect once the new role lands.
+    setJdDraft("");
+    lastSyncedJdRawRef.current = "";
     // Reset Applications-tab UX state too so Role B doesn't
     // briefly show Role A's terminal generation outcome.
     setGenerationStatus("editing");
@@ -333,6 +562,13 @@ export default function RoleDetail(): ReactElement {
       return;
     }
 
+    // Capture visit token so a slow runMatching from Role A
+    // doesn't clear `computingMatches` after the user has
+    // navigated to Role B (CodeRabbit P1 round 4 on PR #206).
+    // Without this, B's own auto-trigger hint could be
+    // wiped by A's stale finally callback.
+    const issuedAgainstAuto = roleId;
+    const issuedTokenAuto = visitTokenRef.current;
     triggeredRef.current = true;
     setComputingMatches(true);
     void invokeRunMatching(roleId)
@@ -344,6 +580,12 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeRunMatching failed", err);
       })
       .finally(() => {
+        if (
+          currentRoleIdRef.current !== issuedAgainstAuto ||
+          visitTokenRef.current !== issuedTokenAuto
+        ) {
+          return;
+        }
         setComputingMatches(false);
       });
   }, [
@@ -401,6 +643,13 @@ export default function RoleDetail(): ReactElement {
     if (!hasApprovedMatches) return;
 
     const issuedAgainst = roleId;
+    // Same A → B → A race protection as parse/save (CodeRabbit
+    // P1 on PR #206) — capture the visit token at issue time
+    // and check both pieces in every continuation.
+    const issuedToken = visitTokenRef.current;
+    const isStale = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainst ||
+      visitTokenRef.current !== issuedToken;
     const newAppId = globalThis.crypto.randomUUID();
     const nowIso = new Date().toISOString();
 
@@ -440,10 +689,10 @@ export default function RoleDetail(): ReactElement {
           generated_assets: [],
           approved_unit_ids: approvedUnitIds,
         });
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
 
         await invokeGenerateResume(newAppId);
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
 
         // Success: clear status + navigate. The
         // ApplicationEditor's container subscribes to its
@@ -452,7 +701,7 @@ export default function RoleDetail(): ReactElement {
         setGenerationError(null);
         navigate(`/applications/${newAppId}`);
       } catch (err) {
-        if (currentRoleIdRef.current !== issuedAgainst) return;
+        if (isStale()) return;
         setGenerationError(
           err instanceof Error ? err : new Error(String(err)),
         );
@@ -473,6 +722,13 @@ export default function RoleDetail(): ReactElement {
       onTabChange={onTabChange}
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
+      parsingStatus={parsingStatus}
+      parseError={parseError}
+      savingJd={savingJd}
+      jdDraft={jdDraft}
+      onJdDraftChange={setJdDraft}
+      onSaveJd={onSaveJd}
+      onParseJd={onParseJd}
       applications={applications}
       hasApprovedMatches={hasApprovedMatches}
       generationStatus={generationStatus}

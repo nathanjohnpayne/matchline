@@ -108,10 +108,26 @@ const NOOP = (): void => {};
 const NOOP_STATE_CHANGE = (): void => {};
 
 /**
- * Defaults for the Applications-tab props added in #202.
+ * Defaults for the Requirements-tab props added in #201.
  * Spread into every test so the existing tests don't have
- * to repeat them. Tests that exercise the Applications tab
+ * to repeat them. Tests that exercise the Requirements tab
  * directly override these inline.
+ */
+const REQS_TAB_DEFAULTS = {
+  parsingStatus: "editing" as const,
+  parseError: null as Error | null,
+  savingJd: false,
+  jdDraft: "",
+  onJdDraftChange: NOOP as (next: string) => void,
+  onSaveJd: NOOP as (text: string) => void,
+  onParseJd: NOOP as (text: string) => void,
+};
+
+/**
+ * Defaults for the Applications-tab props added in #202.
+ * Same shape as REQS_TAB_DEFAULTS — most existing tests
+ * spread BOTH so the new prop surface is satisfied without
+ * per-test repetition.
  */
 const APPS_TAB_DEFAULTS = {
   applications: [] as readonly import("../../types/crm.ts").Application[],
@@ -135,6 +151,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -155,6 +172,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -175,6 +193,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -195,6 +214,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -228,6 +248,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -260,6 +281,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -284,6 +306,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -304,6 +327,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -311,12 +335,120 @@ describe("RoleDetailView", () => {
     expect(html).toContain("priority: high");
   });
 
-  it("REQUIREMENTS TAB: renders the placeholder count when active", () => {
-    const reqs = [makeReq("r1"), makeReq("r2"), makeReq("r3")];
+  // -- #201: Requirements tab (paste-JD UI + parse wire-up) -----
+
+  it("REQUIREMENTS TAB: renders the live tab (not the old placeholder) when active", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView
         status="ready"
         role={makeRole()}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab"');
+    expect(html).toContain('data-requirements-tab-status="editing"');
+    // Old placeholder testid is gone — confirms the swap landed.
+    expect(html).not.toContain('data-testid="requirements-tab-placeholder"');
+    // The JD textarea is always present (rule 4 — inline edit).
+    expect(html).toContain('data-testid="requirements-tab-jd-textarea"');
+  });
+
+  it("REQUIREMENTS TAB: empty-jd_raw + empty-requirements renders the empty-state copy", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab-empty"');
+    expect(html).toContain("Paste JD text above");
+    expect(html).toContain("(paste JD text first)");
+    // Parse button rendered but disabled (jd is empty).
+    // Match the HTML `disabled` attribute, not the Tailwind
+    // `disabled:opacity-60` utility class which substring-matches.
+    const parseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>/,
+    );
+    expect(parseBtn).not.toBeNull();
+    expect(parseBtn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("REQUIREMENTS TAB: jd_raw set + requirements empty renders Parse JD enabled, no list yet", () => {
+    // jdDraft override: simulates the user having the persisted
+    // JD loaded into the textarea (the container's sync effect
+    // adopts persisted into draft on roleId change). With the
+    // draft-driven empty-state copy, "JD ready" requires the
+    // draft to be non-empty too.
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "Build great things." })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft="Build great things."
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab-empty"');
+    expect(html).toContain("JD ready");
+    // Parse button present and NOT disabled. Anchor on the
+    // attribute (\sdisabled) so the Tailwind disabled:* utility
+    // classes don't false-positive.
+    const parseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>[^<]*<\/button>/,
+    );
+    expect(parseBtn).not.toBeNull();
+    expect(parseBtn?.[0]).not.toMatch(/\sdisabled(?:=|>|\s)/);
+    expect(parseBtn?.[0]).toContain(">Parse JD<");
+    // Re-parse / Confirm should NOT be present yet.
+    expect(html).not.toContain('data-action="requirements-confirm-reparse"');
+  });
+
+  it("REQUIREMENTS TAB: requirements non-empty renders the list + Re-parse JD button", () => {
+    const reqs = [
+      makeReq("r-mh", {
+        must_have: true,
+        priority: "high",
+        normalized_requirement: "5+ yrs distributed systems",
+        category: "experience_level",
+      }),
+      makeReq("r-mid", {
+        must_have: false,
+        priority: "medium",
+        normalized_requirement: "TypeScript proficiency",
+        category: "skill",
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
         requirements={reqs}
         matches={[]}
         unitsById={new Map()}
@@ -325,11 +457,204 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
-    expect(html).toContain("data-testid=\"requirements-tab-placeholder\"");
-    expect(html).toContain("3 requirements parsed");
+    expect(html).toContain('data-testid="requirements-tab-list"');
+    // Both rows render with their normalized text.
+    expect(html).toContain("5+ yrs distributed systems");
+    expect(html).toContain("TypeScript proficiency");
+    // Must-have flag visible on the first row.
+    expect(html).toContain('data-testid="requirements-tab-must-have"');
+    // Priority + category badges per row.
+    expect(html).toMatch(/priority: high/);
+    expect(html).toMatch(/priority: medium/);
+    expect(html).toContain("experience_level");
+    expect(html).toContain(">skill<");
+    // Re-parse JD button (not Parse JD).
+    const reparseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>[^<]*<\/button>/,
+    );
+    expect(reparseBtn).not.toBeNull();
+    expect(reparseBtn?.[0]).toContain(">Re-parse JD<");
+  });
+
+  it("REQUIREMENTS TAB: must-haves sort to the top of the list", () => {
+    const reqs = [
+      makeReq("r-low", {
+        must_have: false,
+        priority: "low",
+        normalized_requirement: "ALPHA-low-mid-priority",
+      }),
+      makeReq("r-mh", {
+        must_have: true,
+        priority: "high",
+        normalized_requirement: "ZULU-must-have",
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={reqs}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    const mhIdx = html.indexOf("ZULU-must-have");
+    const lowIdx = html.indexOf("ALPHA-low-mid-priority");
+    expect(mhIdx).toBeGreaterThan(0);
+    expect(lowIdx).toBeGreaterThan(0);
+    // Must-have appears first despite being defined second in input
+    // and starting with a later letter.
+    expect(mhIdx).toBeLessThan(lowIdx);
+  });
+
+  it("REQUIREMENTS TAB: Parse JD disabled while computingMatches is in flight (re-parse race)", () => {
+    // Pin the nathanpayne-codex Phase 4b P1 fix: a second
+    // re-parse must be blocked while invokeRunMatching from the
+    // prior parse is still settling, otherwise two matching
+    // runs could race and the older `replaceMatchesForRole`
+    // could land last with matches against deleted requirement
+    // IDs.
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[makeReq("r1")]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={true}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    const parseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>/,
+    );
+    expect(parseBtn).not.toBeNull();
+    expect(parseBtn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+    // Textarea also disabled — busy gate covers all inputs.
+    const ta = html.match(
+      /<textarea[^>]*data-testid="requirements-tab-jd-textarea"[^>]*>/,
+    );
+    expect(ta?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("REQUIREMENTS TAB: parsing status renders the thin progress bar (UI rule 6)", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        parsingStatus="parsing"
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab-progress"');
+    expect(html).toContain('role="progressbar"');
+    // Parse button disabled while in flight (HTML attribute,
+    // not the Tailwind disabled:* utility class).
+    const parseBtn = html.match(
+      /<button[^>]*data-action="requirements-parse-jd"[^>]*>/,
+    );
+    expect(parseBtn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("REQUIREMENTS TAB: error status renders the error banner with the message", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        parsingStatus="error"
+        parseError={new Error("JD parsing failed after retries.")}
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab-error"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("JD parsing failed after retries");
+  });
+
+  it("REQUIREMENTS TAB: savingJd flag renders the inline 'Saving…' marker", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        savingJd={true}
+      />,
+    );
+    expect(html).toContain('data-testid="requirements-tab-jd-saving"');
+    expect(html).toContain("Saving");
+  });
+
+  it("REQUIREMENTS TAB: keywords / tools / domains render when populated", () => {
+    const reqs = [
+      makeReq("r-kw", {
+        normalized_requirement: "Frontend systems work",
+        keywords: ["accessibility", "performance"],
+        tools: ["TypeScript", "React"],
+        domains: ["streaming"],
+      }),
+    ];
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={reqs}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    expect(html).toContain("accessibility, performance");
+    expect(html).toContain("TypeScript, React");
+    expect(html).toContain("streaming");
   });
 
   // -- #202: Applications tab (Generate resume CTA + list) -----
@@ -347,6 +672,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -373,6 +699,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={false}
       />,
@@ -402,6 +729,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
       />,
@@ -461,6 +789,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         applications={apps}
         hasApprovedMatches={true}
@@ -517,6 +846,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         applications={[legacyApp]}
         hasApprovedMatches={true}
@@ -541,6 +871,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
         generationStatus="generating"
@@ -569,6 +900,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
         generationStatus="error"
@@ -593,6 +925,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -624,6 +957,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -658,6 +992,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -687,6 +1022,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -711,6 +1047,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -750,6 +1087,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -789,6 +1127,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -825,6 +1164,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -845,6 +1185,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={true}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -867,6 +1208,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
@@ -897,6 +1239,7 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
     );
