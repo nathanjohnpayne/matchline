@@ -59,11 +59,16 @@ export function friendlyAuthError(err: unknown): string {
     case "auth/popup-blocked":
       return "Your browser blocked the sign-in popup. Allow popups for this site and try again, or use email + password below.";
     case "auth/account-exists-with-different-credential":
-      // The user previously signed up with a different provider
-      // (e.g. email/password) under the same email. Firebase's
-      // default linking behavior requires server-side coordination;
-      // for V1 just steer the user to the right path.
-      return "An account with this email already exists with a different sign-in method. Try email + password below.";
+      // Anti-enumeration: don't confirm that an account exists
+      // for this email under another provider. Collapse to the
+      // same non-committal credential-failure wording used by
+      // the email/password mismatch cases above. Codex P2 on
+      // PR #208. Cost is minor friction for the rare "I have
+      // both Google and email/password under the same email"
+      // user — they'll try the email/password form below and
+      // get in. Provider linking is server-side coordination
+      // territory and out of scope for V1.
+      return "Sign-in didn't go through. Try again.";
     case "auth/operation-not-allowed":
       // Google provider not enabled in the Firebase console.
       // Should never hit in normal use; surface the diagnostic.
