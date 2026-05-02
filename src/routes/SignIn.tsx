@@ -3,15 +3,20 @@
  * `docs/design/ui-guidance.md § Sign-in (#57)`: no marketing, one
  * primary action, monochrome aesthetic with restrained accent.
  *
- * V1 uses Firebase Auth's email/password provider (the only method
- * enabled on matchline-dev as of 2026-04-23). Switching to Google
- * SSO later is a provider flip + a button variant; the form shape
- * below stays the same.
+ * Two auth methods on matchline-dev:
+ *   1. Google SSO (primary; one-click via popup) — recommended
+ *      for a single-user-V1 cloud-resident app where there's no
+ *      reason to manage passwords.
+ *   2. Email + password (fallback; rendered below an "or" divider)
+ *      — kept for the no-popup case (corporate networks, strict
+ *      browser privacy) and for any pre-existing accounts.
  */
 
 import {
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithPopup,
 } from "firebase/auth";
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
@@ -48,6 +53,29 @@ export default function SignIn() {
   // double-render warning.
   if (!pending && user) {
     return <Navigate to="/units" replace />;
+  }
+
+  async function onGoogleSignIn() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const auth = getAuthClient();
+      // Popup flow: simpler return path than redirect (no
+      // post-redirect bounce-handling, no auth state recovery on
+      // load). If a user's browser blocks popups they can fall
+      // back to the email/password form below. We don't pre-call
+      // `provider.setCustomParameters({ prompt: "select_account" })`
+      // — Firebase's default lets Google reuse the active session,
+      // which matches the "one click" promise.
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      navigate("/units", { replace: true });
+    } catch (err) {
+      setError(friendlyAuthError(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -92,11 +120,57 @@ export default function SignIn() {
           </p>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
-          noValidate
-        >
+        <div className="rounded-lg border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          {/* Primary path: Google SSO. Sits above the divider so
+              the "no password to manage" path is the obvious one. */}
+          <button
+            type="button"
+            onClick={onGoogleSignIn}
+            disabled={busy}
+            data-action="sign-in-google"
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-900 transition duration-150 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 dark:focus:ring-zinc-100 dark:focus:ring-offset-zinc-900"
+          >
+            {/* Inline SVG of the Google "G" mark — avoids a remote
+                request and survives offline / strict-CSP scenarios.
+                Sized to match the button's text height. */}
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 18 18"
+              className="h-4 w-4"
+            >
+              <path
+                fill="#4285F4"
+                d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"
+              />
+              <path
+                fill="#34A853"
+                d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"
+              />
+              <path
+                fill="#EA4335"
+                d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"
+              />
+            </svg>
+            {busy ? "Signing in…" : "Continue with Google"}
+          </button>
+
+          {/* Visible "or" divider — restrained accent per UI
+              guidance. The label sits in the line so the eye
+              can move past it without re-anchoring. */}
+          <div
+            className="my-5 flex items-center gap-3 text-xs text-zinc-400 dark:text-zinc-500"
+            aria-hidden="true"
+          >
+            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+            <span>or</span>
+            <span className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+          </div>
+
+          <form onSubmit={onSubmit} noValidate>
           <div className="space-y-4">
             <label className="block">
               <span className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
@@ -165,7 +239,8 @@ export default function SignIn() {
                 : "Already have an account? Sign in."}
             </button>
           </div>
-        </form>
+          </form>
+        </div>
       </div>
     </div>
   );
