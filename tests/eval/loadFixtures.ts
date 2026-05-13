@@ -343,9 +343,15 @@ function validateExpectedRequirements(
     }
     const r = entry as Record<string, unknown>;
     for (const k of ["id", "text", "category"] as const) {
-      if (typeof r[k] !== "string") {
+      // CodeRabbit Nitpick on PR #139: reject empty strings too,
+      // not just non-string types. An entry like `{ id: "" }` would
+      // silently slip through the typeof check and break ID
+      // resolution in `check_fixture_match_ids` and `mapping.ts`
+      // (the loader is the fail-loud boundary; element-level rules
+      // close the silent-crash window).
+      if (typeof r[k] !== "string" || (r[k] as string).length === 0) {
         throw new Error(
-          `${filePath}.expected_requirements[${idx}]: missing string "${k}".`,
+          `${filePath}.expected_requirements[${idx}]: missing non-empty string "${k}".`,
         );
       }
     }

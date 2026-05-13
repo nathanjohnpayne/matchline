@@ -494,6 +494,39 @@ describe("compositeIdsFromMatches", () => {
     const composite = compositeIdsFromMatches(matches, new Map(), new Map());
     expect(composite).toEqual(["unmapped_uuid-orphan:unmapped_uuid-rorphan"]);
   });
+
+  it("preserves input order on ties (deterministic top-K with equal final_score)", () => {
+    // CodeRabbit Nitpick on PR #139: pin tie-breaking semantics so
+    // a regression doesn't silently re-order matches with equal
+    // `final_score`. `topKOverlap` slices the first K of this list,
+    // so a non-stable sort here would produce non-deterministic
+    // accuracy on fixtures with score ties. ECMA-262 (since 2019)
+    // guarantees `Array.prototype.sort` is stable, but a future
+    // refactor that swaps to a custom sort or a `toSorted` chain
+    // with a different comparator could lose that property — this
+    // test catches it.
+    const matches = [
+      makeMatch("m1", "uuid-a", "uuid-r1", 0.7),
+      makeMatch("m2", "uuid-b", "uuid-r1", 0.7),
+      makeMatch("m3", "uuid-c", "uuid-r1", 0.7),
+      makeMatch("m4", "uuid-d", "uuid-r1", 0.9),
+    ];
+    const unitMap = new Map([
+      ["uuid-a", "u_a"],
+      ["uuid-b", "u_b"],
+      ["uuid-c", "u_c"],
+      ["uuid-d", "u_d"],
+    ]);
+    const reqMap = new Map([["uuid-r1", "r_one"]]);
+    const composite = compositeIdsFromMatches(matches, unitMap, reqMap);
+    // 0.9 first (strict desc), then the three 0.7s in INPUT ORDER.
+    expect(composite).toEqual([
+      "u_d:r_one", // 0.9
+      "u_a:r_one", // 0.7 (input index 0)
+      "u_b:r_one", // 0.7 (input index 1)
+      "u_c:r_one", // 0.7 (input index 2)
+    ]);
+  });
 });
 
 describe("DEFAULT_MAPPING_THRESHOLD", () => {
