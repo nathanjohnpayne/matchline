@@ -57,6 +57,12 @@ jobs:
       - name: check_prompt_schema_pairs
         run: ./scripts/ci/check_prompt_schema_pairs
 
+      - name: check_no_other_skill_normalization
+        run: ./scripts/ci/check_no_other_skill_normalization
+
+      - name: check_fixture_match_ids
+        run: ./scripts/ci/check_fixture_match_ids
+
       - name: check_governance_files
         run: |
           MISSING=0

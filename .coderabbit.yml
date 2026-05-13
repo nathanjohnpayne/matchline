@@ -32,9 +32,13 @@ reviews:
   path_instructions:
     - path: "scripts/**"
       instructions: >-
-        Review shell scripts for safety: unquoted variables, missing error
-        handling (set -euo pipefail), command injection risks, and
-        cross-platform portability issues.
+        Review shell scripts for safety: unquoted variables, command
+        injection risks, and cross-platform portability issues.
+        Error handling: prefer `set -euo pipefail`, but accept
+        `set -eo pipefail` (no `-u`) where the script deliberately
+        relies on unset-variable expansion (e.g., optional env vars,
+        op-preflight credential overrides) — flag only when an unset
+        variable would actually cause silent misbehavior.
     - path: "docs/**"
       instructions: >-
         Check documentation for accuracy against the actual scripts and

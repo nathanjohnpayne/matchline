@@ -67,21 +67,6 @@ must be decomposed into smaller sub-issues **before** it enters the
   work is genuinely one atomic unit (rare); reach for XL only for
   phase parents or architecture reviews.
 
-## CI Enforcement
-
-The following checks run from `scripts/ci/` locally and via `.github/workflows/repo_lint.yml` in CI.
-All checks must pass before merge.
-
-- check_required_root_files
-- check_no_tool_folder_instructions
-- check_no_forbidden_top_level_dirs
-- check_dist_not_modified
-- check_spec_test_alignment
-- check_duplicate_docs
-- check_review_policy_exists (inline in repo_lint.yml): .github/review-policy.yml and REVIEW_POLICY.md must both exist
-- check_codex_scripts: `scripts/codex-review-request.sh` and `scripts/codex-review-check.sh` must exist and be executable in every repo. Required for `CLAUDE.md` step 8 Phase 4a (automated external review via the OpenAI Codex GitHub App) — missing either script silently forces callers to Phase 4b fallback.
-- check_prompt_schema_pairs: every `functions/src/prompts/<stage>/<name>.v<N>.md` must have a co-located `<name>.v<N>.schema.ts` and vice versa. Enforces the versioned-prompt pair invariant the loader in `functions/src/prompts/loader.ts` depends on. See issue #49.
-
 The L/XL decomposition rule above is enforced at agent-workflow time,
 not via a CI script — Project v2 field state isn't available to
 `scripts/ci/` runs. See `docs/agents/code-modification-rules.md` for
@@ -102,3 +87,5 @@ All checks must pass before merge.
 - check_review_policy_exists (inline in repo_lint.yml): .github/review-policy.yml and REVIEW_POLICY.md must both exist
 - check_codex_scripts: `scripts/codex-review-request.sh` and `scripts/codex-review-check.sh` must exist and be executable in every repo. Required for `CLAUDE.md` step 8 Phase 4a (automated external review via the OpenAI Codex GitHub App) — missing either script silently forces callers to Phase 4b fallback.
 - check_prompt_schema_pairs: every `functions/src/prompts/<stage>/<name>.v<N>.md` must have a co-located `<name>.v<N>.schema.ts` and vice versa. Enforces the versioned-prompt pair invariant the loader in `functions/src/prompts/loader.ts` depends on. See issue #49.
+- check_no_other_skill_normalization: only `functions/src/matching/normalize.ts` may define `normalizeSkill` / `normalizeTool` / `normalizeDomain`, and only that module may import the `*.seed.json` ontology files directly. Enforces the single-source-of-truth invariant for canonical-vocabulary normalization (#96, parent #20).
+- check_fixture_match_ids: every `expected_top_matches` entry in `tests/fixtures/expected-matches/*.json` must resolve to a real unit id in `tests/fixtures/expected-units/<resume>.json` and a real requirement id in the same expected-matches file's `expected_requirements`. Closes the silent ID-drift window flagged on #138.
