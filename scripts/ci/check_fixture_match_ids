@@ -55,14 +55,16 @@ CHECKED=0
 shopt -s nullglob
 for match_file in "$EXPECTED_MATCHES_DIR"/*.json; do
   CHECKED=$((CHECKED + 1))
-  base="$(basename "$match_file" .json)"
+  # Short name for error messages — `expected-matches/<base>.json`
+  # reads cleaner than the full filesystem path (reviewer nit on PR #218).
+  base_name="$(basename "$match_file")"
 
   # Parse resume_fixture_id from the file itself (not the
   # filename) so a typo in either surface is caught.
   resume_id="$(jq -r '.resume_fixture_id // ""' "$match_file")"
   if [[ -z "$resume_id" ]]; then
     echo "check_fixture_match_ids: FAIL"
-    echo "  $match_file: missing \`resume_fixture_id\`."
+    echo "  expected-matches/$base_name: missing \`resume_fixture_id\`."
     VIOLATIONS=$((VIOLATIONS + 1))
     continue
   fi
@@ -70,8 +72,8 @@ for match_file in "$EXPECTED_MATCHES_DIR"/*.json; do
   unit_file="$EXPECTED_UNITS_DIR/${resume_id}.json"
   if [[ ! -f "$unit_file" ]]; then
     echo "check_fixture_match_ids: FAIL"
-    echo "  $match_file: resume_fixture_id=\"$resume_id\""
-    echo "  → expected-units file $unit_file does not exist."
+    echo "  expected-matches/$base_name: resume_fixture_id=\"$resume_id\""
+    echo "  → expected-units file expected-units/${resume_id}.json does not exist."
     VIOLATIONS=$((VIOLATIONS + 1))
     continue
   fi
@@ -93,13 +95,13 @@ for match_file in "$EXPECTED_MATCHES_DIR"/*.json; do
 
     if ! grep -qxF "$u_part" <<<"$unit_ids"; then
       echo "check_fixture_match_ids: FAIL"
-      echo "  $match_file: expected_top_matches entry \"$entry\""
-      echo "  → unit id \"$u_part\" not found in $unit_file"
+      echo "  expected-matches/$base_name: entry \"$entry\""
+      echo "  → unit id \"$u_part\" not found in expected-units/${resume_id}.json"
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
     if ! grep -qxF "$r_part" <<<"$req_ids"; then
       echo "check_fixture_match_ids: FAIL"
-      echo "  $match_file: expected_top_matches entry \"$entry\""
+      echo "  expected-matches/$base_name: entry \"$entry\""
       echo "  → requirement id \"$r_part\" not found in this file's expected_requirements"
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
