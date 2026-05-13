@@ -32,10 +32,15 @@ describe("Wordmark", () => {
     expect(html).toMatch(/<span[^>]*class="font-bold"[^>]*>\|<\/span>/);
     expect(html).toMatch(/<span[^>]*aria-hidden="true"[^>]*>\|<\/span>/);
     // Sequence check: the text node `>match` precedes the bold pipe
-    // precedes `line</`.
+    // precedes `line</`. CodeRabbit Nitpick on PR #76: use a regex
+    // index rather than a literal `class="font-bold">|` substring so
+    // a harmless attribute-order tweak (e.g., adding `data-testid` or
+    // re-ordering `aria-hidden` before `class`) doesn't false-fail.
     const matchIdx = html.indexOf(">match");
-    const pipeIdx = html.indexOf('class="font-bold">|');
+    const pipeMatch = html.match(/<span[^>]*\bfont-bold\b[^>]*>\|<\/span>/);
+    const pipeIdx = pipeMatch?.index ?? -1;
     const lineIdx = html.indexOf("line</span>");
+    expect(pipeIdx).toBeGreaterThanOrEqual(0);
     expect(matchIdx).toBeLessThan(pipeIdx);
     expect(pipeIdx).toBeLessThan(lineIdx);
   });

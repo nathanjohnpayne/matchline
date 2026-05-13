@@ -66,7 +66,13 @@ export function parseSamples(argv: readonly string[]): number {
     const arg = argv[i]!;
     if (arg === "--samples") {
       const value = argv[i + 1];
-      if (value === undefined) {
+      // CodeRabbit Nit on PR #172: reject `--samples --full` (and
+      // any other flag-as-value) at this layer rather than letting
+      // it fall into the numeric validator. The numeric validator
+      // would surface a confusing "must be a positive integer (got
+      // \"--full\")" message; "requires a positive integer" is the
+      // accurate cause. A value that looks like a flag is missing.
+      if (value === undefined || value.startsWith("--")) {
         throw new Error(
           "--samples requires a positive integer (e.g. `--samples 3`)",
         );

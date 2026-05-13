@@ -119,6 +119,16 @@ export async function getExperienceUnit(
  *
  * Returns the firestore `Unsubscribe` cleanup function — the caller
  * (a React effect) must invoke it on unmount.
+ *
+ * @param onError Optional error handler passed straight to Firestore's
+ *   `onSnapshot`. **Omitting this means Firestore errors (e.g.,
+ *   `permission-denied` after a rules change, or transient
+ *   `unavailable`) are silently swallowed** — the subscription stops
+ *   delivering snapshots and the UI is left stuck on whatever it last
+ *   rendered. Callers that surface load state to the user should
+ *   always pass an `onError` and route it to their error-state branch
+ *   (see `UnitReviewView`'s `status === "error"` path). CodeRabbit
+ *   Nitpick on PR #85.
  */
 export function subscribeByOwner(
   callback: (units: ExperienceUnit[]) => void,
