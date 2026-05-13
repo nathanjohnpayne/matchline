@@ -127,6 +127,27 @@ export default function RoleDetailView({
   generationError,
   onGenerate,
 }: RoleDetailViewProps): ReactElement {
+  // CodeRabbit Nit on PR #133: both derivations depend only on
+  // `requirements` + `matches`; memoize so unrelated re-renders
+  // (tab switches, hover state, etc.) don't recompute them.
+  //
+  // Codex P1 on PR #219: the memo hooks MUST run before the
+  // `loading` / `error` / `role === null` early returns below,
+  // otherwise the render-hook count changes across status
+  // transitions (zero hooks in loading → two hooks in ready)
+  // and React throws "Rendered more hooks than during the
+  // previous render." Computing the groups/gaps on the
+  // pre-loaded inputs is harmless — they're not consumed until
+  // the `ready` branch.
+  const groups = useMemo(
+    () => groupMatchesByRequirement(requirements, matches),
+    [requirements, matches],
+  );
+  const gaps = useMemo(
+    () => computeGaps(requirements, matches),
+    [requirements, matches],
+  );
+
   if (status === "loading") {
     return (
       <section
@@ -167,18 +188,6 @@ export default function RoleDetailView({
       </section>
     );
   }
-
-  // CodeRabbit Nit on PR #133: both derivations depend only on
-  // `requirements` + `matches`; memoize so unrelated re-renders
-  // (tab switches, hover state, etc.) don't recompute them.
-  const groups = useMemo(
-    () => groupMatchesByRequirement(requirements, matches),
-    [requirements, matches],
-  );
-  const gaps = useMemo(
-    () => computeGaps(requirements, matches),
-    [requirements, matches],
-  );
 
   return (
     <section className="mx-auto max-w-6xl space-y-6">
