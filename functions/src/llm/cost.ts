@@ -72,6 +72,70 @@ export function priceFor(model: string, tokens: TokenCounts): number {
 }
 
 /**
+ * Wrap a `recordUsage`-shaped call with the consolidated try/catch
+ * + `logger.warn` shape every LLM pipeline module previously had to
+ * hand-roll. Centralizing it here keeps the redaction contract
+ * (no `ownerUid` in log payloads, no PII widening) and the
+ * "telemetry never blocks the caller" invariant in one place — a
+ * future change to that contract only needs to land in one module
+ * instead of six (CodeRabbit Nitpick on PR #118).
+ *
+ * Pipelines should call
+ * `safeRecordUsage(record, () => ({...usage...}), "<stage.module>")`
+ * instead of inlining `try { await record(...) } catch (err) { logger.warn(...) }`.
+ * The `stageLabel` is a free-form string used only in the warn log
+ * (e.g. `"validation.traceability"`, `"extraction.resume"`) so
+ * grep-by-pipeline still works across log output.
+ *
+ * **Why a thunk and not a `UsageRecord` value.** Codex P2 on PR #220
+ * caught a real regression: the prior signature evaluated
+ * `response.usage.input_tokens` (and friends) at the call site —
+ * BEFORE the helper entered its try/catch. Function arguments are
+ * evaluated eagerly, so a malformed `response.usage` would throw
+ * past the helper and break the "telemetry must never block a
+ * successful verdict" contract that the inline pattern preserved.
+ * Accepting a `() => UsageRecord` thunk defers the construction
+ * into the protected try block, restoring the original semantics.
+ *
+ * Returns the propagated cost from `record` on success, or `0` if
+ * either the thunk OR `record` threw. The return value is rarely
+ * consumed by these pipelines (callers use it only for footer-cost
+ * display, where `0` on a failed telemetry write is the correct
+ * "unknown" answer).
+ */
+export async function safeRecordUsage(
+  record: (usage: UsageRecord) => Promise<number>,
+  buildUsage: () => UsageRecord,
+  stageLabel: string,
+): Promise<number> {
+  let stageForLog: string | undefined;
+  let modelForLog: string | undefined;
+  try {
+    const usage = buildUsage();
+    stageForLog = usage.stage;
+    modelForLog = usage.model;
+    return await record(usage);
+  } catch (err) {
+    // `ownerUid` intentionally omitted from the log payload —
+    // matches the redaction shape `cost.ts` already uses on its
+    // own internal failure paths so logs don't widen PII exposure
+    // for an observability-only failure path. CodeRabbit Major on
+    // PR #116.
+    //
+    // `stage`/`model` log fields default to `<unknown>` because the
+    // thunk itself may have thrown before populating them (e.g.,
+    // a malformed `response.usage`). Better to surface the failure
+    // with placeholders than to drop the log.
+    logger.warn(`${stageLabel}: recordUsage failed (non-fatal)`, {
+      stage: stageForLog ?? "<unknown>",
+      model: modelForLog ?? "<unknown>",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
+/**
  * Compute the dollar cost for one LLM call and persist a `llm_calls`
  * doc fire-and-forget — the caller never waits for the Firestore
  * write, and neither pricing failures nor Firestore failures throw.

@@ -23,12 +23,11 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { logger } from "firebase-functions";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage } from "../llm/cost.js";
+import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import {
   SpecificityResponseV1Schema,
   type SpecificityResponseV1,
@@ -189,12 +188,12 @@ async function runLlmFallback(
     }
 
     // Cost telemetry must never block a successful LLM verdict.
-    // recordUsage is fire-and-forget by contract (see llm/cost.ts);
-    // this guard is defense-in-depth so a future regression — or a
-    // test-injected `record` that rejects — can't kill the pipeline.
-    // CodeRabbit on PR #113.
-    try {
-      await record({
+    // safeRecordUsage centralizes the try/catch + log-warn shape
+    // (CodeRabbit Nitpick on PR #118); see llm/cost.ts for the
+    // redaction contract.
+    await safeRecordUsage(
+      record,
+      () => ({
         stage: "validation",
         provider: "anthropic",
         model,
@@ -202,19 +201,9 @@ async function runLlmFallback(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      });
-    } catch (err) {
-      // ownerUid intentionally omitted from the log payload —
-      // matches the redaction shape `cost.ts` already uses on its
-      // own internal failure paths so logs don't widen PII exposure
-      // for an observability-only failure path. CodeRabbit Major on
-      // PR #116.
-      logger.warn("validation.specificity: recordUsage failed (non-fatal)", {
-        stage: "validation",
-        model,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+      }),
+      "validation.specificity",
+    );
 
     const toolUse = response.content.find(
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
