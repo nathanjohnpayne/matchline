@@ -72,20 +72,6 @@ export function priceFor(model: string, tokens: TokenCounts): number {
 }
 
 /**
- * Compute the dollar cost for one LLM call and persist a `llm_calls`
- * doc fire-and-forget — the caller never waits for the Firestore
- * write, and neither pricing failures nor Firestore failures throw.
- *
- * The "telemetry must not kill caller flow" contract applies to BOTH
- * failure modes: a malformed token count (rejected by `priceFor`) OR
- * a flaky Firestore write is logged and swallowed. Cost telemetry is
- * a reporting concern, not a correctness one.
- *
- * The returned value lets the caller surface per-call cost on the
- * Application (Phase 2a Editor footer) without a round-trip read.
- * Returns `0` when pricing itself fails (logged as a warning).
- */
-/**
  * Wrap a `recordUsage`-shaped call with the consolidated try/catch
  * + `logger.warn` shape every LLM pipeline module previously had to
  * hand-roll. Centralizing it here keeps the redaction contract
@@ -127,6 +113,20 @@ export async function safeRecordUsage(
   }
 }
 
+/**
+ * Compute the dollar cost for one LLM call and persist a `llm_calls`
+ * doc fire-and-forget — the caller never waits for the Firestore
+ * write, and neither pricing failures nor Firestore failures throw.
+ *
+ * The "telemetry must not kill caller flow" contract applies to BOTH
+ * failure modes: a malformed token count (rejected by `priceFor`) OR
+ * a flaky Firestore write is logged and swallowed. Cost telemetry is
+ * a reporting concern, not a correctness one.
+ *
+ * The returned value lets the caller surface per-call cost on the
+ * Application (Phase 2a Editor footer) without a round-trip read.
+ * Returns `0` when pricing itself fails (logged as a warning).
+ */
 export async function recordUsage(usage: UsageRecord): Promise<number> {
   let costUsd: number;
   try {
