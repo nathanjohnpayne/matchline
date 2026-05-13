@@ -16,7 +16,7 @@
  * user can see what's coming.
  */
 
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 
 import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
 import type { Application, Role } from "../../types/crm.ts";
@@ -168,8 +168,17 @@ export default function RoleDetailView({
     );
   }
 
-  const groups = groupMatchesByRequirement(requirements, matches);
-  const gaps = computeGaps(requirements, matches);
+  // CodeRabbit Nit on PR #133: both derivations depend only on
+  // `requirements` + `matches`; memoize so unrelated re-renders
+  // (tab switches, hover state, etc.) don't recompute them.
+  const groups = useMemo(
+    () => groupMatchesByRequirement(requirements, matches),
+    [requirements, matches],
+  );
+  const gaps = useMemo(
+    () => computeGaps(requirements, matches),
+    [requirements, matches],
+  );
 
   return (
     <section className="mx-auto max-w-6xl space-y-6">

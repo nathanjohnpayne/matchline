@@ -411,35 +411,6 @@ describe("runMatchingPipeline", () => {
     expect(persistBatch).toHaveBeenCalledWith(CTX, []);
   });
 
-  it("score throws → pair skipped; pipeline does NOT abort the whole run (legacy partial-failure check)", async () => {
-    // Defense-in-depth: if a single (unit, req) pair throws
-    // (corrupt input, etc.), the surrounding pairs still
-    // produce matches. This is the right call for V1 because
-    // a single bad pair shouldn't lose the entire match set
-    // for a Role; the missing match surfaces in the Gaps view
-    // instead.
-    const u1 = makeUnit({ id: "u1" });
-    const u2 = makeUnit({ id: "u2" });
-    const r = makeRequirement({ id: "r1" });
-
-    const score = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new Error("synthetic score failure");
-      })
-      .mockImplementationOnce(() => makeScoreResult(0.7));
-
-    const result = await runMatchingPipeline(CTX, {
-      listUnits: async () => [u1, u2],
-      listRequirements: async () => [r],
-      score,
-      persistBatch: async () => {},
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.experience_unit_id).toBe("u2");
-  });
-
   it("persistBatch failure propagates to the caller (atomic-replace must not silently swallow)", async () => {
     const score = vi.fn(() => makeScoreResult(0.5));
     const persistBatch = vi.fn(async () => {

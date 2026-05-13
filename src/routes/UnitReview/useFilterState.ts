@@ -53,36 +53,44 @@ export function useFilterState(): UseFilterStateResult {
   const setFilters = useCallback(
     (next: FilterState) => {
       const encoded = encodeToSearchParams(next);
-      // Preserve any query params NOT owned by the filter (none
-      // today on this route, but cheap defensive — if the route
-      // ever gains a tab param or similar, the filter sync won't
-      // clobber it).
-      const merged = new URLSearchParams(searchParams);
-      // Clear every filter-owned key before re-appending, so a
-      // previously-active filter value that's now removed is
-      // actually removed from the URL. The key list comes from
-      // filterState.ts to stay in lockstep with the encode/decode
-      // helpers — a new axis added there updates here via this
-      // import (CodeRabbit nit on #88).
-      for (const key of FILTER_SEARCH_PARAM_KEYS) {
-        merged.delete(key);
-      }
-      for (const [k, v] of encoded.entries()) {
-        // append (not set) because the filter encoding uses
-        // repeated same-key params for array fields
-        // (?skills=sql&skills=python) — see filterState.ts
-        // appendArray for rationale. Using set() here would
-        // collapse the array to its last value.
-        merged.append(k, v);
-      }
+      // CodeRabbit Nit on PR #88: use the functional updater form so
+      // the merge always reads the latest URL params, not the
+      // snapshot from when this callback was last rebuilt. A rapid
+      // sequence of filter changes (e.g., toggling two checkboxes
+      // in quick succession) could otherwise merge against a stale
+      // base and drop the intermediate update.
+      setSearchParams((prev) => {
+        // Preserve any query params NOT owned by the filter (none
+        // today on this route, but cheap defensive — if the route
+        // ever gains a tab param or similar, the filter sync won't
+        // clobber it).
+        const merged = new URLSearchParams(prev);
+        // Clear every filter-owned key before re-appending, so a
+        // previously-active filter value that's now removed is
+        // actually removed from the URL. The key list comes from
+        // filterState.ts to stay in lockstep with the encode/decode
+        // helpers — a new axis added there updates here via this
+        // import (CodeRabbit nit on #88).
+        for (const key of FILTER_SEARCH_PARAM_KEYS) {
+          merged.delete(key);
+        }
+        for (const [k, v] of encoded.entries()) {
+          // append (not set) because the filter encoding uses
+          // repeated same-key params for array fields
+          // (?skills=sql&skills=python) — see filterState.ts
+          // appendArray for rationale. Using set() here would
+          // collapse the array to its last value.
+          merged.append(k, v);
+        }
+        return merged;
+      });
       // No `replace: true` — each filter change becomes a
       // distinct history entry so Back/Forward can step through
       // filter combinations. Codex P2 on #88 caught the prior
       // replace-on-every-change behavior, which undermined the
       // "URL is source of truth" contract for navigation.
-      setSearchParams(merged);
     },
-    [searchParams, setSearchParams],
+    [setSearchParams],
   );
 
   const clearFilters = useCallback(() => {
