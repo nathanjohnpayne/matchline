@@ -134,7 +134,11 @@ describe("UnitReviewView", () => {
     expect(html).toContain("Add Unit manually");
     // Counter is still rendered in the header, showing 0 of 20
     expect(html).toContain(`0 of ${APPROVED_MILESTONE} approved`);
-    // And the three load-state markers are mutually exclusive
+    // The three load-state markers are mutually exclusive. Pin the
+    // positive "ready" marker as well (CodeRabbit Nitpick on PR #86)
+    // — without it, a regression that dropped `data-load-state="ready"`
+    // entirely could still pass the negative assertions below.
+    expect(html).toContain('data-load-state="ready"');
     expect(html).not.toContain('data-load-state="loading"');
     expect(html).not.toContain('data-load-state="error"');
   });

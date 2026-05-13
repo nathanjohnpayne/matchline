@@ -372,6 +372,20 @@ describe("parseSamples", () => {
     expect(() => parseSamples(["--samples"])).toThrow(/requires/);
     expect(() => parseSamples(["--full", "--samples"])).toThrow(/requires/);
   });
+
+  it("rejects --samples when the next token is another flag (no value swallowing)", () => {
+    // CodeRabbit Nit on PR #172: pin that `--samples` followed by
+    // another flag token (`--full`, `--smoke`, ...) raises
+    // "requires" rather than silently consuming the flag as a value.
+    // Without this pin, a regression that accepted `--full` as the
+    // sample count would surface only at parseInt time, far from
+    // the actual misuse.
+    expect(() => parseSamples(["--samples", "--full"])).toThrow(/requires/);
+    expect(() => parseSamples(["--samples", "--smoke"])).toThrow(/requires/);
+    expect(() => parseSamples(["--full", "--samples", "--smoke"])).toThrow(
+      /requires/,
+    );
+  });
 });
 
 // -- aggregateSampledFixture (multi-sample averaging) -------------------
