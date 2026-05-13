@@ -348,4 +348,43 @@ describe("runForFixture", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/ENOENT|no such file|does-not-exist/);
   });
+
+  it("EMPTY EXTRACTION + EMPTY REQUIREMENTS: orchestration completes with ok=true, no crash, zero/low accuracy", async () => {
+    // CodeRabbit Nitpick on PR #139: pin the no-crash contract for
+    // the empty-pipeline case. If extraction and parsing both
+    // return valid-shape responses but with zero items, the
+    // orchestrator should:
+    //   - not throw,
+    //   - produce a well-formed result shape (ok=true),
+    //   - report extracted=0 / parsed=0 counts,
+    //   - clamp both accuracies to a sane numeric range (0..1),
+    //   - still surface non-negative cost from the API calls.
+    // Without this pin, a regression that crashed on empty arrays
+    // (e.g., a `.reduce` without an initial value, or a `[0]!`
+    // bang) wouldn't surface in CI until a real fixture happened
+    // to extract nothing.
+    const emptyExtraction = { units: [] };
+    const emptyParsing = { requirements: [] };
+
+    const result = await runForFixture(
+      {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      },
+      {
+        anthropicClient: makeMockAnthropic([emptyExtraction, emptyParsing]),
+        openaiClient: makeMockOpenAi(),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeNull();
+    expect(result.extractedUnitCount).toBe(0);
+    expect(result.parsedRequirementCount).toBe(0);
+    expect(result.extractionAccuracy).toBeGreaterThanOrEqual(0);
+    expect(result.extractionAccuracy).toBeLessThanOrEqual(1);
+    expect(result.matchAccuracy).toBeGreaterThanOrEqual(0);
+    expect(result.matchAccuracy).toBeLessThanOrEqual(1);
+    expect(result.costUsd).toBeGreaterThanOrEqual(0);
+  });
 });

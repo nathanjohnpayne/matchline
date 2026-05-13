@@ -85,6 +85,48 @@ export function priceFor(model: string, tokens: TokenCounts): number {
  * Application (Phase 2a Editor footer) without a round-trip read.
  * Returns `0` when pricing itself fails (logged as a warning).
  */
+/**
+ * Wrap a `recordUsage`-shaped call with the consolidated try/catch
+ * + `logger.warn` shape every LLM pipeline module previously had to
+ * hand-roll. Centralizing it here keeps the redaction contract
+ * (no `ownerUid` in log payloads, no PII widening) and the
+ * "telemetry never blocks the caller" invariant in one place — a
+ * future change to that contract only needs to land in one module
+ * instead of six (CodeRabbit Nitpick on PR #118).
+ *
+ * Pipelines should call `safeRecordUsage(record, usage, "<stage.module>")`
+ * instead of inlining `try { await record(...) } catch (err) { logger.warn(...) }`.
+ * The `stageLabel` is a free-form string used only in the warn log
+ * (e.g. `"validation.traceability"`, `"extraction.resume"`) so
+ * grep-by-pipeline still works across log output.
+ *
+ * Returns the propagated cost from `record` on success, or `0` if
+ * the call threw. The return value is rarely consumed by these
+ * pipelines (callers use it only for footer-cost display, where
+ * `0` on a failed telemetry write is the correct "unknown" answer).
+ */
+export async function safeRecordUsage(
+  record: (usage: UsageRecord) => Promise<number>,
+  usage: UsageRecord,
+  stageLabel: string,
+): Promise<number> {
+  try {
+    return await record(usage);
+  } catch (err) {
+    // `ownerUid` intentionally omitted from the log payload —
+    // matches the redaction shape `cost.ts` already uses on its
+    // own internal failure paths so logs don't widen PII exposure
+    // for an observability-only failure path. CodeRabbit Major on
+    // PR #116.
+    logger.warn(`${stageLabel}: recordUsage failed (non-fatal)`, {
+      stage: usage.stage,
+      model: usage.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
+}
+
 export async function recordUsage(usage: UsageRecord): Promise<number> {
   let costUsd: number;
   try {

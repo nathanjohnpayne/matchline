@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { priceFor } from "./cost.js";
+import { priceFor, safeRecordUsage, type UsageRecord } from "./cost.js";
+
+const SAMPLE_USAGE: UsageRecord = {
+  stage: "extraction",
+  model: "claude-sonnet-4-6",
+  provider: "anthropic",
+  inputTokens: 100,
+  outputTokens: 200,
+  latencyMs: 50,
+};
 
 describe("priceFor", () => {
   it("computes Sonnet cost from published rates", () => {
@@ -68,5 +77,41 @@ describe("priceFor", () => {
         outputTokens: 0,
       }),
     ).toThrow(/Token counts must be finite, non-negative/);
+  });
+});
+
+// CodeRabbit Nitpick on PR #118: centralize the telemetry guard
+// shape every LLM pipeline previously hand-rolled. These tests pin
+// the contract — record errors must never propagate; success returns
+// the propagated cost.
+describe("safeRecordUsage", () => {
+  it("returns the cost when record resolves", async () => {
+    const record = vi.fn(async () => 0.42);
+    const result = await safeRecordUsage(record, SAMPLE_USAGE, "extraction.resume");
+    expect(result).toBe(0.42);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(SAMPLE_USAGE);
+  });
+
+  it("returns 0 and swallows the error when record rejects", async () => {
+    const record = vi.fn(async () => {
+      throw new Error("synthetic telemetry failure");
+    });
+    // Critical contract: caller must observe no thrown error and a
+    // 0-cost reading. Without this, a flaky Firestore write could
+    // kill a successful LLM verdict — the prior PR-#113 regression
+    // this helper prevents from recurring.
+    await expect(
+      safeRecordUsage(record, SAMPLE_USAGE, "extraction.resume"),
+    ).resolves.toBe(0);
+  });
+
+  it("returns 0 when record throws synchronously (defense-in-depth)", async () => {
+    const record = vi.fn(() => {
+      throw new Error("non-async throw");
+    });
+    await expect(
+      safeRecordUsage(record, SAMPLE_USAGE, "validation.specificity"),
+    ).resolves.toBe(0);
   });
 });

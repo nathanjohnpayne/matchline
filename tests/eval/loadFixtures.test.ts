@@ -421,4 +421,29 @@ describe("loadExpectedMatches — expected_requirements (cursor #139 r1)", () =>
       loadExpectedMatches("alice", "role", { fixturesDir }),
     ).toThrow(/text/);
   });
+
+  // CodeRabbit Nitpick on PR #139: pin rejection of empty-string
+  // values for the required fields. Without this, a fixture like
+  // `{ id: "", text: "...", category: "..." }` would slip past the
+  // typeof check and break ID resolution downstream in
+  // `check_fixture_match_ids` and `mapping.ts`.
+  for (const field of ["id", "text", "category"] as const) {
+    it(`THROWS when an entry's "${field}" is the empty string`, () => {
+      const requirement: Record<string, unknown> = { ...validRequirement };
+      requirement[field] = "";
+      writeJson(
+        join(fixturesDir, "expected-matches", "alice__role.json"),
+        {
+          resume_fixture_id: "alice",
+          jd_fixture_id: "role",
+          k: 1,
+          expected_top_matches: ["u_a:r_a"],
+          expected_requirements: [requirement],
+        },
+      );
+      expect(() =>
+        loadExpectedMatches("alice", "role", { fixturesDir }),
+      ).toThrow(new RegExp(`non-empty string "${field}"`));
+    });
+  }
 });

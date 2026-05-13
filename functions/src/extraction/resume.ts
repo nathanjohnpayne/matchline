@@ -21,13 +21,12 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
-import { logger } from "firebase-functions";
 import { randomUUID, createHash } from "node:crypto";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage } from "../llm/cost.js";
+import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   ExtractionResponseV1Schema,
@@ -160,12 +159,12 @@ export async function extractFromResume(
     }
 
     // Cost telemetry must never block a successful LLM verdict.
-    // recordUsage is fire-and-forget by contract (see llm/cost.ts);
-    // this guard is defense-in-depth so a future regression — or a
-    // test-injected `record` that rejects — can't kill the pipeline.
-    // CodeRabbit on PR #113.
-    try {
-      await record({
+    // safeRecordUsage centralizes the try/catch + log-warn shape
+    // (CodeRabbit Nitpick on PR #118); see llm/cost.ts for the
+    // redaction contract.
+    await safeRecordUsage(
+      record,
+      {
         stage: "extraction",
         provider: "anthropic",
         model,
@@ -173,19 +172,9 @@ export async function extractFromResume(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      });
-    } catch (err) {
-      // ownerUid intentionally omitted from the log payload —
-      // matches the redaction shape `cost.ts` already uses on its
-      // own internal failure paths so logs don't widen PII exposure
-      // for an observability-only failure path. CodeRabbit Major on
-      // PR #116.
-      logger.warn("extraction.resume: recordUsage failed (non-fatal)", {
-        stage: "extraction",
-        model,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+      },
+      "extraction.resume",
+    );
 
     // `stop_reason: "max_tokens"` means the model hit the budget
     // mid-tool-call and the `tool_use.input` is truncated (we've
