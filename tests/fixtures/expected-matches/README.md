@@ -42,9 +42,8 @@ first `k` items. **`k` MUST be ≥ `expected_top_matches.length`,
 otherwise the scorer's max ratio is `k / expected.length` and the
 fixture cannot meet the 0.80 gate even with a perfect matching
 engine.** The convention in this repo is to set `k =
-expected_top_matches.length` directly. cursor #138 r1 caught the
-prior shape (k=5 with 22 expected) which capped achievable
-accuracy at 22.7%.
+expected_top_matches.length` directly. A prior shape (k=5 with 22
+expected) capped achievable accuracy at 22.7%.
 
 ## Stable mnemonic IDs
 
