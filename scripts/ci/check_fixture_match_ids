@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# check_fixture_match_ids
+#
+# Enforces ID integrity in eval-harness label fixtures: every
+# `<unit>:<requirement>` entry in
+# `tests/fixtures/expected-matches/<resume>__<jd>.json`'s
+# `expected_top_matches` must resolve to a real unit id (declared
+# in `tests/fixtures/expected-units/<resume>.json`) AND a real
+# requirement id (declared in the same expected-matches file's
+# `expected_requirements`).
+#
+# Background (#138, CodeRabbit Nitpick): the runtime loader
+# `tests/eval/loadFixtures.ts` already validates per-entry
+# format (`u:r` with non-empty parts) and rejects malformed
+# fixtures at run time. What it does NOT do — and cannot do
+# without loading both pairs of files — is verify that the
+# IDs themselves point at things that exist. A typo in a
+# new label fixture (`u_keplerz:r_3yr_pm` instead of
+# `u_kepler:r_3yr_pm`) silently degrades the top-K overlap
+# score because the misspelled composite ID can never match
+# the runtime UUID->mnemonic projection.
+#
+# This script closes that silent-drift window at lint time.
+# It runs in CI via `.github/workflows/repo_lint.yml` and is
+# fast (parses a handful of JSON files with `jq`).
+#
+# Exit 0 = pass. Exit 1 = at least one fixture has an unresolved ID.
+#
+# Dependency: `jq` (preinstalled on every GitHub-hosted runner
+# image; ubuntu-latest ships jq 1.7+).
+
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+
+FIXTURES_DIR="tests/fixtures"
+EXPECTED_MATCHES_DIR="$FIXTURES_DIR/expected-matches"
+EXPECTED_UNITS_DIR="$FIXTURES_DIR/expected-units"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "check_fixture_match_ids: SKIP (jq not installed)"
+  exit 0
+fi
+
+if [[ ! -d "$EXPECTED_MATCHES_DIR" ]]; then
+  echo "check_fixture_match_ids: SKIP ($EXPECTED_MATCHES_DIR missing)"
+  exit 0
+fi
+
+VIOLATIONS=0
+CHECKED=0
+
+# Iterate every `<resume>__<jd>.json` in expected-matches/.
+# README.md is in the same dir; skip it.
+shopt -s nullglob
+for match_file in "$EXPECTED_MATCHES_DIR"/*.json; do
+  CHECKED=$((CHECKED + 1))
+  # Short name for error messages — `expected-matches/<base>.json`
+  # reads cleaner than the full filesystem path (reviewer nit on PR #218).
+  base_name="$(basename "$match_file")"
+
+  # Parse resume_fixture_id from the file itself (not the
+  # filename) so a typo in either surface is caught.
+  resume_id="$(jq -r '.resume_fixture_id // ""' "$match_file")"
+  if [[ -z "$resume_id" ]]; then
+    echo "check_fixture_match_ids: FAIL"
+    echo "  expected-matches/$base_name: missing \`resume_fixture_id\`."
+    VIOLATIONS=$((VIOLATIONS + 1))
+    continue
+  fi
+  # Restrict to a safe-for-filesystem charset (no slashes, no
+  # leading dots) so a malicious fixture can't escape
+  # `expected-units/` via `../something.json` and silently
+  # validate against an unrelated file. The repo's own fixtures
+  # all match this pattern (mnemonic ids like `nathan-2026`,
+  # `chen-hardware-silicon-pm-2026`). CodeRabbit Major on PR #218.
+  if [[ ! "$resume_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "check_fixture_match_ids: FAIL"
+    echo "  expected-matches/$base_name: invalid resume_fixture_id=\"$resume_id\" (allowed charset: [A-Za-z0-9_-])"
+    VIOLATIONS=$((VIOLATIONS + 1))
+    continue
+  fi
+
+  unit_file="$EXPECTED_UNITS_DIR/${resume_id}.json"
+  if [[ ! -f "$unit_file" ]]; then
+    echo "check_fixture_match_ids: FAIL"
+    echo "  expected-matches/$base_name: resume_fixture_id=\"$resume_id\""
+    echo "  → expected-units file expected-units/${resume_id}.json does not exist."
+    VIOLATIONS=$((VIOLATIONS + 1))
+    continue
+  fi
+
+  # Build the known-good ID sets.
+  unit_ids="$(jq -r '.expected_units[].id' "$unit_file" | sort -u)"
+  req_ids="$(jq -r '.expected_requirements[].id' "$match_file" | sort -u)"
+
+  # Validate every expected_top_matches entry. Format is
+  # already enforced at runtime; here we only check ID
+  # membership. Skip the runtime format guard so a single
+  # malformed entry still surfaces an actionable error here.
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    # Split on the first colon. `loadFixtures.ts` already
+    # rejects multi-colon entries, so we trust the format.
+    u_part="${entry%%:*}"
+    r_part="${entry#*:}"
+
+    if ! grep -qxF "$u_part" <<<"$unit_ids"; then
+      echo "check_fixture_match_ids: FAIL"
+      echo "  expected-matches/$base_name: entry \"$entry\""
+      echo "  → unit id \"$u_part\" not found in expected-units/${resume_id}.json"
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+    if ! grep -qxF "$r_part" <<<"$req_ids"; then
+      echo "check_fixture_match_ids: FAIL"
+      echo "  expected-matches/$base_name: entry \"$entry\""
+      echo "  → requirement id \"$r_part\" not found in this file's expected_requirements"
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+  done < <(jq -r '.expected_top_matches[]?' "$match_file")
+done
+shopt -u nullglob
+
+if [[ $VIOLATIONS -gt 0 ]]; then
+  echo "check_fixture_match_ids: $VIOLATIONS violation(s) across $CHECKED file(s)."
+  exit 1
+fi
+
+echo "check_fixture_match_ids: PASS ($CHECKED file(s) checked)"
