@@ -241,15 +241,17 @@ describe("extractFromResume", () => {
     }
   });
 
-  it("surfaces stop_reason: max_tokens as a max_tokens_exceeded failure (not a misleading schema_error)", async () => {
+  it("surfaces stop_reason: max_tokens as a max_tokens_exceeded failure and short-circuits the retry loop (#216)", async () => {
     // Reproduces the regression observed when running the eval
     // harness against Nathan's real resume: the prior 4096-token
     // budget hit the cap mid-tool-call, the SDK returned
     // `stop_reason: "max_tokens"` with `tool_use.input = {}`, and
     // the Zod parse bounced through all 3 retries with a
-    // misleading "units: required" schema error. The new code path
+    // misleading "units: required" schema error. The code path
     // catches the truncation explicitly so debug runs see the
-    // real cause.
+    // real cause, AND bails out after the first attempt because
+    // an identical retry against the same budget cannot recover
+    // (#216).
     const truncated = {
       id: "msg_test",
       type: "message",
@@ -269,8 +271,8 @@ describe("extractFromResume", () => {
       stop_sequence: null,
       usage: { input_tokens: 4702, output_tokens: 4096 },
     } as unknown as Anthropic.Messages.Message;
-    // Three identical truncations → ExtractionError with three
-    // max_tokens_exceeded failures. Retries can't fix truncation.
+    // Queue three truncations but expect only the first to be
+    // consumed: the loop must break on the first max_tokens_exceeded.
     const client = mockClient([truncated, truncated, truncated]);
     const record = vi.fn<typeof RecordUsage>(async () => 0.01);
 
@@ -282,16 +284,14 @@ describe("extractFromResume", () => {
       ),
     ).rejects.toMatchObject({
       name: "ExtractionError",
-      failures: [
-        { attempt: 0, kind: "max_tokens_exceeded" },
-        { attempt: 1, kind: "max_tokens_exceeded" },
-        { attempt: 2, kind: "max_tokens_exceeded" },
-      ],
+      failures: [{ attempt: 0, kind: "max_tokens_exceeded" }],
     });
-    // recordUsage still fires per attempt because tokens were
-    // actually billed (output_tokens: 4096 each time). Cost
-    // accounting must not undercount truncated retries.
-    expect(record).toHaveBeenCalledTimes(3);
+    // Exactly one API call and one recordUsage call — the retry
+    // loop short-circuits because identical retries against the
+    // same MAX_OUTPUT_TOKENS budget cannot recover. Budget
+    // escalation is intentionally out of scope.
+    expect(client.messages.create).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledTimes(1);
   });
 
   it("retries on missing tool_use (response has only text blocks)", async () => {

@@ -182,8 +182,10 @@ export async function extractFromResume(
     // 4096 cap). Surface this as its own failure kind so debug
     // runs don't waste cycles chasing a misleading "units required"
     // schema error. Retries can't fix the truncation — bumping
-    // MAX_OUTPUT_TOKENS is the only fix — but we still record all
-    // 3 attempts so the cost accounting is honest.
+    // MAX_OUTPUT_TOKENS is the only fix — so short-circuit the
+    // retry loop instead of burning two more identical attempts
+    // (#216). The single attempt's usage was already recorded
+    // above, so cost accounting stays honest.
     if (response.stop_reason === "max_tokens") {
       failures.push({
         attempt,
@@ -194,7 +196,7 @@ export async function extractFromResume(
           `tool_use.input was truncated. Retries cannot recover; raise ` +
           `MAX_OUTPUT_TOKENS in extraction/resume.ts.`,
       });
-      continue;
+      break;
     }
 
     const toolUse = response.content.find(
