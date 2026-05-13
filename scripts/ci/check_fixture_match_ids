@@ -68,6 +68,18 @@ for match_file in "$EXPECTED_MATCHES_DIR"/*.json; do
     VIOLATIONS=$((VIOLATIONS + 1))
     continue
   fi
+  # Restrict to a safe-for-filesystem charset (no slashes, no
+  # leading dots) so a malicious fixture can't escape
+  # `expected-units/` via `../something.json` and silently
+  # validate against an unrelated file. The repo's own fixtures
+  # all match this pattern (mnemonic ids like `nathan-2026`,
+  # `chen-hardware-silicon-pm-2026`). CodeRabbit Major on PR #218.
+  if [[ ! "$resume_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "check_fixture_match_ids: FAIL"
+    echo "  expected-matches/$base_name: invalid resume_fixture_id=\"$resume_id\" (allowed charset: [A-Za-z0-9_-])"
+    VIOLATIONS=$((VIOLATIONS + 1))
+    continue
+  fi
 
   unit_file="$EXPECTED_UNITS_DIR/${resume_id}.json"
   if [[ ! -f "$unit_file" ]]; then
