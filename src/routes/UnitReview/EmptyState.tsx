@@ -26,6 +26,7 @@ export default function EmptyState({
       className="rounded-lg border border-dashed border-zinc-300 px-6 py-12 text-center dark:border-zinc-700"
       role="region"
       aria-label="Empty Unit Review"
+      data-load-state="ready"
     >
       <p className="text-sm text-zinc-700 dark:text-zinc-300">
         No Experience Units yet.

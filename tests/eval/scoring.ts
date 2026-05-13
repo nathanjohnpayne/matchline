@@ -94,34 +94,39 @@ export function unitSetAccuracy(
   const used = new Set<number>();
   let total = 0;
   for (const e of expected) {
+    // Codex P2 on PR #147: a summary made entirely of short
+    // tokens (e.g. "AI ML", "TV OS") tokenizes to empty under
+    // the >2-char filter, and the token-set similarity
+    // function returns 0 on empty-vs-empty — that would
+    // punish a perfect textual match. Fall back to exact
+    // equality on the trimmed lowercase strings when either
+    // side tokenizes empty so identical short-token summaries
+    // still get full credit.
+    //
+    // Summary similarity uses overlap-coefficient (#148) not
+    // Jaccard. The runtime extractor produces verbose
+    // summaries (~30 tokens with detail); labeled summaries
+    // are concise (~13 tokens). Jaccard penalized that
+    // asymmetry — the live diagnostic on Nathan-2026 ×
+    // Google-Compute-SPM saw token-Jaccard score ~0.34 on
+    // the Kepler match where overlap-coefficient scores
+    // ~0.85. See `tokenOverlapCoefficient`'s docstring.
+    //
+    // CodeRabbit Nit on PR #147: `expectedTokens` and the
+    // lowercased fallback string depend only on `e`; hoist out
+    // of the inner `i` loop so they're computed once per
+    // expected unit, not once per (expected × actual) pair.
+    const expectedTokens = tokenize(e.normalizedSummary);
+    const expectedNormalized = e.normalizedSummary.trim().toLowerCase();
     let bestScore = 0;
     let bestIdx = -1;
     for (let i = 0; i < actual.length; i++) {
       if (used.has(i)) continue;
       const a = actual[i]!;
-      // Codex P2 on PR #147: a summary made entirely of short
-      // tokens (e.g. "AI ML", "TV OS") tokenizes to empty under
-      // the >2-char filter, and the token-set similarity
-      // function returns 0 on empty-vs-empty — that would
-      // punish a perfect textual match. Fall back to exact
-      // equality on the trimmed lowercase strings when either
-      // side tokenizes empty so identical short-token summaries
-      // still get full credit.
-      //
-      // Summary similarity uses overlap-coefficient (#148) not
-      // Jaccard. The runtime extractor produces verbose
-      // summaries (~30 tokens with detail); labeled summaries
-      // are concise (~13 tokens). Jaccard penalized that
-      // asymmetry — the live diagnostic on Nathan-2026 ×
-      // Google-Compute-SPM saw token-Jaccard score ~0.34 on
-      // the Kepler match where overlap-coefficient scores
-      // ~0.85. See `tokenOverlapCoefficient`'s docstring.
-      const expectedTokens = tokenize(e.normalizedSummary);
       const actualTokens = tokenize(a.normalizedSummary);
       const summaryMatch =
         expectedTokens.size === 0 || actualTokens.size === 0
-          ? e.normalizedSummary.trim().toLowerCase() ===
-            a.normalizedSummary.trim().toLowerCase()
+          ? expectedNormalized === a.normalizedSummary.trim().toLowerCase()
             ? 1
             : 0
           : tokenOverlapCoefficient(expectedTokens, actualTokens);

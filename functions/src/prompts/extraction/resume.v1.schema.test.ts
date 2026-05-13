@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,13 +10,26 @@ import {
 
 /**
  * Load the known-good fixture that mirrors the example in the prompt
- * itself. Path is relative to repo root (vitest's cwd). Keep the
- * fixture in sync with the prompt's example so tests catch drift
- * between the prompt's documented response and the schema it's
+ * itself. Resolved from `import.meta.url` rather than `process.cwd()`
+ * so the suite works regardless of the caller's working directory
+ * (vitest from the functions/ dir vs. root vs. a watch invocation
+ * from an editor). CodeRabbit Nitpick on PR #69.
+ *
+ * Keep the fixture in sync with the prompt's example so tests catch
+ * drift between the prompt's documented response and the schema it's
  * validated against.
  */
+// __dirname → functions/src/prompts/extraction
+// repo root  → ../../../..
+const REPO_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "..",
+  "..",
+);
 const FIXTURE_PATH = join(
-  process.cwd(),
+  REPO_ROOT,
   "tests",
   "fixtures",
   "prompts",
