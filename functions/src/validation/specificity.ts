@@ -193,7 +193,7 @@ async function runLlmFallback(
     // redaction contract.
     await safeRecordUsage(
       record,
-      {
+      () => ({
         stage: "validation",
         provider: "anthropic",
         model,
@@ -201,7 +201,7 @@ async function runLlmFallback(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      },
+      }),
       "validation.specificity",
     );
 

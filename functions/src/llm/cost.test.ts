@@ -84,10 +84,20 @@ describe("priceFor", () => {
 // shape every LLM pipeline previously hand-rolled. These tests pin
 // the contract — record errors must never propagate; success returns
 // the propagated cost.
+//
+// Codex P2 on PR #220: the helper takes a `() => UsageRecord` thunk
+// (not a value) so that constructing the payload — e.g., reading
+// `response.usage.input_tokens` on a malformed Anthropic response —
+// happens INSIDE the protected try block. A value-arg shape would
+// throw before the helper could swallow it.
 describe("safeRecordUsage", () => {
   it("returns the cost when record resolves", async () => {
     const record = vi.fn(async () => 0.42);
-    const result = await safeRecordUsage(record, SAMPLE_USAGE, "extraction.resume");
+    const result = await safeRecordUsage(
+      record,
+      () => SAMPLE_USAGE,
+      "extraction.resume",
+    );
     expect(result).toBe(0.42);
     expect(record).toHaveBeenCalledTimes(1);
     expect(record).toHaveBeenCalledWith(SAMPLE_USAGE);
@@ -102,7 +112,7 @@ describe("safeRecordUsage", () => {
     // kill a successful LLM verdict — the prior PR-#113 regression
     // this helper prevents from recurring.
     await expect(
-      safeRecordUsage(record, SAMPLE_USAGE, "extraction.resume"),
+      safeRecordUsage(record, () => SAMPLE_USAGE, "extraction.resume"),
     ).resolves.toBe(0);
   });
 
@@ -111,7 +121,27 @@ describe("safeRecordUsage", () => {
       throw new Error("non-async throw");
     });
     await expect(
-      safeRecordUsage(record, SAMPLE_USAGE, "validation.specificity"),
+      safeRecordUsage(record, () => SAMPLE_USAGE, "validation.specificity"),
     ).resolves.toBe(0);
+  });
+
+  it("returns 0 when the build-usage thunk itself throws (e.g., malformed response.usage)", async () => {
+    // Codex P2 pin on PR #220: the thunk must run inside the
+    // helper's try/catch. A value-arg shape would evaluate the
+    // payload eagerly before the helper was invoked — a malformed
+    // `response.usage.input_tokens` access would throw past the
+    // helper and kill the caller's success path.
+    const record = vi.fn(async () => 0.42);
+    const buildUsage = (): UsageRecord => {
+      const malformed = undefined as unknown as {
+        usage: { input_tokens: number };
+      };
+      return { ...SAMPLE_USAGE, inputTokens: malformed.usage.input_tokens };
+    };
+    await expect(
+      safeRecordUsage(record, buildUsage, "extraction.resume"),
+    ).resolves.toBe(0);
+    // The record fn never got called — the thunk threw first.
+    expect(record).not.toHaveBeenCalled();
   });
 });

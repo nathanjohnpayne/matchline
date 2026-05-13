@@ -164,7 +164,7 @@ export async function extractFromResume(
     // redaction contract.
     await safeRecordUsage(
       record,
-      {
+      () => ({
         stage: "extraction",
         provider: "anthropic",
         model,
@@ -172,7 +172,7 @@ export async function extractFromResume(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      },
+      }),
       "extraction.resume",
     );
 

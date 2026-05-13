@@ -160,7 +160,7 @@ export async function checkTraceability(
     // redaction contract.
     await safeRecordUsage(
       record,
-      {
+      () => ({
         stage: "validation",
         provider: "anthropic",
         model,
@@ -168,7 +168,7 @@ export async function checkTraceability(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      },
+      }),
       "validation.traceability",
     );
 

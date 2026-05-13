@@ -131,7 +131,7 @@ export async function parseJobRequirements(
     // redaction contract.
     await safeRecordUsage(
       record,
-      {
+      () => ({
         stage: "requirement_parsing",
         provider: "anthropic",
         model,
@@ -139,7 +139,7 @@ export async function parseJobRequirements(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      },
+      }),
       "parsing.jd",
     );
 

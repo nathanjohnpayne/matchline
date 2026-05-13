@@ -196,7 +196,7 @@ export async function extractClaims(
     // redaction contract.
     await safeRecordUsage(
       record,
-      {
+      () => ({
         stage: "validation",
         provider: "anthropic",
         model,
@@ -204,7 +204,7 @@ export async function extractClaims(
         outputTokens: response.usage.output_tokens,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
-      },
+      }),
       "validation.claimExtraction",
     );
 
