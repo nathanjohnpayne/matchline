@@ -48,8 +48,13 @@ jobs:
       - name: check_codex_scripts
         run: ./scripts/ci/check_codex_scripts
 
-      - name: check_hook_tests
-        run: ./scripts/ci/check_hook_tests
+      - name: check_gh_as_author
+        # Replaces matchline-local check_hook_tests (divergent fork at
+        # scripts/hooks/__tests__/gh-pr-guard.test.sh). The canonical
+        # check runs tests/test_gh_pr_guard.sh + test_gh_as_author.sh +
+        # test_gh_as_reviewer.sh — all three are propagated from
+        # mergepath as canonical. See mergepath#264.
+        run: ./scripts/ci/check_gh_as_author
 
       - name: check_workflow_parsers
         run: ./scripts/ci/check_workflow_parsers
