@@ -10,21 +10,30 @@
 # silently breaking the BLOCKED / DIRTY / UNSTABLE / BEHIND
 # refusal logic.
 #
-# Per #171 layer 2 acceptance criteria.
+# CONVERGED (mergepath#264): this check used to run a matchline-only
+# FORK of the hook test at scripts/hooks/__tests__/gh-pr-guard.test.sh.
+# The fork drifted from the canonical hook — its gh stub emitted the
+# pre-line-delimited `MERGE_STATE|LABELS` format and it had no #241
+# identity-check coverage — so it failed 23 assertions when the
+# unified canonical hook (mergepath#263) propagated in. The fork is
+# deleted; this now runs the CANONICAL suite tests/test_gh_pr_guard.sh,
+# which is a canonical manifest path (mergepath#266) and propagates in
+# lockstep with scripts/hooks/gh-pr-guard.sh. No more divergence.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TEST="$REPO_ROOT/scripts/hooks/__tests__/gh-pr-guard.test.sh"
+TEST="$REPO_ROOT/tests/test_gh_pr_guard.sh"
 
 if [[ ! -f "$TEST" ]]; then
-  echo "FAIL: Missing required hook test: scripts/hooks/__tests__/gh-pr-guard.test.sh"
+  echo "FAIL: Missing required hook test: tests/test_gh_pr_guard.sh"
+  echo "      It is a canonical manifest path — re-run the mergepath propagation."
   exit 1
 fi
 
 if [[ ! -x "$TEST" ]]; then
-  echo "FAIL: Hook test is not executable: scripts/hooks/__tests__/gh-pr-guard.test.sh"
-  echo "      Fix with: chmod +x scripts/hooks/__tests__/gh-pr-guard.test.sh"
+  echo "FAIL: Hook test is not executable: tests/test_gh_pr_guard.sh"
+  echo "      Fix with: chmod +x tests/test_gh_pr_guard.sh"
   exit 1
 fi
 
