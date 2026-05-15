@@ -2,18 +2,28 @@
 # gh-pr-guard.sh — PreToolUse hook for Claude Code
 #
 # Gates four operations:
-#   1. gh pr create — blocks unless the command text includes
-#      "Authoring-Agent:" and "## Self-Review"
+#   1. gh pr create — blocks unless (a) the keyring's active gh
+#      account is the AUTHOR identity (nathanjohnpayne by default;
+#      override via GH_PR_GUARD_EXPECTED_AUTHOR), AND (b) the command
+#      text includes "Authoring-Agent:" and "## Self-Review". The
+#      identity check (#241) prevents the split-invocation footgun
+#      where a `gh auth switch` in one Bash tool call drifts before
+#      the `gh pr create` in a subsequent call, landing the PR under
+#      the wrong account. Canonical fix is to use
+#      scripts/gh-as-author.sh which wraps switch + create + switch-
+#      back in one bash process.
 #   2. gh pr merge --admin — blocks unless BREAK_GLASS_ADMIN=1
 #      (human must explicitly authorize in chat)
 #   3. gh pr merge (any flavor) — blocks when the target PR's
-#      `mergeStateStatus` is BLOCKED / DIRTY / UNSTABLE / BEHIND
-#      (or any unrecognized future value) unless
+#      `mergeStateStatus` is BLOCKED / DIRTY / UNSTABLE / BEHIND /
+#      DRAFT (or any unrecognized future value) unless
 #      BREAK_GLASS_MERGE_STATE=1. This is the defense-in-depth
-#      layer behind GitHub branch protection — see #170 / #171
-#      for the merge-gate gap this closes (PR #165 merged with
-#      failing CI on every matrix cell because nothing in the
-#      merge path actually blocked).
+#      layer behind GitHub branch protection — see #170 / #171 for
+#      the merge-gate gap this closes (a PR can otherwise be merged
+#      with failing CI because nothing in the merge path actually
+#      blocks). Originated downstream (matchline #170/#171) and is
+#      unified into the canonical hook here so propagation no longer
+#      clobbers the feature — see the propagation-wave retro.
 #   4. gh pr merge (non-admin) — blocks when the target PR carries
 #      the `needs-external-review` label unless CODEX_CLEARED=1
 #      (agent must have just run scripts/codex-review-check.sh
@@ -21,6 +31,13 @@
 #      merge gate at the hook layer so an agent can't accidentally
 #      merge past Label Gate by removing the label without running
 #      the gate check first.
+#
+# The identity check (1a) honors a
+# BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK=1 escape hatch for tests
+# that PATH-shim gh and have no real keyring. Production code should
+# never set this — the wrapper script gh-as-author.sh switches to the
+# author identity BEFORE the gh pr create call lands, so the check
+# passes naturally without the bypass.
 #
 # Exit codes:
 #   0 = allow
@@ -526,6 +543,58 @@ fi
 # structural ones, and they don't depend on argument positions or
 # global flags.
 if [ "$PR_SUBCOMMAND" = "create" ]; then
+  # Identity check (#241): the keyring's active account must be the
+  # AUTHOR identity (nathanjohnpayne) at the moment of `gh pr create`,
+  # otherwise the PR is authored by whatever identity IS active —
+  # observed concretely on friends-and-family-billing#262 where a
+  # split switch / pr-create across two Bash tool calls landed a PR
+  # under the wrong identity. The canonical fix is to wrap the entire
+  # sequence in `scripts/gh-as-author.sh` so the switch and the create
+  # share one bash process.
+  #
+  # The check uses `gh config get -h github.com user`, NOT `gh auth
+  # status`. The latter is GH_TOKEN-poisonable: when GH_TOKEN is set
+  # it reports the GH_TOKEN entry as Active, but the keyring entry is
+  # still the one that signs writes. `gh config get` reads the
+  # keyring config file directly and is the authoritative read for
+  # "who will this write attribute to".
+  #
+  # Escape hatch: `BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK=1` lets
+  # tests and edge cases bypass this check. The check is additive
+  # defense-in-depth on top of gh-as-author.sh — when an agent runs
+  # `scripts/gh-as-author.sh -- gh pr create ...` correctly, the
+  # wrapper has already switched to the author identity by the time
+  # this hook fires, so the check passes naturally without the
+  # escape. The escape exists for test harnesses that PATH-shim `gh`
+  # and have no real keyring to read.
+  EXPECTED_AUTHOR="${GH_PR_GUARD_EXPECTED_AUTHOR:-nathanjohnpayne}"
+  if [ "${BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK:-0}" != "1" ]; then
+    ACTIVE_GH_USER=$(gh config get -h github.com user 2>/dev/null || echo "")
+    if [ -z "$ACTIVE_GH_USER" ]; then
+      echo "BLOCKED: gh-pr-guard could not read the active gh account from 'gh config get -h github.com user'." >&2
+      echo "  Either gh is not installed/authenticated, or the keyring config is corrupt." >&2
+      echo "  Run 'gh auth login' for the $EXPECTED_AUTHOR identity, then retry via scripts/gh-as-author.sh." >&2
+      exit 2
+    fi
+    if [ "$ACTIVE_GH_USER" != "$EXPECTED_AUTHOR" ]; then
+      echo "BLOCKED: gh pr create is about to run under active account '$ACTIVE_GH_USER', not the expected author identity '$EXPECTED_AUTHOR'." >&2
+      echo "" >&2
+      echo "  This is the #241 footgun. A PR created right now would be authored by '$ACTIVE_GH_USER'," >&2
+      echo "  which breaks self-approval (Can not approve your own pull request) and inverts the" >&2
+      echo "  Authoring-Agent: fingerprint in the PR body." >&2
+      echo "" >&2
+      echo "  Canonical fix: wrap the call in scripts/gh-as-author.sh, which switches to" >&2
+      echo "  $EXPECTED_AUTHOR, runs gh pr create, then restores the prior active account via" >&2
+      echo "  trap EXIT — all inside one bash process so the switch and the create can't drift apart:" >&2
+      echo "" >&2
+      echo "    scripts/gh-as-author.sh -- gh pr create --title '...' --body '...'" >&2
+      echo "" >&2
+      echo "  See REVIEW_POLICY.md § Recovery: PR created under the wrong identity for the case" >&2
+      echo "  where a PR already landed under the wrong account." >&2
+      exit 2
+    fi
+  fi
+
   MISSING=""
 
   if ! echo "$COMMAND" | grep -qi 'Authoring-Agent:'; then
@@ -643,21 +712,27 @@ fi
 # current branch; with a positional argument it accepts number /
 # URL / branch forms identically to gh pr merge.
 #
-# Output format: a single line `MERGE_STATE|LABELS` (e.g.
-# `CLEAN|`, `BLOCKED|needs-external-review,bug`). The custom
-# `--jq` filter joins the two fields so the hook only has to
-# parse one string.
+# Output format: mergeStateStatus on line 1, then one label name
+# per line (zero or more lines). The `--jq` filter is
+# `.mergeStateStatus, .labels[].name` — jq emits each result on
+# its own line. NEWLINE-delimited, NOT comma-joined: GitHub label
+# names may legally contain commas (and spaces), so a CSV join
+# would make the later exact-match label gate ambiguous — a label
+# literally named `team,needs-external-review` would be parsed as
+# two labels and false-match the real `needs-external-review`
+# gate (CodeRabbit caught this on PR #263). Label names cannot
+# contain newlines, so one-label-per-line is unambiguous.
 #
 # #171 / #170 retrospective: pre-this-change the hook fetched
 # only labels and let `gh pr merge` run even when GitHub's
 # `mergeStateStatus` was BLOCKED (failing CI / active
-# CHANGES_REQUESTED). PR #165 merged with red CI on every
+# CHANGES_REQUESTED). A PR could merge with red CI on every
 # matrix cell because nothing in the merge path actually
 # blocked. The new check is defense-in-depth behind branch
 # protection: even if branch protection is misconfigured or
 # disabled for an emergency hotfix, the hook will still refuse
 # to dispatch the merge.
-GH_JQ='"\(.mergeStateStatus)|\([.labels[].name] | join(","))"'
+GH_JQ='.mergeStateStatus, .labels[].name'
 GH_ARGS=(pr view --json labels,mergeStateStatus --jq "$GH_JQ")
 if [ -n "$PR_SELECTOR" ]; then
   GH_ARGS=(pr view "$PR_SELECTOR" --json labels,mergeStateStatus --jq "$GH_JQ")
@@ -666,17 +741,17 @@ if [ -n "$REPO_ARG" ]; then
   GH_ARGS+=(--repo "$REPO_ARG")
 fi
 
-# Capture stdout and stderr separately. Codex P1 on PR #174 r2:
-# the prior `2>&1` form would prepend ANY non-fatal stderr gh
+# Capture stdout and stderr separately. Codex P1 on matchline PR
+# #174 r2: a `2>&1` form would prepend ANY non-fatal stderr gh
 # emitted (update notifier, deprecation warnings, etc.) to the
-# stdout payload, then the `${GH_OUTPUT%%|*}` parameter expansion
-# would parse that noise as MERGE_STATE — corrupting a CLEAN PR
-# into the unrecognized-state block path. Routing stderr to a
-# tempfile keeps MERGE_STATE pure. We still surface stderr in the
-# error path for diagnostics.
+# stdout payload, then the line-1 `MERGE_STATE` extraction would
+# parse that noise as MERGE_STATE — corrupting a CLEAN PR into the
+# unrecognized-state block path. Routing stderr to a tempfile
+# keeps MERGE_STATE pure. We still surface stderr in the error
+# path for diagnostics.
 GH_STDERR=$(mktemp)
 # Re-declare the EXIT trap so $GH_STDERR is also cleaned up. The
-# trap call replaces (not appends) any prior trap; keep all four
+# trap call replaces (not appends) any prior trap; keep all three
 # tempfile names listed here so a future edit doesn't drop one.
 trap 'rm -f "$TMP_TOKENS" "$TMP_TOKENS_ERR" "$GH_STDERR"' EXIT
 if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>"$GH_STDERR"); then
@@ -685,26 +760,23 @@ if ! GH_OUTPUT=$(gh "${GH_ARGS[@]}" 2>"$GH_STDERR"); then
     echo "  stderr: $(cat "$GH_STDERR")" >&2
   fi
   echo "  command: gh ${GH_ARGS[*]}" >&2
-  # Cursor on PR #174: the prior recovery hint suggested
-  # `BREAK_GLASS_ADMIN=1 + --admin` to bypass this failure, but
-  # the gh-call happens BEFORE the admin gate in the current
-  # ordering — so the bypass would re-fail here regardless of
-  # break-glass state. There is no agent-side override for a
-  # metadata-fetch failure; the only fix is restoring gh/auth
-  # connectivity. (Once that's restored, BREAK_GLASS_MERGE_STATE
-  # and BREAK_GLASS_ADMIN are still available downstream if the
-  # PR's merge state or admin gate need to be overridden.)
-  echo "  Fix the underlying gh/auth issue and retry. The metadata fetch is unconditional and runs before any break-glass override." >&2
+  # The metadata fetch is unconditional and runs BEFORE any break-
+  # glass override, so a BREAK_GLASS_* env var cannot bypass this
+  # failure — the only fix is restoring gh/auth connectivity. Once
+  # that's restored, BREAK_GLASS_MERGE_STATE / BREAK_GLASS_ADMIN
+  # are still available downstream if the PR's merge state or admin
+  # gate need to be overridden.
+  echo "  Fix the underlying gh/auth issue and retry." >&2
   exit 2
 fi
 
-# Split on the first `|`. The mergeStateStatus enum values are
-# all uppercase ASCII identifiers without `|`, and the labels
-# are comma-joined (commas, not pipes), so the split is
-# unambiguous. Empty MERGE_STATE (e.g., transient API state)
-# falls into the `*` case below and fails closed.
-MERGE_STATE="${GH_OUTPUT%%|*}"
-LABELS="${GH_OUTPUT#*|}"
+# Line 1 is mergeStateStatus; lines 2..N are label names (one per
+# line, possibly zero). Empty/missing MERGE_STATE (e.g. transient
+# API state) falls into the `*` case below and fails closed.
+# LABELS keeps the newline-delimited remainder for the exact-match
+# gate further down — never re-join it into a delimited string.
+MERGE_STATE=$(printf '%s\n' "$GH_OUTPUT" | sed -n '1p')
+LABELS=$(printf '%s\n' "$GH_OUTPUT" | sed -n '2,$p')
 
 # mergeStateStatus check (#171 layer 2). API enum (full set per
 # GitHub GraphQL `MergeStateStatus`):
@@ -713,15 +785,15 @@ LABELS="${GH_OUTPUT#*|}"
 #   UNKNOWN     — state not yet determined (often transient; allow
 #                 rather than wedge on slow API responses)
 #   BLOCKED     — required check failing OR active CHANGES_REQUESTED
-#                 review (this is the #165 case)
+#                 review
 #   DIRTY       — merge conflict
 #   UNSTABLE    — non-required check failed
 #   BEHIND      — base has commits the head lacks (with "Require
 #                 branches to be up to date" enabled)
-#   DRAFT       — PR is in draft mode (Codex on PR #174 r2: cover
-#                 explicitly so the diagnostic points at the right
-#                 fix, "mark draft as ready," not at "update the
-#                 case statement for a future state")
+#   DRAFT       — PR is in draft mode (covered explicitly so the
+#                 diagnostic points at the right fix, "mark draft
+#                 as ready," not at "update the case statement for
+#                 a future state")
 #
 # Unknown future states (anything not in the case below) fail
 # CLOSED — a new GitHub API state shouldn't silently bypass the
@@ -769,16 +841,15 @@ esac
 # above sets ADMIN_REQUESTED=1 only when `--admin` appears as a
 # REAL flag of `merge`, not as a substring of another flag's value.
 #
-# Ordering note (#171 / CodeRabbit on PR #174): this guard is
-# evaluated AFTER the mergeStateStatus check above. Pre-this-
-# ordering, `--admin + BREAK_GLASS_ADMIN=1` exited before the
-# merge-state guard ran — meaning an emergency `--admin` merge
-# would silently bypass the new BLOCKED/DIRTY/UNSTABLE/BEHIND
-# refusal. The two break-glass overrides are independent
-# decisions: BREAK_GLASS_ADMIN authorizes admin-flag use,
-# BREAK_GLASS_MERGE_STATE authorizes merging despite a failing
-# merge state. Requiring both for the worst-case merge (admin
-# AND failing CI) is intentional.
+# Ordering note (#171): this guard is evaluated AFTER the
+# mergeStateStatus check above. Pre-this-ordering, `--admin +
+# BREAK_GLASS_ADMIN=1` exited before the merge-state guard ran —
+# meaning an emergency `--admin` merge would silently bypass the
+# BLOCKED/DIRTY/UNSTABLE/BEHIND refusal. The two break-glass
+# overrides are independent decisions: BREAK_GLASS_ADMIN authorizes
+# admin-flag use, BREAK_GLASS_MERGE_STATE authorizes merging despite
+# a failing merge state. Requiring both for the worst-case merge
+# (admin AND failing CI) is intentional.
 if [ "$ADMIN_REQUESTED" -eq 1 ]; then
   if [ "$EFFECTIVE_BREAK_GLASS_ADMIN" = "1" ]; then
     echo "BREAK-GLASS: --admin merge authorized by human." >&2
@@ -789,17 +860,20 @@ if [ "$ADMIN_REQUESTED" -eq 1 ]; then
   exit 2
 fi
 
-case ",$LABELS," in
-  *,needs-external-review,*)
-    if [ "$EFFECTIVE_CODEX_CLEARED" != "1" ]; then
-      echo "BLOCKED: PR carries 'needs-external-review' and CODEX_CLEARED is not set." >&2
-      echo "  Phase 4a merge gate: run 'scripts/codex-review-check.sh <PR#>' first." >&2
-      echo "  When it exits 0, retry this merge with CODEX_CLEARED=1 (export or inline prefix)." >&2
-      echo "  See REVIEW_POLICY.md § Phase 4a for the full flow." >&2
-      exit 2
-    fi
-    echo "CODEX_CLEARED=1 set; PR is labeled needs-external-review but agent claims merge-gate has passed." >&2
-    ;;
-esac
+# Exact-match the label gate against the newline-delimited LABELS
+# list. `grep -Fxq` = fixed-string, whole-line, quiet — so a label
+# literally named `team,needs-external-review` (commas are legal in
+# GitHub label names) is its own line and does NOT false-match the
+# real `needs-external-review` gate.
+if printf '%s\n' "$LABELS" | grep -Fxq "needs-external-review"; then
+  if [ "$EFFECTIVE_CODEX_CLEARED" != "1" ]; then
+    echo "BLOCKED: PR carries 'needs-external-review' and CODEX_CLEARED is not set." >&2
+    echo "  Phase 4a merge gate: run 'scripts/codex-review-check.sh <PR#>' first." >&2
+    echo "  When it exits 0, retry this merge with CODEX_CLEARED=1 (export or inline prefix)." >&2
+    echo "  See REVIEW_POLICY.md § Phase 4a for the full flow." >&2
+    exit 2
+  fi
+  echo "CODEX_CLEARED=1 set; PR is labeled needs-external-review but agent claims merge-gate has passed." >&2
+fi
 
 exit 0
