@@ -26,6 +26,20 @@ export default [
       ".astro/**",
       ".next/**",
       ".vercel/**",
+      // CONSUMER-LOCAL: agent-spawned git worktrees for parallel PR
+      // exploration. Local state — linting them double-counts
+      // findings against the main tree.
+      ".claude/worktrees/**",
+      // CONSUMER-LOCAL: Cloud Functions compiled output (tsc -b emits
+      // here). functions/src/ is the canonical source; linting the
+      // compiled `.js` duplicates findings already covered upstream.
+      "functions/lib/**",
+      // CONSUMER-LOCAL: ad-hoc debugging / experiment scripts. The
+      // tmp/ directory holds throwaway `*.mts` files for one-off
+      // investigations (vocab-collect, threshold-experiment,
+      // match-trace, etc.). Not production code; linting them is
+      // counterproductive (intentional `any`/`_` patterns abound).
+      "tmp/**",
     ],
   },
 
@@ -93,6 +107,42 @@ export default [
     },
     settings: {
       react: { version: "detect" },
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────
+  // CONSUMER-LOCAL POLICY — TS + React-rule overrides. MUST be LAST.
+  //
+  // Same template policy class as dpr#83 / ffb#274 / tadlock#58 /
+  // nathanpaynedotcom#373:
+  // - react/prop-types: off (modern React + TS)
+  // - react/no-unescaped-entities: off (cosmetic)
+  // - react-hooks React Compiler advisories: off (not yet adopted)
+  // - @typescript-eslint/no-unused-vars: standard `^_`-prefix ignore
+  // - @typescript-eslint/no-explicit-any: demoted to warn — there
+  //   are 10 legitimate `any` sites across Firestore-bridge code
+  //   and eval projection; tightening is tracked separately, not
+  //   blocking the ESLint baseline rollout
+  // - @typescript-eslint/no-empty-object-type: demoted to warn —
+  //   `{}` is sometimes the correct type for "any non-null/undef
+  //   value" in narrowing scenarios
+  {
+    files: ["**/*.{js,jsx,ts,tsx}"],
+    rules: {
+      "react/prop-types": "off",
+      "react/no-unescaped-entities": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/immutability": "off",
+      "@typescript-eslint/no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+        destructuredArrayIgnorePattern: "^_",
+      }],
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-empty-object-type": "warn",
     },
   },
 ];

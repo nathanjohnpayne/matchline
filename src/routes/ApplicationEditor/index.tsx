@@ -334,11 +334,11 @@ function ApplicationEditorInner({
       try {
         await refetchApplication();
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn("refetchApplication failed after undo", err);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.warn("restoreAssetState failed during undo", err);
       // Re-push on transport failure too so the user can retry.
       setUndoStack((prev) => [...prev, top]);
@@ -404,14 +404,14 @@ function ApplicationEditorInner({
         try {
           await refetchApplication();
         } catch (err) {
-          // eslint-disable-next-line no-console
+           
           console.warn(
             "refetchApplication failed after successful reorder",
             err,
           );
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn("reorderBulletsInAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
@@ -436,7 +436,7 @@ function ApplicationEditorInner({
         if (result.status !== "added") {
           // application-not-found / asset-not-found shouldn't
           // happen from the editor's UI (we just loaded both).
-          // eslint-disable-next-line no-console
+           
           console.warn("addBulletToAsset returned", result.status);
           return null;
         }
@@ -449,7 +449,7 @@ function ApplicationEditorInner({
         await refetchApplication();
         return result.bulletId;
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn("addBulletToAsset failed", err);
         return null;
       } finally {
@@ -508,7 +508,7 @@ function ApplicationEditorInner({
       try {
         await invokeValidateAsset(applicationId, asset.id);
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           "validateAsset failed after edit; asset remains in stale state",
           err,
@@ -527,7 +527,7 @@ function ApplicationEditorInner({
       try {
         await refetchApplication();
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           "refetchApplication failed after successful edit; UI may be briefly stale",
           err,
@@ -574,7 +574,7 @@ function ApplicationEditorInner({
         // surface as an unhandled rejection. PR 2 has no toast UI;
         // a future visible error surface will replace this log.
         // CodeRabbit Major on PR #182.
-        // eslint-disable-next-line no-console
+         
         console.warn("removeBulletFromAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
@@ -604,7 +604,7 @@ function ApplicationEditorInner({
         await manualInsert(input);
         setManualAddOpen(false);
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn("manualInsert failed", err);
         throw err;
       }
@@ -620,7 +620,7 @@ function ApplicationEditorInner({
   // single line. Disabled state is computed in the view from the
   // asset's `validation_status`.
   const onExport = useCallback(() => {
-    // eslint-disable-next-line no-console
+     
     console.info("Export not yet implemented (Phase 2)", {
       applicationId,
       assetId: asset?.id,

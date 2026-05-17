@@ -369,7 +369,7 @@ export async function restoreAssetState(
   // the spread doesn't carry the prior asset's flags forward when
   // the snapshot says they should be absent.
   const nextAssets = [...assets];
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   const { validation_flags: _existingFlags, ...targetWithoutFlags } = target;
   if (snapshot.validation_flags === undefined) {
     nextAssets[assetIndex] = {
