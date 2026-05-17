@@ -82,7 +82,18 @@ export default [
   // TypeScript recommended ruleset — applied to .ts / .tsx via the
   // typescript-eslint plugin's flat-config preset. Includes the
   // parser, the recommended rule set, and the file-glob targeting.
-  ...tseslint.configs.recommended,
+  // CONSUMER-LOCAL: scope tseslint.configs.recommended to TS files
+  // only via tseslint.config({files, extends}). The bare spread
+  // (`...tseslint.configs.recommended`) applies the preset to ALL
+  // files including JS, which leaks `@typescript-eslint/no-unused-vars`
+  // onto JS sources where it duplicates the core `no-unused-vars`
+  // (both rules then report the same finding). Codex Phase 4b on
+  // matchline#234 surfaced the leak. The `tseslint.config()` helper
+  // is the canonical v8-era scoping mechanism for extended presets.
+  ...tseslint.config({
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    extends: [...tseslint.configs.recommended],
+  }),
 
 
   // React + React Hooks recommended rulesets — applied to .jsx / .tsx.
