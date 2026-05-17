@@ -194,7 +194,7 @@ export default function RoleDetail(): ReactElement {
   const onApprovalStateChange = useCallback(
     (matchId: string, state: MatchApprovalState) => {
       void setMatchApprovalState(matchId, state).catch((err: unknown) => {
-         
+
         console.warn("setMatchApprovalState failed", err);
       });
     },
@@ -222,7 +222,7 @@ export default function RoleDetail(): ReactElement {
         currentRoleIdRef.current !== issuedAgainst ||
         visitTokenRef.current !== issuedToken;
       setSavingJd(true);
-       
+
       const { owner_uid: _ownerUid, ...rest } = next;
       void upsertRole(rest)
         .then(() => {
@@ -236,7 +236,7 @@ export default function RoleDetail(): ReactElement {
           setParsingStatus("editing");
         })
         .catch((err: unknown) => {
-           
+
           console.warn("upsertRole failed", err);
           if (isStale()) return;
           // Prefix the message so the inline error banner makes
@@ -285,7 +285,7 @@ export default function RoleDetail(): ReactElement {
           // strand the user's edits. upsertRole is a merge
           // setDoc, so the rest of the Role doc is unchanged.
           if (text !== role.jd_raw) {
-             
+
             const { owner_uid: _o, ...rest } = next;
             await upsertRole(rest);
             if (!isStale()) {
@@ -340,7 +340,7 @@ export default function RoleDetail(): ReactElement {
           setComputingMatches(true);
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
-               
+
               console.warn("invokeRunMatching after re-parse failed", err);
             })
             .finally(() => {
@@ -499,7 +499,7 @@ export default function RoleDetail(): ReactElement {
             // the rest of the page rendering. The tab will
             // show no Applications; user can click Generate
             // to retry the path.
-             
+
             console.warn("subscribeApplicationsForRole failed", err);
           },
         );
@@ -576,7 +576,7 @@ export default function RoleDetail(): ReactElement {
         // Subscription delivers the new matches on success;
         // failures log + un-set the loading state. Phase 2
         // surfaces a toast; deferred per #21 spec.
-         
+
         console.warn("invokeRunMatching failed", err);
       })
       .finally(() => {

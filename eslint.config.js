@@ -111,23 +111,35 @@ export default [
   },
 
   // ─────────────────────────────────────────────────────────────────
-  // CONSUMER-LOCAL POLICY — TS + React-rule overrides. MUST be LAST.
+  // CONSUMER-LOCAL POLICY — split by file type. MUST be LAST.
   //
   // Same template policy class as dpr#83 / ffb#274 / tadlock#58 /
-  // nathanpaynedotcom#373:
-  // - react/prop-types: off (modern React + TS)
-  // - react/no-unescaped-entities: off (cosmetic)
-  // - react-hooks React Compiler advisories: off (not yet adopted)
-  // - @typescript-eslint/no-unused-vars: standard `^_`-prefix ignore
-  // - @typescript-eslint/no-explicit-any: demoted to warn — there
-  //   are 10 legitimate `any` sites across Firestore-bridge code
-  //   and eval projection; tightening is tracked separately, not
-  //   blocking the ESLint baseline rollout
-  // - @typescript-eslint/no-empty-object-type: demoted to warn —
-  //   `{}` is sometimes the correct type for "any non-null/undef
-  //   value" in narrowing scenarios
+  // nathanpaynedotcom#373, but split into three target-scoped
+  // blocks per typescript-eslint v8 guidance (CodeRabbit Major on
+  // matchline#234): the base `no-unused-vars` enabled by
+  // `js.configs.recommended` and the typescript-eslint variant
+  // conflict if both run on the same file — the rule is intended
+  // as a direct replacement scoped to TS files only.
+  //
+  // Block 1 — JS/JSX files: apply `^_`-prefix to the base
+  //   `no-unused-vars` (the TS variant is not enabled here).
+  // Block 2 — JSX/TSX (React files): React + React Compiler off.
+  // Block 3 — TS/TSX/MTS/CTS: TS-specific rules incl. the
+  //   replacement `no-unused-vars`. Disabling the base rule on
+  //   the same files prevents the double-report.
   {
-    files: ["**/*.{js,jsx,ts,tsx}"],
+    files: ["**/*.{js,jsx,mjs,cjs}"],
+    rules: {
+      "no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+        destructuredArrayIgnorePattern: "^_",
+      }],
+    },
+  },
+  {
+    files: ["**/*.{jsx,tsx}"],
     rules: {
       "react/prop-types": "off",
       "react/no-unescaped-entities": "off",
@@ -135,6 +147,12 @@ export default [
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/refs": "off",
       "react-hooks/immutability": "off",
+    },
+  },
+  {
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    rules: {
+      "no-unused-vars": "off",
       "@typescript-eslint/no-unused-vars": ["error", {
         argsIgnorePattern: "^_",
         varsIgnorePattern: "^_",
