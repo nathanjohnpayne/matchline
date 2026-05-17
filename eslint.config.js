@@ -17,6 +17,10 @@ export default [
   // Ignore generated / vendored output. Customize per-consumer via
   // a follow-up commit on the propagation PR if a repo needs extras
   // (e.g., functions/lib for cloud-functions repos).
+  //
+  // `.claude/worktrees/**` is the per-agent worktree root that
+  // Claude Code creates for parallel sub-tasks; linting the working
+  // copies inside it is duplicative and noisy on every agent run.
   {
     ignores: [
       "node_modules/**",
@@ -26,25 +30,32 @@ export default [
       ".astro/**",
       ".next/**",
       ".vercel/**",
-      // CONSUMER-LOCAL: agent-spawned git worktrees for parallel PR
-      // exploration. Local state — linting them double-counts
-      // findings against the main tree.
       ".claude/worktrees/**",
-      // CONSUMER-LOCAL: Cloud Functions compiled output (tsc -b emits
-      // here). functions/src/ is the canonical source; linting the
-      // compiled `.js` duplicates findings already covered upstream.
-      "functions/lib/**",
-      // CONSUMER-LOCAL: ad-hoc debugging / experiment scripts. The
-      // tmp/ directory holds throwaway `*.mts` files for one-off
-      // investigations (vocab-collect, threshold-experiment,
-      // match-trace, etc.). Not production code; linting them is
-      // counterproductive (intentional `any`/`_` patterns abound).
-      "tmp/**",
     ],
   },
 
   // Baseline JS recommended — required by the Mergepath policy floor.
   js.configs.recommended,
+
+  // Baseline rule policy applied to all JS sources. `^_`-prefix
+  // unused-vars is the standard convention for marking intentionally-
+  // unused locals (args, vars, caught errors, destructured-array
+  // leftovers); the `allowEmptyCatch` setting permits the
+  // `catch (_) {}` swallow idiom that appears in legacy code.
+  // Both relaxations were added by hand by 5 of 6 consumers during
+  // the Phase D fanout (#250) — folding them into the baseline
+  // removes the per-consumer churn.
+  {
+    rules: {
+      "no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+        destructuredArrayIgnorePattern: "^_",
+      }],
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
 
   // Apply browser + node globals to all JS sources by default. Narrow
   // these per-file-pattern in a follow-up commit if the repo has a
@@ -82,18 +93,28 @@ export default [
   // TypeScript recommended ruleset — applied to .ts / .tsx via the
   // typescript-eslint plugin's flat-config preset. Includes the
   // parser, the recommended rule set, and the file-glob targeting.
-  // CONSUMER-LOCAL: scope tseslint.configs.recommended to TS files
-  // only via tseslint.config({files, extends}). The bare spread
-  // (`...tseslint.configs.recommended`) applies the preset to ALL
-  // files including JS, which leaks `@typescript-eslint/no-unused-vars`
-  // onto JS sources where it duplicates the core `no-unused-vars`
-  // (both rules then report the same finding). Codex Phase 4b on
-  // matchline#234 surfaced the leak. The `tseslint.config()` helper
-  // is the canonical v8-era scoping mechanism for extended presets.
-  ...tseslint.config({
-    files: ["**/*.{ts,tsx,mts,cts}"],
-    extends: [...tseslint.configs.recommended],
-  }),
+  ...tseslint.configs.recommended,
+
+  // Tighten the TS-specific unused-vars rule to match the JS baseline
+  // `^_`-prefix convention, and demote `no-explicit-any` to warn —
+  // legitimate `any` usage shows up in Playwright cross-frame DOM
+  // bridges, Firestore type-erasure, and WIP design-direction code;
+  // an error blocks CI on signals the team has already considered.
+  // Both demotions were hand-added by every TS consumer during the
+  // Phase D fanout (#250); folding into the template removes the
+  // per-consumer churn.
+  {
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-unused-vars": ["error", {
+        argsIgnorePattern: "^_",
+        varsIgnorePattern: "^_",
+        caughtErrorsIgnorePattern: "^_",
+        destructuredArrayIgnorePattern: "^_",
+      }],
+      "@typescript-eslint/no-explicit-any": "warn",
+    },
+  },
 
 
   // React + React Hooks recommended rulesets — applied to .jsx / .tsx.
@@ -115,63 +136,32 @@ export default [
       ...react.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
       "react/react-in-jsx-scope": "off",
+      // React Compiler advisories — disabled by default because they
+      // only fire usefully once the React Compiler is adopted; until
+      // then they're noisy on idiomatic React (set-state-in-effect
+      // for init, ref-during-render in TipTap-style editors). Inlined
+      // here (vs a sibling block) so they inherit this entry's
+      // `files:` and `plugins:` scope — codex P1 #327 round 3
+      // caught the standalone block referencing react-hooks/* rules
+      // without a scope, breaking ESLint on .js files of React
+      // consumers (where the plugin isn't loaded for that glob).
+      // React Compiler adopters override locally back to "error".
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/immutability": "off",
     },
     settings: {
       react: { version: "detect" },
     },
   },
 
-  // ─────────────────────────────────────────────────────────────────
-  // CONSUMER-LOCAL POLICY — split by file type. MUST be LAST.
-  //
-  // Same template policy class as dpr#83 / ffb#274 / tadlock#58 /
-  // nathanpaynedotcom#373, but split into three target-scoped
-  // blocks per typescript-eslint v8 guidance (CodeRabbit Major on
-  // matchline#234): the base `no-unused-vars` enabled by
-  // `js.configs.recommended` and the typescript-eslint variant
-  // conflict if both run on the same file — the rule is intended
-  // as a direct replacement scoped to TS files only.
-  //
-  // Block 1 — JS/JSX files: apply `^_`-prefix to the base
-  //   `no-unused-vars` (the TS variant is not enabled here).
-  // Block 2 — JSX/TSX (React files): React + React Compiler off.
-  // Block 3 — TS/TSX/MTS/CTS: TS-specific rules incl. the
-  //   replacement `no-unused-vars`. Disabling the base rule on
-  //   the same files prevents the double-report.
-  {
-    files: ["**/*.{js,jsx,mjs,cjs}"],
-    rules: {
-      "no-unused-vars": ["error", {
-        argsIgnorePattern: "^_",
-        varsIgnorePattern: "^_",
-        caughtErrorsIgnorePattern: "^_",
-        destructuredArrayIgnorePattern: "^_",
-      }],
-    },
-  },
-  {
-    files: ["**/*.{jsx,tsx}"],
-    rules: {
-      "react/prop-types": "off",
-      "react/no-unescaped-entities": "off",
-      "react-hooks/set-state-in-effect": "off",
-      "react-hooks/preserve-manual-memoization": "off",
-      "react-hooks/refs": "off",
-      "react-hooks/immutability": "off",
-    },
-  },
-  {
-    files: ["**/*.{ts,tsx,mts,cts}"],
-    rules: {
-      "no-unused-vars": "off",
-      "@typescript-eslint/no-unused-vars": ["error", {
-        argsIgnorePattern: "^_",
-        varsIgnorePattern: "^_",
-        caughtErrorsIgnorePattern: "^_",
-        destructuredArrayIgnorePattern: "^_",
-      }],
-      "@typescript-eslint/no-explicit-any": "warn",
-      "@typescript-eslint/no-empty-object-type": "warn",
-    },
-  },
+
+// React Compiler advisory disables are now INSIDE the React block(s)
+// above (so they inherit the same `files:` and `plugins:` scope and
+// don't reference react-hooks/* on files where the plugin isn't
+// loaded — codex P1 #327 round 3). The standalone block previously
+// at this position has been removed.
+
+
 ];
