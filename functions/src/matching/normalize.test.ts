@@ -312,6 +312,70 @@ describe("normalizeDomain", () => {
   });
 });
 
+describe("#159 nathan×google ontology expansion", () => {
+  // Pins the match-critical JD bridges: terms the labeled unit side
+  // uses must canonicalize to the SAME form the Google Compute SPM JD
+  // demands, so jaccard(unit.skills, requirement.keywords) actually
+  // overlaps. Coverage completeness is checked separately by
+  // `npm run ontology:collect -- nathan-2026` (0 null); these pin the
+  // specific bridges that drive match accuracy.
+  it("bridges genuine 0-to-1 vocabulary to the JD's conception-to-launch language", () => {
+    expect(normalizeSkill("0-to-1 product launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("conception to launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("product conception")).toBe(
+      "product conceptualization",
+    );
+  });
+
+  it("routes generic launch vocabulary to launch management, NOT 0-to-1 (CodeRabbit on #254)", () => {
+    // Over-broad bridging (any "product launch" → 0-to-1) would false-
+    // positive routine launches against a true-0-to-1 requirement —
+    // exactly the semantic merge #159 warns against. Generic launch
+    // terms canonicalize to launch management; only genuine 0-to-1
+    // phrasings reach "0-to-1 product".
+    expect(normalizeSkill("product launch")).toBe("launch management");
+    expect(normalizeSkill("rapid product launch")).toBe("launch management");
+    expect(normalizeSkill("platform launch")).toBe("launch management");
+  });
+
+  it("keeps broad 'storage systems' distinct from the LSDD requirement (gap preservation, Codex P1 on #254)", () => {
+    // The nathan×google fixture marks r_storage_systems as an EXPECTED
+    // GAP: Nathan's SAN/broadcast storage is not LSDD / SAP-HANA-class
+    // locally-attached storage. Bridging "storage systems" → "locally
+    // attached storage" would manufacture a false structural match on
+    // that gap, so they stay separate canonicals.
+    expect(normalizeSkill("storage systems")).toBe("storage systems");
+    expect(normalizeSkill("lsdd")).toBe("locally attached storage");
+    expect(normalizeSkill("storage systems")).not.toBe(
+      "locally attached storage",
+    );
+  });
+
+  it("recognizes new skill canonicals from nathan's units", () => {
+    expect(normalizeSkill("capacity planning")).toBe("capacity planning");
+    expect(normalizeSkill("cross-team leadership")).toBe(
+      "cross-team leadership",
+    );
+    expect(normalizeSkill("technical strategy")).toBe("technical strategy");
+    expect(normalizeSkill("platform architecture")).toBe(
+      "platform architecture",
+    );
+  });
+
+  it("recognizes new tool canonicals (incl. proper-noun streaming services)", () => {
+    expect(normalizeTool("Linux")).toBe("linux");
+    expect(normalizeTool("Disney+")).toBe("disney+");
+    expect(normalizeTool("disney plus")).toBe("disney+");
+    expect(normalizeTool("shared storage")).toBe("shared storage");
+  });
+
+  it("recognizes new domain canonicals from nathan's units", () => {
+    expect(normalizeDomain("post-production")).toBe("post-production");
+    expect(normalizeDomain("OTT applications")).toBe("ott applications");
+    expect(normalizeDomain("enterprise storage")).toBe("enterprise storage");
+  });
+});
+
 describe("category isolation", () => {
   it("normalizeSkill / normalizeTool / normalizeDomain don't leak across categories", () => {
     // Defense: the same string could legitimately appear as
