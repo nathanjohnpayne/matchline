@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# scripts/codex-review-check.sh — Phase 4a merge gate
+# scripts/codex-review-check.sh — Phase 4 external-review merge gate
 #
-# Verifies that a pull request is ready to merge under the Phase 4a
-# automated external review flow. Read-only. Never merges, labels, or
-# comments on the PR.
+# Verifies that a pull request is ready to merge under the Phase 4
+# external-review flow. Read-only. Never merges, labels, or comments
+# on the PR.
 #
 # Usage:
 #   scripts/codex-review-check.sh <PR_NUMBER> [REPO]
@@ -25,19 +25,35 @@
 #       nathanpayne-cursor, nathanpayne-codex) is present on the PR,
 #       from an account != the PR author.
 #
-#   (c) Codex has cleared on or after the current HEAD commit via one
-#       of two signals:
+#   (c) Codex (when codex.enabled=true) or a Phase 4b substitute
+#       reviewer has cleared on or after the current HEAD commit via
+#       one of three signals:
 #
 #         - A COMMENTED review from the Codex bot on the current HEAD
 #           with NO unaddressed P0/P1 inline findings, OR
 #         - A +1 / 👍 reaction from the Codex bot on the PR issue
-#           with created_at >= current HEAD committer date.
+#           with created_at >= current HEAD committer date, OR
+#         - **Phase 4b substitute (#218):** an APPROVED review on the
+#           current HEAD (`commit_id == HEAD_SHA`) from a non-author
+#           identity in `available_reviewers`, gated on
+#           `codex.allow_phase_4b_substitute` (default true). This
+#           handles the case where the Codex App is unavailable
+#           (not review-ready, timeout, agent usage limits) and an
+#           external CLI reviewer (e.g., nathanpayne-cursor or
+#           nathanpayne-codex) carries the cross-agent merge gate
+#           per REVIEW_POLICY.md § Phase 4b. Set the knob to false
+#           for repos that genuinely require Codex bot clearance and
+#           not a substitute Phase 4b reviewer. Mirrors gate (b)
+#           branch 1's filter shape, scoped to HEAD via commit_id.
 #
 #       The merge gate explicitly does NOT require an APPROVED review
 #       state from the Codex bot. The ChatGPT Codex Connector GitHub
 #       App never emits APPROVED — it uses COMMENTED with inline
 #       findings, or no review at all when it reacts 👍. See #29 for
 #       live observational evidence from the PR #53 bootstrap.
+#       When codex.enabled=false, this script ignores Codex bot
+#       reviews/reactions entirely and gate (c) can clear only through
+#       the Phase 4b substitute branch when enabled.
 #
 # "Unaddressed" heuristic for v1:
 #   A P0/P1 finding is considered unaddressed if it exists on the
@@ -73,6 +89,36 @@
 
 set -euo pipefail
 
+# --- preflight auto-source (#282) ------------------------------------------
+# Auto-source the op-preflight cache when GH_TOKEN is unset and a fresh
+# cache exists for this agent. codex-review-check.sh is read-only, so
+# reviewer scope is the right PAT — but the auto-source picks whatever
+# is in the cache, both PATs are available, and we only need one for
+# the API calls below.
+__CODEX_CHECK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$__CODEX_CHECK_DIR/lib/preflight-helpers.sh" ]; then
+  # shellcheck source=lib/preflight-helpers.sh
+  . "$__CODEX_CHECK_DIR/lib/preflight-helpers.sh"
+  preflight_require_token reviewer || true
+fi
+
+# --- gh retry helper (#324) ------------------------------------------------
+# Wrap gh calls (statusCheckRollup read in particular) in 3×30s retry on
+# transient failures (HTTP 5xx, rate-limit, "Resource not accessible by
+# integration"). Permanent 4xx errors break out immediately. The
+# canonical helper lives at scripts/lib/gh-retry-helpers.sh and is
+# declared as a `requires:` dep of this script in .mergepath-sync.yml,
+# so propagated consumers always carry it. The existence-guarded
+# fallback below means a hand-built or partial install still runs
+# (without retry) rather than aborting with "with_gh_retry: command
+# not found" at the call site.
+if [ -r "$__CODEX_CHECK_DIR/lib/gh-retry-helpers.sh" ]; then
+  # shellcheck source=lib/gh-retry-helpers.sh
+  . "$__CODEX_CHECK_DIR/lib/gh-retry-helpers.sh"
+else
+  with_gh_retry() { "$@"; }
+fi
+
 # --- argument parsing -------------------------------------------------------
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
@@ -96,7 +142,10 @@ if [ -z "$REPO" ]; then
 fi
 
 if [ -z "${GH_TOKEN:-}" ]; then
-  echo "ERROR: GH_TOKEN is required. See REVIEW_POLICY.md § PAT lookup table." >&2
+  echo "ERROR: GH_TOKEN is required. Either:" >&2
+  echo "  - Run: eval \"\$(scripts/op-preflight.sh --agent <agent> --mode review)\"" >&2
+  echo "    so this helper auto-sources OP_PREFLIGHT_REVIEWER_PAT, OR" >&2
+  echo "  - Set GH_TOKEN inline per REVIEW_POLICY.md § PAT lookup table." >&2
   exit 3
 fi
 
@@ -114,8 +163,8 @@ codex_field() {
     in_block && /^[^[:space:]#]/ {in_block=0}
     in_block && $1 == field":" {
       sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
-      gsub(/^"/, "", $0)
-      gsub(/"[[:space:]]*(#.*)?$/, "", $0)
+      gsub(/^["\047]/, "", $0)
+      gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
       gsub(/[[:space:]]*#.*$/, "", $0)
       sub(/[[:space:]]+$/, "", $0)
       print
@@ -124,8 +173,58 @@ codex_field() {
   ' "$CONFIG"
 }
 
+# Read a top-level (block-less) scalar field. Same shape as codex_field
+# but without the in-block check — used for fields like `phase_4b_default`
+# (#185) that live at the document root rather than inside `codex:` /
+# `coderabbit:`. Outputs the value or empty on miss.
+#
+# Anchored to start-of-line (no leading whitespace) so a same-named
+# nested key under e.g. `codex:` doesn't accidentally match. Codex P2
+# on PR #189 caught the unanchored-match scope-bleed risk.
+policy_field() {
+  local field=$1
+  [ -f "$CONFIG" ] || return 0
+  awk -v field="$field" '
+    /^[^[:space:]]/ && $1 == field":" {
+      sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
+      gsub(/^["\047]/, "", $0)
+      gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
+      gsub(/[[:space:]]*#.*$/, "", $0)
+      sub(/[[:space:]]+$/, "", $0)
+      print
+      exit
+    }
+  ' "$CONFIG"
+}
+
+# phase_4b_default — controls when Phase 4b fires proactively. Validated
+# against the three known values; reject unknowns with a clear error
+# pointing at REVIEW_POLICY.md § Phase 4b Triggers. Missing field defaults
+# to "fallback-only" (existing-consumer migration semantics per #188).
+PHASE_4B_DEFAULT=$(policy_field phase_4b_default)
+PHASE_4B_DEFAULT=${PHASE_4B_DEFAULT:-fallback-only}
+case "$PHASE_4B_DEFAULT" in
+  fallback-only|complex-changes|always) ;;
+  *)
+    echo "ERROR: phase_4b_default must be one of: fallback-only, complex-changes, always — got '$PHASE_4B_DEFAULT'" >&2
+    echo "       See REVIEW_POLICY.md § Phase 4b Triggers." >&2
+    exit 3
+    ;;
+esac
+export PHASE_4B_DEFAULT
+
 BOT_LOGIN=$(codex_field bot_login)
 BOT_LOGIN=${BOT_LOGIN:-"chatgpt-codex-connector[bot]"}
+
+CODEX_ENABLED=$(codex_field enabled)
+CODEX_ENABLED=${CODEX_ENABLED:-true}
+case "$CODEX_ENABLED" in
+  true|false) ;;
+  *)
+    echo "ERROR: codex.enabled must be true|false; got '$CODEX_ENABLED'" >&2
+    exit 3
+    ;;
+esac
 
 REACTION_FRESHNESS_SECONDS=$(codex_field reaction_freshness_window_seconds)
 REACTION_FRESHNESS_SECONDS=${REACTION_FRESHNESS_SECONDS:-1800}
@@ -143,6 +242,27 @@ fi
 # actually consulted by this script).
 REQUIRE_CI_GREEN=$(codex_field require_ci_green)
 REQUIRE_CI_GREEN=${REQUIRE_CI_GREEN:-true}
+
+# Honor codex.allow_phase_4b_substitute. When true (default), gate (c)
+# also accepts an APPROVED review on the current HEAD from an
+# available_reviewers identity != the PR author as a Codex-equivalent
+# clearance signal. This is the merge gate's understanding of Phase 4b
+# clearance per REVIEW_POLICY.md § Phase 4b — without it, PRs that
+# clear via Phase 4b (Codex App not review-ready, App timeout, agent
+# usage limits) leave gate (c) failing forever and the auto-clear
+# workflow stops working until a human removes the
+# `needs-external-review` label by hand. Set to false for repos that
+# genuinely require Codex clearance and not a substitute Phase 4b
+# reviewer. See nathanjohnpayne/mergepath#218.
+ALLOW_PHASE_4B_SUBSTITUTE=$(codex_field allow_phase_4b_substitute)
+ALLOW_PHASE_4B_SUBSTITUTE=${ALLOW_PHASE_4B_SUBSTITUTE:-true}
+case "$ALLOW_PHASE_4B_SUBSTITUTE" in
+  true|false) ;;
+  *)
+    echo "ERROR: codex.allow_phase_4b_substitute must be true|false; got '$ALLOW_PHASE_4B_SUBSTITUTE'" >&2
+    exit 3
+    ;;
+esac
 
 # Read the available_reviewers list (one per line). Same state-machine
 # awk pattern, but collecting list items rather than matching a scalar.
@@ -201,8 +321,81 @@ PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER" 2>&1) || die 3 "failed to fetch 
 
 HEAD_SHA=$(echo "$PR_JSON" | jq -r '.head.sha')
 PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.user.login')
+PR_BODY=$(echo "$PR_JSON" | jq -r '.body // ""')
 if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
   die 3 "could not determine HEAD sha for PR #$PR_NUMBER"
+fi
+
+# Extract the Authoring-Agent line and resolve it to the matching reviewer
+# identity (e.g., `Authoring-Agent: claude` → `nathanpayne-claude`). Used
+# by gate (b) branch 2 (#170) to detect the same-agent author/reviewer
+# case where Codex's 👍 reaction can substitute for an APPROVED review.
+#
+# Pipefail-safe header parse, iteration history:
+#
+#   r1 (#283 initial): used `echo "$PR_BODY" | grep ... | sed ... | tr ...`
+#   assigned to AUTHORING_AGENT. On a PR with no `Authoring-Agent:` line
+#   the `grep` step returned rc=1; under `set -eo pipefail` that rc=1
+#   bubbled up as the pipeline's exit status and `set -e` aborted the
+#   script before `SAME_AGENT_REVIEWER=""` ran on the next line — so any
+#   PR missing the header (UI-created, external-contributor, or
+#   predating the `gh-pr-guard.sh` Authoring-Agent enforcement on
+#   `gh pr create`) blew up the merge gate with an opaque trace.
+#
+#   r2 (codex CHANGES_REQUESTED): gated extraction on a prior
+#   `if printf ... | grep -qiE ...`. The if-test context suppresses
+#   `set -e` on the test command, so no-header bodies now took the
+#   intended "skip extraction, leave SAME_AGENT_REVIEWER empty" path
+#   without aborting.
+#
+#   r3 (codex CHANGES_REQUESTED): r2 still had a silent failure on
+#   LARGE bodies. `printf '%s\n' "$PR_BODY" | grep` is a producer
+#   pipe; once the body crosses the 64KB pipe buffer AND the
+#   `Authoring-Agent:` header is near the top of the body, grep -q
+#   matches and exits early, printf gets SIGPIPE (rc=141), pipefail
+#   bubbles the 141 as the pipeline's exit. In the guard `if` test,
+#   141 is non-zero → the `if` evaluates false → AUTHORING_AGENT and
+#   SAME_AGENT_REVIEWER stay empty even though the header IS present.
+#   THE EXACT HOLE r1+r2 set out to close, reopened by a different
+#   mechanism. Fix: replace producer pipe with bash herestring
+#   `<<<"$PR_BODY"` — no producer process, no SIGPIPE.
+#
+#   r4 (codex CHANGES_REQUESTED — THIS iteration): r3 still failed
+#   case-coverage. The guard's `grep -i` matched any case of the
+#   header (e.g. `AUTHORING-AGENT: Claude`), but the extraction
+#   `sed -E 's/^[Aa]uthoring-[Aa]gent:[[:space:]]*([A-Za-z0-9_-]+).*/\1/'`
+#   only character-classed the FIRST letter of each word — fully-
+#   uppercase keys fell through sed unchanged, and the trailing `tr`
+#   then lowercased the WHOLE line (`AUTHORING-AGENT: Claude` →
+#   `authoring-agent: claude`), so AUTHORING_AGENT was set to the
+#   string "authoring-agent: claude" rather than just "claude". The
+#   awk suffix match on `-authoring-agent: claude` against
+#   `nathanpayne-claude` then failed → SAME_AGENT_REVIEWER="" →
+#   same-agent exclusion no-op'd → self-approval hole reopened.
+#   GNU sed's `I` regex flag would be the natural fix but BSD/macOS
+#   sed doesn't support it, so we can't rely on it.
+#
+#   Fix: reorder the pipeline so `tr` lowercases BEFORE sed. sed
+#   then sees a canonical-lowercase line and uses a strict-lowercase
+#   pattern — no character classes needed. Order is grep -i (still
+#   case-insensitive on detection) → tr (canonicalize) → sed
+#   (extract from canonical). Works for every case-permutation of
+#   the header without per-letter character classing.
+#   (nathanpayne-codex Phase 4b r4 on PR #283.)
+AUTHORING_AGENT=""
+SAME_AGENT_REVIEWER=""
+if grep -qiE '^Authoring-Agent:' <<<"$PR_BODY"; then
+  AUTHORING_AGENT=$(grep -i -m1 -E '^Authoring-Agent:' <<<"$PR_BODY" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/^authoring-agent:[[:space:]]*([a-z0-9_-]+).*/\1/')
+  if [ -n "$AUTHORING_AGENT" ]; then
+    # Match against available_reviewers via suffix (e.g., "claude"
+    # matches "nathanpayne-claude"). Empty if no match — also
+    # pipefail-safe: REVIEWERS is small (~3 lines) so SIGPIPE on the
+    # `echo` producer cannot fire here, and awk always exits 0 even
+    # when no record matched.
+    SAME_AGENT_REVIEWER=$(echo "$REVIEWERS" | awk -v agent="-$AUTHORING_AGENT" '$0 ~ agent"$" { print; exit }')
+  fi
 fi
 
 HEAD_COMMITTER_DATE=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.committer.date' 2>&1) \
@@ -321,20 +514,26 @@ log "reaction_threshold = $REACTION_THRESHOLD (source: $REACTION_THRESHOLD_SOURC
 # agent-review.yml when two reviewers have opposing opinionated states —
 # a human must resolve it. `policy-violation` is applied by
 # block-self-approval when a reviewer bot tries to approve its own PR.
-# Both block merge categorically and are not resolvable by Phase 4a flow.
+# `human-hold` is a manual hard freeze. All three block merge
+# categorically and are not resolvable by Phase 4a flow.
 #
 # Note: `needs-external-review` is NOT a blocking label from this script's
 # perspective — it's the signal that this script should run, not a block.
 # Gate (c) resolves whether the external review is actually complete.
-PR_LABELS=$(echo "$PR_JSON" | jq -r '[.labels[].name] | join(",")')
-case ",$PR_LABELS," in
-  *,needs-human-review,*)
-    fail_gate "blocking label 'needs-human-review' present — human disagreement resolution required"
-    ;;
-  *,policy-violation,*)
-    fail_gate "blocking label 'policy-violation' present — policy violation must be resolved"
-    ;;
-esac
+pr_has_label() {
+  local label="$1"
+  echo "$PR_JSON" | jq -e --arg label "$label" 'any(.labels[].name; . == $label)' >/dev/null
+}
+
+if pr_has_label "needs-human-review"; then
+  fail_gate "blocking label 'needs-human-review' present — human disagreement resolution required"
+fi
+if pr_has_label "policy-violation"; then
+  fail_gate "blocking label 'policy-violation' present — policy violation must be resolved"
+fi
+if pr_has_label "human-hold"; then
+  fail_gate "blocking label 'human-hold' present — human hard hold must be released"
+fi
 
 # --- gate (a): CI checks green ---------------------------------------------
 
@@ -348,8 +547,8 @@ log "gate (a): checking CI state"
 # filter out checks that are EXPECTED to be failing during Phase 4a flow:
 #
 #   - "Label Gate" (from the "PR Review Policy" workflow) fails by design
-#     whenever `needs-external-review`, `needs-human-review`, or
-#     `policy-violation` is present on the PR. During Phase 4a, the first
+#     whenever `needs-external-review`, `needs-human-review`,
+#     `policy-violation`, or `human-hold` is present on the PR. During Phase 4a, the first
 #     of those labels is always set by pr-review-policy.yml, so Label Gate
 #     will fail. It's the enforcement mechanism for "don't merge until
 #     external review clears" — NOT a code-quality signal. We verify
@@ -359,8 +558,15 @@ log "gate (a): checking CI state"
 # state. A check still running (no conclusion yet) is treated as not-green
 # — the caller should wait or retry. SKIPPED is treated as success because
 # many Agent Review Pipeline jobs skip by design when the label is set.
-ROLLUP_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json statusCheckRollup 2>&1) \
-  || die 3 "failed to fetch statusCheckRollup: $ROLLUP_JSON"
+# Drop `2>&1`: with_gh_retry emits per-attempt diagnostics to stderr on
+# transient failures, and merging those lines into ROLLUP_JSON would
+# corrupt the jq parse below — a transient 5xx + successful retry would
+# look like an infra error (gate (a) fail) when the retry actually
+# recovered. Caught by codex P1 on PR #328 round 1. The retry diagnostics
+# still surface in the workflow log via stderr, so the visibility cost
+# is zero.
+ROLLUP_JSON=$(with_gh_retry gh pr view "$PR_NUMBER" --repo "$REPO" --json statusCheckRollup) \
+  || die 3 "failed to fetch statusCheckRollup (see stderr above for retry diagnostics)"
 
 # statusCheckRollup mixes two entry types:
 #   - CheckRun (GitHub Actions jobs): uses .name, .workflowName,
@@ -424,7 +630,7 @@ BAD_CHECKS=$(echo "$ROLLUP_JSON" | jq --argjson required_names "${REQUIRED_JSON:
     # Filter out the known "expected to fail during Phase 4a" check.
     # Label Gate lives in the "PR Review Policy" workflow and fails by
     # design whenever needs-external-review / needs-human-review /
-    # policy-violation is set. That enforcement is what Phase 4a is
+    # policy-violation / human-hold is set. That enforcement is what Phase 4a is
     # trying to unblock; we verify clearance separately in gate (c).
     | select(
         (.workflow != "PR Review Policy") or
@@ -495,13 +701,29 @@ REVIEWERS_JSON=$(echo "$REVIEWERS" | jq -R . | jq -s .)
 # changes) is caught by the preflight blocking-label check above: the
 # Agent Review Pipeline's detect-disagreement job applies
 # `needs-human-review`, which the preflight rejects before this gate runs.
+# Self-approval guard: exclude BOTH the GitHub PR-author login
+# (`$author`, typically nathanjohnpayne) AND the authoring-agent's
+# reviewer identity (`$same_agent_reviewer`, e.g.
+# nathanpayne-claude for a claude-authored PR). GitHub-native
+# branch protection only blocks reviewer == PR-author, but per
+# REVIEW_POLICY.md § No-self-approve scoping the authoring agent's
+# OWN reviewer identity is also disqualified for Phase 4 (over-
+# threshold) gate-(b) clearance — that's the exact case branch 2
+# below (same-agent + Codex 👍) is designed to handle. Without
+# the second exclusion, a claude-authored PR could be cleared by
+# nathanpayne-claude posting APPROVED, since nathanpayne-claude
+# is different from nathanjohnpayne and thus passes the bare
+# `.user.login != $author` filter. (nathanpayne-codex Phase 4b
+# finding on the 263caf3 sync wave.)
 APPROVING_REVIEWER=$(echo "$REVIEWS_JSON" | jq -r \
   --argjson reviewers "$REVIEWERS_JSON" \
-  --arg author "$PR_AUTHOR" '
+  --arg author "$PR_AUTHOR" \
+  --arg same_agent_reviewer "$SAME_AGENT_REVIEWER" '
     [ .[]
       | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
       | select(.user.login as $u | $reviewers | index($u))
       | select(.user.login != $author)
+      | select($same_agent_reviewer == "" or .user.login != $same_agent_reviewer)
     ]
     | group_by(.user.login)
     | map(max_by(.submitted_at))
@@ -511,14 +733,75 @@ APPROVING_REVIEWER=$(echo "$REVIEWS_JSON" | jq -r \
 ')
 
 if [ -z "$APPROVING_REVIEWER" ]; then
-  fail_gate "no reviewer identity in available_reviewers has a latest-state APPROVED review (COMMENTED reviews are ignored; later CHANGES_REQUESTED/DISMISSED overrides earlier APPROVED)"
+  # Branch 2 (#170): same-agent author/reviewer fallback. For Phase 4
+  # PRs, the no-self-approve scoping rule (REVIEW_POLICY.md § No-self-
+  # approve scoping; #220) prohibits the agent that authored the PR from
+  # also approving under its own reviewer identity — that's the case
+  # this branch handles. (Under-threshold PRs don't reach this script;
+  # they self-approve via the reviewer identity per the same scoping
+  # rule.) Same-agent PRs at Phase 4 would otherwise be unable to clear
+  # gate (b) by branch 1 unless a second agent (cursor / codex CLI)
+  # reviews independently. In a single-agent session that's friction
+  # with no policy benefit when Codex is enabled — Codex's external
+  # review IS the cross-agent signal. Accept a fresh Codex 👍 reaction
+  # on the PR issue as a substitute for branch 1, BUT ONLY when
+  # codex.enabled=true AND the PR's Authoring-Agent matches an entry in
+  # available_reviewers (otherwise this would weaken gate (b) for
+  # cross-agent PRs that genuinely need a reviewer-identity APPROVED).
+  #
+  # Freshness: same REACTION_THRESHOLD that gate (c) uses, computed
+  # earlier in the script. Reaction must be at-or-after the threshold,
+  # which is max(HEAD_PUSHED_AT, NOW - reaction_freshness_window).
+  #
+  # If a cross-agent reviewer COULD review (e.g., another agent is in
+  # available_reviewers with no opinionated state on this PR), that's
+  # still permitted — branch 2 is opt-in via the matching Authoring-
+  # Agent header. If you want strict cross-agent enforcement, omit the
+  # Authoring-Agent line; gate (b) then falls back to branch 1 only.
+  if [ -n "$SAME_AGENT_REVIEWER" ] && [ "$CODEX_ENABLED" != "true" ]; then
+    log "gate (b): same-agent Codex 👍 fallback unavailable because codex.enabled=false"
+  elif [ -n "$SAME_AGENT_REVIEWER" ]; then
+    log "gate (b): no reviewer-identity APPROVED, but same-agent author/reviewer detected (Authoring-Agent: $AUTHORING_AGENT → $SAME_AGENT_REVIEWER); checking for Codex 👍 fallback per #170"
+    REACTIONS_FOR_GATE_B=$(fetch_api_array "repos/$REPO/issues/$PR_NUMBER/reactions" "reactions")
+    GATE_B_THUMBS_UP=$(echo "$REACTIONS_FOR_GATE_B" | jq -r \
+      --arg bot "$BOT_LOGIN" --arg after "$REACTION_THRESHOLD" '
+      [ .[]
+        | select(.user.login == $bot)
+        | select(.content == "+1")
+        | select(.created_at >= $after)
+        | .created_at
+      ]
+      | max // ""
+    ')
+    if [ -n "$GATE_B_THUMBS_UP" ]; then
+      log "gate (b): same-agent + Codex 👍 @ $GATE_B_THUMBS_UP (≥ threshold $REACTION_THRESHOLD) — branch 2 cleared"
+      APPROVING_REVIEWER="(branch 2: same-agent + Codex 👍)"
+    fi
+  fi
+
+  if [ -z "$APPROVING_REVIEWER" ]; then
+    fail_gate "no reviewer identity in available_reviewers has a latest-state APPROVED review, and same-agent + Codex 👍 fallback (branch 2) did not apply (codex.enabled=$CODEX_ENABLED; Authoring-Agent: ${AUTHORING_AGENT:-not set}; matched reviewer: ${SAME_AGENT_REVIEWER:-none}; threshold: $REACTION_THRESHOLD)"
+  fi
+else
+  log "gate (b): latest-state APPROVED by $APPROVING_REVIEWER"
 fi
 
-log "gate (b): latest-state APPROVED by $APPROVING_REVIEWER"
+# --- gate (c): Codex / Phase 4b cleared on current HEAD --------------------
 
-# --- gate (c): Codex cleared on current HEAD -------------------------------
+log "gate (c): checking external clearance on $HEAD_SHA (codex.enabled=$CODEX_ENABLED)"
 
-log "gate (c): checking Codex clearance on $HEAD_SHA"
+CLEARED=false
+CLEARANCE_REASON=""
+CODEX_REVIEW='null'
+CODEX_REVIEW_ID=""
+COMMENTS_JSON='[]'
+UNADDRESSED_P01='[]'
+UNADDRESSED_COUNT=0
+REACTIONS_JSON='[]'
+LATEST_THUMBS_UP_TIME=""
+CODEX_REVIEW_TIME=""
+
+if [ "$CODEX_ENABLED" = "true" ]; then
 
 # Latest Codex review on the current HEAD commit (if any). Codex always
 # uses COMMENTED state regardless of findings — do NOT filter on state.
@@ -611,9 +894,6 @@ CODEX_REVIEW_TIME=$(echo "$CODEX_REVIEW" | jq -r 'if . == null then "" else .sub
 # pull_request_review_id to scope findings (addressed in round 1's
 # finding 2), so an older review's stale comments are never counted.
 
-CLEARED=false
-CLEARANCE_REASON=""
-
 if [ -n "$LATEST_THUMBS_UP_TIME" ] && [ -n "$CODEX_REVIEW_TIME" ]; then
   # Both signals present on HEAD — compare timestamps. ISO 8601 sorts
   # chronologically under lexicographic string comparison.
@@ -638,9 +918,109 @@ elif [ -n "$CODEX_REVIEW_TIME" ]; then
   fi
 fi
 
+else
+  log "gate (c): codex.enabled=false — ignoring Codex bot review/reaction signals; requiring Phase 4b substitute clearance when allowed"
+fi
+
+# Phase 4b substitute (#218): if Codex hasn't cleared via 👍 or a
+# COMMENTED-on-HEAD review, and the knob is on, accept a fresh APPROVED
+# review on the current HEAD from an available_reviewers identity that
+# is NOT the PR author. This is the merge gate's understanding of
+# Phase 4b clearance per REVIEW_POLICY.md § Phase 4b: when the Codex
+# App is unavailable / times out / hits usage limits, an external CLI
+# reviewer (e.g., nathanpayne-cursor or nathanpayne-codex) is the
+# cross-agent signal. The freshness anchor is a strict commit_id ==
+# HEAD_SHA match — no time-window approximation needed since the
+# review API returns the exact SHA the review was submitted on.
+#
+# Latest-state-per-reviewer filter (Codex P1 round 1 on PR #225):
+# group reviews on HEAD by reviewer identity, take each reviewer's
+# most-recent review on this SHA, then accept ONLY if that latest
+# state is APPROVED. Without this guard, a reviewer who first APPROVED
+# then later submitted CHANGES_REQUESTED on the same HEAD would still
+# satisfy the substitute via the stale APPROVED. Mirrors gate (b)
+# branch 1's same-shaped filter (line 547 above).
+#
+# When this branch fires, the auto-clear-blocking-labels workflow
+# correctly removes `needs-external-review` on the next event-driven
+# trigger or scheduled sweep, instead of stalling on a permanently-
+# failing gate (c) until a human clears the label by hand.
+if [ "$CLEARED" != "true" ] && [ "$ALLOW_PHASE_4B_SUBSTITUTE" = "true" ]; then
+  # Same self-approval guard as gate (b) branch 1 above: exclude
+  # the authoring-agent's reviewer identity in addition to the
+  # GitHub PR-author login. Without this, a claude-authored
+  # over-threshold PR could clear the Phase 4b substitute via
+  # nathanpayne-claude posting APPROVED on HEAD — collapsing the
+  # cross-agent guarantee Phase 4b is meant to provide. (Same
+  # nathanpayne-codex Phase 4b finding on the 263caf3 sync wave.)
+  PHASE_4B_APPROVER=$(echo "$REVIEWS_JSON" | jq -r \
+    --argjson reviewers "$REVIEWERS_JSON" \
+    --arg author "$PR_AUTHOR" \
+    --arg same_agent_reviewer "$SAME_AGENT_REVIEWER" \
+    --arg sha "$HEAD_SHA" '
+      [ .[]
+        | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+        | select(.commit_id == $sha)
+        | select(.user.login as $u | $reviewers | index($u))
+        | select(.user.login != $author)
+        | select($same_agent_reviewer == "" or .user.login != $same_agent_reviewer)
+      ]
+      | group_by(.user.login)
+      | map(max_by(.submitted_at))
+      | map(select(.state == "APPROVED"))
+      | max_by(.submitted_at)
+      | if . == null then "" else .user.login + "|" + .submitted_at end
+  ')
+  if [ -n "$PHASE_4B_APPROVER" ]; then
+    PHASE_4B_LOGIN="${PHASE_4B_APPROVER%|*}"
+    PHASE_4B_TIME="${PHASE_4B_APPROVER#*|}"
+
+    # Latest-signal-wins guard (codex CHANGES_REQUESTED + CodeRabbit ⚠️
+    # Major @ scripts/codex-review-check.sh:811 on PR #225 round 3):
+    # accept the Phase 4b substitute ONLY when its APPROVED is the
+    # newest external clearance signal on HEAD. If a Codex bot review
+    # or 👍 reaction on HEAD is newer than the Phase 4b APPROVED, the
+    # Codex signal carries the verdict — and since the Codex paths
+    # above already failed to clear (CLEARED != true at this point),
+    # that means Codex's newer signal indicated unresolved P0/P1
+    # findings or had no qualifying clearance, and the older Phase 4b
+    # APPROVED must NOT override.
+    #
+    # Edge cases:
+    # - No Codex signals on HEAD (`LATEST_CODEX_SIGNAL_TIME` empty):
+    #   Phase 4b APPROVED is the only external-clearance evidence on
+    #   HEAD; accept it. This is the bare Phase 4b path (Codex App
+    #   not review-ready / timed out / etc.).
+    # - Phase 4b APPROVED newer than Codex review timestamp: the
+    #   reviewer saw Codex's findings and approved anyway (or the
+    #   findings were addressed and Codex's review captured them
+    #   without a 👍). Treat as deliberate; accept.
+    LATEST_CODEX_SIGNAL_TIME="$LATEST_THUMBS_UP_TIME"
+    if [ -n "$CODEX_REVIEW_TIME" ] && { [ -z "$LATEST_CODEX_SIGNAL_TIME" ] || [[ "$CODEX_REVIEW_TIME" > "$LATEST_CODEX_SIGNAL_TIME" ]]; }; then
+      LATEST_CODEX_SIGNAL_TIME="$CODEX_REVIEW_TIME"
+    fi
+    if [ -z "$LATEST_CODEX_SIGNAL_TIME" ] || [[ "$PHASE_4B_TIME" > "$LATEST_CODEX_SIGNAL_TIME" ]]; then
+      CLEARED=true
+      CLEARANCE_REASON="Phase 4b substitute: latest-state APPROVED on HEAD from $PHASE_4B_LOGIN @ $PHASE_4B_TIME (codex.allow_phase_4b_substitute=true; newer than any Codex bot signal on HEAD: ${LATEST_CODEX_SIGNAL_TIME:-none})"
+    else
+      log "gate (c): Phase 4b substitute candidate $PHASE_4B_LOGIN @ $PHASE_4B_TIME is older than newest Codex bot signal @ $LATEST_CODEX_SIGNAL_TIME; latest-signal-wins guard rejects substitute"
+    fi
+  fi
+fi
+
 if [ "$CLEARED" != "true" ]; then
-  if [ -z "$LATEST_THUMBS_UP_TIME" ] && [ -z "$CODEX_REVIEW_TIME" ]; then
-    fail_gate "Codex has not cleared current HEAD (no review on $HEAD_SHA and no +1 reaction from $BOT_LOGIN on or after reaction threshold $REACTION_THRESHOLD: $REACTION_THRESHOLD_SOURCE)"
+  if [ "$CODEX_ENABLED" != "true" ]; then
+    if [ "$ALLOW_PHASE_4B_SUBSTITUTE" = "true" ]; then
+      fail_gate "codex.enabled=false and no Phase 4b substitute APPROVED on $HEAD_SHA from a non-author identity in available_reviewers"
+    else
+      fail_gate "codex.enabled=false and codex.allow_phase_4b_substitute=false, so no gate (c) clearance path is available"
+    fi
+  elif [ -z "$LATEST_THUMBS_UP_TIME" ] && [ -z "$CODEX_REVIEW_TIME" ]; then
+    if [ "$ALLOW_PHASE_4B_SUBSTITUTE" = "true" ]; then
+      fail_gate "Codex has not cleared current HEAD and no Phase 4b substitute APPROVED on $HEAD_SHA from a non-author identity in available_reviewers (no review on HEAD, no +1 reaction from $BOT_LOGIN on or after reaction threshold $REACTION_THRESHOLD: $REACTION_THRESHOLD_SOURCE)"
+    else
+      fail_gate "Codex has not cleared current HEAD (no review on $HEAD_SHA and no +1 reaction from $BOT_LOGIN on or after reaction threshold $REACTION_THRESHOLD: $REACTION_THRESHOLD_SOURCE)"
+    fi
   else
     PATHS=$(echo "$UNADDRESSED_P01" | jq -r '[.[] | "\(.path):\(.line)"] | join(", ")')
     fail_gate "latest Codex signal is a review on HEAD with $UNADDRESSED_COUNT unaddressed P0/P1 finding(s): $PATHS"
@@ -651,5 +1031,5 @@ log "gate (c): cleared — $CLEARANCE_REASON"
 
 # --- all gates pass ---------------------------------------------------------
 
-log "all merge gates pass — PR $REPO#$PR_NUMBER is mergeable under Phase 4a"
+log "all merge gates pass — PR $REPO#$PR_NUMBER is mergeable under Phase 4 external review"
 exit 0

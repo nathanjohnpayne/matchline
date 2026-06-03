@@ -119,7 +119,7 @@ export default function UnitRow({
     // Intentional: react only to id changes, not other field
     // changes. A subscription update on the same id during an edit
     // keeps the user's draft in place.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [unit.id]);
 
   const handleApproval = async (state: ApprovalState) => {

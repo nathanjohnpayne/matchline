@@ -16,22 +16,36 @@
 # motivated this design.
 #
 # Usage:
-#   eval "$(scripts/op-preflight.sh --agent claude --mode all)"
+#   # Session start (one biometric burst) — review mode is the default:
+#   eval "$(scripts/op-preflight.sh --agent claude --mode review)"
+#
+#   # Idempotent re-check at the top of every subsequent tool call. NEVER
+#   # prompts for biometric; exits non-zero if no fresh cache exists:
+#   eval "$(scripts/op-preflight.sh --agent claude --check)"
 #
 #   # Force a fresh fetch even if the session file is still warm:
-#   eval "$(scripts/op-preflight.sh --agent claude --mode all --refresh)"
+#   eval "$(scripts/op-preflight.sh --agent claude --refresh)"
+#
+#   # Deploy scripts that genuinely need deploy credentials:
+#   eval "$(scripts/op-preflight.sh --agent claude --mode deploy)"
 #
 #   # Delete the session file + ADC tempfile (end-of-session cleanup):
 #   scripts/op-preflight.sh --agent claude --purge
 #
 # Modes:
-#   review  — reviewer PAT + author PAT + SSH key warming
-#   deploy  — GCP ADC credential
-#   all     — everything (default)
+#   review  — reviewer PAT + author PAT + SSH key warming (DEFAULT)
+#   deploy  — Firebase project SA key (when .firebaserc is present),
+#             else GCP ADC credential + Cloudflare cache-purge token
+#   all     — everything
 #
 # Flags:
 #   --agent <name>   Agent name: claude, cursor, or codex (required except --purge-all)
-#   --mode <mode>    review, deploy, or all (default: all)
+#   --mode <mode>    review, deploy, or all (default: review). #282
+#   --check          Validate the session file is fresh and emit cached
+#   --status         (alias for --check) exports WITHOUT invoking op.
+#                    Never burns biometric, never warms SSH, never reads
+#                    ADC. Exits non-zero if cache missing/stale. Mutually
+#                    exclusive with --refresh, --purge, --purge-all. #282
 #   --dry-run        Show what would be fetched without prompting
 #   --skip-ssh       Skip SSH key warming (useful in CI or non-interactive)
 #   --refresh        Force biometric fetch even if session file is fresh
@@ -45,6 +59,31 @@
 #                             file does NOT extend its effective lifetime.
 #   OP_PREFLIGHT_CACHE_DIR    Override cache dir (default
 #                             $XDG_CACHE_HOME/mergepath or $HOME/.cache/mergepath).
+#   OP_PREFLIGHT_SSH_WARM_TTL_SECONDS
+#                             Override SSH-warm freshness window (default
+#                             1800s = 30 min). Independent of the PAT
+#                             cache TTL because the 1Password SSH agent
+#                             has its own session lifetime, typically
+#                             shorter than 4h. Skipping re-warm within
+#                             this window prevents a biometric prompt on
+#                             every cache-hit invocation. See #163.
+#   OP_PREFLIGHT_QUIET        When set to 1, suppress the verbose
+#                             cached-hit stderr block. A single-line
+#                             "# preflight: cache hit, no biometric
+#                             burned" message replaces it. Refresh
+#                             notices and warnings are unaffected. #282
+#   OP_SERVICE_ACCOUNT_TOKEN  Explicit CI/headless lane. When set,
+#                             review mode reads ONLY the scoped reviewer
+#                             PAT through the 1Password CLI service-
+#                             account auth path. Author PAT, deploy
+#                             secrets, SSH warming, and gh keyring
+#                             repair stay out of scope.
+#   OP_PREFLIGHT_REVIEWER_PAT_REF
+#                             Required op://vault/item/field reference for
+#                             the reviewer PAT in service-account token
+#                             mode. Must point to a service-account-
+#                             accessible vault; Private/Personal vaults
+#                             are rejected before op read.
 #
 # Session file:
 #   Path:        $cache_dir/op-preflight-<agent>.env
@@ -52,11 +91,25 @@
 #   Format:      bash-sourceable KEY='value' lines (printf %q-escaped)
 #   TTL anchor:  OP_PREFLIGHT_CREATED_AT_EPOCH (embedded in file, not mtime)
 #
-# After eval, downstream scripts and agent commands use the exported env
-# vars instead of calling op directly:
-#   GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" gh pr review ...
-#   GH_TOKEN="$OP_PREFLIGHT_AUTHOR_PAT"   gh pr merge ...
-#   # gcloud/firebase use GOOGLE_APPLICATION_CREDENTIALS automatically
+# After eval, downstream usage splits along the gh read/write boundary
+# (see CLAUDE.md § Active-account convention):
+#
+#   # Read-path: GH_TOKEN authenticates the request (no byline involved).
+#   GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" gh api user --jq .login
+#   GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" scripts/codex-review-check.sh <PR#>
+#
+#   # Helpers that may also POST a trigger comment — GH_TOKEN authenticates
+#   # the API call, but the comment byline is the active keyring account.
+#   GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" scripts/coderabbit-wait.sh <PR#>
+#   GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" scripts/codex-review-request.sh <PR#>
+#
+#   # Write-path: active keyring is the byline; GH_TOKEN is irrelevant.
+#   # This script warns if active != expected.
+#   gh pr review <PR#> --comment --body "..."   # active = nathanpayne-<agent>
+#   gh auth switch -u nathanjohnpayne && gh pr merge <PR#> ... && \
+#     gh auth switch -u nathanpayne-<agent>     # author write
+#
+#   # gcloud/firebase use GOOGLE_APPLICATION_CREDENTIALS automatically.
 
 set -eo pipefail
 umask 077  # Restrict file permissions before any mktemp/cache writes
@@ -74,6 +127,26 @@ reviewer_pat_item_for() {
   esac
 }
 
+reviewer_pat_ref_for() {
+  local item
+  item="$(reviewer_pat_item_for "$1")" || return 1
+  printf '%s\n' "${OP_PREFLIGHT_REVIEWER_PAT_REF:-op://Private/${item}/token}"
+}
+
+is_op_secret_ref() {
+  case "$1" in
+    op://*/*/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_private_or_personal_ref() {
+  case "$1" in
+    op://Private/*|op://Personal/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ssh_host_for() {
   case "$1" in
     claude) echo "github-claude" ;;
@@ -84,6 +157,12 @@ ssh_host_for() {
 }
 
 # ── Cache layout ──────────────────────────────────────────────────────
+# Cache directory is intentionally shared across all consumer repos:
+#   - The session file is keyed by --agent (see SESSION_FILE below).
+#   - PATs are agent-keyed and currently uniform across the Phase 4
+#     propagation set, so a shared cache is functionally correct.
+# Re-evaluate if per-repo PATs ever diverge — at that point, namespace
+# the cache path per consumer repo (e.g. $HOME/.cache/mergepath/$REPO).
 DEFAULT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mergepath"
 CACHE_DIR="${OP_PREFLIGHT_CACHE_DIR:-$DEFAULT_CACHE_DIR}"
 DEFAULT_TTL_SECONDS=14400  # 4 hours
@@ -91,16 +170,35 @@ TTL_SECONDS="${OP_PREFLIGHT_TTL_SECONDS:-$DEFAULT_TTL_SECONDS}"
 
 # ── GCP ADC ───────────────────────────────────────────────────────────
 DEFAULT_ADC_OP_URI="${GCP_ADC_OP_URI:-op://Private/c2v6emkwppjzjjaq2bdqk3wnlm/credential}"
+
+# ── Firebase deploy SA key ────────────────────────────────────────────
+SA_NAME="${FIREBASE_DEPLOY_SA_NAME:-firebase-deployer}"
+FIREBASE_SA_VAULT="${FIREBASE_SA_VAULT:-Firebase}"
+
+# ── Cloudflare Cache Purge token (#167) ───────────────────────────────
+# Shared API token with Purge:Edit permission across all domains. Wired
+# into preflight so scripts/deploy.sh's existing CF purge step
+# (currently no-op when CF_API_TOKEN is unset) actually fires on
+# agent-driven deploys without an extra biometric prompt. CF_ZONE_ID
+# is intentionally NOT sourced here — it's per-repo and lives in each
+# downstream consumer's own bootstrap, not in this shared wiring.
+DEFAULT_CF_TOKEN_OP_URI="${CF_TOKEN_OP_URI:-op://Private/4x6wslp3f6pal5t6h3jhhe63ie/credential}"
 SSH_AUTHOR_HOST="github.com"
 
 # ── Parse arguments ───────────────────────────────────────────────────
+# Default --mode is `review` (was `all` prior to #282). The vast majority
+# of agent tool calls only need the reviewer/author PATs + SSH warming;
+# loading ADC + Cloudflare on every preflight bloated the biometric
+# burst for no reason. Deploy scripts that genuinely need deploy
+# credentials must pass `--mode deploy` or `--mode all` explicitly.
 AGENT=""
-MODE="all"
+MODE="review"
 DRY_RUN=false
 SKIP_SSH=false
 REFRESH=false
 PURGE=false
 PURGE_ALL=false
+CHECK=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -111,26 +209,38 @@ while [[ $# -gt 0 ]]; do
     --refresh) REFRESH=true; shift ;;
     --purge) PURGE=true; shift ;;
     --purge-all) PURGE_ALL=true; shift ;;
+    --check|--status) CHECK=true; shift ;;
     *)
       echo "Error: unknown argument: $1" >&2
-      echo "Usage: eval \"\$(scripts/op-preflight.sh --agent claude --mode all)\"" >&2
+      echo "Usage: eval \"\$(scripts/op-preflight.sh --agent claude --mode review)\"" >&2
       exit 1
       ;;
   esac
 done
 
+# ── --check / --status mutual exclusion (#282) ────────────────────────
+# --check is the "never invoke op, never warm SSH, never touch ADC"
+# read-only validator. It is mutually exclusive with anything that
+# would mutate state or burn biometric.
+if $CHECK; then
+  if $REFRESH || $PURGE || $PURGE_ALL; then
+    echo "Error: --check / --status is mutually exclusive with --refresh, --purge, --purge-all." >&2
+    exit 1
+  fi
+fi
+
 # ── Validate ──────────────────────────────────────────────────────────
 if $PURGE_ALL; then
   if [[ -d "$CACHE_DIR" ]]; then
     echo "# Purging all session files under $CACHE_DIR" >&2
-    find "$CACHE_DIR" -maxdepth 1 -type f \( -name 'op-preflight-*.env' -o -name 'op-preflight-*-adc.json' \) -print -delete >&2
+    find "$CACHE_DIR" -maxdepth 1 -type f \( -name 'op-preflight-*.env' -o -name 'op-preflight-*-adc.json' -o -name 'op-preflight-*-firebase-sa.json' -o -name 'op-preflight-*.ssh-warmed' \) -print -delete >&2
   fi
   exit 0
 fi
 
-if [[ "$MODE" == "review" || "$MODE" == "all" || "$PURGE" == "true" ]] && [[ -z "$AGENT" ]]; then
-  echo "Error: --agent is required for review, all, or --purge mode." >&2
-  echo "Usage: eval \"\$(scripts/op-preflight.sh --agent claude --mode all)\"" >&2
+if [[ "$MODE" == "review" || "$MODE" == "all" || "$PURGE" == "true" || "$CHECK" == "true" ]] && [[ -z "$AGENT" ]]; then
+  echo "Error: --agent is required for review, all, --purge, or --check mode." >&2
+  echo "Usage: eval \"\$(scripts/op-preflight.sh --agent claude --mode review)\"" >&2
   exit 1
 fi
 
@@ -144,15 +254,142 @@ if ! [[ "$TTL_SECONDS" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+SERVICE_ACCOUNT_TOKEN_MODE=false
+if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+  SERVICE_ACCOUNT_TOKEN_MODE=true
+fi
+
 # ── Cache paths (deterministic per agent) ─────────────────────────────
 SESSION_FILE="$CACHE_DIR/op-preflight-$AGENT.env"
 ADC_TMPFILE="$CACHE_DIR/op-preflight-$AGENT-adc.json"
+FIREBASE_SA_TMPFILE="$CACHE_DIR/op-preflight-$AGENT-firebase-sa.json"
+SSH_WARM_MARKER="$CACHE_DIR/op-preflight-$AGENT.ssh-warmed"
+BIOMETRIC_LOG="$CACHE_DIR/biometric-log"  # #282: append a one-line
+                                          # record on each fresh fetch.
+SSH_WARM_TTL_SECONDS="${OP_PREFLIGHT_SSH_WARM_TTL_SECONDS:-1800}"  # 30 min default; #163
+
+detect_firebase_project() {
+  if [[ -n "${OP_PREFLIGHT_FIREBASE_PROJECT_ID:-}" ]]; then
+    printf '%s\n' "$OP_PREFLIGHT_FIREBASE_PROJECT_ID"
+    return 0
+  fi
+  [[ -f .firebaserc ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    project = json.loads(pathlib.Path(".firebaserc").read_text())["projects"]["default"]
+except Exception:
+    sys.exit(1)
+if not isinstance(project, str) or not project:
+    sys.exit(1)
+print(project)
+PY
+}
+
+json_string_field_no_python() {
+  local file="${1:-}" field="${2:-}"
+  [[ -n "$file" && -f "$file" && -n "$field" ]] || return 1
+  awk -v field="$field" '
+    { text = text $0 " " }
+    END {
+      pattern = "\"" field "\"[[:space:]]*:[[:space:]]*\"[^\"]+\""
+      if (!match(text, pattern)) {
+        exit 1
+      }
+      matched = substr(text, RSTART, RLENGTH)
+      if (split(matched, parts, "\"") < 4) {
+        exit 1
+      }
+      print parts[4]
+    }
+  ' "$file"
+}
+
+firebaserc_default_project_no_python() {
+  [[ -f .firebaserc ]] || return 1
+  awk '
+    { text = text $0 " " }
+    END {
+      if (!match(text, /"projects"[[:space:]]*:[[:space:]]*\{[^}]*\}/)) {
+        exit 1
+      }
+      projects = substr(text, RSTART, RLENGTH)
+      if (!match(projects, /"default"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+        exit 1
+      }
+      matched = substr(projects, RSTART, RLENGTH)
+      if (split(matched, parts, "\"") < 4) {
+        exit 1
+      }
+      print parts[4]
+    }
+  ' .firebaserc
+}
+
+detect_firebase_project_no_python() {
+  if [[ -n "${OP_PREFLIGHT_FIREBASE_PROJECT_ID:-}" ]]; then
+    printf '%s\n' "$OP_PREFLIGHT_FIREBASE_PROJECT_ID"
+    return 0
+  fi
+  firebaserc_default_project_no_python
+}
+
+firebase_sa_matches_project_no_python() {
+  local file="${1:-}" project="${2:-}" client_email expected
+  [[ -n "$file" && -f "$file" && -s "$file" && -n "$project" ]] || return 1
+  client_email="$(json_string_field_no_python "$file" "client_email" || true)"
+  expected="${SA_NAME}@${project}.iam.gserviceaccount.com"
+  [[ "$client_email" == "$expected" ]]
+}
+
+# Validate the override is a non-negative integer before any arithmetic
+# context (`[[ "$age" -lt "$SSH_WARM_TTL_SECONDS" ]]` later in the
+# script). A non-numeric override (`OP_PREFLIGHT_SSH_WARM_TTL_SECONDS=foo`)
+# would otherwise abort the run under `set -e` with a "value too great
+# for base" error — one bad local env value would break every cache-hit
+# review. Fall back to the documented default with a warning rather
+# than crashing. (CodeRabbit Major, #272.)
+if [[ ! "$SSH_WARM_TTL_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "# WARNING: OP_PREFLIGHT_SSH_WARM_TTL_SECONDS='$SSH_WARM_TTL_SECONDS' is not a non-negative integer; falling back to default 1800s" >&2
+  SSH_WARM_TTL_SECONDS=1800
+fi
+
+# ── Biometric trigger log (#282) ──────────────────────────────────────
+# Append a one-line record every time the interactive lane triggers a
+# fresh op fetch (i.e. every time `op inject` or deploy `op read` is
+# invoked for cache population).
+# Format: `<ISO8601> agent=<agent> mode=<mode> reason=<reason>` so a
+# session audit can correlate biometric prompts against agent behavior.
+# Always-on (independent of OP_PREFLIGHT_QUIET) — the file is local-only
+# and there's no privacy / log-volume tradeoff to suppress it for.
+log_biometric_trigger() {
+  local reason="${1:-full-fetch}"
+  local now_iso
+  now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%FT%TZ)
+  mkdir -p "$CACHE_DIR" 2>/dev/null || true
+  if [[ ! -f "$BIOMETRIC_LOG" ]]; then
+    touch "$BIOMETRIC_LOG" 2>/dev/null || return 0
+    chmod 600 "$BIOMETRIC_LOG" 2>/dev/null || true
+  fi
+  printf '%s agent=%s mode=%s reason=%s\n' \
+    "$now_iso" "${AGENT:-unknown}" "${MODE:-unknown}" "$reason" \
+    >> "$BIOMETRIC_LOG" 2>/dev/null || true
+}
 
 # ── Purge mode ────────────────────────────────────────────────────────
 if $PURGE; then
-  rm -f "$SESSION_FILE" "$ADC_TMPFILE"
-  echo "# Purged session file + ADC tempfile for agent=$AGENT" >&2
+  rm -f "$SESSION_FILE" "$ADC_TMPFILE" "$FIREBASE_SA_TMPFILE" "$SSH_WARM_MARKER"
+  echo "# Purged session file + ADC tempfile + Firebase SA tempfile + SSH-warm marker for agent=$AGENT" >&2
   exit 0
+fi
+
+if $SERVICE_ACCOUNT_TOKEN_MODE && [[ "$MODE" != "review" ]]; then
+  echo "Error: OP_SERVICE_ACCOUNT_TOKEN mode is scoped to reviewer PAT reads only; mode '$MODE' is out of scope." >&2
+  exit 2
 fi
 
 # ── Dry run ───────────────────────────────────────────────────────────
@@ -161,26 +398,55 @@ if $DRY_RUN; then
   echo "#" >&2
   echo "# Session file:   $SESSION_FILE" >&2
   echo "# ADC tempfile:   $ADC_TMPFILE" >&2
+  echo "# Firebase SA tempfile: $FIREBASE_SA_TMPFILE" >&2
   echo "# TTL seconds:    $TTL_SECONDS" >&2
   if [[ -f "$SESSION_FILE" ]]; then
-    embedded=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" | cut -d= -f2- | tr -d "'\"")
+    # `|| true` so a missing epoch key doesn't take down dry-run under
+    # set -e + pipefail (grep exits 1 on no match). The numeric-only
+    # validation + `10#` decimal coercion below covers the OTHER bad
+    # case CodeRabbit caught on PR #278: a key present with a garbage
+    # value (e.g. `123abc` errors in arithmetic, or `08` is parsed as
+    # invalid octal). On bad input we fall back to age=$now → huge →
+    # cache miss + refresh (the correct fallback). (CodeRabbit, #272.)
+    embedded=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" | cut -d= -f2- | tr -d "'\"" || true)
     now=$(date +%s)
-    age=$((now - ${embedded:-0}))
+    if [[ "$embedded" =~ ^[0-9]+$ ]]; then
+      age=$(( now - 10#$embedded ))
+    else
+      age=$now
+    fi
     echo "# Session age:    ${age}s (TTL ${TTL_SECONDS}s)" >&2
   else
     echo "# Session age:    n/a (no session file)" >&2
   fi
   echo "#" >&2
   if [[ "$MODE" == "review" || "$MODE" == "all" ]]; then
-    echo "# Would read: reviewer PAT ($(reviewer_pat_item_for "$AGENT"))" >&2
-    echo "# Would read: author PAT ($AUTHOR_PAT_ITEM)" >&2
-    if ! $SKIP_SSH; then
+    if $SERVICE_ACCOUNT_TOKEN_MODE; then
+      if [[ -n "${OP_PREFLIGHT_REVIEWER_PAT_REF:-}" ]]; then
+        echo "# Would read: reviewer PAT ($(reviewer_pat_ref_for "$AGENT")) via OP_SERVICE_ACCOUNT_TOKEN" >&2
+      else
+        echo "# Would require: OP_PREFLIGHT_REVIEWER_PAT_REF (service-account-accessible op://vault/item/field)" >&2
+      fi
+      echo "# Would skip: author PAT (out of token-mode scope)" >&2
+      echo "# Would skip: SSH warming (out of token-mode scope)" >&2
+      echo "# Would skip: gh keyring repair (out of token-mode scope)" >&2
+    else
+      echo "# Would read: reviewer PAT ($(reviewer_pat_item_for "$AGENT"))" >&2
+      echo "# Would read: author PAT ($AUTHOR_PAT_ITEM)" >&2
+    fi
+    if ! $SKIP_SSH && ! $SERVICE_ACCOUNT_TOKEN_MODE; then
       echo "# Would warm SSH: $SSH_AUTHOR_HOST (author key)" >&2
       echo "# Would warm SSH: $(ssh_host_for "$AGENT") (reviewer key)" >&2
     fi
   fi
   if [[ "$MODE" == "deploy" || "$MODE" == "all" ]]; then
-    echo "# Would read: GCP ADC ($DEFAULT_ADC_OP_URI)" >&2
+    if firebase_project="$(detect_firebase_project 2>/dev/null || true)" && [[ -n "$firebase_project" ]]; then
+      echo "# Would read: Firebase project SA key (${firebase_project} — Firebase Deployer SA Key in vault ${FIREBASE_SA_VAULT})" >&2
+      echo "# Would fall back to: GCP ADC ($DEFAULT_ADC_OP_URI)" >&2
+    else
+      echo "# Would read: GCP ADC ($DEFAULT_ADC_OP_URI)" >&2
+    fi
+    echo "# Would read: Cloudflare cache-purge token ($DEFAULT_CF_TOKEN_OP_URI)" >&2
   fi
   exit 0
 fi
@@ -195,12 +461,35 @@ chmod 700 "$CACHE_DIR" 2>/dev/null || true
 session_is_fresh() {
   [[ -f "$SESSION_FILE" ]] || return 1
   local created_at now age
-  created_at=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'\"")
+  created_at=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" 2>/dev/null | cut -d= -f2- | tr -d "'\"" || true)
   [[ -z "$created_at" ]] && return 1
   [[ "$created_at" =~ ^[0-9]+$ ]] || return 1
   now=$(date +%s)
   age=$((now - created_at))
   [[ "$age" -lt "$TTL_SECONDS" ]]
+}
+
+session_is_token_mode() {
+  [[ -f "$SESSION_FILE" ]] || return 1
+  grep -q '^OP_PREFLIGHT_TOKEN_MODE=1$' "$SESSION_FILE" 2>/dev/null
+}
+
+scrub_op_error() {
+  local file="${1:-}" raw token redacted
+  [[ -n "$file" && -f "$file" ]] || return 0
+  raw="$(tr '\n' ' ' < "$file" || true)"
+  token="${OP_SERVICE_ACCOUNT_TOKEN:-}"
+  if [[ -n "$raw" && -n "$token" ]]; then
+    redacted="$(awk -v s="$raw" -v token="$token" 'BEGIN {
+      while ((i = index(s, token)) > 0) {
+        s = substr(s, 1, i - 1) "[redacted]" substr(s, i + length(token))
+      }
+      print s
+    }')"
+  else
+    redacted="$raw"
+  fi
+  printf '%s\n' "${redacted:0:500}"
 }
 
 # Validate that a materialized ADC file still mints a token. Mirrors the
@@ -259,6 +548,28 @@ except Exception:
 PY
 }
 
+firebase_sa_matches_project() {
+  local file="${1:-}" project="${2:-}"
+  [[ -n "$file" && -f "$file" && -s "$file" && -n "$project" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$file" "$project" "$SA_NAME" <<'PY'
+import json
+import pathlib
+import sys
+
+path, project, sa_name = sys.argv[1:4]
+expected = f"{sa_name}@{project}.iam.gserviceaccount.com"
+try:
+    cred = json.loads(pathlib.Path(path).read_text())
+except Exception:
+    sys.exit(1)
+
+if cred.get("type") == "service_account" and cred.get("client_email") == expected:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # Emit the human-facing guidance for a stale 1Password ADC item. Called
 # from both the full-fetch path (after op read + adc_is_usable fails)
 # and the fast-path cache-hit path (when a cached ADC fails the same
@@ -295,13 +606,108 @@ log_stale_adc_guidance() {
 # incomplete codex session file look valid and causing gh to run as
 # the wrong identity. See round-5 Codex finding on the propagation
 # PRs for the multi-agent repro.
+# Active-account drift auto-restore (#284, replaces the previous warn-
+# only behavior). gh's write paths use the keyring's active account
+# regardless of GH_TOKEN. Each agent's machine should have its agent
+# identity (nathanpayne-<agent>) as the active gh account so
+# reviewer-identity writes (gh pr review --comment) attribute correctly
+# without a switch. Author-identity writes (gh pr create / merge / edit)
+# still need a temporary `gh auth switch -u nathanjohnpayne` around them.
+# See nathanjohnpayne/mergepath#164 for the empirical diagnosis
+# (matchline PRs #181, #182 — wrong-byline reviews when active was
+# nathanjohnpayne instead of the agent identity).
+#
+# The prior behavior was a stderr warning: "your keyring drifted, here's
+# the fix command, you go run it." In practice agents kept missing the
+# warning and kept landing misattributed writes (#283 in-session
+# incidents documented this concretely). The new behavior is
+# auto-restore: if the keyring drifted, we run the switch ourselves
+# and log a clear stderr line so the operator can see what happened.
+# Idempotent — when the keyring is already correct, the function is a
+# no-op. Fail-soft — a switch failure logs and returns 0 (we don't
+# want preflight itself to abort because of an auth-switch race).
+restore_active_account_or_warn() {
+  # Skip silently when no agent is selected (e.g. deploy-only runs that
+  # don't need a reviewer identity). The check only makes sense when
+  # we know which agent identity SHOULD be active. Codex P2 on PR #171.
+  [[ -z "$AGENT" ]] && return 0
+  command -v gh >/dev/null 2>&1 || return 0
+  local expected="nathanpayne-${AGENT}"
+  local actual=""
+  # Use `gh config get -h github.com user` to read the active keyring
+  # account. This is the GH_TOKEN-immune signal:
+  #
+  #   - `gh auth status` honors GH_TOKEN — when GH_TOKEN is set, gh
+  #     reports the GH_TOKEN entry as Active: true and flips the
+  #     keyring entry to Active: false, even though writes still use
+  #     the keyring active. Codex CHANGES_REQUESTED on #171 reproduced
+  #     this masking: GH_TOKEN=<codex PAT> + keyring active=claude
+  #     made `gh auth status` parsers report codex as active, masking
+  #     the mismatch the warn function exists to surface.
+  #
+  #   - `gh config get -h github.com user` reads the keyring's stored
+  #     active username directly from ~/.config/gh/hosts.yml. It does
+  #     NOT honor GH_TOKEN. Verified: returns `nathanpayne-claude`
+  #     unchanged with and without GH_TOKEN set.
+  #
+  # Wrap in `|| true` so a `gh config` failure (corrupt hosts.yml,
+  # no gh login) cannot abort the parent under `set -eo pipefail`.
+  actual=$(gh config get -h github.com user 2>/dev/null || true)
+  if [[ -z "$actual" ]] || [[ "$actual" == "$expected" ]]; then
+    return 0
+  fi
+
+  echo "# ──────────────────────────────────────────────────────" >&2
+  echo "# Preflight: keyring drift detected — auto-restoring." >&2
+  echo "#   Was:      $actual" >&2
+  echo "#   Restoring: $expected" >&2
+  echo "#   Reason:   gh write paths (pr review/comment/etc.) attribute" >&2
+  echo "#             to the keyring's active account. Letting the drift" >&2
+  echo "#             persist would land the next reviewer write under the" >&2
+  echo "#             wrong byline. See REVIEW_POLICY.md § Operation-to-" >&2
+  echo "#             Identity Matrix and #284." >&2
+  if gh auth switch -u "$expected" >/dev/null 2>&1; then
+    local verify
+    verify=$(gh config get -h github.com user 2>/dev/null || true)
+    if [[ "$verify" == "$expected" ]]; then
+      echo "#   Result:   restored to $expected." >&2
+    else
+      echo "#   Result:   switch returned 0 but active is still '$verify'." >&2
+      echo "#             The switch silently no-op'd (corrupt hosts.yml," >&2
+      echo "#             mock gh, concurrent switch race). Run" >&2
+      echo "#             gh auth switch -u '$expected' manually to recover." >&2
+    fi
+  else
+    echo "#   Result:   gh auth switch -u '$expected' FAILED." >&2
+    echo "#             Is $expected in the keyring? Run 'gh auth login'" >&2
+    echo "#             once for that identity, then re-run preflight." >&2
+  fi
+  echo "# ──────────────────────────────────────────────────────" >&2
+  # Fail-soft: never abort preflight on a switch failure. The next
+  # write that lands under the wrong byline will fail its own
+  # identity-check at the write site (the helper scripts each gate
+  # on identity-check.sh before posting).
+  return 0
+}
+
+# Backwards-compat shim: the prior `warn_active_account_mismatch`
+# name is still referenced in some downstream consumers' wrappers.
+# Map it to the new auto-restore function so propagation lands
+# cleanly. Remove this alias once all consumers have re-propagated.
+warn_active_account_mismatch() {
+  restore_active_account_or_warn "$@"
+}
+
 emit_from_session_file() (
   # Subshell: the (  ... ) above means unset/source/return here do
   # not escape back to the caller. We still "return" rc codes via
   # stdout+exit; parent stays clean.
   unset OP_PREFLIGHT_REVIEWER_PAT OP_PREFLIGHT_AUTHOR_PAT
   unset GOOGLE_APPLICATION_CREDENTIALS OP_PREFLIGHT_ADC_TMPFILE
+  unset OP_PREFLIGHT_FIREBASE_SA_TMPFILE OP_PREFLIGHT_FIREBASE_PROJECT
+  unset CF_API_TOKEN
   unset OP_PREFLIGHT_DONE OP_PREFLIGHT_AGENT OP_PREFLIGHT_MODE
+  unset OP_PREFLIGHT_TOKEN_MODE OP_PREFLIGHT_REVIEWER_PAT_SOURCE_REF
   unset OP_PREFLIGHT_CREATED_AT_EPOCH OP_PREFLIGHT_TTL_SECONDS
 
   # Source the session file and re-emit only the vars we own, so a
@@ -322,15 +728,34 @@ emit_from_session_file() (
   # unauthenticated. Return non-zero to trigger the refresh path in
   # each case. See #141 round-1 Codex finding (P1, line 223).
   if [[ "$MODE" == "review" || "$MODE" == "all" ]]; then
-    if [[ -z "${OP_PREFLIGHT_REVIEWER_PAT:-}" ]] || [[ -z "${OP_PREFLIGHT_AUTHOR_PAT:-}" ]]; then
+    if $SERVICE_ACCOUNT_TOKEN_MODE && [[ "${OP_PREFLIGHT_TOKEN_MODE:-0}" != "1" ]]; then
       exit 2
+    fi
+    if ! $SERVICE_ACCOUNT_TOKEN_MODE && [[ "${OP_PREFLIGHT_TOKEN_MODE:-0}" == "1" ]]; then
+      exit 2
+    fi
+    if [[ "${OP_PREFLIGHT_TOKEN_MODE:-0}" == "1" ]]; then
+      [[ -n "${OP_PREFLIGHT_REVIEWER_PAT_REF:-}" ]] || exit 2
+      desired_reviewer_ref="$(reviewer_pat_ref_for "$AGENT" 2>/dev/null || true)"
+      is_op_secret_ref "$desired_reviewer_ref" || exit 2
+      is_private_or_personal_ref "$desired_reviewer_ref" && exit 2
+      if [[ "${OP_PREFLIGHT_REVIEWER_PAT_SOURCE_REF:-}" != "$desired_reviewer_ref" ]]; then
+        exit 2
+      fi
+      if [[ "$MODE" == "all" ]] || [[ -z "${OP_PREFLIGHT_REVIEWER_PAT:-}" ]]; then
+        exit 2
+      fi
+    else
+      if [[ -z "${OP_PREFLIGHT_REVIEWER_PAT:-}" ]] || [[ -z "${OP_PREFLIGHT_AUTHOR_PAT:-}" ]]; then
+        exit 2
+      fi
     fi
   fi
   if [[ "$MODE" == "deploy" || "$MODE" == "all" ]]; then
-    # Both `--mode deploy` and `--mode all` require a usable ADC from
-    # the cache to take the fast path. If the session file's ADC field
-    # is missing or the materialized file is unreadable, return 2 to
-    # trigger a full refresh.
+    # Both `--mode deploy` and `--mode all` require a usable deploy
+    # credential from the cache to take the fast path. If the session
+    # file's credential field is missing or the materialized file is
+    # unreadable, return 2 to trigger a full refresh.
     #
     # An earlier iteration of this code treated missing-ADC on
     # `--mode all` as a partial hit (emit PATs, skip ADC) to spare
@@ -345,15 +770,52 @@ emit_from_session_file() (
     if [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] || [[ ! -s "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
       exit 2
     fi
-    if ! adc_is_usable "${GOOGLE_APPLICATION_CREDENTIALS}"; then
-      # File exists but refresh token is rejected. Warn and skip the
-      # export so downstream deploy callers can fall back to local
-      # firebase-login / ADC. OP_PREFLIGHT_DONE stays 1 and PATs are
-      # still emitted below, because preflight itself succeeded —
-      # only the ADC-specific path is degraded, which matches what
-      # the user will see when they run `gcloud auth ...` manually.
-      log_stale_adc_guidance
-      unset GOOGLE_APPLICATION_CREDENTIALS OP_PREFLIGHT_ADC_TMPFILE
+    if [[ -n "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE:-}" && "${GOOGLE_APPLICATION_CREDENTIALS}" == "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE}" ]]; then
+      if [[ "${OP_PREFLIGHT_CHECK_MODE:-0}" == "1" ]]; then
+        current_firebase_project="$(detect_firebase_project_no_python 2>/dev/null || true)"
+        firebase_sa_matches_project_check() {
+          firebase_sa_matches_project_no_python "${GOOGLE_APPLICATION_CREDENTIALS}" "$current_firebase_project"
+        }
+      else
+        current_firebase_project="$(detect_firebase_project 2>/dev/null || true)"
+        firebase_sa_matches_project_check() {
+          firebase_sa_matches_project "${GOOGLE_APPLICATION_CREDENTIALS}" "$current_firebase_project"
+        }
+      fi
+      if [[ -z "$current_firebase_project" || "$current_firebase_project" != "${OP_PREFLIGHT_FIREBASE_PROJECT:-}" ]]; then
+        echo "# WARNING: cached Firebase project SA key is for '${OP_PREFLIGHT_FIREBASE_PROJECT:-unknown}', but current project is '${current_firebase_project:-none}'; refreshing deploy credentials." >&2
+        exit 2
+      fi
+      if ! firebase_sa_matches_project_check; then
+        echo "# WARNING: cached Firebase project SA key file does not match current project '$current_firebase_project'; refreshing deploy credentials." >&2
+        exit 2
+      fi
+    fi
+    # --check is the "no external probes" contract — never invoke op,
+    # ssh, OR python3. The `adc_is_usable` probe spawns python3 to
+    # validate the OAuth2 refresh token, which fires a network call.
+    # Under --check we trust the cache as-is and emit the ADC path
+    # without validating it; downstream deploy callers will surface
+    # their own auth failure if the cred is actually broken.
+    # (nathanpayne-codex Phase 4b r1 on PR #292 — they verified
+    # `--check --mode deploy` still spawned python3.)
+    if [[ "${OP_PREFLIGHT_CHECK_MODE:-0}" != "1" ]] && \
+       ! adc_is_usable "${GOOGLE_APPLICATION_CREDENTIALS}"; then
+      # File exists but the credential is unusable. Warn and skip the
+      # export so downstream deploy callers can fall back through their
+      # own resolver. OP_PREFLIGHT_DONE stays 1 and PATs are still
+      # emitted below, because preflight itself succeeded — only the
+      # deploy-credential path is degraded.
+      if [[ -n "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE:-}" && "${GOOGLE_APPLICATION_CREDENTIALS}" == "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE}" ]]; then
+        echo "# WARNING: cached Firebase project SA key is unusable; refreshing deploy credentials." >&2
+        unset GOOGLE_APPLICATION_CREDENTIALS OP_PREFLIGHT_ADC_TMPFILE
+        unset OP_PREFLIGHT_FIREBASE_SA_TMPFILE OP_PREFLIGHT_FIREBASE_PROJECT
+        exit 2
+      else
+        log_stale_adc_guidance
+        unset GOOGLE_APPLICATION_CREDENTIALS OP_PREFLIGHT_ADC_TMPFILE
+        unset OP_PREFLIGHT_FIREBASE_SA_TMPFILE OP_PREFLIGHT_FIREBASE_PROJECT
+      fi
     fi
   fi
 
@@ -361,10 +823,18 @@ emit_from_session_file() (
     printf 'export OP_PREFLIGHT_REVIEWER_PAT=%q\n' "$OP_PREFLIGHT_REVIEWER_PAT"
   [[ -n "${OP_PREFLIGHT_AUTHOR_PAT:-}" ]] && \
     printf 'export OP_PREFLIGHT_AUTHOR_PAT=%q\n' "$OP_PREFLIGHT_AUTHOR_PAT"
+  [[ "${OP_PREFLIGHT_TOKEN_MODE:-0}" == "1" ]] && \
+    printf 'export OP_PREFLIGHT_TOKEN_MODE=1\n'
   [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && \
     printf 'export GOOGLE_APPLICATION_CREDENTIALS=%q\n' "$GOOGLE_APPLICATION_CREDENTIALS"
   [[ -n "${OP_PREFLIGHT_ADC_TMPFILE:-}" ]] && \
     printf 'export OP_PREFLIGHT_ADC_TMPFILE=%q\n' "$OP_PREFLIGHT_ADC_TMPFILE"
+  [[ -n "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE:-}" ]] && \
+    printf 'export OP_PREFLIGHT_FIREBASE_SA_TMPFILE=%q\n' "$OP_PREFLIGHT_FIREBASE_SA_TMPFILE"
+  [[ -n "${OP_PREFLIGHT_FIREBASE_PROJECT:-}" ]] && \
+    printf 'export OP_PREFLIGHT_FIREBASE_PROJECT=%q\n' "$OP_PREFLIGHT_FIREBASE_PROJECT"
+  [[ -n "${CF_API_TOKEN:-}" ]] && \
+    printf 'export CF_API_TOKEN=%q\n' "$CF_API_TOKEN"
   printf 'export OP_PREFLIGHT_DONE=1\n'
   printf 'export OP_PREFLIGHT_AGENT=%q\n' "$AGENT"
   exit 0
@@ -378,7 +848,34 @@ emit_from_session_file() (
 # means subsequent git/gh SSH operations can still block on auth even
 # after preflight reports success (friends-and-family-billing#227
 # round-5 Codex P2). Output goes to stderr so it's not eval'd.
+#
+# SSH-warm freshness (#163): the 1Password SSH agent has its OWN
+# session TTL — independent of the chmod-600 PAT cache. Re-warming
+# on every cache-hit invocation re-prompts biometric whenever the
+# 1Password agent's own session has expired (typically much shorter
+# than the 4h PAT TTL). Track an SSH-warm marker file and skip the
+# warm if it's recent enough. The marker's age is the only thing
+# that matters here — if the 1Password agent expires inside our
+# SSH_WARM_TTL window, the next git push/pull still triggers
+# biometric, but at least preflight itself doesn't multiply that.
+ssh_warm_is_fresh() {
+  [[ -f "$SSH_WARM_MARKER" ]] || return 1
+  local mtime now age
+  mtime=$(stat -f %m "$SSH_WARM_MARKER" 2>/dev/null || stat -c %Y "$SSH_WARM_MARKER" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  age=$((now - mtime))
+  [[ "$age" -lt "$SSH_WARM_TTL_SECONDS" ]]
+}
+
 warm_ssh_keys() {
+  if ssh_warm_is_fresh; then
+    local mtime now age
+    mtime=$(stat -f %m "$SSH_WARM_MARKER" 2>/dev/null || stat -c %Y "$SSH_WARM_MARKER" 2>/dev/null || echo 0)
+    now=$(date +%s); age=$((now - mtime))
+    echo "# Preflight: SSH keys recently warmed (${age}s ago / TTL ${SSH_WARM_TTL_SECONDS}s) — skipping" >&2
+    SUMMARY+=("SSH keys: cached (${age}s ago)")
+    return 0
+  fi
   echo "# Preflight: warming SSH keys..." >&2
   if ssh -T "git@${SSH_AUTHOR_HOST}" 2>&1 | grep -qi "successfully authenticated"; then
     SUMMARY+=("SSH key ($SSH_AUTHOR_HOST): authorized")
@@ -392,7 +889,65 @@ warm_ssh_keys() {
   else
     SUMMARY+=("SSH key ($reviewer_host): warming attempted")
   fi
+  # Touch the marker AFTER both warms attempted. If either warm failed
+  # (network blip, key not in agent) we still set the marker — the next
+  # git op will surface the underlying problem rather than masking it
+  # with a re-warm cycle. Marker-touch failures are non-fatal.
+  touch "$SSH_WARM_MARKER" 2>/dev/null || true
+  chmod 600 "$SSH_WARM_MARKER" 2>/dev/null || true
 }
+
+# ── --check / --status mode (#282) ────────────────────────────────────
+# Read-only validator: emit cached exports if the session file is fresh,
+# OR exit non-zero with a diagnostic if it is missing/stale. NEVER
+# invokes op, NEVER warms SSH, NEVER reads ADC. Designed to be re-run
+# at the top of every agent tool call without the biometric prompt risk
+# of `--mode review`.
+if $CHECK; then
+  if ! session_is_fresh; then
+    echo "# preflight: cache missing or stale for agent=$AGENT" >&2
+    echo "#   run: scripts/op-preflight.sh --agent $AGENT --mode review" >&2
+    echo "#   then re-run this command." >&2
+    exit 2
+  fi
+  # The session is fresh. Emit the cached exports the same way the fast
+  # path does — but DO NOT warm SSH and DO NOT call any other helpers
+  # that might prompt. Setting OP_PREFLIGHT_CHECK_MODE=1 tells
+  # emit_from_session_file to skip the ADC-usability python3 probe
+  # under `--mode deploy`/`--mode all` so the helper stays probe-free
+  # in --check mode. (nathanpayne-codex Phase 4b r1 on PR #292.)
+  if cached_exports=$(OP_PREFLIGHT_CHECK_MODE=1 emit_from_session_file); then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ "$rc" != "0" ]]; then
+    echo "# preflight: cache present but incomplete for agent=$AGENT (mode=$MODE)" >&2
+    echo "#   run: scripts/op-preflight.sh --agent $AGENT --mode review" >&2
+    exit 2
+  fi
+  echo "$cached_exports"
+  if [[ "${OP_PREFLIGHT_QUIET:-0}" != "1" ]]; then
+    epoch=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+    now=$(date +%s)
+    if [[ "$epoch" =~ ^[0-9]+$ ]]; then
+      age=$(( now - 10#$epoch ))
+    else
+      age=$now
+    fi
+    echo "# preflight: --check ok (age ${age}s / TTL ${TTL_SECONDS}s, no biometric)" >&2
+  else
+    echo "# preflight: cache hit, no biometric burned" >&2
+  fi
+  exit 0
+fi
+
+# ── Refresh forces both PAT cache + SSH-warm marker invalidation ─────
+# (--refresh is the "I want a brand-new biometric burst" knob; honor
+# it for SSH too, otherwise the warm would skip via the marker.)
+if $REFRESH; then
+  rm -f "$SSH_WARM_MARKER"
+fi
 
 # ── Fast path: reuse session file when fresh ──────────────────────────
 if ! $REFRESH && session_is_fresh; then
@@ -411,28 +966,80 @@ if ! $REFRESH && session_is_fresh; then
   fi
   if [[ "$rc" == "0" ]]; then
     echo "$cached_exports"
-    age=$(( $(date +%s) - $(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" | cut -d= -f2- | tr -d "'\"") ))
+    # `|| true` + numeric-only validation + `10#` decimal coercion so
+    # neither a missing key NOR a garbage value (e.g. `123abc` errors
+    # in arithmetic; `08` is parsed as invalid octal) takes down the
+    # cache-hit path under set -e + pipefail. On bad input we fall
+    # back to age = $now → huge → cache miss + refresh (the correct
+    # fallback). (CodeRabbit Minor on PR #278, #272.)
+    epoch=$(grep '^OP_PREFLIGHT_CREATED_AT_EPOCH=' "$SESSION_FILE" | cut -d= -f2- | tr -d "'\"" || true)
+    now=$(date +%s)
+    if [[ "$epoch" =~ ^[0-9]+$ ]]; then
+      age=$(( now - 10#$epoch ))
+    else
+      age=$now
+    fi
+    CACHE_TOKEN_MODE=false
+    if session_is_token_mode; then
+      CACHE_TOKEN_MODE=true
+    fi
     # Warm SSH keys on the cache-hit path too. The cached PATs are
     # worthless for git push/pull if SSH auth isn't also primed, and
     # the prior implementation skipped this step entirely on cache
     # hit — a repro surfaced on the consumer-repo propagation PRs.
     SUMMARY=()
-    if [[ "$MODE" == "review" || "$MODE" == "all" ]] && ! $SKIP_SSH; then
+    if $CACHE_TOKEN_MODE; then
+      SUMMARY+=("Service-account token cache: reviewer PAT only; SSH/keyring skipped")
+    fi
+    if [[ "$MODE" == "review" || "$MODE" == "all" ]] && ! $SKIP_SSH && ! $CACHE_TOKEN_MODE; then
       warm_ssh_keys
     fi
-    echo "" >&2
-    echo "# ── Preflight cached hit (age ${age}s / TTL ${TTL_SECONDS}s) ──" >&2
-    echo "# Session file: $SESSION_FILE" >&2
-    for line in "${SUMMARY[@]}"; do
-      echo "#   $line" >&2
-    done
-    echo "# Run with --refresh to force a new biometric fetch." >&2
-    echo "# ──────────────────────────────────────────────────────────" >&2
+    if [[ "${OP_PREFLIGHT_QUIET:-0}" == "1" ]]; then
+      # #282: agents that re-run preflight at the top of every tool
+      # call want a single-line confirmation, not the verbose block.
+      # Refresh notices and warnings remain unaffected; only this
+      # routine cache-hit block collapses.
+      echo "# preflight: cache hit, no biometric burned" >&2
+      if ! $CACHE_TOKEN_MODE; then
+        warn_active_account_mismatch
+      fi
+    else
+      echo "" >&2
+      echo "# ── Preflight cached hit (age ${age}s / TTL ${TTL_SECONDS}s) ──" >&2
+      echo "# Session file: $SESSION_FILE" >&2
+      for line in "${SUMMARY[@]}"; do
+        echo "#   $line" >&2
+      done
+      echo "# Run with --refresh to force a new biometric fetch." >&2
+      if ! $CACHE_TOKEN_MODE; then
+        warn_active_account_mismatch
+      fi
+      echo "# ──────────────────────────────────────────────────────────" >&2
+    fi
     exit 0
   fi
   # emit_from_session_file returned non-zero (e.g. ADC file vanished).
   # Fall through to full fetch.
   echo "# Session file stale or incomplete — refreshing" >&2
+  # Distinguish a partial-cache miss (stale ADC, cross-mode invalidation)
+  # from a full-fetch when logging the biometric trigger reason. The rc
+  # from emit_from_session_file is in scope thanks to the if-condition
+  # capture above. rc=2 means cross-mode invalidation; anything else is
+  # treated as stale-ADC by default for log clarity.
+  if [[ "${rc:-0}" == "2" ]]; then
+    BIOMETRIC_REASON="cross-mode-invalidation"
+  else
+    BIOMETRIC_REASON="stale-adc"
+  fi
+fi
+
+# Default reason for full-fetch path (no cache hit at all, or --refresh).
+if [[ -z "${BIOMETRIC_REASON:-}" ]]; then
+  if $REFRESH; then
+    BIOMETRIC_REASON="refresh"
+  else
+    BIOMETRIC_REASON="full-fetch"
+  fi
 fi
 
 # ── Preflight checks for full fetch ──────────────────────────────────
@@ -445,76 +1052,186 @@ fi
 EXPORTS=()
 SESSION_LINES=()
 SUMMARY=()
+DEPLOY_BIOMETRIC_LOGGED=false
+
+log_deploy_biometric_once() {
+  if [[ "$MODE" == "deploy" && "$DEPLOY_BIOMETRIC_LOGGED" == "false" ]]; then
+    log_biometric_trigger "$BIOMETRIC_REASON"
+    DEPLOY_BIOMETRIC_LOGGED=true
+  fi
+}
 
 # ── Phase 1: CLI credentials (one biometric prompt + session reuse) ───
 if [[ "$MODE" == "review" || "$MODE" == "all" ]]; then
   reviewer_item="$(reviewer_pat_item_for "$AGENT")"
 
-  # Build an op inject template for both PATs. op inject resolves all
-  # op:// references in a single process — one biometric prompt covers
-  # both reads.
-  tpl_file="$(mktemp "${TMPDIR:-/tmp}/op-preflight-tpl-XXXXXX")"
-  trap 'rm -f "$tpl_file"' EXIT
+  if $SERVICE_ACCOUNT_TOKEN_MODE; then
+    if [[ -z "${OP_PREFLIGHT_REVIEWER_PAT_REF:-}" ]]; then
+      echo "Error: OP_PREFLIGHT_REVIEWER_PAT_REF is required in OP_SERVICE_ACCOUNT_TOKEN mode." >&2
+      echo "       Use a service-account-accessible op://vault/item/field reference; Private/Personal vaults are out of scope." >&2
+      exit 1
+    fi
+    reviewer_ref="$(reviewer_pat_ref_for "$AGENT")"
+    if ! is_op_secret_ref "$reviewer_ref"; then
+      echo "Error: OP_PREFLIGHT_REVIEWER_PAT_REF must be an op:// secret reference." >&2
+      exit 1
+    fi
+    if is_private_or_personal_ref "$reviewer_ref"; then
+      echo "Error: OP_PREFLIGHT_REVIEWER_PAT_REF cannot point to Private or Personal vaults in OP_SERVICE_ACCOUNT_TOKEN mode." >&2
+      exit 1
+    fi
+    echo "# Preflight: reading reviewer PAT via OP_SERVICE_ACCOUNT_TOKEN..." >&2
+    op_err_file="$(mktemp "${TMPDIR:-/tmp}/op-preflight-read-err-XXXXXX")"
+    reviewer_pat=""
+    op_read_rc=0
+    if reviewer_pat="$(op read "$reviewer_ref" 2>"$op_err_file")"; then
+      op_read_rc=0
+    else
+      op_read_rc=$?
+    fi
+    if [[ "$op_read_rc" -ne 0 || -z "$reviewer_pat" ]]; then
+      op_error="$(scrub_op_error "$op_err_file")"
+      rm -f "$op_err_file"
+      echo "Error: failed to read reviewer PAT for $AGENT via OP_SERVICE_ACCOUNT_TOKEN." >&2
+      if [[ -n "$op_error" ]]; then
+        echo "1Password CLI: $op_error" >&2
+      fi
+      exit 1
+    fi
+    rm -f "$op_err_file"
+    EXPORTS+=("export OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
+    EXPORTS+=("export OP_PREFLIGHT_TOKEN_MODE=1")
+    SESSION_LINES+=("OP_PREFLIGHT_TOKEN_MODE=1")
+    SESSION_LINES+=("OP_PREFLIGHT_REVIEWER_PAT_SOURCE_REF=$(printf '%q' "$reviewer_ref")")
+    SESSION_LINES+=("OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
+    SUMMARY+=("Reviewer PAT ($AGENT): loaded via service account token")
+    SUMMARY+=("Author PAT: skipped (service account token mode)")
+  else
+    # Build an op inject template for both PATs. op inject resolves all
+    # op:// references in a single process — one biometric prompt covers
+    # both reads.
+    tpl_file="$(mktemp "${TMPDIR:-/tmp}/op-preflight-tpl-XXXXXX")"
+    trap 'rm -f "$tpl_file"' EXIT
 
-  cat > "$tpl_file" <<TPL
+    cat > "$tpl_file" <<TPL
 REVIEWER_PAT={{ op://Private/${reviewer_item}/token }}
 AUTHOR_PAT={{ op://Private/${AUTHOR_PAT_ITEM}/token }}
 TPL
 
-  echo "# Preflight: reading PATs (one biometric prompt)..." >&2
-  resolved="$(op inject -i "$tpl_file")"
-  rm -f "$tpl_file"
+    echo "# Preflight: reading PATs (one biometric prompt)..." >&2
+    log_biometric_trigger "$BIOMETRIC_REASON"
+    resolved="$(op inject -i "$tpl_file")"
+    rm -f "$tpl_file"
 
-  reviewer_pat="$(echo "$resolved" | grep '^REVIEWER_PAT=' | cut -d= -f2-)"
-  author_pat="$(echo "$resolved" | grep '^AUTHOR_PAT=' | cut -d= -f2-)"
+    reviewer_pat="$(echo "$resolved" | grep '^REVIEWER_PAT=' | cut -d= -f2-)"
+    author_pat="$(echo "$resolved" | grep '^AUTHOR_PAT=' | cut -d= -f2-)"
 
-  if [[ -z "$reviewer_pat" ]]; then
-    echo "Error: failed to read reviewer PAT for $AGENT." >&2
-    exit 1
+    if [[ -z "$reviewer_pat" ]]; then
+      echo "Error: failed to read reviewer PAT for $AGENT." >&2
+      exit 1
+    fi
+    if [[ -z "$author_pat" ]]; then
+      echo "Error: failed to read author PAT." >&2
+      exit 1
+    fi
+
+    EXPORTS+=("export OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
+    EXPORTS+=("export OP_PREFLIGHT_AUTHOR_PAT=$(printf '%q' "$author_pat")")
+    SESSION_LINES+=("OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
+    SESSION_LINES+=("OP_PREFLIGHT_AUTHOR_PAT=$(printf '%q' "$author_pat")")
+    SUMMARY+=("Reviewer PAT ($AGENT): loaded")
+    SUMMARY+=("Author PAT: loaded")
   fi
-  if [[ -z "$author_pat" ]]; then
-    echo "Error: failed to read author PAT." >&2
-    exit 1
-  fi
-
-  EXPORTS+=("export OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
-  EXPORTS+=("export OP_PREFLIGHT_AUTHOR_PAT=$(printf '%q' "$author_pat")")
-  SESSION_LINES+=("OP_PREFLIGHT_REVIEWER_PAT=$(printf '%q' "$reviewer_pat")")
-  SESSION_LINES+=("OP_PREFLIGHT_AUTHOR_PAT=$(printf '%q' "$author_pat")")
-  SUMMARY+=("Reviewer PAT ($AGENT): loaded")
-  SUMMARY+=("Author PAT: loaded")
 fi
 
 if [[ "$MODE" == "deploy" || "$MODE" == "all" ]]; then
-  echo "# Preflight: reading GCP ADC (reuses session)..." >&2
+  firebase_project="$(detect_firebase_project 2>/dev/null || true)"
+  firebase_sa_loaded=false
 
-  # Deterministic path so subsequent invocations find the same file.
-  # Overwrite in place — chmod 600 before writing secret content.
-  touch "$ADC_TMPFILE"
-  chmod 600 "$ADC_TMPFILE"
+  if [[ -n "$firebase_project" ]]; then
+    echo "# Preflight: reading Firebase project SA key for $firebase_project..." >&2
 
-  if op read "$DEFAULT_ADC_OP_URI" > "$ADC_TMPFILE" 2>/dev/null && [[ -s "$ADC_TMPFILE" ]]; then
-    if adc_is_usable "$ADC_TMPFILE"; then
-      EXPORTS+=("export GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$ADC_TMPFILE")")
-      EXPORTS+=("export OP_PREFLIGHT_ADC_TMPFILE=$(printf '%q' "$ADC_TMPFILE")")
-      SESSION_LINES+=("GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$ADC_TMPFILE")")
-      SESSION_LINES+=("OP_PREFLIGHT_ADC_TMPFILE=$(printf '%q' "$ADC_TMPFILE")")
-      SUMMARY+=("GCP ADC: loaded -> $ADC_TMPFILE")
+    # Deterministic path so subsequent invocations and op-firebase-deploy
+    # can reuse the same cached project SA key without a second biometric
+    # prompt. Overwrite in place — chmod 600 before writing secret content.
+    touch "$FIREBASE_SA_TMPFILE"
+    chmod 600 "$FIREBASE_SA_TMPFILE"
+    : > "$FIREBASE_SA_TMPFILE"
+
+    # For --mode deploy (no review credentials loaded), this is the first
+    # op call of the run — log it. For --mode all, the Phase 1 op inject
+    # above already logged a single line covering the whole biometric
+    # burst, so no second log entry is needed here.
+    log_deploy_biometric_once
+    if op document get "${firebase_project} — Firebase Deployer SA Key" \
+         --vault "$FIREBASE_SA_VAULT" \
+         --out-file "$FIREBASE_SA_TMPFILE" \
+         --force >/dev/null 2>&1 \
+       && firebase_sa_matches_project "$FIREBASE_SA_TMPFILE" "$firebase_project"; then
+      EXPORTS+=("export GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$FIREBASE_SA_TMPFILE")")
+      EXPORTS+=("export OP_PREFLIGHT_FIREBASE_SA_TMPFILE=$(printf '%q' "$FIREBASE_SA_TMPFILE")")
+      EXPORTS+=("export OP_PREFLIGHT_FIREBASE_PROJECT=$(printf '%q' "$firebase_project")")
+      SESSION_LINES+=("GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$FIREBASE_SA_TMPFILE")")
+      SESSION_LINES+=("OP_PREFLIGHT_FIREBASE_SA_TMPFILE=$(printf '%q' "$FIREBASE_SA_TMPFILE")")
+      SESSION_LINES+=("OP_PREFLIGHT_FIREBASE_PROJECT=$(printf '%q' "$firebase_project")")
+      SUMMARY+=("Firebase SA key ($firebase_project): loaded -> $FIREBASE_SA_TMPFILE")
+      firebase_sa_loaded=true
     else
-      rm -f "$ADC_TMPFILE"
-      log_stale_adc_guidance
-      SUMMARY+=("GCP ADC: STALE (refresh_token rejected — see warning above)")
+      rm -f "$FIREBASE_SA_TMPFILE"
+      SUMMARY+=("Firebase SA key ($firebase_project): SKIPPED (not found or did not match ${SA_NAME}@${firebase_project}.iam.gserviceaccount.com)")
     fi
   else
-    rm -f "$ADC_TMPFILE"
-    echo "# Warning: could not read GCP ADC. Deploy credentials not cached." >&2
-    SUMMARY+=("GCP ADC: SKIPPED (not available)")
+    SUMMARY+=("Firebase SA key: SKIPPED (no .firebaserc default project detected)")
+  fi
+
+  if [[ "$firebase_sa_loaded" != "true" ]]; then
+    echo "# Preflight: reading GCP ADC (reuses session)..." >&2
+
+    # Deterministic path so subsequent invocations find the same file.
+    # Overwrite in place — chmod 600 before writing secret content.
+    touch "$ADC_TMPFILE"
+    chmod 600 "$ADC_TMPFILE"
+
+    log_deploy_biometric_once
+    if op read "$DEFAULT_ADC_OP_URI" > "$ADC_TMPFILE" 2>/dev/null && [[ -s "$ADC_TMPFILE" ]]; then
+      if adc_is_usable "$ADC_TMPFILE"; then
+        EXPORTS+=("export GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$ADC_TMPFILE")")
+        EXPORTS+=("export OP_PREFLIGHT_ADC_TMPFILE=$(printf '%q' "$ADC_TMPFILE")")
+        SESSION_LINES+=("GOOGLE_APPLICATION_CREDENTIALS=$(printf '%q' "$ADC_TMPFILE")")
+        SESSION_LINES+=("OP_PREFLIGHT_ADC_TMPFILE=$(printf '%q' "$ADC_TMPFILE")")
+        SUMMARY+=("GCP ADC: loaded -> $ADC_TMPFILE")
+      else
+        rm -f "$ADC_TMPFILE"
+        log_stale_adc_guidance
+        SUMMARY+=("GCP ADC: STALE (refresh_token rejected — see warning above)")
+      fi
+    else
+      rm -f "$ADC_TMPFILE"
+      echo "# Warning: could not read GCP ADC. Deploy credentials not cached." >&2
+      SUMMARY+=("GCP ADC: SKIPPED (not available)")
+    fi
+  fi
+
+  # Cloudflare cache-purge token (#167). Optional — if 1Password is
+  # unreachable for this item the deploy still proceeds; deploy.sh's
+  # CF purge step gracefully no-ops on empty CF_API_TOKEN.
+  echo "# Preflight: reading Cloudflare cache-purge token..." >&2
+  cf_token=$(op read "$DEFAULT_CF_TOKEN_OP_URI" 2>/dev/null || true)
+  if [[ -n "$cf_token" ]]; then
+    EXPORTS+=("export CF_API_TOKEN=$(printf '%q' "$cf_token")")
+    SESSION_LINES+=("CF_API_TOKEN=$(printf '%q' "$cf_token")")
+    SUMMARY+=("Cloudflare cache-purge token: loaded")
+  else
+    echo "# Warning: could not read Cloudflare cache-purge token. CF_API_TOKEN not exported; deploy.sh will skip the purge step." >&2
+    SUMMARY+=("Cloudflare cache-purge token: SKIPPED (not available)")
   fi
 fi
 
 # ── Phase 2: SSH key warming ──────────────────────────────────────────
-if [[ "$MODE" == "review" || "$MODE" == "all" ]] && ! $SKIP_SSH; then
+if [[ "$MODE" == "review" || "$MODE" == "all" ]] && ! $SKIP_SSH && ! $SERVICE_ACCOUNT_TOKEN_MODE; then
   warm_ssh_keys
+elif $SERVICE_ACCOUNT_TOKEN_MODE; then
+  SUMMARY+=("SSH/keyring: skipped (service account token mode)")
 fi
 
 # ── Persist session file ──────────────────────────────────────────────
@@ -553,5 +1270,8 @@ for line in "${SUMMARY[@]}"; do
 done
 echo "# Session file: $SESSION_FILE (TTL ${TTL_SECONDS}s)" >&2
 echo "# OP_PREFLIGHT_DONE=1" >&2
+if ! $SERVICE_ACCOUNT_TOKEN_MODE; then
+  warn_active_account_mismatch
+fi
 echo "# Human can step away." >&2
 echo "# ──────────────────────────────────────────────────────" >&2
