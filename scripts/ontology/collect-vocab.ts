@@ -105,9 +105,16 @@ function collectVocab(fixtureIds?: readonly string[]): VocabIndex {
 
   for (const file of files) {
     const fixtureId = file.replace(/\.json$/, "");
-    const data = JSON.parse(
-      readFileSync(join(EXPECTED_UNITS_DIR, file), "utf8"),
-    ) as ExpectedUnitFile;
+    let data: ExpectedUnitFile;
+    try {
+      data = JSON.parse(
+        readFileSync(join(EXPECTED_UNITS_DIR, file), "utf8"),
+      ) as ExpectedUnitFile;
+    } catch (err) {
+      throw new Error(
+        `collect-vocab: failed to parse ${file}: ${(err as Error).message}`,
+      );
+    }
     for (const unit of data.expected_units ?? []) {
       for (const cat of CATEGORIES) {
         for (const term of unit[cat] ?? []) {

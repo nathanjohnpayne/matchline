@@ -319,17 +319,36 @@ describe("#159 nathan×google ontology expansion", () => {
   // overlaps. Coverage completeness is checked separately by
   // `npm run ontology:collect -- nathan-2026` (0 null); these pin the
   // specific bridges that drive match accuracy.
-  it("bridges unit launch vocabulary to the JD's conception-to-launch language", () => {
+  it("bridges genuine 0-to-1 vocabulary to the JD's conception-to-launch language", () => {
     expect(normalizeSkill("0-to-1 product launch")).toBe("0-to-1 product");
     expect(normalizeSkill("conception to launch")).toBe("0-to-1 product");
-    expect(normalizeSkill("rapid product launch")).toBe("0-to-1 product");
     expect(normalizeSkill("product conception")).toBe(
       "product conceptualization",
     );
   });
 
-  it("bridges 'storage systems' to the JD's locally-attached-storage requirement", () => {
-    expect(normalizeSkill("storage systems")).toBe("locally attached storage");
+  it("routes generic launch vocabulary to launch management, NOT 0-to-1 (CodeRabbit on #254)", () => {
+    // Over-broad bridging (any "product launch" → 0-to-1) would false-
+    // positive routine launches against a true-0-to-1 requirement —
+    // exactly the semantic merge #159 warns against. Generic launch
+    // terms canonicalize to launch management; only genuine 0-to-1
+    // phrasings reach "0-to-1 product".
+    expect(normalizeSkill("product launch")).toBe("launch management");
+    expect(normalizeSkill("rapid product launch")).toBe("launch management");
+    expect(normalizeSkill("platform launch")).toBe("launch management");
+  });
+
+  it("keeps broad 'storage systems' distinct from the LSDD requirement (gap preservation, Codex P1 on #254)", () => {
+    // The nathan×google fixture marks r_storage_systems as an EXPECTED
+    // GAP: Nathan's SAN/broadcast storage is not LSDD / SAP-HANA-class
+    // locally-attached storage. Bridging "storage systems" → "locally
+    // attached storage" would manufacture a false structural match on
+    // that gap, so they stay separate canonicals.
+    expect(normalizeSkill("storage systems")).toBe("storage systems");
+    expect(normalizeSkill("lsdd")).toBe("locally attached storage");
+    expect(normalizeSkill("storage systems")).not.toBe(
+      "locally attached storage",
+    );
   });
 
   it("recognizes new skill canonicals from nathan's units", () => {
