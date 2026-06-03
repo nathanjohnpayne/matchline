@@ -138,6 +138,18 @@
     { "canonical": "stripe", "synonyms": ["stripe billing", "stripe api"] },
     { "canonical": "spark", "synonyms": ["apache spark"] },
     { "canonical": "gnu radio", "synonyms": ["gnu-radio"] },
-    { "canonical": "shopify", "synonyms": ["shopify platform"] }
+    { "canonical": "shopify", "synonyms": ["shopify platform"] },
+
+    { "canonical": "disney+", "synonyms": ["disney plus", "disneyplus", "disney+ app"] },
+    { "canonical": "hulu", "synonyms": ["hulu app", "hulu streaming"] },
+    { "canonical": "linux", "synonyms": ["linux os", "linux operating system", "gnu/linux"] },
+    { "canonical": "level 3", "synonyms": ["level 3 communications", "level3", "level 3 cdn"] },
+    { "canonical": "mvpd set-top boxes", "synonyms": ["operator set-top boxes", "cable set-top boxes", "mvpd stb"] },
+    { "canonical": "hd broadcast cameras", "synonyms": ["hd cameras", "high-definition broadcast cameras", "broadcast camera systems"] },
+    { "canonical": "broadcast playout systems", "synonyms": ["playout system", "broadcast playout", "playout server"] },
+    { "canonical": "mobile video transmission", "synonyms": ["mobile video uplink", "mobile transmission system", "satellite video transmission"] },
+    { "canonical": "multi-touch hardware", "synonyms": ["multi-touch display", "touchscreen hardware", "multi-touch wall"] },
+    { "canonical": "rendering clusters", "synonyms": ["render cluster", "gpu rendering cluster", "render farm"] },
+    { "canonical": "shared storage", "synonyms": ["shared storage system", "networked shared storage", "shared storage pool"] }
   ]
 }

@@ -61,6 +61,20 @@
     { "canonical": "platform observability", "synonyms": ["observability products"] },
     { "canonical": "legal compliance", "synonyms": ["compliance products", "regulatory compliance"] },
     { "canonical": "digital media", "synonyms": ["digital media products", "digital publishing"] },
-    { "canonical": "entertainment technology", "synonyms": ["entertainment tech"] }
+    { "canonical": "entertainment technology", "synonyms": ["entertainment tech"] },
+
+    { "canonical": "ai-augmented engineering", "synonyms": ["ai-assisted engineering", "ai-augmented software development", "ai assisted development"] },
+    { "canonical": "ott applications", "synonyms": ["streaming applications", "ott streaming applications", "ott app domain"] },
+    { "canonical": "broadcast operations", "synonyms": ["broadcast ops", "live broadcast operations domain", "broadcast operations domain"] },
+    { "canonical": "console platforms", "synonyms": ["game consoles", "gaming consoles", "console gaming platforms"] },
+    { "canonical": "consumer launch", "synonyms": ["consumer product launch", "consumer market launch", "direct-to-consumer launch"] },
+    { "canonical": "content discovery", "synonyms": ["content browsing", "media discovery", "content recommendation experience"] },
+    { "canonical": "enterprise storage", "synonyms": ["enterprise storage systems", "enterprise data storage", "enterprise storage platforms"] },
+    { "canonical": "investor tooling", "synonyms": ["investor software", "investor reporting tools", "investor relations tooling"] },
+    { "canonical": "live news", "synonyms": ["live news production", "broadcast news", "breaking news coverage"] },
+    { "canonical": "operator devices", "synonyms": ["operator hardware", "mvpd devices", "cable operator devices"] },
+    { "canonical": "partner operations", "synonyms": ["partner ops", "partner device operations", "partner management operations"] },
+    { "canonical": "post-production", "synonyms": ["post-production workflow", "video post-production", "media post-production"] },
+    { "canonical": "theatrical finance", "synonyms": ["broadway finance", "theatre finance", "live entertainment finance"] }
   ]
 }

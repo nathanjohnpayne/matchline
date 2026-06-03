@@ -312,6 +312,51 @@ describe("normalizeDomain", () => {
   });
 });
 
+describe("#159 nathan×google ontology expansion", () => {
+  // Pins the match-critical JD bridges: terms the labeled unit side
+  // uses must canonicalize to the SAME form the Google Compute SPM JD
+  // demands, so jaccard(unit.skills, requirement.keywords) actually
+  // overlaps. Coverage completeness is checked separately by
+  // `npm run ontology:collect -- nathan-2026` (0 null); these pin the
+  // specific bridges that drive match accuracy.
+  it("bridges unit launch vocabulary to the JD's conception-to-launch language", () => {
+    expect(normalizeSkill("0-to-1 product launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("conception to launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("rapid product launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("product conception")).toBe(
+      "product conceptualization",
+    );
+  });
+
+  it("bridges 'storage systems' to the JD's locally-attached-storage requirement", () => {
+    expect(normalizeSkill("storage systems")).toBe("locally attached storage");
+  });
+
+  it("recognizes new skill canonicals from nathan's units", () => {
+    expect(normalizeSkill("capacity planning")).toBe("capacity planning");
+    expect(normalizeSkill("cross-team leadership")).toBe(
+      "cross-team leadership",
+    );
+    expect(normalizeSkill("technical strategy")).toBe("technical strategy");
+    expect(normalizeSkill("platform architecture")).toBe(
+      "platform architecture",
+    );
+  });
+
+  it("recognizes new tool canonicals (incl. proper-noun streaming services)", () => {
+    expect(normalizeTool("Linux")).toBe("linux");
+    expect(normalizeTool("Disney+")).toBe("disney+");
+    expect(normalizeTool("disney plus")).toBe("disney+");
+    expect(normalizeTool("shared storage")).toBe("shared storage");
+  });
+
+  it("recognizes new domain canonicals from nathan's units", () => {
+    expect(normalizeDomain("post-production")).toBe("post-production");
+    expect(normalizeDomain("OTT applications")).toBe("ott applications");
+    expect(normalizeDomain("enterprise storage")).toBe("enterprise storage");
+  });
+});
+
 describe("category isolation", () => {
   it("normalizeSkill / normalizeTool / normalizeDomain don't leak across categories", () => {
     // Defense: the same string could legitimately appear as
