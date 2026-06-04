@@ -376,6 +376,26 @@ describe("#159 nathan×google ontology expansion", () => {
   });
 });
 
+describe("#258 JD-side keyword bridges", () => {
+  // Live JD-parser keywords (harvested by scripts/ontology/harvest-jd-vocab.ts)
+  // bridged to the canonical that nathan's MATCHING units actually carry, so
+  // jaccard(unit.skills, requirement.keywords) overlaps structurally on the
+  // requirements nathan genuinely matches. Only same-concept bridges with a
+  // real unit-side anchor — gap-mapped JD terms (CPU/Arm/x86, sales, SAP HANA)
+  // are deliberately NOT bridged.
+  it("maps cross-functional JD vocab to the unit canonical", () => {
+    expect(normalizeSkill("cross-functional")).toBe("cross-functional leadership");
+    expect(normalizeSkill("cross-functional influence")).toBe(
+      "cross-functional leadership",
+    );
+  });
+
+  it("maps technical-direction + product-lifecycle JD vocab to unit canonicals", () => {
+    expect(normalizeSkill("technical direction")).toBe("technical strategy");
+    expect(normalizeSkill("product lifecycle")).toBe("lifecycle management");
+  });
+});
+
 describe("category isolation", () => {
   it("normalizeSkill / normalizeTool / normalizeDomain don't leak across categories", () => {
     // Defense: the same string could legitimately appear as
