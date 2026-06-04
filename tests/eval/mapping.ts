@@ -38,18 +38,32 @@ import type {
 } from "./loadFixtures.ts";
 
 /**
- * Default mapping threshold in [0, 1]. Below this, the
- * actual entry is considered "no honest mapping" and gets
- * `unmapped_<id>` in the composite output. 0.30 is permissive
- * enough that paraphrased extractor output (LLMs rarely
- * reproduce the labeler's exact wording) maps correctly,
- * but strict enough that wholly unrelated content doesn't
- * accidentally collapse onto a single labeled entry.
+ * Sanity floor in [0, 1] for the relative best-match mapping
+ * (#148 acceptance #1). The map functions below are greedy
+ * *relative* best-pairing: each actual entry is assigned to its
+ * single best available expected entry (highest score wins, each
+ * expected consumed at most once). This floor exists ONLY to
+ * reject wholly-unrelated garbage — it is NOT a quality cutoff
+ * for real matches.
  *
- * Override for fixtures with unusual content density via
- * the `threshold` parameter on each map function.
+ * **Why 0.10, not the prior 0.30.** 0.30 was an absolute cutoff
+ * that left real-but-paraphrased pairs `unmapped_<id>`. The live
+ * Kepler pair scored ~0.17 pre-#157's overlap-coefficient fix and
+ * ~0.30 after — right on the knife's edge. Pairs hovering near
+ * 0.30 flipped mapped/unmapped as the non-deterministic extractor
+ * reworded summaries run-to-run, injecting ~8–13pp of pure noise
+ * into match accuracy (observed on PR #258: a single fixture swung
+ * 12.5–25.0% across three samples). Dropping the floor to a low
+ * sanity guard lets the relative best-match do the real work: the
+ * strongest available pairing wins regardless of its absolute
+ * score, so a real pair at 0.15–0.30 maps *stably* instead of
+ * flickering. Only genuine garbage (< 0.10 to its best expected)
+ * stays unmapped.
+ *
+ * Override per call via the `threshold` parameter on each map
+ * function (e.g. a stricter floor for a content-dense fixture).
  */
-export const DEFAULT_MAPPING_THRESHOLD = 0.3;
+export const DEFAULT_MAPPING_THRESHOLD = 0.1;
 
 /**
  * Tokenize a string for similarity comparison: lowercase,
