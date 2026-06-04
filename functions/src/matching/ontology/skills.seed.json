@@ -3,7 +3,7 @@
   "entries": [
     { "canonical": "product strategy", "synonyms": ["product vision", "pm strategy", "strategic product planning"] },
     { "canonical": "product roadmap", "synonyms": ["roadmap planning", "roadmapping", "product planning", "multi-year roadmap", "long-term roadmap", "technical roadmap"] },
-    { "canonical": "cross-functional leadership", "synonyms": ["xfn leadership", "cross-functional collaboration", "cross functional leadership", "xfn collaboration"] },
+    { "canonical": "cross-functional leadership", "synonyms": ["xfn leadership", "cross-functional collaboration", "cross functional leadership", "xfn collaboration", "cross-functional", "cross-functional influence"] },
     { "canonical": "stakeholder management", "synonyms": ["stakeholder alignment", "stakeholder engagement", "executive stakeholder management"] },
     { "canonical": "executive communication", "synonyms": ["leadership communication", "exec comms", "communicating with executives", "executive engagement", "executive stakeholder engagement", "exec engagement"] },
     { "canonical": "prd writing", "synonyms": ["product requirements", "product spec writing", "writing prds", "product requirements document"] },
@@ -232,7 +232,7 @@
     { "canonical": "front-end engineering team management", "synonyms": ["front-end team leadership", "frontend engineering management", "managing front-end engineers"] },
     { "canonical": "interaction design", "synonyms": ["ixd", "interaction design patterns", "user interaction design"] },
     { "canonical": "interactive systems design", "synonyms": ["interactive system design", "interactive platform design", "interactive experience design"] },
-    { "canonical": "lifecycle management", "synonyms": ["product lifecycle management", "lifecycle ownership", "end-to-end lifecycle management"] },
+    { "canonical": "lifecycle management", "synonyms": ["product lifecycle management", "lifecycle ownership", "end-to-end lifecycle management", "product lifecycle"] },
     { "canonical": "live streaming infrastructure", "synonyms": ["live video infrastructure", "live streaming systems", "live streaming platform"] },
     { "canonical": "multi-repo standards", "synonyms": ["multi-repository standards", "cross-repo standards", "repository standards across teams"] },
     { "canonical": "multi-site rollout", "synonyms": ["multi-location rollout", "multi-site deployment", "rollout across sites"] },
@@ -246,7 +246,7 @@
     { "canonical": "production systems", "synonyms": ["production system design", "broadcast production systems", "live production systems"] },
     { "canonical": "role-based access design", "synonyms": ["rbac design", "access control design", "permissions design"] },
     { "canonical": "technical project management", "synonyms": ["technical program management", "technical delivery management", "engineering project management"] },
-    { "canonical": "technical strategy", "synonyms": ["technology strategy", "technical roadmap strategy", "technical direction setting"] },
+    { "canonical": "technical strategy", "synonyms": ["technology strategy", "technical roadmap strategy", "technical direction setting", "technical direction"] },
     { "canonical": "virtual production", "synonyms": ["virtual studio production", "virtual set production", "in-camera virtual production"] }
   ]
 }
