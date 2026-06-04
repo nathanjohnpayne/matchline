@@ -92,7 +92,7 @@ runForFixture(input, deps)
   ├─ parseJobRequirements       Anthropic Haiku — in-memory Reqs
   ├─ embedMany on Reqs          OpenAI text-embedding-3-small
   ├─ runMatchingPipeline        no Firestore: listUnits + listRequirements + persistBatch all overridden
-  ├─ mapUnitIds                 runtime UUID → labeler mnemonic (token Jaccard, 0.30 threshold)
+  ├─ mapUnitIds                 runtime UUID → labeler mnemonic (relative best-match; 0.10 sanity floor, #148)
   ├─ mapRequirementIds          same shape for Reqs
   ├─ unitSetAccuracy            extraction score vs. expected_units
   ├─ compositeIdsFromMatches    "<unit_mnemonic>:<req_mnemonic>" strings
