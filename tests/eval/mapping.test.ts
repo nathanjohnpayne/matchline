@@ -530,10 +530,57 @@ describe("compositeIdsFromMatches", () => {
 });
 
 describe("DEFAULT_MAPPING_THRESHOLD", () => {
-  it("is in the documented permissive-but-not-promiscuous range", () => {
-    // Pin against drift. 0.30 is small enough that LLM
-    // paraphrases map correctly, large enough that
-    // wholly-unrelated content stays unmapped.
-    expect(DEFAULT_MAPPING_THRESHOLD).toBe(0.3);
+  it("is a low sanity floor, not an absolute quality cutoff (#148)", () => {
+    // Pin against drift. #148 acceptance #1: the floor dropped
+    // from 0.30 (an absolute cutoff that suppressed real-but-
+    // paraphrased pairs and made match accuracy flicker) to 0.10,
+    // a sanity guard that only rejects wholly-unrelated garbage.
+    // The greedy *relative* best-match does the real assignment.
+    expect(DEFAULT_MAPPING_THRESHOLD).toBe(0.1);
+  });
+});
+
+describe("relative best-match mapping (#148)", () => {
+  it("maps a moderate-overlap pair (0.10–0.30 band) the retired 0.30 cutoff dropped", () => {
+    // A pair whose composite score lands in the 0.10–0.30 band
+    // (shares the distinctive "launch" content but diverges
+    // elsewhere, no curated-skill overlap → ~0.15). Under the
+    // retired 0.30 cutoff this was `unmapped_<id>` — a false miss
+    // that zeroed topKOverlap. Under the 0.10 floor + relative
+    // best-match it maps to its best available expected, stably.
+    // (In a full run the stronger Kepler unit would claim u_kepler
+    // first via consume-once; this pair only maps when nothing
+    // stronger competes — "best available guess" beats a false miss.)
+    const expected = [
+      makeExpectedUnit("u_kepler", "Led Amazon Kepler launch", ["release engineering"]),
+    ];
+    const actual = [
+      makeActualUnit(
+        "uuid-band",
+        "Managed the product launch process for the retail org",
+        ["delivery management"],
+      ),
+    ];
+    const score = scoreUnitPair(expected[0]!, actual[0]!);
+    expect(score).toBeGreaterThanOrEqual(0.1);
+    expect(score).toBeLessThan(0.3);
+    // Old default (0.30) → unmapped; new default (0.10) → mapped.
+    expect(mapUnitIds(expected, actual, 0.3).get("uuid-band")).toBe(
+      "unmapped_uuid-band",
+    );
+    expect(mapUnitIds(expected, actual).get("uuid-band")).toBe("u_kepler");
+  });
+
+  it("still leaves wholly-unrelated content unmapped (floor rejects garbage)", () => {
+    const expected = [
+      makeExpectedUnit("u_kepler", "Led Amazon Kepler launch", ["release engineering"]),
+    ];
+    const actual = [
+      makeActualUnit("uuid-garbage", "Managed SAP HANA database backups", ["dba"]),
+    ];
+    expect(scoreUnitPair(expected[0]!, actual[0]!)).toBeLessThan(0.1);
+    expect(mapUnitIds(expected, actual).get("uuid-garbage")).toBe(
+      "unmapped_uuid-garbage",
+    );
   });
 });
