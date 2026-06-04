@@ -45,6 +45,13 @@ const FIELD_NORMALIZER = {
 type Field = keyof typeof FIELD_NORMALIZER;
 const FIELDS: readonly Field[] = ["keywords", "tools", "domains"];
 
+// Fixture ids are flat slugs (e.g. "google-compute-spm-2026"). Validate
+// before passing CLI input to loadJdText, which builds a path with
+// `join(.., `${id}.txt`)` — an id like "../../.env" would escape the
+// fixtures dir and (worse) get uploaded to the LLM. Reject anything
+// outside the known slug charset. (CodeRabbit on #261.)
+const FIXTURE_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
 // In-memory no-op usage recorder — same shape the eval harness uses to
 // avoid a Firestore dependency on the CLI path.
 const noopRecord = async (): Promise<number> => 0;
@@ -68,6 +75,11 @@ async function main(): Promise<void> {
   };
 
   for (const jdId of jdIds) {
+    if (!FIXTURE_ID_RE.test(jdId)) {
+      throw new Error(
+        `Invalid JD fixture id ${JSON.stringify(jdId)}. Expected a lowercase slug like "google-compute-spm-2026".`,
+      );
+    }
     const text = loadJdText(jdId);
     const reqs = await parseJobRequirements(
       text,
