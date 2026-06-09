@@ -6,8 +6,9 @@ import Onboarding from "./Onboarding.tsx";
 
 /**
  * Static-render tests for the Onboarding paste-resume route
- * (sub-issue #199). Same convention as the rest of the codebase
- * — `renderToStaticMarkup` exercises every rendering branch.
+ * (sub-issue #199; resume input upgraded to the TipTap ResumeEditor
+ * in #264). Same convention as the rest of the codebase —
+ * `renderToStaticMarkup` exercises every rendering branch.
  *
  * `Onboarding` uses `useNavigate` from React Router so the
  * component requires a Router context; we wrap with
@@ -16,6 +17,12 @@ import Onboarding from "./Onboarding.tsx";
  * integration level via hand-testing per the route's test
  * convention; the unit tests here pin the rendering shape per
  * status / draft state.
+ *
+ * NB (#264): the resume input is now a TipTap editor mounted with
+ * `immediatelyRender: false`, so the ProseMirror surface mounts in a
+ * client-side effect — NOT during `renderToStaticMarkup`. These tests
+ * therefore pin the shell + the editor *wrapper*; the Markdown
+ * paste→render behavior is browser/hand-tested (acceptance on #264).
  */
 
 function render(node: React.ReactElement): string {
@@ -27,7 +34,7 @@ describe("Onboarding", () => {
     const html = render(<Onboarding />);
     expect(html).toContain('data-testid="onboarding"');
     expect(html).toContain('data-onboarding-status="editing"');
-    expect(html).toContain('data-testid="onboarding-textarea"');
+    expect(html).toContain('data-testid="onboarding-editor-wrapper"');
     expect(html).toMatch(/<button[^>]*data-action="extract-units"/);
     // Sprint-0 placeholder copy is gone.
     expect(html).not.toContain("Sprint 0 placeholder");
@@ -63,16 +70,12 @@ describe("Onboarding", () => {
     expect(html).toContain("matching pipeline without your explicit approval");
   });
 
-  it("renders a textarea with aria-label for screen readers", () => {
+  it("renders the resume editor wrapper (TipTap surface mounts client-side)", () => {
     const html = render(<Onboarding />);
-    expect(html).toMatch(
-      /<textarea[^>]*aria-label="Resume text"/,
-    );
-  });
-
-  it("renders the textarea with rows=20 (multi-line resume content)", () => {
-    const html = render(<Onboarding />);
-    expect(html).toMatch(/<textarea[^>]*rows="20"/);
+    // The ProseMirror element (with aria-label="Resume text") mounts in
+    // an effect; renderToStaticMarkup only sees the wrapper. Editor a11y
+    // + MD rendering are verified in the browser per #264.
+    expect(html).toContain('data-testid="onboarding-editor-wrapper"');
   });
 
   it("uses a thin top progress bar (not a spinner overlay) per UI guidance rule 6", () => {
@@ -91,14 +94,12 @@ describe("Onboarding", () => {
     expect(html).not.toContain("h-0.5 w-full");
   });
 
-  it("uses font-mono on the textarea (resume formatting matters; preserve indentation)", () => {
+  it("keeps the resume label + approval-invariant copy with the editor swap", () => {
     const html = render(<Onboarding />);
-    expect(html).toMatch(/<textarea[^>]*font-mono/);
-  });
-
-  it("placeholder copy hints at plain text + tolerates headers/bullets", () => {
-    const html = render(<Onboarding />);
-    expect(html).toContain("Paste your resume as plain text");
-    expect(html).toContain("Headers and bullet points are fine");
+    // The "Resume text" label and the user-approval invariant copy are
+    // SSR-rendered shell (the Markdown-hint placeholder lives in the
+    // client-mounted editor and is verified in-browser per #264).
+    expect(html).toContain("Resume text");
+    expect(html).toContain("matching pipeline without your explicit approval");
   });
 });

@@ -26,14 +26,10 @@
  *     the textarea, allow retry on next keystroke / Submit
  */
 
-import {
-  useState,
-  type ChangeEvent,
-  type FormEvent,
-  type ReactElement,
-} from "react";
+import { useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
+import ResumeEditor from "../components/ResumeEditor.tsx";
 import { invokeExtractFromResume } from "../services/extraction.ts";
 
 export type OnboardingStatus = "editing" | "extracting" | "error";
@@ -44,8 +40,8 @@ export default function Onboarding(): ReactElement {
   const [status, setStatus] = useState<OnboardingStatus>("editing");
   const [error, setError] = useState<Error | null>(null);
 
-  const onChangeText = (e: ChangeEvent<HTMLTextAreaElement>): void => {
-    setText(e.target.value);
+  const onEditorChange = (markdown: string): void => {
+    setText(markdown);
     if (status === "error") setStatus("editing");
   };
 
@@ -121,23 +117,16 @@ export default function Onboarding(): ReactElement {
       )}
 
       <form onSubmit={onSubmit} className="space-y-3">
-        <label
-          htmlFor="onboarding-text"
+        <span
+          id="onboarding-text-label"
           className="block text-xs font-medium text-zinc-600 dark:text-zinc-400"
         >
           Resume text
-        </label>
-        <textarea
-          id="onboarding-text"
-          value={text}
-          onChange={onChangeText}
+        </span>
+        <ResumeEditor
+          onChange={onEditorChange}
           disabled={extracting}
-          rows={20}
-          aria-label="Resume text"
-          aria-describedby="onboarding-helper"
-          placeholder={"Paste your resume as plain text. Headers and bullet points are fine — we'll structure it."}
-          data-testid="onboarding-textarea"
-          className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-100"
+          placeholder="Paste your resume — Markdown renders (# headers, **bold**, - bullet lists). We'll structure it."
         />
         <div
           id="onboarding-helper"
