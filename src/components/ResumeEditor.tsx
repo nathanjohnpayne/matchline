@@ -50,9 +50,15 @@ export default function ResumeEditor({
       Placeholder.configure({ placeholder: placeholder ?? "" }),
       // Parse pasted text as Markdown so `# H` / `**b**` / `- x` render,
       // and expose getMarkdown() to serialize back to text for extraction.
+      // `breaks: true` keeps single newlines as hard breaks instead of
+      // collapsing them to spaces — a plain-text resume (company / title /
+      // dates on separate lines) is the DEFAULT onboarding input and must
+      // keep its line structure for extraction, matching the old textarea.
+      // (Codex P2 on #267.)
       Markdown.configure({
         transformPastedText: true,
         transformCopiedText: true,
+        breaks: true,
       }),
     ],
     editable: !disabled,
