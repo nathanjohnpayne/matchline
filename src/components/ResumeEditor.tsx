@@ -55,6 +55,25 @@ export default function ResumeEditor({
       // dates on separate lines) is the DEFAULT onboarding input and must
       // keep its line structure for extraction, matching the old textarea.
       // (Codex P2 on #267.)
+      //
+      // --- Serialization-layer scope + justification ---
+      // (docs/agents/operating-rules.md §"Serialization layer review
+      // requirement".) This editor is a Markdown (de)serialization layer:
+      // pasted text is parsed into the StarterKit schema and re-serialized
+      // via getMarkdown() for the route's TEXT-ONLY extraction call. Scope:
+      //   • Lossless — the StarterKit construct set: headings, bold, italic,
+      //     ordered/bullet lists, inline code, code blocks, blockquote
+      //     (round-trip browser-verified in #267).
+      //   • Lossy — GFM constructs outside that schema (tables, task-list
+      //     checkboxes, strikethrough) have no node to parse into and degrade
+      //     to plain text on paste.
+      // Explicit justification for the bounded loss (the rule's
+      // justification path): invokeExtractFromResume is text-only at V1 — it
+      // consumes the flat text, not document structure — so the structure an
+      // unsupported construct would carry is flattened by the consumer
+      // regardless; no information the consumer reads is discarded. Revisit
+      // (extend the schema, or feed the raw paste) if extraction becomes
+      // structure-aware. (Codex P2 "Preserve Markdown TipTap cannot model".)
       Markdown.configure({
         transformPastedText: true,
         transformCopiedText: true,
