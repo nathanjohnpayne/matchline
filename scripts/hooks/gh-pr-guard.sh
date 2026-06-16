@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
 # gh-pr-guard.sh — PreToolUse hook for Claude Code
 #
-# Gates five operations:
-#   1. gh pr create — blocks unless (a) the keyring's active gh
-#      account is the AUTHOR identity (nathanjohnpayne by default;
-#      override via GH_PR_GUARD_EXPECTED_AUTHOR), AND (b) the command
-#      text includes "Authoring-Agent:" and "## Self-Review". The
-#      identity check (#241) prevents the split-invocation footgun
-#      where a `gh auth switch` in one Bash tool call drifts before
-#      the `gh pr create` in a subsequent call, landing the PR under
-#      the wrong account. Canonical fix is to use
-#      scripts/gh-as-author.sh which wraps switch + create + switch-
-#      back in one bash process.
+# Gates core write operations:
+#   1. gh pr create — blocks unless the command is routed through
+#      scripts/gh-as-author.sh and the command text includes
+#      "Authoring-Agent:" and "## Self-Review". The wrapper verifies
+#      an author token before the write and verifies the created PR
+#      author afterward with the same token.
 #   2. gh pr merge --admin — blocks unless BREAK_GLASS_ADMIN=1
 #      (human must explicitly authorize in chat)
 #   3. gh pr merge (any flavor) — blocks when the target PR's
@@ -36,7 +31,7 @@
 #      merge past Label Gate by removing the label without running
 #      the gate check first.
 #
-# Byline-sensitive command coverage (#284):
+# Byline-sensitive command coverage (#284/#411):
 #
 #   Beyond the pr-create / pr-merge gates above, the hook ALSO
 #   guards a class of commands whose byline is identity-load-bearing
@@ -46,15 +41,13 @@
 #     - gh pr review <PR#> --comment / --approve / --request-changes
 #     - gh issue comment <issue#> --body "..."
 #
-#   For all three, the keyring's active account must exactly match the
-#   operating agent's REVIEWER identity. The expected reviewer resolves
-#   as: explicit GH_PR_GUARD_EXPECTED_REVIEWER override, else
-#   nathanpayne-$MERGEPATH_AGENT, else nathanpayne-claude.
-#   Posting these as the AUTHOR identity (nathanjohnpayne), or as the
-#   wrong reviewer identity after cross-session keyring drift, breaks
-#   the audit-trail convention REVIEW_POLICY.md depends on — reviewer
-#   comments must attribute to the reviewer. The check fires before
-#   the keyring write so misattributed comments never land.
+#   All three must be routed through scripts/gh-as-reviewer.sh. The
+#   expected reviewer resolves as: explicit
+#   GH_PR_GUARD_EXPECTED_REVIEWER override, else
+#   nathanpayne-$MERGEPATH_AGENT, else nathanpayne-claude. The hook
+#   validates the wrapper configuration and blocks direct or inline
+#   token forms so the wrapper can verify the effective token before
+#   any comment/review lands.
 #
 #   `gh issue create` is intentionally NOT in this set. It was briefly
 #   guarded (#317, after the mergepath#315 misattribution) but that
@@ -64,9 +57,9 @@
 #   under any identity.
 #
 #   Additionally, `gh pr review --approve` is blocked when the
-#   target PR is OVER-threshold AND the keyring is the agent's own
-#   reviewer identity AND the PR's body contains an `Authoring-Agent:`
-#   line that names the SAME agent. This is the no-self-approve
+#   target PR is OVER-threshold AND the reviewer wrapper identity is the
+#   agent's own reviewer identity AND the PR's body contains an
+#   `Authoring-Agent:` line that names the SAME agent. This is the no-self-approve
 #   policy from REVIEW_POLICY.md § No-self-approve scoping enforced
 #   at the hook layer: a `claude` reviewer must not approve a PR
 #   whose `Authoring-Agent: claude` line means claude wrote it. The
@@ -374,7 +367,56 @@ prefix_flag_takes_value() {
     ionice:-c|ionice:-n|ionice:-p)
       return 0
       ;;
-    env:-u|env:-S)
+    env:-u|env:-S|env:--unset)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GUARD_REPO_ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
+
+# Locate the governing review-policy.yml without trusting the caller's
+# cwd to BE the repo root (Codex P2 on PR #442 r21): walk upward from
+# the cwd (covers subdirectory invocations and out-of-tree fixture
+# repos), then fall back to the hook's own repo root (the hook is
+# installed at <root>/scripts/hooks/, so script root == project root
+# in production). Echoes the path or nothing.
+guard_policy_file() {
+  local d="$PWD"
+  while [ -n "$d" ] && [ "$d" != "/" ]; do
+    if [ -f "$d/.github/review-policy.yml" ]; then
+      printf '%s\n' "$d/.github/review-policy.yml"
+      return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  if [ -f "$GUARD_REPO_ROOT/.github/review-policy.yml" ]; then
+    printf '%s\n' "$GUARD_REPO_ROOT/.github/review-policy.yml"
+    return 0
+  fi
+  return 1
+}
+REPO_ROOT="$(cd "$HOOK_DIR/../.." && pwd)"
+CANON_AUTHOR_WRAPPER="$REPO_ROOT/scripts/gh-as-author.sh"
+CANON_REVIEWER_WRAPPER="$REPO_ROOT/scripts/gh-as-reviewer.sh"
+
+is_author_wrapper_token() {
+  [ "$1" = "scripts/gh-as-author.sh" ] || \
+    [ "$1" = "./scripts/gh-as-author.sh" ] || \
+    [ "$1" = "$CANON_AUTHOR_WRAPPER" ]
+}
+
+is_reviewer_wrapper_token() {
+  [ "$1" = "scripts/gh-as-reviewer.sh" ] || \
+    [ "$1" = "./scripts/gh-as-reviewer.sh" ] || \
+    [ "$1" = "$CANON_REVIEWER_WRAPPER" ]
+}
+
+is_any_wrapper_named_token() {
+  case "$1" in
+    */gh-as-author.sh|gh-as-author.sh|*/gh-as-reviewer.sh|gh-as-reviewer.sh)
       return 0
       ;;
   esac
@@ -439,7 +481,7 @@ guarded_gh_invocation_label() {
     esac
 
     case "$parent:$tok" in
-      pr:create|pr:merge|pr:comment|pr:review)
+      pr:create|pr:merge|pr:comment|pr:review|pr:edit)
         printf 'gh pr %s\n' "$tok"
         return 0
         ;;
@@ -489,6 +531,15 @@ for i in "${!TOKENS[@]}"; do
       SCAN_CURRENT_PREFIX="$tok"
       continue
       ;;
+    *)
+      if is_author_wrapper_token "$tok" || is_reviewer_wrapper_token "$tok"; then
+        SCAN_CURRENT_PREFIX="$tok"
+        continue
+      fi
+      ;;
+  esac
+
+  case "$tok" in
     -*)
       if prefix_flag_takes_value "$SCAN_CURRENT_PREFIX" "$tok"; then
         SCAN_SKIP_PREFIX_VALUE=1
@@ -571,9 +622,30 @@ fi
 INLINE_CODEX_CLEARED=""
 INLINE_BREAK_GLASS_ADMIN=""
 INLINE_BREAK_GLASS_MERGE_STATE=""
+INLINE_GH_AS_AUTHOR_IDENTITY=""
+INLINE_GH_AS_REVIEWER_IDENTITY=""
+# Standalone (own-segment) identity assignments persist as shell
+# variables and — when the name already carries the export attribute in
+# the calling shell — ALSO reach later processes. The hook cannot see
+# the export attribute, so these are tracked separately as
+# possibly-effective candidates that the byline guards must validate
+# alongside the environment value (fail closed on the ambiguity).
+# Codex P1 on PR #442 r4.
+STANDALONE_GH_AS_AUTHOR_IDENTITY=""
+STANDALONE_GH_AS_REVIEWER_IDENTITY=""
+# Set-ness flags: an EMPTY assignment (`GH_AS_AUTHOR_IDENTITY= wrapper`)
+# is NOT absent — it resets the wrapper to its hardcoded default, which
+# in a custom-author repo differs from the expected author (Codex P1 on
+# PR #442 r15). Every capture records both the value and that an
+# assignment happened.
+INLINE_GH_AS_AUTHOR_IDENTITY_SET=0
+INLINE_GH_AS_REVIEWER_IDENTITY_SET=0
+STANDALONE_GH_AS_AUTHOR_IDENTITY_SET=0
+STANDALONE_GH_AS_REVIEWER_IDENTITY_SET=0
 GLOBAL_REPO=""
 PR_SUBCOMMAND=""
 PR_SUBCOMMAND_INDEX=-1    # index in TOKENS where the gh pr subcommand was found
+WRAPPER_KIND=""           # "" | "author" | "reviewer"
 SAW_GH=0
 SAW_PR=0
 SAW_ISSUE=0
@@ -582,6 +654,14 @@ AT_COMMAND_POSITION=1    # 1 = at command position, 0 = walking unrelated-comman
 SEGMENT_HAS_COMMAND=0    # 1 = this segment has seen a non-assignment command (echo, cat, etc.)
 SKIP_PREFIX_VALUE=0      # 1 = next token is the value of a prefix-command flag
 CURRENT_PREFIX=""        # name of the most recently seen prefix command (sudo/time/etc.)
+IN_EXPORT_SEGMENT=0      # 1 = current segment is an `export` command (its
+                         # assignment args reach all later processes)
+SEGMENT_HAS_EVAL=0       # 1 = current segment ran `eval` — an eval'd
+                         # assignment persists like a bare standalone
+PENDING_PREFIX_FLAG=""   # "<prefix>:<flag>" whose value the next token is
+                         # (lets the consumer recognize `env -u NAME`)
+IDENTITY_ENV_CLEARED_FOR_WRAPPER=0  # 1 = env -i seen: the wrapper sees an
+                         # EMPTY environment (no MERGEPATH_AGENT either)
 for i in "${!TOKENS[@]}"; do
   tok="${TOKENS[$i]}"
   # --- phase 2: walking after gh, looking for pr + subcommand ---
@@ -665,6 +745,24 @@ for i in "${!TOKENS[@]}"; do
   # straight to the actual command.
   if [ "$SKIP_PREFIX_VALUE" -eq 1 ]; then
     SKIP_PREFIX_VALUE=0
+    # `env -u NAME` removes NAME from the wrapped command's
+    # environment: for the identity variables that is exactly the
+    # r15 empty-override semantics — the wrapper falls back to its
+    # hardcoded default, which a custom-author repo must fail closed
+    # on (Codex P2 on PR #442 r17, env --help verified).
+    if [ "$PENDING_PREFIX_FLAG" = "env:-u" ] || [ "$PENDING_PREFIX_FLAG" = "env:--unset" ]; then
+      case "$tok" in
+        GH_AS_AUTHOR_IDENTITY)
+          INLINE_GH_AS_AUTHOR_IDENTITY=""
+          INLINE_GH_AS_AUTHOR_IDENTITY_SET=1
+          ;;
+        GH_AS_REVIEWER_IDENTITY)
+          INLINE_GH_AS_REVIEWER_IDENTITY=""
+          INLINE_GH_AS_REVIEWER_IDENTITY_SET=1
+          ;;
+      esac
+    fi
+    PENDING_PREFIX_FLAG=""
     continue
   fi
 
@@ -685,6 +783,8 @@ for i in "${!TOKENS[@]}"; do
     "&&"|"||"|";"|"|"|"|&"|"&"|"("|")")
       AT_COMMAND_POSITION=1
       CURRENT_PREFIX=""
+      WRAPPER_KIND=""
+      IN_EXPORT_SEGMENT=0
       # Clear inline env vars ONLY when the segment that just ended
       # contained a non-assignment command. That means the assignment
       # was a PREFIX scoped to that command, not a standalone
@@ -706,6 +806,44 @@ for i in "${!TOKENS[@]}"; do
         INLINE_BREAK_GLASS_ADMIN=""
         INLINE_BREAK_GLASS_MERGE_STATE=""
       fi
+      # Identity assignments: their consumer is the WRAPPER process
+      # environment, not this hook, and what survives a separator
+      # depends on HOW the assignment appeared (Codex P2s/P1 on PR
+      # #442 r1/r3/r4):
+      #   - PREFIX to an earlier command (`VAR=x echo ok ; wrapper`):
+      #     the shell restores the variable after that command —
+      #     provably ineffective for later segments. Drop it, or a
+      #     stale value falsely blocks later wrapper writes (r1).
+      #   - STANDALONE (`VAR=x ; wrapper` / `VAR=x && wrapper`): the
+      #     value persists as a shell variable, and IF the name
+      #     already carries the export attribute in the calling shell
+      #     it also reaches the wrapper (r4). The hook cannot see the
+      #     export attribute, so the value is stashed as a
+      #     possibly-effective candidate that the byline guards
+      #     validate IN ADDITION to the environment/default value —
+      #     fail closed on the ambiguity (this also covers r3, where
+      #     an unexported standalone value would have masked the
+      #     wrapper falling back to its stock default).
+      if [ "$SEGMENT_HAS_COMMAND" -eq 0 ] || [ "${SEGMENT_HAS_EVAL:-0}" -eq 1 ]; then
+        # Bare standalone segment, or an eval segment — in both, a
+        # captured assignment persists past the separator (eval'd
+        # assignments are standalone-equivalent; assignments that
+        # were prefixes TO the eval are over-captured on purpose,
+        # the fail-closed direction).
+        if [ "$INLINE_GH_AS_AUTHOR_IDENTITY_SET" -eq 1 ]; then
+          STANDALONE_GH_AS_AUTHOR_IDENTITY="$INLINE_GH_AS_AUTHOR_IDENTITY"
+          STANDALONE_GH_AS_AUTHOR_IDENTITY_SET=1
+        fi
+        if [ "$INLINE_GH_AS_REVIEWER_IDENTITY_SET" -eq 1 ]; then
+          STANDALONE_GH_AS_REVIEWER_IDENTITY="$INLINE_GH_AS_REVIEWER_IDENTITY"
+          STANDALONE_GH_AS_REVIEWER_IDENTITY_SET=1
+        fi
+      fi
+      SEGMENT_HAS_EVAL=0
+      INLINE_GH_AS_AUTHOR_IDENTITY=""
+      INLINE_GH_AS_REVIEWER_IDENTITY=""
+      INLINE_GH_AS_AUTHOR_IDENTITY_SET=0
+      INLINE_GH_AS_REVIEWER_IDENTITY_SET=0
       SEGMENT_HAS_COMMAND=0
       continue
       ;;
@@ -730,13 +868,107 @@ for i in "${!TOKENS[@]}"; do
       BREAK_GLASS_MERGE_STATE=*)
         INLINE_BREAK_GLASS_MERGE_STATE="${tok#BREAK_GLASS_MERGE_STATE=}"
         ;;
+      GH_AS_AUTHOR_IDENTITY=*)
+        INLINE_GH_AS_AUTHOR_IDENTITY="${tok#GH_AS_AUTHOR_IDENTITY=}"
+        INLINE_GH_AS_AUTHOR_IDENTITY_SET=1
+        ;;
+      GH_AS_REVIEWER_IDENTITY=*)
+        INLINE_GH_AS_REVIEWER_IDENTITY="${tok#GH_AS_REVIEWER_IDENTITY=}"
+        INLINE_GH_AS_REVIEWER_IDENTITY_SET=1
+        ;;
     esac
   fi
 
   if [ "$AT_COMMAND_POSITION" -eq 0 ]; then
+    # Arguments of an `export` command are DEFINITELY-effective
+    # identity assignments: `export GH_AS_AUTHOR_IDENTITY=x ; wrapper`
+    # puts the value in every later process's environment, while this
+    # walk would otherwise skip the token as an unrelated-command
+    # argument and the byline guard would fall back to the default
+    # candidate (Codex P1 on PR #442 r11 — the wrong-byline class).
+    # Capture them into the standalone (possibly-effective) slots the
+    # candidate model already validates.
+    if [ "$IN_EXPORT_SEGMENT" -eq 1 ]; then
+      case "$tok" in
+        GH_AS_AUTHOR_IDENTITY=*)
+          STANDALONE_GH_AS_AUTHOR_IDENTITY="${tok#GH_AS_AUTHOR_IDENTITY=}"
+          STANDALONE_GH_AS_AUTHOR_IDENTITY_SET=1
+          ;;
+        GH_AS_REVIEWER_IDENTITY=*)
+          STANDALONE_GH_AS_REVIEWER_IDENTITY="${tok#GH_AS_REVIEWER_IDENTITY=}"
+          STANDALONE_GH_AS_REVIEWER_IDENTITY_SET=1
+          ;;
+        GH_AS_AUTHOR_IDENTITY)
+          # Bare name as an `unset` argument: the variable is removed
+          # from the shell AND the child environment — the r15
+          # empty-override semantics, persisting past separators.
+          if [ "${DECLARATION_KIND:-}" = "unset" ]; then
+            STANDALONE_GH_AS_AUTHOR_IDENTITY=""
+            STANDALONE_GH_AS_AUTHOR_IDENTITY_SET=1
+          fi
+          ;;
+        GH_AS_REVIEWER_IDENTITY)
+          if [ "${DECLARATION_KIND:-}" = "unset" ]; then
+            STANDALONE_GH_AS_REVIEWER_IDENTITY=""
+            STANDALONE_GH_AS_REVIEWER_IDENTITY_SET=1
+          fi
+          ;;
+      esac
+    fi
     # Skipping arguments of an unrelated command. Stay until a
     # separator resets us above.
     continue
+  fi
+
+  # Declaration builtins (`export`, `declare`, `typeset`, `readonly`,
+  # `local`) at command position: their assignment arguments can reach
+  # all later processes (-x exports; readonly -x verified on PR #442
+  # r14). Flag the segment so the skip-path above captures the
+  # identity assignments that follow. Variants without -x are
+  # over-captured on purpose — the candidate model only blocks
+  # MISMATCHED values, so the cost of the ambiguity is a false block
+  # on a non-exported mismatched declaration, which is the fail-closed
+  # direction for a byline guard.
+  case "$tok" in export|declare|typeset|readonly|local|unset) IS_DECLARATION_BUILTIN=1 ;; *) IS_DECLARATION_BUILTIN=0 ;; esac
+  if [ "$IS_DECLARATION_BUILTIN" -eq 1 ]; then
+    DECLARATION_KIND="$tok"
+    IN_EXPORT_SEGMENT=1
+    SEGMENT_HAS_COMMAND=1
+    AT_COMMAND_POSITION=0
+    # A prefix assignment BEFORE the export command in the same
+    # segment (`VAR=x export VAR`) both persists in the shell and is
+    # exported — bash applies the prefix to the declaration builtin
+    # and the bare-name export then marks the variable. Promote any
+    # already-captured inline identity to the definitely-effective
+    # slots, or the separator path would discard it as an ordinary
+    # command prefix (Codex P1 on PR #442 r12 — wrong-byline class).
+    if [ "$INLINE_GH_AS_AUTHOR_IDENTITY_SET" -eq 1 ]; then
+      STANDALONE_GH_AS_AUTHOR_IDENTITY="$INLINE_GH_AS_AUTHOR_IDENTITY"
+      STANDALONE_GH_AS_AUTHOR_IDENTITY_SET=1
+    fi
+    if [ "$INLINE_GH_AS_REVIEWER_IDENTITY_SET" -eq 1 ]; then
+      STANDALONE_GH_AS_REVIEWER_IDENTITY="$INLINE_GH_AS_REVIEWER_IDENTITY"
+      STANDALONE_GH_AS_REVIEWER_IDENTITY_SET=1
+    fi
+    continue
+  fi
+
+  if is_any_wrapper_named_token "$tok"; then
+    if is_author_wrapper_token "$tok"; then
+      WRAPPER_KIND="author"
+      CURRENT_PREFIX="$tok"
+      continue
+    fi
+    if is_reviewer_wrapper_token "$tok"; then
+      WRAPPER_KIND="reviewer"
+      CURRENT_PREFIX="$tok"
+      continue
+    fi
+    echo "BLOCKED: non-canonical GitHub write wrapper path '$tok'." >&2
+    echo "  Use the repository wrapper so token verification is guaranteed:" >&2
+    echo "    scripts/gh-as-author.sh -- gh ..." >&2
+    echo "    scripts/gh-as-reviewer.sh -- gh ..." >&2
+    exit 2
   fi
 
   case "$tok" in
@@ -751,6 +983,16 @@ for i in "${!TOKENS[@]}"; do
       # tell value-taking flags from boolean ones — short flags
       # like `-p` mean different things to different commands
       # (boolean for time, value-taking for ionice/sudo).
+      #
+      # eval is special: it executes its arguments as a NEW command
+      # line, so an assignment argument (`eval VAR=x`) becomes a
+      # STANDALONE assignment persisting in the shell — unlike an
+      # ordinary prefix the shell restores. The separator path
+      # promotes captured identities from eval segments to the
+      # possibly-effective slots instead of discarding them.
+      if [ "$tok" = "eval" ]; then
+        SEGMENT_HAS_EVAL=1
+      fi
       CURRENT_PREFIX="$tok"
       continue
       ;;
@@ -776,7 +1018,39 @@ for i in "${!TOKENS[@]}"; do
       # identically.
       if prefix_flag_takes_value "$CURRENT_PREFIX" "$tok"; then
         SKIP_PREFIX_VALUE=1
+        PENDING_PREFIX_FLAG="$CURRENT_PREFIX:$tok"
         continue
+      fi
+      # env's combined/long forms that drop identity variables from
+      # the wrapped command's environment (same r15 empty-override
+      # semantics as `env -u NAME` above): --unset=NAME, and -i which
+      # clears the whole environment.
+      if [ "$CURRENT_PREFIX" = "env" ]; then
+        case "$tok" in
+          --unset=GH_AS_AUTHOR_IDENTITY|-u=GH_AS_AUTHOR_IDENTITY)
+            INLINE_GH_AS_AUTHOR_IDENTITY=""
+            INLINE_GH_AS_AUTHOR_IDENTITY_SET=1
+            continue
+            ;;
+          --unset=GH_AS_REVIEWER_IDENTITY|-u=GH_AS_REVIEWER_IDENTITY)
+            INLINE_GH_AS_REVIEWER_IDENTITY=""
+            INLINE_GH_AS_REVIEWER_IDENTITY_SET=1
+            continue
+            ;;
+          -i|--ignore-environment)
+            INLINE_GH_AS_AUTHOR_IDENTITY=""
+            INLINE_GH_AS_AUTHOR_IDENTITY_SET=1
+            INLINE_GH_AS_REVIEWER_IDENTITY=""
+            INLINE_GH_AS_REVIEWER_IDENTITY_SET=1
+            # env -i clears EVERYTHING the wrapper would see —
+            # including MERGEPATH_AGENT — so the reviewer fallback
+            # must be the wrapper's bare hardcoded default, not the
+            # hook environment's agent chain (Codex P1 on PR #442
+            # r19).
+            IDENTITY_ENV_CLEARED_FOR_WRAPPER=1
+            continue
+            ;;
+        esac
       fi
       # Otherwise: boolean flag of the current prefix (or a flag
       # of an unknown prefix, which we conservatively assume is
@@ -825,18 +1099,177 @@ fi
 if [ "$PR_SUBCOMMAND" != "create" ] && \
    [ "$PR_SUBCOMMAND" != "merge" ] && \
    [ "$PR_SUBCOMMAND" != "comment" ] && \
+   [ "$PR_SUBCOMMAND" != "edit" ] && \
    [ "$PR_SUBCOMMAND" != "review" ] && \
    [ "$IS_ISSUE_COMMENT" -eq 0 ]; then
   exit 0
 fi
 
+cmd_label=""
+case "$PR_SUBCOMMAND" in
+  create)  cmd_label="gh pr create" ;;
+  merge)   cmd_label="gh pr merge" ;;
+  comment) cmd_label="gh pr comment" ;;
+  review)  cmd_label="gh pr review" ;;
+  edit)    cmd_label="gh pr edit" ;;
+esac
+[ "$IS_ISSUE_COMMENT" -eq 1 ] && cmd_label="gh issue comment"
+
+PR_COMMENT_BODY_HAS_CODEX_TRIGGER=0
+if [ "$PR_SUBCOMMAND" = "comment" ] && [ "$IS_ISSUE_COMMENT" -eq 0 ]; then
+  # Only author-wrapper pr comments that actually pass @codex review in
+  # the gh pr comment body are allowed. Looking at the whole shell
+  # command would let an earlier `echo "@codex review"` spoof this gate.
+  comment_walk_start=$((PR_SUBCOMMAND_INDEX + 1))
+  comment_skip_next=""
+  for j in "${!TOKENS[@]}"; do
+    if [ "$j" -lt "$comment_walk_start" ]; then
+      continue
+    fi
+    tok="${TOKENS[$j]}"
+    case "$tok" in
+      "&&"|"||"|";"|"|"|"|&"|"&"|"("|")") break ;;
+    esac
+    if [ -n "$comment_skip_next" ]; then
+      comment_skip_next=""
+      continue
+    fi
+    case "$tok" in
+      --body|-b)
+        next_index=$((j + 1))
+        body_value="${TOKENS[$next_index]:-}"
+        case "$body_value" in
+          *"@codex review"*) PR_COMMENT_BODY_HAS_CODEX_TRIGGER=1 ;;
+        esac
+        comment_skip_next=1
+        ;;
+      --body=*)
+        body_value="${tok#--body=}"
+        case "$body_value" in
+          *"@codex review"*) PR_COMMENT_BODY_HAS_CODEX_TRIGGER=1 ;;
+        esac
+        ;;
+      --body-file|-F)
+        comment_skip_next=1
+        ;;
+    esac
+  done
+fi
+
+if [ -z "$WRAPPER_KIND" ]; then
+  echo "BLOCKED: $cmd_label is a guarded GitHub write and must use a token-verifying wrapper (#411)." >&2
+  echo "" >&2
+  echo "  Direct or inline-token gh writes are not hook-verifiable before shell expansion." >&2
+  echo "  Use the wrapper that verifies the effective token immediately before the write:" >&2
+  echo "" >&2
+  case "$PR_SUBCOMMAND:$IS_ISSUE_COMMENT" in
+    create:*|merge:*|edit:*)
+      echo "    scripts/gh-as-author.sh -- $cmd_label ..." >&2
+      ;;
+    comment:0)
+      echo "    scripts/gh-as-reviewer.sh -- $cmd_label ..." >&2
+      echo "    scripts/gh-as-author.sh -- gh pr comment ... --body '@codex review'   # Codex trigger only" >&2
+      ;;
+    review:*)
+      echo "    scripts/gh-as-reviewer.sh -- $cmd_label ..." >&2
+      ;;
+    *:1)
+      echo "    scripts/gh-as-reviewer.sh -- gh issue comment ..." >&2
+      ;;
+  esac
+  echo "" >&2
+  echo "  See REVIEW_POLICY.md § Operation-to-Identity Matrix." >&2
+  exit 2
+fi
+
+AUTHOR_WRAPPER_ALLOWED=0
+REVIEWER_WRAPPER_ALLOWED=0
+case "$PR_SUBCOMMAND:$IS_ISSUE_COMMENT" in
+  create:*|merge:*|edit:*) AUTHOR_WRAPPER_ALLOWED=1 ;;
+  comment:0)
+    if [ "$PR_COMMENT_BODY_HAS_CODEX_TRIGGER" -eq 1 ]; then
+      AUTHOR_WRAPPER_ALLOWED=1
+    fi
+    REVIEWER_WRAPPER_ALLOWED=1
+    ;;
+  review:*) REVIEWER_WRAPPER_ALLOWED=1 ;;
+  *:1) REVIEWER_WRAPPER_ALLOWED=1 ;;
+esac
+
+if [ "$WRAPPER_KIND" = "author" ] && [ "$AUTHOR_WRAPPER_ALLOWED" -ne 1 ]; then
+  echo "BLOCKED: $cmd_label was routed through gh-as-author.sh, but this write must use a reviewer token." >&2
+  echo "  Use scripts/gh-as-reviewer.sh -- $cmd_label ..." >&2
+  exit 2
+fi
+if [ "$WRAPPER_KIND" = "reviewer" ] && [ "$REVIEWER_WRAPPER_ALLOWED" -ne 1 ]; then
+  echo "BLOCKED: $cmd_label was routed through gh-as-reviewer.sh, but this write must use the author token." >&2
+  echo "  Use scripts/gh-as-author.sh -- $cmd_label ..." >&2
+  exit 2
+fi
+
+# --- byline guard for author-wrapper writes (#438) --------------------
+#
+# gh-as-author.sh verifies the token for whatever login
+# GH_AS_AUTHOR_IDENTITY names — its default is nathanjohnpayne, but a
+# shell where the variable is exported (or inline-prefixed) as a
+# different login makes the wrapper verify THAT login's token and run
+# `gh pr merge`/`edit`/`create` under it. Pin the wrapper's effective
+# author identity to the expected author, exactly as the reviewer
+# branch below pins the reviewer identity. Without this,
+# `GH_AS_AUTHOR_IDENTITY=nathanpayne-codex scripts/gh-as-author.sh --
+# gh pr merge ...` re-opens the wrong-byline merge/edit path the
+# wrapper migration closed (the #359 class).
+if [ "$WRAPPER_KIND" = "author" ]; then
+  # Expected-author resolution order: explicit env override, then the
+  # repo's review-policy.yml author_identity (so custom-author repos
+  # need no hook-specific variable — Codex P2 on PR #442 round 2),
+  # then the fleet default.
+  EXPECTED_AUTHOR="${GH_PR_GUARD_EXPECTED_AUTHOR:-}"
+  GUARD_POLICY_FILE="$(guard_policy_file || true)"
+  if [ -z "$EXPECTED_AUTHOR" ] && [ -n "$GUARD_POLICY_FILE" ]; then
+    # Strip surrounding double OR single quotes — both are valid YAML
+    # scalars (`author_identity: "custom-owner"` / `'custom-owner'`),
+    # matching the quote-tolerance of the sibling policy parsers
+    # (Codex P2s on PR #442 r6/r7). Policy located via upward walk +
+    # script-root fallback per r21.
+    EXPECTED_AUTHOR=$(grep -m1 '^author_identity:' "$GUARD_POLICY_FILE" | awk '{print $2}' | sed -E "s/^[\"']//; s/[\"']\$//" || true)
+  fi
+  EXPECTED_AUTHOR="${EXPECTED_AUTHOR:-nathanjohnpayne}"
+  # Candidate model (Codex P1 on PR #442 r4): a same-segment prefix on
+  # the wrapper command is DEFINITIVE (it reaches the wrapper's
+  # environment regardless of export attribute). Otherwise the wrapper
+  # may see EITHER the hook's environment value / the wrapper's hard
+  # default (nathanjohnpayne) OR a standalone assignment from an
+  # earlier segment (effective only if the name carries the export
+  # attribute, which the hook cannot observe). Every possibly-effective
+  # candidate must match the expected author — fail closed on the
+  # ambiguity.
+  if [ "$INLINE_GH_AS_AUTHOR_IDENTITY_SET" -eq 1 ]; then
+    # Same-segment prefix is definitive. An EMPTY override is not
+    # "absent" — it resets the wrapper to its hardcoded default
+    # (Codex P1 on PR #442 r15).
+    AUTHOR_IDENTITY_CANDIDATES="${INLINE_GH_AS_AUTHOR_IDENTITY:-nathanjohnpayne}"
+  else
+    AUTHOR_IDENTITY_CANDIDATES="${GH_AS_AUTHOR_IDENTITY:-nathanjohnpayne}"
+    if [ "$STANDALONE_GH_AS_AUTHOR_IDENTITY_SET" -eq 1 ]; then
+      AUTHOR_IDENTITY_CANDIDATES="$AUTHOR_IDENTITY_CANDIDATES ${STANDALONE_GH_AS_AUTHOR_IDENTITY:-nathanjohnpayne}"
+    fi
+  fi
+  for WRAPPER_AUTHOR_IDENTITY in $AUTHOR_IDENTITY_CANDIDATES; do
+    if [ "$WRAPPER_AUTHOR_IDENTITY" != "$EXPECTED_AUTHOR" ]; then
+      echo "BLOCKED: $cmd_label wrapper may run under author identity '$WRAPPER_AUTHOR_IDENTITY', not expected author '$EXPECTED_AUTHOR'." >&2
+      echo "  gh-as-author.sh verifies whatever login GH_AS_AUTHOR_IDENTITY names; a non-author login here lands the write under the wrong byline (#438)." >&2
+      echo "  Unset GH_AS_AUTHOR_IDENTITY (wrapper default: nathanjohnpayne) and drop any standalone GH_AS_AUTHOR_IDENTITY=... assignment from the command, or set GH_PR_GUARD_EXPECTED_AUTHOR if this repo's author identity genuinely differs." >&2
+      exit 2
+    fi
+  done
+fi
+
 # --- byline guard for pr comment / pr review / issue comment ---
 #
-# These three subcommands share a single policy: the keyring's active
-# account must exactly match the operating agent's REVIEWER identity.
-# Posting any of them under nathanjohnpayne OR the wrong reviewer
-# identity mis-attributes the byline in a way that breaks the
-# audit-trail invariant REVIEW_POLICY.md depends on.
+# These three subcommands share a single policy: reviewer writes must be
+# routed through gh-as-reviewer.sh, and that wrapper must be configured
+# for the expected reviewer identity.
 #
 # `gh issue create` is deliberately excluded — it was briefly guarded
 # here (#317, after the mergepath#315 misattribution) but reverted,
@@ -859,39 +1292,40 @@ else
   fi
 fi
 if [ "$PR_SUBCOMMAND" = "comment" ] || [ "$PR_SUBCOMMAND" = "review" ] || [ "$IS_ISSUE_COMMENT" -eq 1 ]; then
-  if [ "${BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK:-0}" != "1" ]; then
-    ACTIVE_GH_USER=$(gh config get -h github.com user 2>/dev/null || echo "")
-    if [ -z "$ACTIVE_GH_USER" ]; then
-      echo "BLOCKED: gh-pr-guard could not read the active gh account from 'gh config get -h github.com user'." >&2
-      echo "  Either gh is not installed/authenticated, or the keyring config is corrupt." >&2
-      echo "  Run 'gh auth login' for the $EXPECTED_REVIEWER identity, then retry." >&2
-      exit 2
+  if [ "$WRAPPER_KIND" = "reviewer" ]; then
+    # Same candidate model as the author guard above (Codex P1 on PR
+    # #442 r4): a same-segment prefix is definitive; otherwise both
+    # the env/default resolution AND any standalone assignment from an
+    # earlier segment are possibly effective and must ALL match.
+    # The wrapper resolves an EMPTY GH_AS_REVIEWER_IDENTITY through its
+    # env-free chain (MERGEPATH_AGENT, then nathanpayne-claude) — an
+    # empty-set assignment maps to that, not to "absent" (r15).
+    REVIEWER_EMPTY_FALLBACK="nathanpayne-claude"
+    if [ -n "${MERGEPATH_AGENT:-}" ] && [ "$IDENTITY_ENV_CLEARED_FOR_WRAPPER" -eq 0 ]; then
+      # env -i strips MERGEPATH_AGENT from the wrapper too — in that
+      # case the wrapper's chain bottoms out at its hardcoded default
+      # regardless of the hook environment (r19).
+      REVIEWER_EMPTY_FALLBACK="nathanpayne-$MERGEPATH_AGENT"
     fi
-    EXPECTED_AUTHOR_FOR_BLOCK="${GH_PR_GUARD_EXPECTED_AUTHOR:-nathanjohnpayne}"
-    if [ "$ACTIVE_GH_USER" != "$EXPECTED_REVIEWER" ]; then
-      cmd_label=""
-      case "$PR_SUBCOMMAND" in
-        comment) cmd_label="gh pr comment" ;;
-        review)  cmd_label="gh pr review" ;;
-      esac
-      [ "$IS_ISSUE_COMMENT" -eq 1 ] && cmd_label="gh issue comment"
-      if [ "$ACTIVE_GH_USER" = "$EXPECTED_AUTHOR_FOR_BLOCK" ]; then
-        active_role="the AUTHOR identity"
-      else
-        active_role="not the expected reviewer identity"
+    if [ "$INLINE_GH_AS_REVIEWER_IDENTITY_SET" -eq 1 ]; then
+      REVIEWER_IDENTITY_CANDIDATES="${INLINE_GH_AS_REVIEWER_IDENTITY:-$REVIEWER_EMPTY_FALLBACK}"
+    else
+      REVIEWER_IDENTITY_CANDIDATES="${GH_AS_REVIEWER_IDENTITY:-}"
+      if [ -z "$REVIEWER_IDENTITY_CANDIDATES" ]; then
+        REVIEWER_IDENTITY_CANDIDATES="$REVIEWER_EMPTY_FALLBACK"
       fi
-      echo "BLOCKED: $cmd_label is about to run under active account '$ACTIVE_GH_USER' ($active_role)." >&2
-      echo "" >&2
-      echo "  Reviewer-byline commands (pr comment / pr review / issue comment)" >&2
-      echo "  must attribute to the operating agent's REVIEWER identity ('$EXPECTED_REVIEWER' for this hook invocation, from $EXPECTED_REVIEWER_SOURCE)." >&2
-      echo "  Posting as '$ACTIVE_GH_USER' breaks the audit-trail convention REVIEW_POLICY.md depends on." >&2
-      echo "" >&2
-      echo "  Fix once: gh auth switch -u $EXPECTED_REVIEWER" >&2
-      echo "  Or set MERGEPATH_AGENT=<agent> / GH_PR_GUARD_EXPECTED_REVIEWER=$ACTIVE_GH_USER only if that is this agent's true reviewer identity." >&2
-      echo "  Or wrap the single call: scripts/gh-as-reviewer.sh -- $cmd_label ..." >&2
-      echo "  See REVIEW_POLICY.md § Operation-to-Identity Matrix." >&2
-      exit 2
+      if [ "$STANDALONE_GH_AS_REVIEWER_IDENTITY_SET" -eq 1 ]; then
+        REVIEWER_IDENTITY_CANDIDATES="$REVIEWER_IDENTITY_CANDIDATES ${STANDALONE_GH_AS_REVIEWER_IDENTITY:-$REVIEWER_EMPTY_FALLBACK}"
+      fi
     fi
+    for WRAPPER_REVIEWER_IDENTITY in $REVIEWER_IDENTITY_CANDIDATES; do
+      if [ "$WRAPPER_REVIEWER_IDENTITY" != "$EXPECTED_REVIEWER" ]; then
+        echo "BLOCKED: $cmd_label wrapper may run under '$WRAPPER_REVIEWER_IDENTITY', not expected reviewer '$EXPECTED_REVIEWER'." >&2
+        echo "  Expected reviewer source: $EXPECTED_REVIEWER_SOURCE" >&2
+        echo "  Set GH_AS_REVIEWER_IDENTITY=$EXPECTED_REVIEWER or MERGEPATH_AGENT=<agent> consistently, and drop any standalone GH_AS_REVIEWER_IDENTITY=... assignment from the command." >&2
+        exit 2
+      fi
+    done
   fi
 fi
 
@@ -901,7 +1335,7 @@ fi
 # them, per REVIEW_POLICY.md § No-self-approve scoping. The hook
 # detects:
 #   - PR_SUBCOMMAND=review with --approve in the args
-#   - active keyring identity = nathanpayne-<agent>
+#   - reviewer wrapper identity = nathanpayne-<agent>
 #   - PR body contains `Authoring-Agent: <agent>` matching the same
 #     agent suffix
 #   - PR is over-threshold (determined from .github/review-policy.yml
@@ -966,20 +1400,13 @@ if [ "$PR_SUBCOMMAND" = "review" ]; then
   fi
 
   if [ "$REVIEW_APPROVE" -eq 1 ] && [ "${BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK:-0}" != "1" ]; then
-    # The keyring read above (in the byline guard) ran a check, but
-    # we need to re-read here in case the byline guard was bypassed.
-    ACTIVE_GH_USER=$(gh config get -h github.com user 2>/dev/null || echo "")
-
-    # Extract the agent suffix from the active identity. We only
-    # apply self-approve detection when the active identity matches
-    # the nathanpayne-<agent> pattern; other identities go through
-    # without this sub-guard.
-    KEYRING_AGENT=""
-    case "$ACTIVE_GH_USER" in
-      nathanpayne-*) KEYRING_AGENT="${ACTIVE_GH_USER#nathanpayne-}" ;;
+    REVIEWER_FOR_APPROVE="${WRAPPER_REVIEWER_IDENTITY:-}"
+    REVIEWER_AGENT=""
+    case "$REVIEWER_FOR_APPROVE" in
+      nathanpayne-*) REVIEWER_AGENT="${REVIEWER_FOR_APPROVE#nathanpayne-}" ;;
     esac
 
-    if [ -n "$KEYRING_AGENT" ]; then
+    if [ -n "$REVIEWER_AGENT" ]; then
       # Fetch PR body + lines-changed + headRefName + author for the
       # self-approve check. headRefName + author drive the propagation-
       # lane bypass (#334): lane PRs (branch starts with
@@ -1042,14 +1469,14 @@ if [ "$PR_SUBCOMMAND" = "review" ]; then
 
       PR_AUTHORING_AGENT=$(printf '%s\n' "$REVIEW_PR_JSON" | grep -oiE 'Authoring-Agent:[[:space:]]*[A-Za-z0-9_-]+' | head -1 | sed -E 's/Authoring-Agent:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' || true)
 
-      if [ -n "$PR_AUTHORING_AGENT" ] && [ "$PR_AUTHORING_AGENT" = "$KEYRING_AGENT" ]; then
+      if [ -n "$PR_AUTHORING_AGENT" ] && [ "$PR_AUTHORING_AGENT" = "$REVIEWER_AGENT" ]; then
         # Same-agent author + reviewer. Decide over/under-threshold.
         # Heuristic: parse `external_review_threshold` from
         # .github/review-policy.yml (line count); compute
         # additions + deletions from the PR JSON; over if sum >= threshold
         # OR threshold can't be determined (fail safe).
         threshold=""
-        policy_path=".github/review-policy.yml"
+        policy_path="$(guard_policy_file || true)"
         if [ -f "$policy_path" ]; then
           threshold=$(grep -oE '^[[:space:]]*external_review_threshold:[[:space:]]*[0-9]+' "$policy_path" | head -1 | grep -oE '[0-9]+$' || true)
         fi
@@ -1067,7 +1494,7 @@ if [ "$PR_SUBCOMMAND" = "review" ]; then
         if [ "$is_over" -eq 1 ]; then
           echo "BLOCKED: self-approve detected on an over-threshold PR." >&2
           echo "" >&2
-          echo "  Active keyring identity: $ACTIVE_GH_USER" >&2
+          echo "  Reviewer wrapper identity: $REVIEWER_FOR_APPROVE" >&2
           echo "  PR Authoring-Agent:      $PR_AUTHORING_AGENT" >&2
           echo "  PR size:                 $total lines changed (threshold: ${threshold:-unknown})" >&2
           echo "" >&2
@@ -1103,58 +1530,6 @@ fi
 # structural ones, and they don't depend on argument positions or
 # global flags.
 if [ "$PR_SUBCOMMAND" = "create" ]; then
-  # Identity check (#241): the keyring's active account must be the
-  # AUTHOR identity (nathanjohnpayne) at the moment of `gh pr create`,
-  # otherwise the PR is authored by whatever identity IS active —
-  # observed concretely on friends-and-family-billing#262 where a
-  # split switch / pr-create across two Bash tool calls landed a PR
-  # under the wrong identity. The canonical fix is to wrap the entire
-  # sequence in `scripts/gh-as-author.sh` so the switch and the create
-  # share one bash process.
-  #
-  # The check uses `gh config get -h github.com user`, NOT `gh auth
-  # status`. The latter is GH_TOKEN-poisonable: when GH_TOKEN is set
-  # it reports the GH_TOKEN entry as Active, but the keyring entry is
-  # still the one that signs writes. `gh config get` reads the
-  # keyring config file directly and is the authoritative read for
-  # "who will this write attribute to".
-  #
-  # Escape hatch: `BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK=1` lets
-  # tests and edge cases bypass this check. The check is additive
-  # defense-in-depth on top of gh-as-author.sh — when an agent runs
-  # `scripts/gh-as-author.sh -- gh pr create ...` correctly, the
-  # wrapper has already switched to the author identity by the time
-  # this hook fires, so the check passes naturally without the
-  # escape. The escape exists for test harnesses that PATH-shim `gh`
-  # and have no real keyring to read.
-  EXPECTED_AUTHOR="${GH_PR_GUARD_EXPECTED_AUTHOR:-nathanjohnpayne}"
-  if [ "${BOOTSTRAP_GH_PR_GUARD_SKIP_IDENTITY_CHECK:-0}" != "1" ]; then
-    ACTIVE_GH_USER=$(gh config get -h github.com user 2>/dev/null || echo "")
-    if [ -z "$ACTIVE_GH_USER" ]; then
-      echo "BLOCKED: gh-pr-guard could not read the active gh account from 'gh config get -h github.com user'." >&2
-      echo "  Either gh is not installed/authenticated, or the keyring config is corrupt." >&2
-      echo "  Run 'gh auth login' for the $EXPECTED_AUTHOR identity, then retry via scripts/gh-as-author.sh." >&2
-      exit 2
-    fi
-    if [ "$ACTIVE_GH_USER" != "$EXPECTED_AUTHOR" ]; then
-      echo "BLOCKED: gh pr create is about to run under active account '$ACTIVE_GH_USER', not the expected author identity '$EXPECTED_AUTHOR'." >&2
-      echo "" >&2
-      echo "  This is the #241 footgun. A PR created right now would be authored by '$ACTIVE_GH_USER'," >&2
-      echo "  which breaks self-approval (Can not approve your own pull request) and inverts the" >&2
-      echo "  Authoring-Agent: fingerprint in the PR body." >&2
-      echo "" >&2
-      echo "  Canonical fix: wrap the call in scripts/gh-as-author.sh, which switches to" >&2
-      echo "  $EXPECTED_AUTHOR, runs gh pr create, then restores the prior active account via" >&2
-      echo "  trap EXIT — all inside one bash process so the switch and the create can't drift apart:" >&2
-      echo "" >&2
-      echo "    scripts/gh-as-author.sh -- gh pr create --title '...' --body '...'" >&2
-      echo "" >&2
-      echo "  See REVIEW_POLICY.md § Recovery: PR created under the wrong identity for the case" >&2
-      echo "  where a PR already landed under the wrong account." >&2
-      exit 2
-    fi
-  fi
-
   MISSING=""
 
   if ! echo "$COMMAND" | grep -qi 'Authoring-Agent:'; then
@@ -1172,6 +1547,13 @@ if [ "$PR_SUBCOMMAND" = "create" ]; then
     exit 2
   fi
 
+  exit 0
+fi
+
+# gh pr edit is a guarded write for attribution, but label-specific
+# edit policy is enforced by label-removal-guard.sh. Once the author
+# wrapper has been verified above, no merge-state checks apply here.
+if [ "$PR_SUBCOMMAND" = "edit" ]; then
   exit 0
 fi
 

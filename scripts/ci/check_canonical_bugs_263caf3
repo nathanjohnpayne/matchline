@@ -92,6 +92,11 @@ cat > "$SCRATCH/gh" <<'GH_STUB'
 #!/usr/bin/env bash
 # Stub: print a marker proving the script reached gh, then succeed.
 case "$1" in
+  "api")
+    if [ "${2:-}" = "user" ]; then
+      printf 'nathanpayne-claude\n'
+    fi
+    ;;
   "pr")
     case "${2:-}" in
       "view")    printf 'https://github.com/nathanjohnpayne/mergepath/pull/99999\n' ;;
@@ -105,7 +110,7 @@ GH_STUB
 chmod +x "$SCRATCH/gh"
 
 set +e
-out=$(PATH="$SCRATCH:$PATH" REQUEST_LABEL_REMOVAL_SKIP_IDENTITY_CHECK=1 \
+out=$(PATH="$SCRATCH:$PATH" OP_PREFLIGHT_REVIEWER_PAT="fake-reviewer-pat" \
   MERGEPATH_NOTIFY_IMESSAGE_TO="" \
   "$LABEL_REMOVAL_SCRIPT" 99999 needs-external-review 2>&1)
 rc=$?
@@ -123,7 +128,7 @@ fi
 # Same, but WITH --repo — sanity-check that the explicit-repo path
 # is also still wired up.
 set +e
-out=$(PATH="$SCRATCH:$PATH" REQUEST_LABEL_REMOVAL_SKIP_IDENTITY_CHECK=1 \
+out=$(PATH="$SCRATCH:$PATH" OP_PREFLIGHT_REVIEWER_PAT="fake-reviewer-pat" \
   MERGEPATH_NOTIFY_IMESSAGE_TO="" \
   "$LABEL_REMOVAL_SCRIPT" 99999 needs-external-review --repo nathanjohnpayne/mergepath 2>&1)
 rc=$?
@@ -143,6 +148,11 @@ fi
 cat > "$SCRATCH/gh" <<'GH_STUB'
 #!/usr/bin/env bash
 case "$1" in
+  "api")
+    if [ "${2:-}" = "user" ]; then
+      printf 'nathanpayne-claude\n'
+    fi
+    ;;
   "pr")
     case "${2:-}" in
       "view") printf 'https://github.com/nathanjohnpayne/mergepath/pull/99999\n' ;;
@@ -164,7 +174,7 @@ chmod +x "$SCRATCH/gh"
 # no-repo path
 SCRATCH_BODY_OUT="$SCRATCH/body-norepo.txt" \
   PATH="$SCRATCH:$PATH" \
-  REQUEST_LABEL_REMOVAL_SKIP_IDENTITY_CHECK=1 \
+  OP_PREFLIGHT_REVIEWER_PAT="fake-reviewer-pat" \
   MERGEPATH_NOTIFY_IMESSAGE_TO="" \
   "$LABEL_REMOVAL_SCRIPT" 99999 needs-external-review >/dev/null 2>&1 || true
 
@@ -182,7 +192,7 @@ fi
 # with-repo path
 SCRATCH_BODY_OUT="$SCRATCH/body-repo.txt" \
   PATH="$SCRATCH:$PATH" \
-  REQUEST_LABEL_REMOVAL_SKIP_IDENTITY_CHECK=1 \
+  OP_PREFLIGHT_REVIEWER_PAT="fake-reviewer-pat" \
   MERGEPATH_NOTIFY_IMESSAGE_TO="" \
   "$LABEL_REMOVAL_SCRIPT" 99999 needs-external-review --repo nathanjohnpayne/mergepath >/dev/null 2>&1 || true
 
@@ -213,13 +223,15 @@ run_filter() {
   #   $1 = jq filter (gate-b form or gate-c form)
   #   $2 = author login
   #   $3 = same_agent_reviewer login (may be empty)
-  #   $4 = sha (only used by gate-c form; harmless for gate-b)
+  #   $4 = sha (gate-c form, and gate-b HEAD-pin)
   #   $5 = reviews_json
+  #   $6 = require_head ("1" to HEAD-pin gate-b branch 1; default "0")
   echo "$5" | jq -r \
     --argjson reviewers "$REVIEWERS_JSON" \
     --arg author "$2" \
     --arg same_agent_reviewer "$3" \
     --arg sha "$4" \
+    --arg require_head "${6:-0}" \
     "$1"
 }
 
@@ -232,7 +244,7 @@ GATE_B_FILTER='
   ]
   | group_by(.user.login)
   | map(max_by(.submitted_at))
-  | map(select(.state == "APPROVED"))
+  | map(select(.state == "APPROVED" and ($require_head != "1" or .commit_id == $sha)))
   | first
   | if . == null then empty else .user.login end
 '
@@ -354,6 +366,66 @@ if [ -z "$got" ]; then
 else
   fail=$((fail + 1))
   echo "  FAIL: gate (b) used stale APPROVED instead of latest CHANGES_REQUESTED — got '$got'" >&2
+fi
+
+# Case F (#435): cross-agent APPROVED on a STALE commit (not HEAD).
+#   require_head=1 (merge-clearance-gate delegation) → gate (b) rejects it,
+#   so a stale approval can't ride a later push to clearance.
+#   require_head=0 (default / auto-clear path) → accepted, preserving the
+#   existing non-HEAD-pinned behavior.
+REVIEWS_F='[
+  {"user":{"login":"nathanpayne-codex"},"state":"APPROVED","commit_id":"OLDsha999","submitted_at":"2026-05-15T10:00:00Z"}
+]'
+
+got=$(run_filter "$GATE_B_FILTER" "nathanjohnpayne" "nathanpayne-claude" "$HEAD_SHA" "$REVIEWS_F" 1)
+if [ -z "$got" ]; then
+  pass=$((pass + 1))
+  echo "  PASS: gate (b) HEAD-pin rejects stale-commit APPROVED when require_head=1 (#435)"
+else
+  fail=$((fail + 1))
+  echo "  FAIL: gate (b) HEAD-pin accepted stale-commit APPROVED — got '$got'" >&2
+fi
+
+got=$(run_filter "$GATE_B_FILTER" "nathanjohnpayne" "nathanpayne-claude" "$HEAD_SHA" "$REVIEWS_F" 0)
+if [ "$got" = "nathanpayne-codex" ]; then
+  pass=$((pass + 1))
+  echo "  PASS: gate (b) default (require_head=0) still accepts stale-commit APPROVED (no regression)"
+else
+  fail=$((fail + 1))
+  echo "  FAIL: gate (b) default path changed behavior — got '$got'" >&2
+fi
+
+# Case G (#435): cross-agent APPROVED ON the current HEAD with require_head=1
+#   → accepted. Confirms HEAD-pin only blocks stale approvals, not fresh ones.
+REVIEWS_G='[
+  {"user":{"login":"nathanpayne-codex"},"state":"APPROVED","commit_id":"abc123","submitted_at":"2026-05-15T10:00:00Z"}
+]'
+got=$(run_filter "$GATE_B_FILTER" "nathanjohnpayne" "nathanpayne-claude" "$HEAD_SHA" "$REVIEWS_G" 1)
+if [ "$got" = "nathanpayne-codex" ]; then
+  pass=$((pass + 1))
+  echo "  PASS: gate (b) HEAD-pin accepts APPROVED on current HEAD when require_head=1 (#435)"
+else
+  fail=$((fail + 1))
+  echo "  FAIL: gate (b) HEAD-pin rejected fresh on-HEAD APPROVED — got '$got'" >&2
+fi
+
+# Case H (#436 Codex P1): reviewer APPROVED on HEAD, then later
+# CHANGES_REQUESTED on a stale/pending non-HEAD commit. Their LATEST
+# opinionated state is CHANGES_REQUESTED, so gate (b) must REJECT — even with
+# require_head=1. Filtering non-HEAD reviews BEFORE the latest-state collapse
+# (the original buggy fix) would discard the blocking CHANGES_REQUESTED and
+# wrongly clear via the stale on-HEAD APPROVED.
+REVIEWS_H='[
+  {"user":{"login":"nathanpayne-codex"},"state":"APPROVED","commit_id":"abc123","submitted_at":"2026-05-15T10:00:00Z"},
+  {"user":{"login":"nathanpayne-codex"},"state":"CHANGES_REQUESTED","commit_id":"OLDsha999","submitted_at":"2026-05-15T12:00:00Z"}
+]'
+got=$(run_filter "$GATE_B_FILTER" "nathanjohnpayne" "nathanpayne-claude" "$HEAD_SHA" "$REVIEWS_H" 1)
+if [ -z "$got" ]; then
+  pass=$((pass + 1))
+  echo "  PASS: gate (b) HEAD-pin honors a LATER non-HEAD CHANGES_REQUESTED over a stale on-HEAD APPROVED (#436)"
+else
+  fail=$((fail + 1))
+  echo "  FAIL: gate (b) discarded the later CHANGES_REQUESTED and cleared via stale APPROVED — got '$got'" >&2
 fi
 
 echo
