@@ -19,7 +19,11 @@ export interface MonthlyUsage {
   readonly firebaseUsd: number;
 }
 
-export interface Caps extends MonthlyUsage {}
+// `Caps` is structurally identical to `MonthlyUsage` (the per-provider
+// monthly ceilings). Expressed as a type alias rather than an empty
+// `extends` interface — the latter trips
+// @typescript-eslint/no-empty-object-type under typescript-eslint v8.61.
+export type Caps = MonthlyUsage;
 
 export interface CapCheck {
   readonly provider: "anthropic" | "openai" | "firebase";
