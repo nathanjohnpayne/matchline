@@ -78,8 +78,14 @@ export default function ResumeEditor({
 
   // Keep the editor's editable state in sync with `disabled` (the
   // initial value is set at creation; this handles toggles after mount).
+  // Pass emitUpdate=false: toggling editability is not a content change,
+  // but Tiptap's setEditable fires onUpdate by default. Without this, an
+  // extraction failure (status extracting→error flips `disabled` back to
+  // false → setEditable(true)) would emit a synthetic onUpdate → the
+  // route's onChange → status back to `editing`, silently dismissing the
+  // failure banner with no user action. (Codex P2 on #267.)
   useEffect(() => {
-    editor?.setEditable(!disabled);
+    editor?.setEditable(!disabled, false);
   }, [editor, disabled]);
 
   return (
