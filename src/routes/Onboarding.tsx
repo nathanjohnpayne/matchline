@@ -118,7 +118,6 @@ export default function Onboarding(): ReactElement {
 
       <form onSubmit={onSubmit} className="space-y-3">
         <span
-          id="onboarding-text-label"
           className="block text-xs font-medium text-zinc-600 dark:text-zinc-400"
         >
           Resume text
