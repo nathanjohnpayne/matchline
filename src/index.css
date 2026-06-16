@@ -22,3 +22,70 @@ body {
     Arial,
     sans-serif;
 }
+
+/*
+ * Rendered-Markdown styling for the Onboarding ResumeEditor (#264).
+ * Tailwind's preflight resets headings/lists/quotes, so the TipTap
+ * editor's semantic output (h1/ul/strong/...) needs explicit styling
+ * to actually *look* like rendered Markdown. Scoped to `.resume-prose`
+ * (set on the `.ProseMirror` element) so it never leaks to other UI.
+ */
+.resume-prose {
+  @apply leading-relaxed;
+}
+.resume-prose:focus {
+  @apply outline-none;
+}
+.resume-prose h1 {
+  @apply mt-4 mb-2 text-xl font-semibold text-zinc-900 first:mt-0 dark:text-zinc-100;
+}
+.resume-prose h2 {
+  @apply mt-3 mb-1.5 text-lg font-semibold text-zinc-900 first:mt-0 dark:text-zinc-100;
+}
+.resume-prose h3 {
+  @apply mt-2 mb-1 text-base font-medium text-zinc-900 first:mt-0 dark:text-zinc-100;
+}
+.resume-prose p {
+  @apply my-1.5;
+}
+.resume-prose ul {
+  @apply my-1.5 list-disc pl-5;
+}
+.resume-prose ol {
+  @apply my-1.5 list-decimal pl-5;
+}
+.resume-prose li {
+  @apply my-0.5;
+}
+.resume-prose li > p {
+  @apply my-0;
+}
+.resume-prose strong {
+  @apply font-semibold;
+}
+.resume-prose em {
+  @apply italic;
+}
+.resume-prose a {
+  @apply text-zinc-900 underline underline-offset-2 dark:text-zinc-100;
+}
+.resume-prose code {
+  @apply rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] dark:bg-zinc-800;
+}
+.resume-prose pre {
+  @apply my-2 overflow-x-auto rounded bg-zinc-100 p-3 font-mono text-xs dark:bg-zinc-800;
+}
+.resume-prose pre code {
+  @apply bg-transparent p-0;
+}
+.resume-prose blockquote {
+  @apply border-l-2 border-zinc-300 pl-3 text-zinc-600 italic dark:border-zinc-600 dark:text-zinc-400;
+}
+.resume-prose hr {
+  @apply my-3 border-zinc-200 dark:border-zinc-700;
+}
+/* Placeholder (from @tiptap/extension-placeholder) — shown when empty. */
+.resume-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  @apply pointer-events-none float-left h-0 text-zinc-400 dark:text-zinc-500;
+}
