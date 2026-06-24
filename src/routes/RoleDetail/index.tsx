@@ -9,11 +9,19 @@
  * `renderToStaticMarkup` so we don't have to mock Firebase.
  *
  * Subscription lifecycle:
- *   - On mount with a roleId: status = "loading". Fetch the
- *     Role doc (one-shot), open Requirements + Matches +
- *     Units subscriptions in parallel.
+ *   - On mount with a roleId: status = "loading". Open the
+ *     Requirements + Matches + Units subscriptions
+ *     immediately AND fetch the Role doc (one-shot) — both
+ *     in parallel. The subscriptions only need `roleId`
+ *     (already in hand), so they are NOT gated behind the
+ *     Role fetch; this keeps time-to-ready from serializing
+ *     against `getRole`.
  *   - On Role doc resolved (existence + ownership) AND
- *     Requirements first snapshot: status = "ready".
+ *     Requirements first snapshot: status = "ready". Because
+ *     those two signals now race, the flip happens when the
+ *     second of the pair lands (a `maybeReady()` gate inside
+ *     the effect), preserving the rule that an existing Role
+ *     never momentarily renders the not-found branch.
  *     Subsequent Matches + Units snapshots flow into state
  *     without flipping status (the loading state is gated
  *     on the Role + Requirements pair because those are the
@@ -407,11 +415,108 @@ export default function RoleDetail(): ReactElement {
     // identity check, but written by hand because we only
     // need it once.
     let active = true;
-    let unsubReqs: (() => void) | null = null;
-    let unsubMatches: (() => void) | null = null;
-    let unsubUnits: (() => void) | null = null;
-    let unsubApplications: (() => void) | null = null;
 
+    // "ready" is gated on the Role + Requirements PAIR (see
+    // the subscription-lifecycle docblock at the top of this
+    // file): the Role doc must resolve to an owned role AND
+    // the first Requirements snapshot must arrive. Those two
+    // signals now race — the subscriptions start immediately
+    // below, in parallel with `getRole`, rather than waiting
+    // on it — so whichever lands second is the one that flips
+    // status. Tracking both as closure booleans + a single
+    // `maybeReady()` gate preserves the exact pre-parallel
+    // semantics: the view never renders the not-found branch
+    // (status "ready" + role null) for an existing role just
+    // because Requirements happened to arrive before the Role
+    // fetch resolved.
+    let roleResolved = false;
+    let firstReqsSnapshot = true;
+    const maybeReady = (): void => {
+      if (roleResolved && !firstReqsSnapshot) {
+        setStatus("ready");
+      }
+    };
+
+    // Open the three subscriptions immediately. They only need
+    // `roleId` (already in hand) — none depend on the Role doc
+    // existing — so gating them behind `getRole` needlessly
+    // serialized time-to-ready against the role fetch. Matches
+    // and Units may still be in flight when Requirements first
+    // lands; the Role + Requirements pair is what determines
+    // whether the tab can render meaningfully.
+    const unsubReqs = subscribeRequirementsForRole(
+      roleId,
+      (next) => {
+        if (!active) return;
+        setRequirements(next);
+        if (firstReqsSnapshot) {
+          firstReqsSnapshot = false;
+          maybeReady();
+        }
+      },
+      (err) => {
+        if (!active) return;
+        setRequirements([]);
+        setError(err);
+        setStatus("error");
+      },
+    );
+    const unsubMatches = subscribeMatchesByRole(
+      roleId,
+      (next) => {
+        if (!active) return;
+        setMatches(next);
+        // Mark the matches subscription as "delivered
+        // at least once" so the auto-trigger gate
+        // (cursor #134 r1) treats matches.length=0 as
+        // a known-empty signal, not the initial-state
+        // default. Idempotent — calling setState with
+        // the same value is a React no-op.
+        setMatchesFirstSnapshotReceived(true);
+      },
+      (err) => {
+        if (!active) return;
+        setMatches([]);
+        setError(err);
+        setStatus("error");
+      },
+    );
+    const unsubUnits = subscribeUnitsByOwner(
+      (next) => {
+        if (!active) return;
+        setUnits(next);
+      },
+      (err) => {
+        if (!active) return;
+        setUnits([]);
+        setError(err);
+        setStatus("error");
+      },
+    );
+    const unsubApplications = subscribeApplicationsForRole(
+      roleId,
+      (next) => {
+        if (!active) return;
+        setApplications(next);
+      },
+      (err) => {
+        if (!active) return;
+        setApplications([]);
+        // Surfacing the error through the top-level
+        // status would block the whole page — but the
+        // Applications tab subscription is non-load-
+        // bearing for Requirements / Matches. Log + keep
+        // the rest of the page rendering. The tab will
+        // show no Applications; user can click Generate
+        // to retry the path.
+
+        console.warn("subscribeApplicationsForRole failed", err);
+      },
+    );
+
+    // Fetch the Role doc in parallel with the subscriptions
+    // above. This populates the Role state (title, jd_raw) and
+    // the existence/ownership half of the "ready" gate.
     void (async () => {
       try {
         const r = await getRole(roleId);
@@ -421,88 +526,16 @@ export default function RoleDetail(): ReactElement {
           // already collapse missing-OR-not-yours into a
           // single "no permission" path; this just renders
           // the not-found state when the doc doesn't come
-          // back.
+          // back. Terminal — flip straight to "ready" with a
+          // null role (the not-found render) without waiting
+          // on the Requirements snapshot.
           setRole(null);
           setStatus("ready");
           return;
         }
         setRole(r);
-
-        // Open the three subscriptions in parallel. We flip
-        // status to "ready" on the FIRST Requirements
-        // snapshot — Matches and Units may still be in
-        // flight, but the Role + Requirements pair is what
-        // determines whether the tab can render meaningfully.
-        let firstReqsSnapshot = true;
-        unsubReqs = subscribeRequirementsForRole(
-          roleId,
-          (next) => {
-            if (!active) return;
-            setRequirements(next);
-            if (firstReqsSnapshot) {
-              firstReqsSnapshot = false;
-              setStatus("ready");
-            }
-          },
-          (err) => {
-            if (!active) return;
-            setRequirements([]);
-            setError(err);
-            setStatus("error");
-          },
-        );
-        unsubMatches = subscribeMatchesByRole(
-          roleId,
-          (next) => {
-            if (!active) return;
-            setMatches(next);
-            // Mark the matches subscription as "delivered
-            // at least once" so the auto-trigger gate
-            // (cursor #134 r1) treats matches.length=0 as
-            // a known-empty signal, not the initial-state
-            // default. Idempotent — calling setState with
-            // the same value is a React no-op.
-            setMatchesFirstSnapshotReceived(true);
-          },
-          (err) => {
-            if (!active) return;
-            setMatches([]);
-            setError(err);
-            setStatus("error");
-          },
-        );
-        unsubUnits = subscribeUnitsByOwner(
-          (next) => {
-            if (!active) return;
-            setUnits(next);
-          },
-          (err) => {
-            if (!active) return;
-            setUnits([]);
-            setError(err);
-            setStatus("error");
-          },
-        );
-        unsubApplications = subscribeApplicationsForRole(
-          roleId,
-          (next) => {
-            if (!active) return;
-            setApplications(next);
-          },
-          (err) => {
-            if (!active) return;
-            setApplications([]);
-            // Surfacing the error through the top-level
-            // status would block the whole page — but the
-            // Applications tab subscription is non-load-
-            // bearing for Requirements / Matches. Log + keep
-            // the rest of the page rendering. The tab will
-            // show no Applications; user can click Generate
-            // to retry the path.
-
-            console.warn("subscribeApplicationsForRole failed", err);
-          },
-        );
+        roleResolved = true;
+        maybeReady();
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err : new Error(String(err)));
@@ -512,10 +545,10 @@ export default function RoleDetail(): ReactElement {
 
     return () => {
       active = false;
-      unsubReqs?.();
-      unsubMatches?.();
-      unsubUnits?.();
-      unsubApplications?.();
+      unsubReqs();
+      unsubMatches();
+      unsubUnits();
+      unsubApplications();
     };
   }, [roleId]);
 
