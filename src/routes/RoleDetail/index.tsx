@@ -541,6 +541,20 @@ export default function RoleDetail(): ReactElement {
           // back. Terminal — flip straight to "ready" with a
           // null role (the not-found render) without waiting
           // on the Requirements snapshot.
+          //
+          // The four subscriptions above were started
+          // speculatively (in parallel with this fetch, before
+          // we knew the role existed/was owned) and are still
+          // live at this point. Tear them down now rather than
+          // waiting for unmount: left running, they keep
+          // consuming reads for a role the user can't access,
+          // and a later listener error would flip status to
+          // "error", replacing the intended not-found surface
+          // (Codex P2, PR #292).
+          unsubReqs();
+          unsubMatches();
+          unsubUnits();
+          unsubApplications();
           setRole(null);
           setStatus("ready");
           return;
