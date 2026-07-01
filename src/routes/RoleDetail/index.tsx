@@ -431,8 +431,17 @@ export default function RoleDetail(): ReactElement {
     // fetch resolved.
     let roleResolved = false;
     let firstReqsSnapshot = true;
+    // Latches once any load-bearing subscription (Requirements /
+    // Matches / Units) or the Role fetch reports an error. Without
+    // this, an error that lands while the OTHER signal in the
+    // Role+Requirements pair is still in flight gets silently
+    // overwritten: maybeReady() only checks roleResolved/
+    // firstReqsSnapshot, so it would flip status back to "ready"
+    // with stale/empty data once both arrive, hiding the failure
+    // (Codex P2, PR #292).
+    let hasErrored = false;
     const maybeReady = (): void => {
-      if (roleResolved && !firstReqsSnapshot) {
+      if (roleResolved && !firstReqsSnapshot && !hasErrored) {
         setStatus("ready");
       }
     };
@@ -456,6 +465,7 @@ export default function RoleDetail(): ReactElement {
       },
       (err) => {
         if (!active) return;
+        hasErrored = true;
         setRequirements([]);
         setError(err);
         setStatus("error");
@@ -476,6 +486,7 @@ export default function RoleDetail(): ReactElement {
       },
       (err) => {
         if (!active) return;
+        hasErrored = true;
         setMatches([]);
         setError(err);
         setStatus("error");
@@ -488,6 +499,7 @@ export default function RoleDetail(): ReactElement {
       },
       (err) => {
         if (!active) return;
+        hasErrored = true;
         setUnits([]);
         setError(err);
         setStatus("error");
