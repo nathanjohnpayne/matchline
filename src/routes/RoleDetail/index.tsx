@@ -1,6 +1,6 @@
 /**
  * Role Detail container. Wires Firestore subscriptions
- * (Role one-shot, Requirements + Matches + Units
+ * (Role one-shot, Requirements + Matches + Units + Applications
  * snapshot-subscribed) into a `RoleDetailView` (#21 /
  * sub-issue #129).
  *
@@ -10,12 +10,12 @@
  *
  * Subscription lifecycle:
  *   - On mount with a roleId: status = "loading". Open the
- *     Requirements + Matches + Units subscriptions
- *     immediately AND fetch the Role doc (one-shot) — both
- *     in parallel. The subscriptions only need `roleId`
- *     (already in hand), so they are NOT gated behind the
- *     Role fetch; this keeps time-to-ready from serializing
- *     against `getRole`.
+ *     Requirements + Matches + Units + Applications
+ *     subscriptions immediately AND fetch the Role doc
+ *     (one-shot) — both in parallel. The subscriptions only
+ *     need `roleId` (already in hand), so they are NOT gated
+ *     behind the Role fetch; this keeps time-to-ready from
+ *     serializing against `getRole`.
  *   - On Role doc resolved (existence + ownership) AND
  *     Requirements first snapshot: status = "ready". Because
  *     those two signals now race, the flip happens when the
@@ -26,9 +26,15 @@
  *     without flipping status (the loading state is gated
  *     on the Role + Requirements pair because those are the
  *     load-bearing axes; Matches arriving slightly later
- *     just renders empty match rows briefly).
- *   - On any error: status = "error", error = err.
- *   - On unmount or roleId change: call all 3 unsubscribe
+ *     just renders empty match rows briefly). Applications is
+ *     non-load-bearing for readiness — its errors are logged,
+ *     not surfaced through `status` (see the subscription
+ *     below) — so it never affects the ready gate.
+ *   - On any load-bearing (Requirements/Matches/Units) error:
+ *     status = "error", error = err, latched via `hasErrored`
+ *     so a later `maybeReady()` or not-found resolution can't
+ *     overwrite it.
+ *   - On unmount or roleId change: call all 4 unsubscribe
  *     cleanups + cancel the in-flight Role fetch (handled
  *     via a stale-closure guard on the role_id).
  *
@@ -556,7 +562,14 @@ export default function RoleDetail(): ReactElement {
           unsubUnits();
           unsubApplications();
           setRole(null);
-          setStatus("ready");
+          // Don't clobber an already-latched subscription error:
+          // if Requirements/Matches/Units errored before this
+          // resolved, `hasErrored` is already true and status is
+          // already "error" — the not-found render must not
+          // overwrite that (CodeRabbit Major, PR #292).
+          if (!hasErrored) {
+            setStatus("ready");
+          }
           return;
         }
         setRole(r);
