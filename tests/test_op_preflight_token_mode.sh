@@ -61,11 +61,11 @@ case "\${1:-}" in
       op://Mergepath\ CI\ Headless/nathanpayne-claude\ reviewer\ PAT/token) printf '%s\n' "reviewer-pat-claude" ;;
       op://Mergepath\ CI\ Headless/nathanpayne-cursor\ reviewer\ PAT/token) printf '%s\n' "reviewer-pat-cursor" ;;
       op://Mergepath\ CI\ Headless/nathanpayne-codex\ reviewer\ PAT/token) printf '%s\n' "reviewer-pat-codex" ;;
-      op://Private/sm5kopwk6t6p3xmu2igesndzhe/token)
+      op://Private/FAKEAUTHORITEMID00000000000/token)
         echo "FATAL: token mode attempted author PAT read" >&2
         exit 66
         ;;
-      op://Private/c2v6emkwppjzjjaq2bdqk3wnlm/credential|op://Private/4x6wslp3f6pal5t6h3jhhe63ie/credential)
+      op://Private/FAKESENTINEL0ID0000000000001/credential|op://Private/FAKESENTINEL0ID0000000000002/credential)
         echo "FATAL: token mode attempted deploy secret read" >&2
         exit 67
         ;;
@@ -236,7 +236,11 @@ test_token_mode_agents() {
       fail "test_token_mode_agents($agent): token mode used op inject"
       return
     fi
-    if grep -q "sm5kopwk6t6p3xmu2igesndzhe\\|c2v6emkwppjzjjaq2bdqk3wnlm\\|4x6wslp3f6pal5t6h3jhhe63ie" "$OP_LOG"; then
+    # The two IDs here are out-of-scope test sentinels (not reviewer/author PAT
+    # UUIDs from REVIEW_POLICY.md). Using fake IDs keeps raw op item IDs out of
+    # tracked test files per repo guidance. The first ID is a pre-existing fake;
+    # the remaining two are replaced with structurally-similar fake sentinels.
+    if grep -q "FAKEAUTHORITEMID00000000000\\|FAKESENTINEL0ID0000000000001\\|FAKESENTINEL0ID0000000000002" "$OP_LOG"; then
       fail "test_token_mode_agents($agent): token mode attempted out-of-scope op item"
       return
     fi
@@ -277,7 +281,7 @@ test_token_mode_reviewer_ref_override() {
     fail "test_token_mode_reviewer_ref_override: op did not read override ref"
     return
   fi
-  if grep -q "op://Private/o6ekjxjjl5gq6rmcneomrjahpu/token" "$OP_LOG"; then
+  if grep -q "op://Private/FAKECODEXITEMID000000000000/token" "$OP_LOG"; then
     fail "test_token_mode_reviewer_ref_override: fallback Private ref was read despite override"
     return
   fi
@@ -383,7 +387,7 @@ test_token_mode_reviewer_ref_override() {
   fi
 
   local blocked_ref
-  for blocked_ref in "op://Private/o6ekjxjjl5gq6rmcneomrjahpu/token" "op://Personal/nathanpayne-codex reviewer PAT/token"; do
+  for blocked_ref in "op://Private/FAKECODEXITEMID000000000000/token" "op://Personal/nathanpayne-codex reviewer PAT/token"; do
     reset_logs
     rc=0
     PATH="$STUB_DIR:$PATH" \

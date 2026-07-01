@@ -62,6 +62,52 @@ assert_clean   "gh api GET not flagged"       'gh api repos/o/r/pulls/1 --jq .st
 assert_flagged "bare exemption marker rejected" 'gh pr merge 1 --squash  # NO_BARE_GH_WRITE_EXEMPT:'
 assert_clean   "exemption WITH reason honored"  'gh pr merge 1 --squash  # NO_BARE_GH_WRITE_EXEMPT: covered by gh-as-author in caller'
 
+# echo/printf substitution masking — the #533 gap. A gh WRITE hidden in an
+# echo/printf command substitution must still be CAUGHT (the prior exemption
+# only negative-checked gh pr|issue|api, so non-pr/issue/api write verbs and
+# gh api -X POST slipped through). Read-only / non-gh substitutions stay EXEMPT.
+assert_flagged "echo \$(gh repo create) caught"      'echo "$(gh repo create x)"'
+assert_flagged "printf \$(gh secret set) caught"     "printf '%s' \"\$(gh secret set X)\""
+assert_flagged "echo \$(gh variable set) caught"     'echo "$(gh variable set X)"'
+assert_flagged "echo backtick gh repo delete caught" 'echo `gh repo delete z`'
+assert_flagged "echo \$(gh api -X POST) caught"      'echo "$(gh api -X POST repos/o/r/x)"'
+# Regression (#540): a ) inside '...' or "..." within $() must NOT end
+# command-substitution extraction early — a gh write AFTER the quoted
+# paren is still caught (the prior walk closed the span on the quoted )).
+assert_flagged "quoted-paren in cmdsub before gh write caught" "echo \"\$(printf '%s' ')'; gh repo create x)\""
+# A bare gh label create (not inside echo) is — and stays — caught.
+assert_flagged "bare gh label create caught"         'gh label create urgent --color FF0000'
+# Controls: a read inside a substitution, and a non-gh substitution, stay exempt.
+assert_clean   "echo \$(gh pr view) stays exempt"    'echo "$(gh pr view 1)"'
+assert_clean   "echo \$(date) stays exempt"          'echo "$(date)"'
+# Control for the #540 regression: a quoted ) inside $() with NO gh write
+# stays exempt (the quote-aware walk must not over-flag).
+assert_clean   "quoted-paren in cmdsub, no gh write, exempt"  "echo \"\$(printf '%s' ')')\""
+# #540 P2 (4a review): a $( inside SINGLE quotes, or an escaped \$( in
+# double quotes, is a literal — bash runs no substitution — so an echo of
+# such help/example text must NOT be flagged as a write.
+assert_clean   "single-quoted dollar-paren literal exempt"   "echo '\$(gh repo create x)'"
+assert_clean   "escaped dollar-paren in dquotes exempt"      'echo "\$(gh repo create x)"'
+# Regression: a gh write spelled in echo TEXT but OUTSIDE the substitution
+# (e.g. a log line whose only substitution is $(date)) must stay exempt —
+# the masking fix must not over-match plain documentation text.
+assert_clean   "gh write text outside subst exempt"  'echo "$(date -u) create Project v2: gh project create --owner o --title t"'
+
+# #553 (Major): the echo/printf exemption must cover ONLY the echo/printf
+# command, NOT a second command chained after a top-level separator. `echo ok;
+# gh pr merge 1` previously slipped through because the branch returned exempt
+# without scanning past the `;`. Re-check the tail after the first top-level
+# (unquoted, non-substitution) separator, recursively. Echoed TEXT, pipes into
+# non-gh commands, and chained WRAPPED writes stay exempt.
+assert_flagged "echo then ;-chained bare gh merge caught"     'echo ok; gh pr merge 1'
+assert_flagged "echo then &&-chained bare gh merge caught"    'echo done && gh pr merge 1'
+assert_flagged "printf then ;-chained gh secret set caught"   "printf '%s' done; gh secret set X"
+assert_flagged "double echo then chained bare gh merge caught" 'echo a; echo b; gh pr merge 1'
+assert_flagged "echo piped into bare gh merge caught"         'echo body | gh pr merge 1'
+assert_clean   "echoed gh-write TEXT (no chained cmd) exempt"  'echo "gh pr merge 1 is documented here"'
+assert_clean   "echo piped into a non-gh command exempt"       'echo ok | grep gh'
+assert_clean   "echo then ;-chained WRAPPED gh merge exempt"   'echo ok; scripts/gh-as-author.sh -- gh pr merge 1'
+
 echo ""
 echo "test_check_no_bare_gh_writes: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
