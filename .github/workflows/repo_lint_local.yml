@@ -1,0 +1,32 @@
+name: repo-lint-local
+
+# Consumer-local CI checks (mergepath#601 annex). repo_lint.yml is
+# manifest-canonical: it is propagated byte-for-byte from mergepath and so
+# cannot carry matchline-specific check wiring. These three checks are
+# matchline-local (they have no mergepath counterpart), so they live here in
+# the OPTIONAL, never-propagated annex that scripts/ci/check_ci_scripts_wired
+# scans as a union with repo_lint.yml. See mergepath#601 and the header of
+# scripts/ci/check_ci_scripts_wired for the union-scan contract.
+#
+# Before the #455 canonical sync these three checks were wired inline in
+# matchline's own repo_lint.yml. The byte-canonical repo_lint.yml replaces that
+# copy, so the wiring migrates here to keep check_ci_scripts_wired green.
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  repo-lint-local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: make_ci_scripts_executable
+        run: chmod +x scripts/ci/*
+      - name: check_prompt_schema_pairs
+        run: ./scripts/ci/check_prompt_schema_pairs
+      - name: check_no_other_skill_normalization
+        run: ./scripts/ci/check_no_other_skill_normalization
+      - name: check_fixture_match_ids
+        run: ./scripts/ci/check_fixture_match_ids
