@@ -5,7 +5,6 @@ import {
   buildManualUnit,
   buildUpdatePayload,
   displayStateOf,
-  EMBEDDING_INVALIDATING_FIELDS,
   flagsForApprovalState,
   SERVER_STAMPED_IMMUTABLE_FIELDS,
   shouldMarkReembed,
@@ -521,13 +520,18 @@ describe("SERVER_STAMPED_IMMUTABLE_FIELDS", () => {
   });
 });
 
-describe("EMBEDDING_INVALIDATING_FIELDS", () => {
-  it("contains raw_text and normalized_summary", () => {
-    expect(EMBEDDING_INVALIDATING_FIELDS.has("raw_text")).toBe(true);
-    expect(EMBEDDING_INVALIDATING_FIELDS.has("normalized_summary")).toBe(true);
+describe("embedding-invalidating field set (via shouldMarkReembed)", () => {
+  // The trigger-field set itself is private (not exported — see
+  // experienceUnits-state.ts for why: freezing a Set doesn't stop
+  // .add()/.delete() at runtime, so it can't be exposed as a
+  // tamper-safe constant). Pin its membership through the public
+  // predicate instead.
+  it("flags raw_text and normalized_summary", () => {
+    expect(shouldMarkReembed({ raw_text: "x" })).toBe(true);
+    expect(shouldMarkReembed({ normalized_summary: "x" })).toBe(true);
   });
 
-  it("does NOT contain other ExperienceUnit fields (skills/tools/domains/etc.)", () => {
+  it("does NOT flag other ExperienceUnit fields (skills/tools/domains/etc.)", () => {
     // Pin the trigger-field set: if a future refactor accidentally
     // adds e.g. "skills" here, every skill edit would re-embed and
     // burn cost. Explicit non-membership test catches that drift.
@@ -545,7 +549,7 @@ describe("EMBEDDING_INVALIDATING_FIELDS", () => {
       "flagged",
       "date_range",
     ]) {
-      expect(EMBEDDING_INVALIDATING_FIELDS.has(field)).toBe(false);
+      expect(shouldMarkReembed({ [field]: "x" })).toBe(false);
     }
   });
 });
