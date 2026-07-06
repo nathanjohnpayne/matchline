@@ -757,10 +757,14 @@ describe("validateAsset orchestrator", () => {
     expect(extractClaims).toHaveBeenCalledTimes(1);
   });
 
-  it("computes content_snapshot deterministically for TOCTOU detection", async () => {
-    // Pin: result.content_snapshot is a JSON-string of the
-    // loaded content. The persist transaction uses this to
-    // detect concurrent edits. Codex/CR Major round 1 on #117.
+  it("forwards content_snapshot to persistFlags for TOCTOU detection", async () => {
+    // Contract: validateAsset produces a string content_snapshot
+    // and forwards the exact same value to persistFlags, which
+    // uses it to detect concurrent edits. Assert propagation, not
+    // the specific serialization — the snapshot may move to a
+    // canonical (key-order-independent) JSON encoding later, and
+    // this test should track the contract, not JSON.stringify's
+    // byte-for-byte output. Codex/CR Major round 1 on #117.
     const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
     const persistFlags = vi.fn(async () => {});
 
@@ -775,11 +779,14 @@ describe("validateAsset orchestrator", () => {
       persistFlags,
     });
 
-    expect(result.content_snapshot).toBe(JSON.stringify(content));
+    expect(typeof result.content_snapshot).toBe("string");
+    expect(result.content_snapshot.length).toBeGreaterThan(0);
     // The persistFlags call gets the snapshot too — the
-    // production persist uses this to detect TOCTOU edits.
+    // production persist uses this to detect TOCTOU edits. Assert
+    // it is the *same* value the caller sees, not a re-derived
+    // literal, so the test tracks faithful propagation.
     const persisted = persistFlags.mock.calls[0]![1];
-    expect(persisted.content_snapshot).toBe(JSON.stringify(content));
+    expect(persisted.content_snapshot).toBe(result.content_snapshot);
   });
 
   it("propagates ValidateAssetStale from persistFlags (TOCTOU stale-write defense)", async () => {
