@@ -256,6 +256,71 @@ describe("parseJobRequirements", () => {
     expect(record).toHaveBeenCalledTimes(2);
   });
 
+  it("keys the retry reminder by the previous attempt's actual failure kind, not attempt index (#334)", async () => {
+    // Attempt 0 fails with no_tool_use — attempt 1 must get the
+    // no-tool-use reminder, NOT the schema-validation reminder that
+    // a pure attempt-index lookup would have produced.
+    const noToolUse = {
+      id: "msg_test",
+      type: "message",
+      role: "assistant",
+      model: "claude-haiku-4-5-20251001",
+      content: [{ type: "text", text: "I can't help with that." }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: { input_tokens: 30, output_tokens: 10 },
+    } as unknown as Anthropic.Messages.Message;
+    const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+    const client = mockClient([noToolUse, mockMessage(VALID_RESPONSE)]);
+
+    await parseJobRequirements("JD text", CTX, {
+      client,
+      record,
+      generateId: () => "id-stub",
+    });
+
+    const create = client.messages.create as unknown as ReturnType<typeof vi.fn>;
+    expect(create).toHaveBeenCalledTimes(2);
+    const secondCallArgs = create.mock.calls[1]![0] as { system: string };
+    expect(secondCallArgs.system).toContain("did not call the tool");
+    expect(secondCallArgs.system).not.toContain("failed schema validation");
+  });
+
+  it("gives no reminder text after a transport_error, since a retry can't correct it via prompt (#334)", async () => {
+    vi.useFakeTimers();
+    try {
+      const record = vi.fn<typeof RecordUsage>(async () => 0.005);
+      let callCount = 0;
+      const client = {
+        messages: {
+          create: vi.fn(async () => {
+            callCount += 1;
+            if (callCount === 1) throw new Error("ETIMEDOUT");
+            return mockMessage(VALID_RESPONSE);
+          }),
+        },
+      } as unknown as Anthropic;
+
+      const resultPromise = parseJobRequirements("JD text", CTX, {
+        client,
+        record,
+        generateId: () => "id-stub",
+      });
+      await vi.runAllTimersAsync();
+      const reqs = await resultPromise;
+
+      expect(reqs).toHaveLength(2);
+      const create = client.messages.create as unknown as ReturnType<typeof vi.fn>;
+      const secondCallArgs = create.mock.calls[1]![0] as { system: string };
+      // No reminder appended: the second call's system prompt should
+      // be exactly the base prompt (no added reminder suffix).
+      expect(secondCallArgs.system).not.toContain("failed schema validation");
+      expect(secondCallArgs.system).not.toContain("did not call the tool");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("records transport_error without calling record (no token counts available)", async () => {
     // Fake timers (per #115): without them the retry-helper's
     // backoff sleeps cost ~1.8s of CI per run. Mirror the

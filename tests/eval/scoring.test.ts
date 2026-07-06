@@ -11,7 +11,7 @@ describe("jaccard", () => {
     expect(jaccard(["a"], ["b"])).toBe(0);
   });
 
-  it("returns 0.5 for half overlap", () => {
+  it("returns 1/3 for one-of-three overlap", () => {
     // |intersection| = 1 (a); |union| = 3 (a, b, c). 1/3, not 0.5 — math check.
     expect(jaccard(["a", "b"], ["a", "c"])).toBeCloseTo(1 / 3, 6);
   });
@@ -200,5 +200,23 @@ describe("topKOverlap", () => {
   it("returns 0 when k <= 0", () => {
     expect(topKOverlap(["a"], ["a"], 0)).toBe(0);
     expect(topKOverlap(["a"], ["a"], -1)).toBe(0);
+  });
+
+  it("dedupes duplicate expected IDs instead of inflating the score", () => {
+    // Without dedup, "a" would count as 2 hits over a denominator of 3.
+    expect(topKOverlap(["a", "a", "b"], ["a", "c"], 2)).toBeCloseTo(1 / 2, 6);
+  });
+
+  it("caps k against the unique expected count so duplicate IDs cannot widen the window (Codex P2 #359)", () => {
+    // Fixture convention sets k from the raw expected_top_matches.length,
+    // so a duplicate ("a") makes k=3 while the deduped fixture is k=2.
+    // "b" only appears at rank 3 in actual; the raw k=3 window would let
+    // it count. Capping the effective window to expectedSet.size (2)
+    // keeps the top-K window consistent with the deduped denominator, so
+    // only "a" (rank 1) is a hit → 1/2.
+    expect(topKOverlap(["a", "a", "b"], ["a", "x", "b"], 3)).toBeCloseTo(
+      1 / 2,
+      6,
+    );
   });
 });

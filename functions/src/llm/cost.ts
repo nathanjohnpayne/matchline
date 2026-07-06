@@ -9,8 +9,9 @@
  * pre-compute a spend estimate without hitting Firestore.
  */
 
-import { FieldValue, getFirestore } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
+import { getAdminDb } from "../firestore/admin.js";
 import { rateFor } from "./rates.js";
 
 export const LLM_CALLS_COLLECTION = "llm_calls";
@@ -163,6 +164,22 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
     return 0;
   }
 
+  // Guard `latencyMs` before persisting: a NaN/Infinity/negative value
+  // (clock skew, a bad `Date.now()` diff) written straight to the doc
+  // would pollute downstream latency rollups and dashboards. Coerce to
+  // 0 and warn-and-continue, matching the pricing/Firestore failure
+  // shape this function already uses.
+  let latencyMs = usage.latencyMs;
+  if (!Number.isFinite(latencyMs) || latencyMs < 0) {
+    logger.warn("cost.recordUsage: invalid latencyMs coerced to 0", {
+      stage: usage.stage,
+      model: usage.model,
+      provider: usage.provider,
+      latencyMs: usage.latencyMs,
+    });
+    latencyMs = 0;
+  }
+
   // Firestore rejects documents containing `undefined` values by
   // default. `usage.ownerUid` and `usage.applicationId` are optional
   // and commonly absent (e.g. embeddings called from a non-user
@@ -174,7 +191,7 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
     provider: usage.provider,
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
-    latencyMs: usage.latencyMs,
+    latencyMs,
     costUsd,
     createdAt: FieldValue.serverTimestamp(),
     ...(usage.ownerUid !== undefined && { ownerUid: usage.ownerUid }),
@@ -187,18 +204,36 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
   // upgrading to Cloud Tasks / Pub/Sub for durability is deferred
   // until Phase 3 telemetry (#41) when real usage reveals whether loss
   // is measurable. Single-user V1 volume does not justify the infra.
-  void getFirestore()
-    .collection(LLM_CALLS_COLLECTION)
-    .add(doc)
-    .catch((err) => {
-      logger.warn("cost.recordUsage: Firestore write failed; returning cost anyway", {
-        stage: usage.stage,
-        model: usage.model,
-        provider: usage.provider,
-        costUsd,
-        error: err instanceof Error ? err.message : String(err),
+  //
+  // Route through `getAdminDb()` (the documented single choke point in
+  // firestore/admin.ts) rather than calling `getFirestore()` directly,
+  // and wrap in try/catch: `.catch` only handles async rejections, but
+  // `getAdminDb()`/`getFirestore()` can throw synchronously if the
+  // Firebase app state is invalid. That synchronous throw would escape
+  // past `.catch` and break the caller's response path, violating the
+  // "telemetry never blocks/throws into the caller" contract.
+  try {
+    void getAdminDb()
+      .collection(LLM_CALLS_COLLECTION)
+      .add(doc)
+      .catch((err) => {
+        logger.warn("cost.recordUsage: Firestore write failed; returning cost anyway", {
+          stage: usage.stage,
+          model: usage.model,
+          provider: usage.provider,
+          costUsd,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
+  } catch (err) {
+    logger.warn("cost.recordUsage: Firestore init failed; returning cost anyway", {
+      stage: usage.stage,
+      model: usage.model,
+      provider: usage.provider,
+      costUsd,
+      error: err instanceof Error ? err.message : String(err),
     });
+  }
 
   return costUsd;
 }

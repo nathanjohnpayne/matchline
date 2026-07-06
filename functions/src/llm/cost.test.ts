@@ -1,6 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { logger } from "firebase-functions";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { priceFor, safeRecordUsage, type UsageRecord } from "./cost.js";
+import { getAdminDb } from "../firestore/admin.js";
+import { priceFor, recordUsage, safeRecordUsage, type UsageRecord } from "./cost.js";
+
+// `recordUsage` writes to Firestore fire-and-forget through the
+// `getAdminDb()` choke point (firestore/admin.ts). Mock that module so
+// the persistence path is observable without a live Firestore, and so
+// a synchronous throw from init can be simulated.
+vi.mock("../firestore/admin.js", () => ({
+  getAdminDb: vi.fn(),
+}));
+
+/** Build a mock Firestore db whose `add` resolves, capturing the doc. */
+function mockDb() {
+  const add = vi.fn(async () => ({ id: "doc-1" }));
+  const collection = vi.fn(() => ({ add }));
+  return { db: { collection }, add, collection };
+}
 
 const SAMPLE_USAGE: UsageRecord = {
   stage: "extraction",
@@ -143,5 +160,53 @@ describe("safeRecordUsage", () => {
     ).resolves.toBe(0);
     // The record fn never got called — the thunk threw first.
     expect(record).not.toHaveBeenCalled();
+  });
+});
+
+// `recordUsage` persists an `llm_calls` doc fire-and-forget through
+// `getAdminDb()`. These tests pin two contracts:
+//   - #325: latencyMs is validated before it reaches the doc, so a
+//     NaN/Infinity/negative value can't pollute latency rollups.
+//   - #326: a synchronous throw from `getAdminDb()` is swallowed, so
+//     the "telemetry never throws into the caller" invariant holds
+//     end-to-end (the `.catch` alone only covers async rejections).
+describe("recordUsage persistence", () => {
+  const getAdminDbMock = vi.mocked(getAdminDb);
+
+  beforeEach(() => {
+    getAdminDbMock.mockReset();
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
+  });
+
+  it("persists a well-formed latencyMs unchanged", async () => {
+    const { db, add } = mockDb();
+    getAdminDbMock.mockReturnValue(db as never);
+    await recordUsage({ ...SAMPLE_USAGE, latencyMs: 123 });
+    // Let the fire-and-forget microtask settle.
+    await Promise.resolve();
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0]![0]).toMatchObject({ latencyMs: 123 });
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -5])(
+    "coerces invalid latencyMs (%s) to 0 in the persisted doc",
+    async (bad) => {
+      const { db, add } = mockDb();
+      getAdminDbMock.mockReturnValue(db as never);
+      await recordUsage({ ...SAMPLE_USAGE, latencyMs: bad });
+      await Promise.resolve();
+      expect(add).toHaveBeenCalledTimes(1);
+      expect(add.mock.calls[0]![0]).toMatchObject({ latencyMs: 0 });
+    },
+  );
+
+  it("returns the cost and never throws when getAdminDb throws synchronously", async () => {
+    getAdminDbMock.mockImplementation(() => {
+      throw new Error("Firebase app not initialized");
+    });
+    // The caller must observe the cost, not the telemetry-init throw.
+    await expect(
+      recordUsage({ ...SAMPLE_USAGE, inputTokens: 1000, outputTokens: 1000 }),
+    ).resolves.toBeGreaterThan(0);
   });
 });

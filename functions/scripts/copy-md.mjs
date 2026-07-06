@@ -41,21 +41,23 @@ let deleted = 0;
 let copied = 0;
 
 /**
- * Walk `dir` and run `onFile` for every file. Swallows ENOENT on
- * the top call so a missing `dir` is a no-op (incremental first
- * builds don't have lib/ yet).
+ * Walk `dir` and run `onFile` for every file. With
+ * `allowMissing: true`, a missing `dir` is a no-op (incremental
+ * first builds don't have lib/ yet); otherwise ENOENT rethrows so
+ * a missing/misconfigured src/ fails the build loudly instead of
+ * silently copying zero assets.
  */
-function forEachFile(dir, onFile) {
+function forEachFile(dir, onFile, { allowMissing = false } = {}) {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (err) {
-    if (err && err.code === "ENOENT") return;
+    if (allowMissing && err && err.code === "ENOENT") return;
     throw err;
   }
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) forEachFile(fullPath, onFile);
+    if (entry.isDirectory()) forEachFile(fullPath, onFile, { allowMissing });
     else onFile(fullPath, entry.name);
   }
 }
@@ -63,15 +65,23 @@ function forEachFile(dir, onFile) {
 // Pre-clean: remove every recognized asset from lib/ so a
 // deleted-in-src file does NOT linger as a stale deployable
 // (Codex P2 on #49). Copy step below re-mirrors src/'s current
-// asset set authoritatively.
-forEachFile(libDir, (fullPath, name) => {
-  if (isAsset(name)) {
-    unlinkSync(fullPath);
-    deleted += 1;
-  }
-});
+// asset set authoritatively. lib/ legitimately doesn't exist yet
+// on a fresh checkout, so this call tolerates ENOENT.
+forEachFile(
+  libDir,
+  (fullPath, name) => {
+    if (isAsset(name)) {
+      unlinkSync(fullPath);
+      deleted += 1;
+    }
+  },
+  { allowMissing: true },
+);
 
-// Copy current src/** assets into matching lib/ paths.
+// Copy current src/** assets into matching lib/ paths. A missing
+// src/ is always a real problem (wrong cwd, broken checkout,
+// misconfigured build context), so this call does NOT tolerate
+// ENOENT.
 forEachFile(srcDir, (fullPath, name) => {
   if (isAsset(name)) {
     const rel = fullPath.slice(srcDir.length);

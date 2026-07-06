@@ -43,7 +43,19 @@ export function getAdminDb(): Firestore {
  * rationale as the file docstring.
  */
 export function initializeAdminAppForTests(projectId: string): void {
-  if (getApps().length === 0) {
+  const existing = getApps()[0];
+  if (!existing) {
     initializeApp({ projectId });
+    return;
+  }
+  // A sibling suite may legitimately reuse the default app, but only
+  // if it targets the same projectId. A mismatch means the caller
+  // would silently run against the wrong Firestore namespace — fail
+  // loudly instead of no-op'ing test isolation away.
+  const existingProjectId = existing.options.projectId;
+  if (existingProjectId && existingProjectId !== projectId) {
+    throw new Error(
+      `initializeAdminAppForTests: default app already initialized with projectId="${existingProjectId}", expected "${projectId}"`,
+    );
   }
 }
