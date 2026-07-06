@@ -85,14 +85,19 @@ const SLOW_DOWN_STATUSES: ReadonlySet<number> = new Set([
  * fall through.
  *
  * Returns a non-negative integer. `attempt` is clamped to ≥0 so a
- * bad caller doesn't produce `2^negative` weirdness.
+ * bad caller doesn't produce `2^negative` weirdness, and a
+ * non-finite `attempt` (`NaN`/`±Infinity`) falls back to attempt 0
+ * so it can't propagate a `NaN` delay into `setTimeout` (which
+ * treats non-finite delays as 1ms → a tight retry storm).
  */
 export function transportBackoffMs(attempt: number, err?: unknown): number {
   const status = extractStatus(err);
   const slowDown = status !== undefined && SLOW_DOWN_STATUSES.has(status);
   const baseMs = slowDown ? RATE_LIMIT_BASE_MS : BASE_MS;
   const capMs = slowDown ? RATE_LIMIT_CAP_MS : CAP_MS;
-  const safeAttempt = Math.max(0, Math.floor(attempt));
+  const safeAttempt = Number.isFinite(attempt)
+    ? Math.max(0, Math.floor(attempt))
+    : 0;
   const exponential = Math.min(baseMs * 2 ** safeAttempt, capMs);
   const jitter = Math.floor(Math.random() * JITTER_MS);
   // Server-supplied hint elevates the delay; jitter still applies
