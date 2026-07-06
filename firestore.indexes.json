@@ -9,6 +9,16 @@
         { "fieldPath": "role_id", "order": "ASCENDING" },
         { "fieldPath": "final_score", "order": "DESCENDING" }
       ]
+    },
+    {
+      "_comment": "Powers the experienceUnits fetch in the validateAsset orchestrator (functions/src/validation/validate.ts). Each asset's claims are traced against the owner's user-approved Units, fetched in chunks via .where(\"owner_uid\", \"==\").where(\"user_approved\", \"==\").where(\"id\", \"in\", chunk). The two equality filters plus the `in` on `id` require this composite index; without it Firestore rejects the query at runtime with 'no matching composite index found', breaking validateAsset for any asset whose bullets reference approved Units.",
+      "collectionGroup": "experienceUnits",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "owner_uid", "order": "ASCENDING" },
+        { "fieldPath": "user_approved", "order": "ASCENDING" },
+        { "fieldPath": "id", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
