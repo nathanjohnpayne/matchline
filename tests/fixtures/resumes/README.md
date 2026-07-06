@@ -36,5 +36,4 @@ identifiers (personal website, LinkedIn, GitHub URLs) are fine to
 keep — they're already on the owner's public footprint and the
 matching pipeline doesn't read them.
 
-cursor #138 r1 + CodeRabbit caught this on the first commit;
-keep the convention.
+This convention is mandatory for all resume fixtures.
