@@ -204,7 +204,7 @@ describe("selectFixturesForMode", () => {
       throw new Error("expected throw");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("/tmp/fixtures/resumes");
+      expect(message).toContain(join("/tmp/fixtures", "resumes"));
       expect(message).toContain("Update SMOKE_RESUME");
     }
   });

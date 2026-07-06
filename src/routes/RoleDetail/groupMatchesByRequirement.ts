@@ -97,6 +97,14 @@ export function groupMatchesByRequirement(
   // changes. cursor CHANGES_REQUESTED round 1 on PR #132.
   const sortedReqs = sortRequirementsForDisplay(requirements);
 
+  // Normalize topK before use. It's caller-overridable and
+  // fed straight into `Array.prototype.slice` below; a
+  // negative value would slice from the end of the array
+  // instead of yielding an empty/full list, and a
+  // non-integer or NaN value would produce similarly
+  // surprising results.
+  const safeTopK = Number.isFinite(topK) ? Math.max(0, Math.trunc(topK)) : TOP_K;
+
   // Index matches by requirement id once, then walk
   // requirements in their sorted order. Single pass over
   // matches; O(R + M) total + O(R log R) for the requirement
@@ -125,6 +133,6 @@ export function groupMatchesByRequirement(
       // Older first — arbitrary but deterministic.
       return a.created_at.localeCompare(b.created_at);
     });
-    return { requirement, matches: sorted.slice(0, topK) };
+    return { requirement, matches: sorted.slice(0, safeTopK) };
   });
 }

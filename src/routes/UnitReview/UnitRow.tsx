@@ -89,7 +89,8 @@ const STATE_LABELS: Record<DisplayState, string> = {
 };
 
 function formatConfidence(score: number): string {
-  const pct = Math.round(Math.max(0, Math.min(1, score)) * 100);
+  const safeScore = Number.isFinite(score) ? score : 0;
+  const pct = Math.round(Math.max(0, Math.min(1, safeScore)) * 100);
   return `${pct}%`;
 }
 
