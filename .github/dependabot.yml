@@ -22,9 +22,15 @@ updates:
         dependency-type: "production"
     commit-message:
       prefix: "deps"
-    # eslint major pinned out until eslint-plugin-react supports eslint 10 (its
-    # peer caps at <=9.7, so eslint 10 fails npm ERESOLVE). Remove this ignore
-    # when eslint-plugin-react ships a release whose eslint peer allows 10.
+    # eslint / @eslint/js majors pinned out until eslint-plugin-react supports
+    # eslint 10 (its peer caps at <=9.7, so eslint 10 fails npm ERESOLVE). Both
+    # are pinned together: @eslint/js is a direct devDependency consumed by
+    # eslint.config.js (js.configs.recommended) and tracks eslint's major, so
+    # ignoring only eslint would let the group pair @eslint/js 10 with eslint 9
+    # and reopen a lint-breaking PR. Remove both ignores when eslint-plugin-react
+    # ships a release whose eslint peer allows 10.
     ignore:
       - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
         update-types: ["version-update:semver-major"]
