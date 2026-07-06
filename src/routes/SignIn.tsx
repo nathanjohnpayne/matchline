@@ -93,14 +93,20 @@ export default function SignIn() {
       return;
     }
 
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setError("Enter an email address.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
     try {
       const auth = getAuthClient();
       if (mode === "sign-in") {
-        await signInWithEmailAndPassword(auth, email, password);
+        await signInWithEmailAndPassword(auth, normalizedEmail, password);
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        await createUserWithEmailAndPassword(auth, normalizedEmail, password);
       }
       navigate("/units", { replace: true });
     } catch (err) {
@@ -229,10 +235,12 @@ export default function SignIn() {
             <button
               type="button"
               onClick={() => {
+                if (busy) return;
                 setMode(mode === "sign-in" ? "create-account" : "sign-in");
                 setError(null);
               }}
-              className="w-full text-center text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              disabled={busy}
+              className="w-full text-center text-xs text-zinc-500 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:text-zinc-100"
             >
               {mode === "sign-in"
                 ? "Don't have an account? Create one."
