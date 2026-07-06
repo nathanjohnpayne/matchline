@@ -152,14 +152,15 @@ export function topKOverlap(
   actual: readonly string[],
   k: number,
 ): number {
-  if (expected.length === 0) return 1;
+  const expectedSet = new Set(expected);
+  if (expectedSet.size === 0) return 1;
   if (k <= 0) return 0;
   const topK = new Set(actual.slice(0, k));
   let hits = 0;
-  for (const e of expected) {
+  for (const e of expectedSet) {
     if (topK.has(e)) hits += 1;
   }
-  return hits / expected.length;
+  return hits / expectedSet.size;
 }
 
 export const EXTRACTION_ACCURACY_TARGET = 0.8;
