@@ -318,7 +318,7 @@ function makeFlag(
     ...(trace.supporting_unit_id !== undefined && status !== "untraceable"
       ? { supporting_unit_id: trace.supporting_unit_id }
       : {}),
-    ...(spec?.matched_pattern !== undefined
+    ...(status === "specificity" && spec?.matched_pattern !== undefined
       ? { matched_pattern: spec.matched_pattern }
       : {}),
   };

@@ -53,6 +53,13 @@ describe("zodToToolSchema", () => {
 
     const result = zodToToolSchema(schema);
 
+    expect(result.properties).toBeDefined();
+    expect(
+      result.properties !== null &&
+        typeof result.properties === "object" &&
+        !Array.isArray(result.properties),
+    ).toBe(true);
+
     // Both `a` and `b` should have their full inlined object
     // shape, not a `$ref` pointer to a shared definition. The
     // converter's pre-#169 behavior on v4 schemas was to emit

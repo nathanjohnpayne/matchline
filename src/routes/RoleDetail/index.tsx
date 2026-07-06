@@ -377,6 +377,11 @@ export default function RoleDetail(): ReactElement {
       // silently sticking on "loading."
       setStatus("ready");
       setRole(null);
+      setRequirements([]);
+      setMatches([]);
+      setUnits([]);
+      setApplications([]);
+      setError(null);
       return;
     }
 

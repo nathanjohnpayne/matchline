@@ -272,4 +272,70 @@ describe("ExtractionResponseV1Schema", () => {
     const result = ExtractedUnitV1Schema.safeParse(bad);
     expect(result.success).toBe(false);
   });
+
+  it("rejects whitespace-only required text fields (#335)", () => {
+    const bad = {
+      raw_text: "   ",
+      normalized_summary: "Summary.",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+    };
+    expect(ExtractedUnitV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects whitespace-only entries inside skills/tools/domains and metric claims (#335)", () => {
+    const base = {
+      raw_text: "Some raw text.",
+      normalized_summary: "Summary.",
+      unit_type: "project" as const,
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified" as const,
+      confidence_score: 0.9,
+    };
+    expect(
+      ExtractedUnitV1Schema.safeParse({ ...base, skills: ["  "] }).success,
+    ).toBe(false);
+    expect(
+      ExtractedUnitV1Schema.safeParse({
+        ...base,
+        metrics: [{ claim: "\t", confidence: "high" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("trims leading/trailing whitespace from valid text fields", () => {
+    const ok = {
+      raw_text: "  Shipped a side project.  ",
+      normalized_summary: "Shipped a side project.",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.8,
+    };
+    const result = ExtractedUnitV1Schema.safeParse(ok);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.raw_text).toBe("Shipped a side project.");
+    }
+  });
 });

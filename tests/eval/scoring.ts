@@ -152,14 +152,24 @@ export function topKOverlap(
   actual: readonly string[],
   k: number,
 ): number {
-  if (expected.length === 0) return 1;
+  const expectedSet = new Set(expected);
+  if (expectedSet.size === 0) return 1;
   if (k <= 0) return 0;
-  const topK = new Set(actual.slice(0, k));
+  // Codex P2 on PR #359: the denominator dedupes to `expectedSet.size`,
+  // but `k` is set from the raw `expected_top_matches.length` by the
+  // fixture convention. When a fixture has duplicate expected IDs, the
+  // raw `k` opens the top-K window one slot too wide per duplicate,
+  // letting an extra actual rank count as a hit (e.g. expected=[a,a,b],
+  // k=3 gives `b` credit at rank 3 where the deduped fixture would use
+  // k=2). Cap the effective window against the unique expected count so
+  // the top-K window and the denominator stay consistent.
+  const effectiveK = Math.min(k, expectedSet.size);
+  const topK = new Set(actual.slice(0, effectiveK));
   let hits = 0;
-  for (const e of expected) {
+  for (const e of expectedSet) {
     if (topK.has(e)) hits += 1;
   }
-  return hits / expected.length;
+  return hits / expectedSet.size;
 }
 
 export const EXTRACTION_ACCURACY_TARGET = 0.8;
