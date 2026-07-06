@@ -60,6 +60,25 @@ export function checkCaps(
   plannedAdd: { anthropicUsd: number; openaiUsd: number; firebaseUsd: number },
   caps: Caps = DEFAULT_CAPS,
 ): readonly CapCheck[] {
+  // Validate every numeric input up front. `NaN`/`Infinity`/negative values
+  // would silently degrade the `projectedUsd > threshold` comparisons
+  // (`NaN > x` is always false), defeating the guard's whole purpose —
+  // fail loudly instead of waving a budget-blowing run through. Validate
+  // each source separately: the three objects share field names, so merging
+  // them into one would let a later object's value mask an invalid earlier one.
+  for (const [source, obj] of [
+    ["currentUsage", currentUsage],
+    ["plannedAdd", plannedAdd],
+    ["caps", caps],
+  ] as const) {
+    for (const [key, value] of Object.entries(obj)) {
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error(
+          `Invalid cap input: ${source}.${key} must be a finite, non-negative number (got ${value})`,
+        );
+      }
+    }
+  }
   return [
     makeCheck("anthropic", caps.anthropicUsd, currentUsage.anthropicUsd, plannedAdd.anthropicUsd),
     makeCheck("openai", caps.openaiUsd, currentUsage.openaiUsd, plannedAdd.openaiUsd),

@@ -19,11 +19,12 @@ npm run eval                # smoke
 npm run eval -- --full      # full corpus — projection-guard gated
 ```
 
-`--full` is opt-in because a daily full run of the 10×10 corpus at
-the PRD's target $0.75/flow is ~$270/month — 5.4× the combined LLM
-cap. The projection guard short-circuits `--full` runs that would
-exceed any per-provider monthly cap (see `tests/eval/projection.ts`,
-defaults from `memory/matchline_budget_ceilings.md`).
+`--full` is opt-in because a daily full run of the 10×10 corpus (100
+flows/run) at the PRD's target $0.75/flow is $75/run — ~$2,250/month
+run daily, roughly 45× the combined $50/mo LLM cap. The projection
+guard short-circuits `--full` runs that would exceed any per-provider
+monthly cap (see `tests/eval/projection.ts`, defaults from
+`memory/matchline_budget_ceilings.md`).
 
 ### API keys
 
