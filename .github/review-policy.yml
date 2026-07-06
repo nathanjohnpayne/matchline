@@ -95,6 +95,16 @@ coderabbit:
   # `scripts/coderabbit-wait.sh` filters on when classifying PR activity.
   bot_login: "coderabbitai[bot]"
 
+  # Pinned to 1245 (mergepath's current retuned default as of the #623 /
+  # #688 latency retune, commit e97a7e9) rather than left absent, because
+  # this repo has not yet received the mergepath sync that updates
+  # scripts/coderabbit-wait.sh's own fallback past its pre-retune 300
+  # default (see mergepath#690). Once this repo syncs past mergepath
+  # commit e97a7e9, this explicit pin and the script's own fallback agree,
+  # and this key can be deleted so future retunes propagate automatically
+  # instead of requiring a per-consumer bump.
+  max_wait_seconds: 1245
+
   # Maximum number of times `scripts/coderabbit-wait.sh` will parse a
   # "Rate limit exceeded" comment, sleep the published window + 30s
   # buffer, and post `@coderabbitai, try again.` to re-trigger.
