@@ -99,8 +99,13 @@ resolve_java_home() {
       # `<jdk>`).
       path_jhome=$(dirname "$(dirname "$resolved_java_bin")")
     else
+      # Under `set -euo pipefail` a broken `java` shim (non-zero
+      # exit) would abort the whole script here, skipping the
+      # remaining fallbacks. Make the probe non-fatal so a failed
+      # self-report just leaves `path_jhome` empty and falls
+      # through to `/usr/libexec/java_home` / the curated error.
       path_jhome=$("$java_bin" -XshowSettings:properties -version 2>&1 \
-        | awk -F'= ' '/^[[:space:]]*java.home = /{print $2; exit}')
+        | awk -F'= ' '/^[[:space:]]*java.home = /{print $2; exit}') || true
     fi
     if [[ -n "${path_jhome:-}" ]] && is_working_java "$path_jhome"; then
       echo "$path_jhome"
