@@ -8,9 +8,11 @@
  *   - Empty match list → empty array per Requirement (NOT
  *     dropped — the Matches tab still renders the Requirement
  *     row with a "no matches" placeholder).
- *   - Requirements are returned in INPUT ORDER. Caller's
- *     sort is preserved (the parsing pipeline #19 sorts by
- *     priority then must_have).
+ *   - Requirements are returned in DETERMINISTIC DISPLAY
+ *     ORDER, not input order: must_have (true first), then
+ *     priority high → low, then `id` asc as a tie-break. See
+ *     `sortRequirementsForDisplay` / the "Order contract"
+ *     docblock in groupMatchesByRequirement.ts.
  */
 
 import { describe, expect, it } from "vitest";
@@ -192,6 +194,33 @@ describe("groupMatchesByRequirement", () => {
     const [row] = groupMatchesByRequirement(reqs, matches, 3);
     expect(row!.matches).toHaveLength(3);
     expect(row!.matches.map((m) => m.id)).toEqual(["m0", "m1", "m2"]);
+  });
+
+  it("clamps a negative topK to an empty slice instead of slicing from the end", () => {
+    const reqs = [makeReq("r1")];
+    const matches = Array.from({ length: 5 }, (_, i) =>
+      makeMatch(`m${i}`, "r1", 1 - i * 0.1),
+    );
+    const [row] = groupMatchesByRequirement(reqs, matches, -1);
+    expect(row!.matches).toEqual([]);
+  });
+
+  it("falls back to TOP_K for a non-finite topK (NaN)", () => {
+    const reqs = [makeReq("r1")];
+    const matches = Array.from({ length: 8 }, (_, i) =>
+      makeMatch(`m${i}`, "r1", 1 - i * 0.1),
+    );
+    const [row] = groupMatchesByRequirement(reqs, matches, NaN);
+    expect(row!.matches).toHaveLength(TOP_K);
+  });
+
+  it("truncates a non-integer topK", () => {
+    const reqs = [makeReq("r1")];
+    const matches = Array.from({ length: 5 }, (_, i) =>
+      makeMatch(`m${i}`, "r1", 1 - i * 0.1),
+    );
+    const [row] = groupMatchesByRequirement(reqs, matches, 2.9);
+    expect(row!.matches).toHaveLength(2);
   });
 
   it("ties on final_score break by created_at asc (older first, deterministic)", () => {

@@ -1,4 +1,4 @@
-import { z, type ZodType } from "zod";
+import { z } from "zod";
 
 // Convert a zod v4 schema into a JSON Schema object suitable for
 // Anthropic's tool_use `input_schema`. Uses zod v4's native
@@ -21,6 +21,8 @@ import { z, type ZodType } from "zod";
 // Anthropic actually reads, with no $ref entries (zod v4's
 // generator inlines by default, matching what `$refStrategy:
 // "none"` used to do).
-export function zodToToolSchema(schema: ZodType): Record<string, unknown> {
+export function zodToToolSchema(
+  schema: z.ZodObject<z.ZodRawShape>,
+): Record<string, unknown> {
   return z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
 }
