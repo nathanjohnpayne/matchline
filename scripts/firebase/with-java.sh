@@ -86,21 +86,23 @@ resolve_java_home() {
   # `-version`, so `is_working_java` correctly skips it here.
   # cursor CHANGES_REQUESTED round 1 on PR #125.
   if command -v java >/dev/null 2>&1; then
-    local java_bin path_jhome
+    local java_bin resolved_java_bin path_jhome
     java_bin=$(command -v java)
     # `readlink -f` follows symlinks recursively; available on
     # GNU coreutils (Linux) and macOS 12.3+. For older macOS
-    # without -f, the homebrew step above would already have
-    # hit. Fall back to plain `readlink` if -f isn't supported.
-    if path_jhome=$(readlink -f "$java_bin" 2>/dev/null); then
-      :
+    # without -f, ask the JVM itself for its home directory
+    # rather than deriving a bogus root from the unresolved
+    # binary path (e.g. `/usr/bin/java` → `/usr`).
+    if resolved_java_bin=$(readlink -f "$java_bin" 2>/dev/null); then
+      # resolved_java_bin now points at the real `java` binary.
+      # JAVA_HOME is two levels up (from `<jdk>/bin/java` →
+      # `<jdk>`).
+      path_jhome=$(dirname "$(dirname "$resolved_java_bin")")
     else
-      path_jhome="$java_bin"
+      path_jhome=$("$java_bin" -XshowSettings:properties -version 2>&1 \
+        | awk -F'= ' '/^[[:space:]]*java.home = /{print $2; exit}')
     fi
-    # path_jhome now points at the real `java` binary. JAVA_HOME
-    # is two levels up (from `<jdk>/bin/java` → `<jdk>`).
-    path_jhome=$(dirname "$(dirname "$path_jhome")")
-    if is_working_java "$path_jhome"; then
+    if [[ -n "${path_jhome:-}" ]] && is_working_java "$path_jhome"; then
       echo "$path_jhome"
       return 0
     fi
