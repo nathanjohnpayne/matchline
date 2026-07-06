@@ -62,6 +62,15 @@ describe("validateForm", () => {
     ).toEqual({ normalized_summary: expect.stringMatching(/required/i) });
   });
 
+  it("rejects an invalid unit_type (regression: #339)", () => {
+    expect(
+      validateForm({
+        ...VALID_FORM,
+        unit_type: "not_a_real_type" as unknown as (typeof VALID_FORM)["unit_type"],
+      }),
+    ).toEqual({ unit_type: expect.stringMatching(/unit type/i) });
+  });
+
   it("rejects end_date without start_date (DateRange invariant)", () => {
     // Same invariant `InlineEditForm` enforces — end alone is
     // not a valid range. nathanpayne-codex Phase 4b on #90

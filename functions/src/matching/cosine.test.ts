@@ -75,6 +75,23 @@ describe("cosineSimilarity", () => {
     const v = new Array(1536).fill(0).map(() => Math.random());
     expect(cosineSimilarity(v, v)).toBeCloseTo(1, 9);
   });
+
+  it("range contract: result is ALWAYS in [-1, 1] across many random pairs", () => {
+    // Direct contract pin for the raw (unclamped) export across a
+    // broad input space, mirroring the semanticSimilarity [0, 1]
+    // sweep below. cosineSimilarity is intentionally unclamped, so
+    // this is what enforces the documented [-1, 1] bound rather
+    // than a handful of hand-picked cases (identical / orthogonal /
+    // antiparallel).
+    for (let trial = 0; trial < 100; trial++) {
+      const dim = 16;
+      const a = new Array(dim).fill(0).map(() => Math.random() * 2 - 1);
+      const b = new Array(dim).fill(0).map(() => Math.random() * 2 - 1);
+      const result = cosineSimilarity(a, b);
+      expect(result).toBeGreaterThanOrEqual(-1);
+      expect(result).toBeLessThanOrEqual(1);
+    }
+  });
 });
 
 describe("semanticSimilarity (cosine clamped to [0, 1])", () => {

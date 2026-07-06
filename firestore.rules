@@ -39,9 +39,25 @@ service cloud.firestore {
     // (`setMatchApprovalState`, cursor #133 r1) and the
     // matching pipeline's carry-forward canonicalization
     // (cursor #133 r3) make the bad shape unrepresentable
-    // through the V1 write paths, but `upsertMatch` and
-    // direct admin-SDK writes can still produce it. Rules
-    // are the SECURITY boundary — generation gates on
+    // through the V1 write paths, but `upsertMatch` can still
+    // produce it. This rule is the boundary for CLIENT-side
+    // (web/mobile SDK) writes ONLY.
+    //
+    // IMPORTANT: Firestore Security Rules do NOT apply to
+    // Admin-SDK / server-credential writes — those bypass
+    // rules entirely (https://firebase.google.com/docs/
+    // firestore/security/overview). The matching pipeline's
+    // `replaceMatchesForRole` (functions/src/matching/
+    // pipeline.ts) writes `unitMatches` via `getAdminDb()`
+    // inside a transaction and is therefore NOT subject to
+    // this guard. On that path the ONLY thing preventing the
+    // contradictory pair is the pipeline's own carry-forward
+    // canonicalization (a service-layer invariant), not this
+    // rule. Any NEW Cloud Function writing `unitMatches` must
+    // replicate that code-level validation — this rule alone
+    // will not catch it.
+    //
+    // Why it still matters for clients: generation gates on
     // `approved_for_use === true` and would consume a
     // contradictory match without this guard, silently
     // violating the user's rejection intent. cursor

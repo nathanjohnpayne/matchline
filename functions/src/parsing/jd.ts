@@ -5,7 +5,10 @@
  *
  * Same retry + cost-tracking pattern as `extraction/resume.ts`:
  *   1. First attempt uses the prompt as authored.
- *   2. Retry with a progressively stricter reminder up to 2 times.
+ *   2. Retry up to 2 times, with a reminder chosen by the *previous*
+ *      attempt's actual failure kind (schema error vs no tool_use vs
+ *      transport/truncation) rather than by attempt index — see
+ *      `retryReminderFor`.
  *   3. After 2 retries, throw `JdParsingError` with per-attempt log.
  * `recordUsage` fires per successful response so retries never
  * silently undercount the cost.
@@ -60,11 +63,37 @@ const TOOL_NAME = "record_job_requirements";
  */
 const MAX_OUTPUT_TOKENS = 16_384;
 
-const RETRY_REMINDERS: readonly string[] = [
-  "",
-  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields.",
-  "\n\nYour previous two attempts failed. Be strict about field types, required fields, and enum values. If a requirement's category is unclear, drop it rather than invent.",
-];
+const SCHEMA_ERROR_REMINDER =
+  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields.";
+const REPEATED_SCHEMA_ERROR_REMINDER =
+  "\n\nYour previous two attempts failed. Be strict about field types, required fields, and enum values. If a requirement's category is unclear, drop it rather than invent.";
+const NO_TOOL_USE_REMINDER =
+  "\n\nYour previous response did not call the tool. You must respond by calling the tool with the parsed requirements; do not respond with plain text.";
+
+/**
+ * Build the reminder text to append to the system prompt for the next
+ * attempt, keyed by the *previous* attempt's actual failure kind
+ * rather than by attempt index. `transport_error` and
+ * `max_tokens_exceeded` get no reminder — a retry can't correct
+ * either via prompt text (transport failures aren't the model's
+ * fault, and truncation needs a higher token budget, not stricter
+ * instructions). See #334.
+ */
+function retryReminderFor(
+  previousFailure: JdParsingAttemptFailure | undefined,
+  attempt: number,
+): string {
+  if (!previousFailure) return "";
+  switch (previousFailure.kind) {
+    case "schema_error":
+      return attempt >= 2 ? REPEATED_SCHEMA_ERROR_REMINDER : SCHEMA_ERROR_REMINDER;
+    case "no_tool_use":
+      return NO_TOOL_USE_REMINDER;
+    case "transport_error":
+    case "max_tokens_exceeded":
+      return "";
+  }
+}
 
 export async function parseJobRequirements(
   text: string,
@@ -89,7 +118,8 @@ export async function parseJobRequirements(
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const start = Date.now();
-    const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
+    const systemWithReminder =
+      prompt.system + retryReminderFor(failures.at(-1), attempt);
     const userContent = `${prompt.userFewShot}\n\nJob description to parse:\n\n${text}`;
 
     let response: Anthropic.Messages.Message;
