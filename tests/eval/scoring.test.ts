@@ -206,4 +206,17 @@ describe("topKOverlap", () => {
     // Without dedup, "a" would count as 2 hits over a denominator of 3.
     expect(topKOverlap(["a", "a", "b"], ["a", "c"], 2)).toBeCloseTo(1 / 2, 6);
   });
+
+  it("caps k against the unique expected count so duplicate IDs cannot widen the window (Codex P2 #359)", () => {
+    // Fixture convention sets k from the raw expected_top_matches.length,
+    // so a duplicate ("a") makes k=3 while the deduped fixture is k=2.
+    // "b" only appears at rank 3 in actual; the raw k=3 window would let
+    // it count. Capping the effective window to expectedSet.size (2)
+    // keeps the top-K window consistent with the deduped denominator, so
+    // only "a" (rank 1) is a hit → 1/2.
+    expect(topKOverlap(["a", "a", "b"], ["a", "x", "b"], 3)).toBeCloseTo(
+      1 / 2,
+      6,
+    );
+  });
 });
