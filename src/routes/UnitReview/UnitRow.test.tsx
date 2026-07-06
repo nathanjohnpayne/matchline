@@ -120,6 +120,19 @@ describe("UnitRow", () => {
     expect(html).toContain(`title="${longSummary}"`);
   });
 
+  it("renders 0% instead of NaN% when confidence_score is non-finite (#338)", () => {
+    const html = renderToStaticMarkup(
+      <ul>
+        <UnitRow
+          unit={unit({ id: "a", confidence_score: Number.NaN })}
+          onSaveEdit={async () => {}}
+        />
+      </ul>,
+    );
+    expect(html).toContain("0%");
+    expect(html).not.toContain("NaN%");
+  });
+
   it("surfaces the re-embed-pending badge when the flag is set", () => {
     const html = renderToStaticMarkup(
       <ul>
