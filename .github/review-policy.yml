@@ -72,8 +72,9 @@ author_identity: nathanjohnpayne
 # proceeding past Phase 2.5.
 #
 # When enabled, the agent MUST:
-#   1. Wait for CodeRabbit to post before proceeding (up to 3 min; ask
-#      the human if it hasn't appeared).
+#   1. Wait for CodeRabbit to post before proceeding. scripts/coderabbit-wait.sh
+#      enforces the coderabbit.max_wait_seconds budget below; ask the human
+#      if it times out without a review.
 #   2. Read BOTH API endpoints:
 #      - gh api repos/{owner}/{repo}/issues/{pr}/comments  (PR-level summary)
 #      - gh api repos/{owner}/{repo}/pulls/{pr}/comments    (inline diff comments)
@@ -95,15 +96,15 @@ coderabbit:
   # `scripts/coderabbit-wait.sh` filters on when classifying PR activity.
   bot_login: "coderabbitai[bot]"
 
-  # Maximum total seconds `scripts/coderabbit-wait.sh` will poll before
-  # timing out. Used by Phase 2.5 grace window + any downstream auto-merge
-  # workflow that wants to block merge until CodeRabbit has reviewed the
-  # current HEAD. The default of 300s (5 min) accommodates CodeRabbit's
-  # typical ~2–3 min review latency plus a short buffer. Raise it for
-  # repos where CodeRabbit consistently runs long; lower it if the
-  # auto-merge workflow would rather proceed than wait. See
-  # nathanjohnpayne/mergepath#136 for the race-with-auto-merge case.
-  max_wait_seconds: 300
+  # Pinned to 1245 (mergepath's current retuned default as of the #623 /
+  # #688 latency retune, commit e97a7e9) rather than left absent, because
+  # this repo has not yet received the mergepath sync that updates
+  # scripts/coderabbit-wait.sh's own fallback past its pre-retune 300
+  # default (see mergepath#690). Once this repo syncs past mergepath
+  # commit e97a7e9, this explicit pin and the script's own fallback agree,
+  # and this key can be deleted so future retunes propagate automatically
+  # instead of requiring a per-consumer bump.
+  max_wait_seconds: 1245
 
   # Maximum number of times `scripts/coderabbit-wait.sh` will parse a
   # "Rate limit exceeded" comment, sleep the published window + 30s
