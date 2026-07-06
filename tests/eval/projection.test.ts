@@ -77,6 +77,26 @@ describe("checkCaps", () => {
       firebaseUsd: 25,
     });
   });
+
+  it("rejects NaN inputs instead of silently passing the guard", () => {
+    // `NaN > threshold` is always false — without validation a NaN usage
+    // value would make exceedsCap false and wave a budget-blowing run through.
+    expect(() =>
+      checkCaps({ anthropicUsd: NaN, openaiUsd: 0, firebaseUsd: 0 }, zero),
+    ).toThrow(/finite, non-negative/);
+  });
+
+  it("rejects Infinity inputs", () => {
+    expect(() =>
+      checkCaps(zero, { anthropicUsd: Infinity, openaiUsd: 0, firebaseUsd: 0 }),
+    ).toThrow(/finite, non-negative/);
+  });
+
+  it("rejects negative inputs", () => {
+    expect(() =>
+      checkCaps(zero, zero, { anthropicUsd: -1, openaiUsd: 25, firebaseUsd: 25 }),
+    ).toThrow(/finite, non-negative/);
+  });
 });
 
 describe("shouldBlock", () => {

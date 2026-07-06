@@ -81,6 +81,22 @@ describe("transportBackoffMs", () => {
     expect(transportBackoffMs(-100)).toBe(500);
   });
 
+  it("clamps non-finite attempt to 0 (NaN / Infinity shouldn't produce a NaN delay)", () => {
+    // A NaN/Infinity attempt used to flow through
+    // Math.max(0, Math.floor(attempt)) unguarded, yielding a NaN
+    // delay that setTimeout treats as 1ms — a tight retry storm,
+    // exactly what this helper exists to prevent.
+    expect(transportBackoffMs(NaN)).toBe(500);
+    expect(transportBackoffMs(Infinity)).toBe(500);
+    expect(transportBackoffMs(-Infinity)).toBe(500);
+    for (const attempt of [NaN, Infinity, -Infinity]) {
+      const v = transportBackoffMs(attempt);
+      expect(Number.isFinite(v)).toBe(true);
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it("returns a non-negative integer for any reasonable attempt", () => {
     vi.restoreAllMocks(); // real Math.random
     for (let attempt = 0; attempt < 20; attempt++) {
