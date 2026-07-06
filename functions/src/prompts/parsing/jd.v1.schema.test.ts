@@ -84,6 +84,45 @@ describe("JdParsingResponseV1Schema", () => {
     delete (bad as Record<string, unknown>).normalized_requirement;
     expect(ParsedRequirementV1Schema.safeParse(bad).success).toBe(false);
   });
+
+  it("rejects whitespace-only required text fields (#335)", () => {
+    expect(
+      ParsedRequirementV1Schema.safeParse({ ...makeBase(), raw_text: "   " })
+        .success,
+    ).toBe(false);
+    expect(
+      ParsedRequirementV1Schema.safeParse({
+        ...makeBase(),
+        normalized_requirement: "\n\t ",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects whitespace-only entries inside keywords/tools/domains (#335)", () => {
+    expect(
+      ParsedRequirementV1Schema.safeParse({ ...makeBase(), keywords: ["   "] })
+        .success,
+    ).toBe(false);
+    expect(
+      ParsedRequirementV1Schema.safeParse({ ...makeBase(), tools: [" "] })
+        .success,
+    ).toBe(false);
+    expect(
+      ParsedRequirementV1Schema.safeParse({ ...makeBase(), domains: ["\t"] })
+        .success,
+    ).toBe(false);
+  });
+
+  it("trims leading/trailing whitespace from valid text fields", () => {
+    const result = ParsedRequirementV1Schema.safeParse({
+      ...makeBase(),
+      raw_text: "  Some requirement text.  ",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.raw_text).toBe("Some requirement text.");
+    }
+  });
 });
 
 function makeBase(): Record<string, unknown> {

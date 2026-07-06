@@ -87,10 +87,14 @@ export function flagsForApprovalState(state: ApprovalState): ApprovalFlags {
  * from `raw_text` upstream of normalization), so changes to either
  * mean the cached vector is stale.
  *
- * Kept as a frozen Set so an accidental `add()` from a future caller
- * throws rather than silently widening the trigger surface.
+ * Kept private and only exposed through the `shouldMarkReembed`
+ * predicate below. `Object.freeze()` does not stop `Set.prototype.add`
+ * / `.delete` from mutating a Set's internal state at runtime, and
+ * `ReadonlySet<string>` is a compile-time-only view — neither actually
+ * prevents a caller from widening the trigger surface, so the set is
+ * not exported at all rather than claiming a guarantee it can't keep.
  */
-export const EMBEDDING_INVALIDATING_FIELDS: ReadonlySet<string> = new Set([
+const _EMBEDDING_INVALIDATING_FIELDS: ReadonlySet<string> = new Set([
   "raw_text",
   "normalized_summary",
 ]);
@@ -105,7 +109,7 @@ export function shouldMarkReembed(
   partial: Readonly<Record<string, unknown>>,
 ): boolean {
   for (const key of Object.keys(partial)) {
-    if (EMBEDDING_INVALIDATING_FIELDS.has(key)) return true;
+    if (_EMBEDDING_INVALIDATING_FIELDS.has(key)) return true;
   }
   return false;
 }

@@ -51,7 +51,10 @@ const MetricConfidenceSchema = z.enum(["high", "medium", "low"]);
 // success with truncated data.
 const MetricSchema = z
   .object({
-    claim: z.string().min(1),
+    // `.trim()` before `.min(1)`: a bare `.min(1)` only checks string
+    // length, so a whitespace-only value (e.g. "   ") would pass and
+    // get embedded/persisted as if it were real content. See #335.
+    claim: z.string().trim().min(1),
     value: z.number().optional(),
     unit: z.string().optional(),
     direction: MetricDirectionSchema.optional(),
@@ -90,16 +93,18 @@ const DateRangeSchema = z
 
 export const ExtractedUnitV1Schema = z
   .object({
-    raw_text: z.string().min(1),
-    normalized_summary: z.string().min(1),
+    // `.trim()` before `.min(1)`: see MetricSchema.claim above — a
+    // bare `.min(1)` lets whitespace-only strings through. See #335.
+    raw_text: z.string().trim().min(1),
+    normalized_summary: z.string().trim().min(1),
     unit_type: UnitTypeSchema,
 
-    skills: z.array(z.string()),
-    tools: z.array(z.string()),
-    domains: z.array(z.string()),
-    seniority_signals: z.array(z.string()),
-    scope_signals: z.array(z.string()),
-    business_outcomes: z.array(z.string()),
+    skills: z.array(z.string().trim().min(1)),
+    tools: z.array(z.string().trim().min(1)),
+    domains: z.array(z.string().trim().min(1)),
+    seniority_signals: z.array(z.string().trim().min(1)),
+    scope_signals: z.array(z.string().trim().min(1)),
+    business_outcomes: z.array(z.string().trim().min(1)),
     metrics: z.array(MetricSchema),
 
     evidence_type: EvidenceTypeSchema,
