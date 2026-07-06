@@ -4,6 +4,11 @@ import { EMBEDDING_MODEL } from "./config.js";
 import { recordUsage } from "./cost.js";
 import { openai } from "./openai.js";
 
+/** The `usage` block shape returned by the OpenAI embeddings API. */
+type EmbeddingUsage = Awaited<
+  ReturnType<OpenAI["embeddings"]["create"]>
+>["usage"];
+
 export interface EmbedOptions {
   readonly ownerUid?: string;
   readonly applicationId?: string;
@@ -25,6 +30,25 @@ export interface EmbedOptions {
 }
 
 /**
+ * Extract `prompt_tokens` from an embeddings response's usage block,
+ * throwing if it is absent or non-numeric. A missing token count is an
+ * API contract violation — silently defaulting to 0 would corrupt cost
+ * telemetry by under-reporting a billed call as free, so fail loudly.
+ * Because callers invoke this AFTER recording is attempted (see
+ * `embed`/`embedMany`), a throw here still surfaces the bad response
+ * rather than persisting a $0 usage doc.
+ */
+function promptTokens(usage: EmbeddingUsage | undefined): number {
+  const tokens = usage?.prompt_tokens;
+  if (typeof tokens !== "number" || !Number.isFinite(tokens)) {
+    throw new Error(
+      `Embeddings API response missing numeric prompt_tokens (got ${String(tokens)})`,
+    );
+  }
+  return tokens;
+}
+
+/**
  * Generate an embedding for a single input string. Callers should
  * normalize inputs (trim, collapse whitespace, lowercase canonical
  * vocabulary) before handing text here so the cached embedding matches
@@ -42,20 +66,24 @@ export async function embed(input: string, options: EmbedOptions = {}): Promise<
     model: EMBEDDING_MODEL,
     input,
   });
-  const first = response.data[0];
-  if (!first) {
-    throw new Error("Embeddings API returned no data for input");
-  }
+  // Record usage BEFORE validating response shape: the API call
+  // already succeeded and was billed, so a subsequent shape check
+  // throwing must not lose the cost telemetry for a call the caller
+  // was charged for.
   await record({
     stage: "embedding",
     provider: "openai",
     model: EMBEDDING_MODEL,
-    inputTokens: response.usage?.prompt_tokens ?? 0,
+    inputTokens: promptTokens(response.usage),
     outputTokens: 0,
     latencyMs: Date.now() - start,
     ownerUid: options.ownerUid,
     applicationId: options.applicationId,
   });
+  const first = response.data[0];
+  if (!first) {
+    throw new Error("Embeddings API returned no data for input");
+  }
   return first.embedding;
 }
 
@@ -75,20 +103,23 @@ export async function embedMany(
     model: EMBEDDING_MODEL,
     input: inputs,
   });
-  if (response.data.length !== inputs.length) {
-    throw new Error(
-      `Embedding count mismatch: expected ${inputs.length}, got ${response.data.length}`,
-    );
-  }
+  // Record usage BEFORE the count-mismatch validation: the batch call
+  // already succeeded and was billed, so a mismatch throw must not
+  // discard the cost telemetry for a call the caller was charged for.
   await record({
     stage: "embedding",
     provider: "openai",
     model: EMBEDDING_MODEL,
-    inputTokens: response.usage?.prompt_tokens ?? 0,
+    inputTokens: promptTokens(response.usage),
     outputTokens: 0,
     latencyMs: Date.now() - start,
     ownerUid: options.ownerUid,
     applicationId: options.applicationId,
   });
+  if (response.data.length !== inputs.length) {
+    throw new Error(
+      `Embedding count mismatch: expected ${inputs.length}, got ${response.data.length}`,
+    );
+  }
   return response.data.map((d) => d.embedding);
 }
