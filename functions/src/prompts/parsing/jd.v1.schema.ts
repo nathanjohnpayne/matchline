@@ -45,13 +45,16 @@ const PrioritySchema = z.enum(["high", "medium", "low"]);
 
 export const ParsedRequirementV1Schema = z
   .object({
-    raw_text: z.string().min(1),
-    normalized_requirement: z.string().min(1),
+    // `.trim()` before `.min(1)`: a bare `.min(1)` only checks string
+    // length, so a whitespace-only value (e.g. "   ") would pass and
+    // get embedded/persisted as if it were real content. See #335.
+    raw_text: z.string().trim().min(1),
+    normalized_requirement: z.string().trim().min(1),
     category: CategorySchema,
 
-    keywords: z.array(z.string()),
-    tools: z.array(z.string()),
-    domains: z.array(z.string()),
+    keywords: z.array(z.string().trim().min(1)),
+    tools: z.array(z.string().trim().min(1)),
+    domains: z.array(z.string().trim().min(1)),
     seniority_level: SeniorityLevelSchema.optional(),
 
     priority: PrioritySchema,

@@ -440,9 +440,21 @@ async function replaceMatchesForRole(
         // (cursor #133 r1) — once the user has rejected a
         // pair, that decision wins until they un-reject via
         // the unified setter.
+        //
+        // Fold duplicates by precedence (`rejected` > `approved`
+        // > `none`) rather than last-write-wins. If Firestore
+        // ever returns more than one doc for the same pair, a
+        // blind `.set()` would let iteration order decide, which
+        // could silently drop a stored rejection during a
+        // rerun-triggered carry-forward — the exact invariant
+        // this loop exists to preserve.
+        const prev = priorFlagsByPair.get(key);
         priorFlagsByPair.set(key, {
-          approved_for_use: m.user_rejected ? false : m.approved_for_use,
-          user_rejected: m.user_rejected,
+          approved_for_use:
+            prev?.user_rejected || m.user_rejected
+              ? false
+              : (prev?.approved_for_use ?? false) || m.approved_for_use,
+          user_rejected: (prev?.user_rejected ?? false) || m.user_rejected,
         });
       }
     }

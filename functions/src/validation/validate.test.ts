@@ -276,6 +276,50 @@ describe("validateAsset orchestrator", () => {
     expect(result.flags[0]!.supporting_unit_id).toBe("u1");
   });
 
+  it("matched_pattern leak guard (#310): passing specificity carrying a deny-list matched_pattern → traced flag omits it", async () => {
+    // Regression for the #310 leak that the makeFlag status guard
+    // (`status === "specificity"`) closes at validate.ts. A
+    // deny-list hit can co-occur with specific: true when numeric/
+    // named anchors override the vague trope, so checkSpecificity
+    // returns a *passing* result that still carries matched_pattern.
+    // The persisted/traced flag must NOT leak that failure-only
+    // metadata onto the passing path — assert the leak stays closed,
+    // not merely that failing flags include matched_pattern (which
+    // the specificity-flag test above already covers). Removing the
+    // status guard would reintroduce this leak and fail here.
+    const content = makeContent([
+      makeBullet("b1", "The user launched 3 products at Netflix.", ["u1"]),
+    ]);
+
+    const persistFlags = vi.fn(async () => {});
+    const result = await validateAsset(CTX, {
+      loadAsset: async () => ({ asset: makeAsset(content), content }),
+      loadUnits: async () => [makeUnit("u1")],
+      extractClaims: async () => [fakeClaim("c1", "b1", "x")],
+      checkTraceability: async () => fakeTraceSupports("u1"),
+      // Passing specificity that still reports a deny-list hit.
+      checkSpecificity: async () => ({
+        ...FAKE_SPEC_OK,
+        matched_pattern: "launched",
+      }),
+      persistFlags,
+      generateId: () => "f1",
+      now: () => "2026-04-26T00:00:00.000Z",
+    });
+
+    expect(result.status).toBe("passed");
+    expect(result.flags).toHaveLength(1);
+    const flag = result.flags[0]!;
+    expect(flag.status).toBe("traced");
+    // The leak is closed: no failure-only matched_pattern on a
+    // passing flag, on both the returned and the persisted flag.
+    expect(flag.matched_pattern).toBeUndefined();
+    expect("matched_pattern" in flag).toBe(false);
+    const persistedResult = persistFlags.mock.calls[0]![1];
+    expect(persistedResult.flags[0]!.matched_pattern).toBeUndefined();
+    expect("matched_pattern" in persistedResult.flags[0]!).toBe(false);
+  });
+
   it("multi-bullet, multi-claim aggregation: 2 bullets × 2 claims = 4 flags", async () => {
     const content = makeContent([
       makeBullet("b1", "The user did a thing.", ["u1"]),
@@ -757,10 +801,14 @@ describe("validateAsset orchestrator", () => {
     expect(extractClaims).toHaveBeenCalledTimes(1);
   });
 
-  it("computes content_snapshot deterministically for TOCTOU detection", async () => {
-    // Pin: result.content_snapshot is a JSON-string of the
-    // loaded content. The persist transaction uses this to
-    // detect concurrent edits. Codex/CR Major round 1 on #117.
+  it("forwards content_snapshot to persistFlags for TOCTOU detection", async () => {
+    // Contract: validateAsset produces a string content_snapshot
+    // and forwards the exact same value to persistFlags, which
+    // uses it to detect concurrent edits. Assert propagation, not
+    // the specific serialization — the snapshot may move to a
+    // canonical (key-order-independent) JSON encoding later, and
+    // this test should track the contract, not JSON.stringify's
+    // byte-for-byte output. Codex/CR Major round 1 on #117.
     const content = makeContent([makeBullet("b1", "thing", ["u1"])]);
     const persistFlags = vi.fn(async () => {});
 
@@ -775,11 +823,23 @@ describe("validateAsset orchestrator", () => {
       persistFlags,
     });
 
-    expect(result.content_snapshot).toBe(JSON.stringify(content));
+    expect(typeof result.content_snapshot).toBe("string");
+    expect(result.content_snapshot.length).toBeGreaterThan(0);
+    // The snapshot must represent the *loaded* content, not a
+    // constant or unrelated payload: production defaultPersistFlags
+    // rejects as stale when JSON.stringify(generated_content) !==
+    // content_snapshot, so a refactor that pins the snapshot to a
+    // fixed literal would break real validations while a
+    // non-empty-string assertion alone stayed green. Deep-equal the
+    // decoded snapshot to the loaded content to stay
+    // serialization-independent while pinning the persist contract.
+    expect(JSON.parse(result.content_snapshot)).toEqual(content);
     // The persistFlags call gets the snapshot too — the
-    // production persist uses this to detect TOCTOU edits.
+    // production persist uses this to detect TOCTOU edits. Assert
+    // it is the *same* value the caller sees, not a re-derived
+    // literal, so the test tracks faithful propagation.
     const persisted = persistFlags.mock.calls[0]![1];
-    expect(persisted.content_snapshot).toBe(JSON.stringify(content));
+    expect(persisted.content_snapshot).toBe(result.content_snapshot);
   });
 
   it("propagates ValidateAssetStale from persistFlags (TOCTOU stale-write defense)", async () => {

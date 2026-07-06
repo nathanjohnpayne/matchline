@@ -129,9 +129,9 @@ export const validateAssetCallable = onCall(
 /**
  * Validate one of the callable's id args. Rejects empty/
  * whitespace inputs AND inputs containing `/` (Firestore
- * accepts `/` in ids but interprets them as sub-collection
- * boundaries — passing one would either fail downstream in a
- * confusing way OR, worse, navigate to an unintended path).
+ * document IDs cannot contain `/`; rejecting here keeps the
+ * failure at the callable boundary with a clear
+ * `invalid-argument` error).
  * CodeRabbit Major round 1 on PR #117.
  */
 function validateId(name: string, value: unknown): string {

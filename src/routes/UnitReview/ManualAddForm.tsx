@@ -149,6 +149,9 @@ export function validateForm(state: FormState): ValidationErrors {
   if (state.normalized_summary.trim().length === 0) {
     out.normalized_summary = "Normalized summary is required.";
   }
+  if (!UNIT_TYPES.includes(state.unit_type)) {
+    out.unit_type = "Unit type must be one of the listed options.";
+  }
   if (state.date_end.length > 0 && state.date_start.length === 0) {
     out.date_range = "End date requires a start date.";
   }
@@ -420,6 +423,14 @@ export default function ManualAddForm({
                   </option>
                 ))}
               </select>
+              {showErrors && errors.unit_type !== undefined && (
+                <p
+                  className="mt-1 text-xs text-red-700 dark:text-red-300"
+                  data-error-for="unit_type"
+                >
+                  {errors.unit_type}
+                </p>
+              )}
             </label>
             <label className="block">
               <span className={LABEL_CLS}>Source ref</span>
