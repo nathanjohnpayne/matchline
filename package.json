@@ -17,11 +17,11 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@tiptap/extension-placeholder": "^3.27.2",
-    "@tiptap/pm": "^3.27.2",
-    "@tiptap/react": "^3.27.2",
-    "@tiptap/starter-kit": "^3.27.2",
-    "firebase": "^12.15.0",
+    "@tiptap/extension-placeholder": "^3.27.3",
+    "@tiptap/pm": "^3.27.3",
+    "@tiptap/react": "^3.27.3",
+    "@tiptap/starter-kit": "^3.27.3",
+    "firebase": "^12.16.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.1",
