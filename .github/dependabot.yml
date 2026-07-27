@@ -34,3 +34,13 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@eslint/js"
         update-types: ["version-update:semver-major"]
+      # typescript majors pinned out until typescript-eslint supports TypeScript 7.
+      # Every published typescript-eslint, through the current latest (8.65.0),
+      # caps its typescript peer at ">=4.8.4 <6.1.0" — TypeScript 7 is the native
+      # Go port and no compatible release exists yet, so a group bump to 7.x fails
+      # npm ci with ERESOLVE. typescript-eslint is a direct devDependency consumed
+      # by eslint.config.js, so it cannot be dropped to take the bump instead.
+      # Remove this ignore when typescript-eslint ships a release whose typescript
+      # peer allows 7. Hit on #378, which had to hold typescript at ~6.0.3.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
