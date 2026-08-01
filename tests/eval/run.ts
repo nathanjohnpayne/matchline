@@ -365,7 +365,16 @@ async function main(): Promise<number> {
   // attempt the run with non-networking placeholder clients; a real
   // cache MISS then fails that fixture loudly with an actionable
   // message instead of silently making an unauthenticated call.
-  const canAttemptOffline = cacheMode === "read-write";
+  //
+  // Codex P2 round 3: `cacheMode === "read-write"` alone was not
+  // enough. On a clean checkout with no keys the cache directory is
+  // empty (it's gitignored), so this ran every labeled pair against
+  // throwing placeholders, sat through the extraction retry backoff,
+  // and printed failed 0-score rows — replacing the documented no-key
+  // stub listing that CI's `npm run eval` depends on. Requiring the
+  // cache to be non-empty restores that contract exactly: nothing on
+  // disk means nothing to serve, so fall back to the stub.
+  const canAttemptOffline = cacheMode === "read-write" && cache.hasEntries();
   const runnable = pairs.length > 0 && (haveKeys || canAttemptOffline);
   if (runnable) {
     // Codex P2: select each client on ITS OWN key. Gating both on

@@ -364,6 +364,33 @@ describe("StageCache", () => {
   });
 });
 
+describe("hasEntries", () => {
+  // Codex P2 round 3: `run.ts` uses this to preserve the documented
+  // no-key stub path. On a clean checkout the gitignored cache dir
+  // does not exist, so without this check the harness ran every pair
+  // against throwing placeholders and printed failed 0-score rows —
+  // replacing the stub listing CI's `npm run eval` depends on.
+  it("is false for a directory that does not exist", () => {
+    expect(new StageCache({ dir: join(dir, "never-created") }).hasEntries()).toBe(false);
+  });
+
+  it("is false for an empty directory", () => {
+    expect(new StageCache({ dir }).hasEntries()).toBe(false);
+  });
+
+  it("is false when a stage directory exists but holds no entries", () => {
+    mkdirSync(join(dir, "extraction"), { recursive: true });
+    expect(new StageCache({ dir }).hasEntries()).toBe(false);
+  });
+
+  it("is true once an entry has been written", async () => {
+    const cache = new StageCache({ dir });
+    expect(cache.hasEntries()).toBe(false);
+    await cache.run(BASE, async () => "value");
+    expect(cache.hasEntries()).toBe(true);
+  });
+});
+
 describe("resolveCacheMode", () => {
   it("defaults to read-write", () => {
     expect(resolveCacheMode([], 1)).toBe("read-write");

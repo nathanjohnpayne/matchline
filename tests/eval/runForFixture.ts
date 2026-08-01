@@ -24,6 +24,8 @@
  * in `runForFixture.test.ts`.
  */
 
+import { createHash } from "node:crypto";
+
 import { extractFromResume } from "../../functions/src/extraction/resume.ts";
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
 import { EMBEDDING_MODEL, modelFor } from "../../functions/src/llm/config.ts";
@@ -35,7 +37,8 @@ import { embedMany } from "../../functions/src/llm/embeddings.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 import { runMatchingPipeline } from "../../functions/src/matching/pipeline.ts";
 import { parseJobRequirements } from "../../functions/src/parsing/jd.ts";
-import { resolvePromptVersion } from "../../functions/src/prompts/loader.ts";
+import type { PromptName, PromptStage } from "../../functions/src/prompts/config.ts";
+import { loadPromptText, resolvePromptVersion } from "../../functions/src/prompts/loader.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -223,6 +226,39 @@ export async function runForFixture(
 }
 
 /**
+ * Cache-key component for a prompt: its resolved version PLUS a hash
+ * of the actual prompt text.
+ *
+ * Codex P1 round 3: keying on the version string alone meant editing
+ * a prompt file **in place** — which is exactly what prompt tuning
+ * does, and what #177 workstream B is — left the key unchanged. The
+ * cache then served extraction produced by the PREVIOUS prompt while
+ * the report claimed to be evaluating the new one, so a tuning session
+ * would draw conclusions from stale output and never notice.
+ * `STAGE_IMPL_VERSION` does not help: it covers TypeScript changes,
+ * not Markdown edits.
+ *
+ * Hashing `system` + `userFewShot` — the two sections the loader
+ * actually feeds the model — means any edit that can change output
+ * changes the key, and edits to the file's commentary preamble (which
+ * the loader discards) correctly do not.
+ */
+export function promptFingerprint<S extends PromptStage, N extends PromptName<S>>(
+  stage: S,
+  name: N,
+): string {
+  const version = resolvePromptVersion(stage, name);
+  const prompt = loadPromptText(stage, name);
+  const hash = createHash("sha256")
+    .update(prompt.system)
+    .update("\u0000")
+    .update(prompt.userFewShot)
+    .digest("hex")
+    .slice(0, 16);
+  return `${version}:${hash}`;
+}
+
+/**
  * Render a pipeline error into something an operator can act on.
  *
  * `ExtractionError` / `JdParsingError` summarize as "failed after 3
@@ -369,7 +405,7 @@ async function runForFixtureInner(
       stage: "extraction",
       provider: extractionModel.provider,
       model: extractionModel.model,
-      promptVersion: resolvePromptVersion("extraction", "resume"),
+      promptVersion: promptFingerprint("extraction", "resume"),
       input: resumeText,
     },
     recordCost,
@@ -428,7 +464,7 @@ async function runForFixtureInner(
       stage: "requirement_parsing",
       provider: parsingModel.provider,
       model: parsingModel.model,
-      promptVersion: resolvePromptVersion("parsing", "jd"),
+      promptVersion: promptFingerprint("parsing", "jd"),
       input: jdText,
     },
     recordCost,

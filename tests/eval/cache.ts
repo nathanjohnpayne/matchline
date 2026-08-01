@@ -59,6 +59,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -257,6 +258,29 @@ export class StageCache {
       hitsByProvider: Object.fromEntries(this.hitsByProvider),
       missesByProvider: Object.fromEntries(this.missesByProvider),
     };
+  }
+
+  /**
+   * True when the cache directory holds at least one stored entry.
+   *
+   * Lets a caller distinguish "cache is available and might serve
+   * this run" from "cache directory is empty, so there is nothing to
+   * serve." `run.ts` uses it to preserve the documented no-key stub
+   * path on a clean checkout, where the gitignored directory does not
+   * exist yet (Codex P2 round 3).
+   */
+  hasEntries(): boolean {
+    if (!existsSync(this.dir)) return false;
+    try {
+      for (const stage of readdirSync(this.dir, { withFileTypes: true })) {
+        if (!stage.isDirectory()) continue;
+        const entries = readdirSync(join(this.dir, stage.name));
+        if (entries.some((e) => e.endsWith(".json"))) return true;
+      }
+    } catch {
+      // Unreadable cache dir — treat as empty rather than throwing.
+    }
+    return false;
   }
 
   private bump(map: Map<string, number>, provider: string): void {

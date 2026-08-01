@@ -33,7 +33,7 @@ import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthr
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
-import { describeError, runForFixture } from "./runForFixture.ts";
+import { describeError, promptFingerprint, runForFixture } from "./runForFixture.ts";
 
 // -- Mock factories ---------------------------------------------------------
 
@@ -124,6 +124,35 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("promptFingerprint", () => {
+  // Codex P1 round 3: keying on the version string alone meant
+  // editing a prompt file IN PLACE — exactly what prompt tuning does,
+  // and what #177 workstream B is — left the key unchanged. The cache
+  // then served extraction from the PREVIOUS prompt while the report
+  // claimed to evaluate the new one, so a tuning session would draw
+  // conclusions from stale output and never notice.
+  it("includes the resolved version", () => {
+    expect(promptFingerprint("extraction", "resume")).toMatch(/^v1:/);
+  });
+
+  it("appends a hash of the prompt contents", () => {
+    const fp = promptFingerprint("extraction", "resume");
+    expect(fp).toMatch(/^v1:[0-9a-f]{16}$/);
+  });
+
+  it("is stable across calls for unchanged content", () => {
+    expect(promptFingerprint("extraction", "resume")).toBe(
+      promptFingerprint("extraction", "resume"),
+    );
+  });
+
+  it("differs between prompts", () => {
+    expect(promptFingerprint("extraction", "resume")).not.toBe(
+      promptFingerprint("parsing", "jd"),
+    );
+  });
 });
 
 describe("describeError", () => {
