@@ -366,12 +366,25 @@ export class StageCache {
 }
 
 /**
+ * Models already warned about, so a 100-cell corpus doesn't emit the
+ * same line 400 times. Module-scoped: the warning is about a
+ * configuration gap, not about any one cache instance.
+ */
+const warnedUnpricedModels = new Set<string>();
+
+/**
  * Sum `priceFor` across usage records. Shared by the actual-spend and
  * modeled-spend rollups so they can never drift apart.
  *
- * Unknown models contribute 0 rather than throwing — the harness must
- * not die because a swept model lacks a `rates.ts` entry, but the
- * sweep reports a warning so the gap is visible (see `sweep.ts`).
+ * An unknown model contributes 0 rather than throwing — the harness
+ * must not die mid-corpus over a pricing gap — but it **warns to
+ * stderr**, once per model.
+ *
+ * Codex P2: the previous version swallowed the failure silently and
+ * its comment claimed a caller reported the gap. No such caller
+ * existed. A renamed or newly-added model therefore showed up as
+ * free, quietly invalidating every cost comparison in the report with
+ * no indication anything was wrong.
  */
 export function sumUsageCost(usage: readonly UsageRecord[]): number {
   let total = 0;
@@ -379,10 +392,22 @@ export function sumUsageCost(usage: readonly UsageRecord[]): number {
     try {
       total += priceFor(u.model, u);
     } catch {
-      // Unknown model — see docstring.
+      if (!warnedUnpricedModels.has(u.model)) {
+        warnedUnpricedModels.add(u.model);
+        process.stderr.write(
+          `[eval-cache] no rates.ts entry for model "${u.model}" — its calls are ` +
+            `counted as $0.00, so reported cost is an UNDERSTATEMENT. Add it to ` +
+            `functions/src/llm/rates.ts.\n`,
+        );
+      }
     }
   }
   return total;
+}
+
+/** Test-only: reset the warn-once dedupe so cases don't mask each other. */
+export function _resetUnpricedWarningsForTests(): void {
+  warnedUnpricedModels.clear();
 }
 
 /**

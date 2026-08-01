@@ -392,10 +392,14 @@ async function runForFixtureInner(
       provider: "openai",
       model: EMBEDDING_MODEL,
       promptVersion: "n/a",
-      // Join on U+0000 — a control character that cannot appear in
-      // a normalized_summary — so two different text arrays can't
-      // collide on a shared separator.
-      input: unitTexts.join("\u0000"),
+      // Codex P2: a delimiter join is NOT collision-free here. Both
+      // extraction schemas accept any non-empty string, U+0000
+      // included, so ["a\u0000b", "c"] and ["a", "b\u0000c"] produced
+      // the same key while needing different embedding batches — one
+      // fixture could receive another batch's vectors and silently
+      // corrupt every matching score downstream. Serialize
+      // structurally instead of relying on an unenforced restriction.
+      input: JSON.stringify(unitTexts),
     },
     recordCost,
     (record) =>
@@ -441,7 +445,7 @@ async function runForFixtureInner(
       provider: "openai",
       model: EMBEDDING_MODEL,
       promptVersion: "n/a",
-      input: reqTexts.join("\u0000"),
+      input: JSON.stringify(reqTexts),
     },
     recordCost,
     (record) =>

@@ -12,14 +12,15 @@
  *      sweep's ranking doesn't move with cache state.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UsageRecord } from "../../functions/src/llm/cost.ts";
 
 import {
+  _resetUnpricedWarningsForTests,
   cacheKey,
   resolveCacheMode,
   StageCache,
@@ -287,7 +288,19 @@ describe("StageCache", () => {
     it("does not mark a key reusable when the persist failed", async () => {
       // A failed write must not make the next lookup believe a fresh
       // entry exists on disk.
-      const refresh = new StageCache({ dir: "/nonexistent-root/deny", mode: "refresh" });
+      //
+      // Codex P2: this used to point at `/nonexistent-root/deny` and
+      // assume the path was unwritable. Running as root — common in
+      // CI containers — that hierarchy is creatable, the write
+      // succeeds, and the assertion inverts. Force the failure
+      // structurally instead: put a regular FILE where the stage
+      // directory needs to be, so `mkdirSync` fails with ENOTDIR for
+      // every user including root.
+      const blockedRoot = join(dir, "blocked");
+      mkdirSync(blockedRoot, { recursive: true });
+      writeFileSync(join(blockedRoot, "extraction"), "not a directory", "utf8");
+
+      const refresh = new StageCache({ dir: blockedRoot, mode: "refresh" });
       const first = await refresh.run(BASE, async () => "one");
       const second = await refresh.run(BASE, async () => "two");
       expect(first.hit).toBe(false);
@@ -386,11 +399,44 @@ describe("sumUsageCost", () => {
   });
 
   it("contributes 0 for a model with no rates entry rather than throwing", () => {
-    // A swept model without a rates.ts entry must not kill the run;
-    // sweep.ts surfaces the gap as a warning instead.
     expect(() =>
       sumUsageCost([usage({ model: "some-unregistered-model" })]),
     ).not.toThrow();
     expect(sumUsageCost([usage({ model: "some-unregistered-model" })])).toBe(0);
+  });
+
+  // Codex P2: the previous version swallowed the pricing failure
+  // silently, and its comment claimed a caller reported the gap — no
+  // such caller existed. A renamed or newly-added model looked FREE
+  // and quietly invalidated every cost comparison in the report.
+  it("warns to stderr about an unpriced model, once per model", () => {
+    _resetUnpricedWarningsForTests();
+    const writes: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        writes.push(String(chunk));
+        return true;
+      });
+
+    sumUsageCost([usage({ model: "mystery-model" })]);
+    sumUsageCost([usage({ model: "mystery-model" })]);
+    sumUsageCost([usage({ model: "other-mystery" })]);
+    spy.mockRestore();
+
+    const mystery = writes.filter((w) => w.includes("mystery-model"));
+    expect(mystery).toHaveLength(1);
+    expect(mystery[0]).toMatch(/UNDERSTATEMENT/);
+    expect(mystery[0]).toMatch(/rates\.ts/);
+    // A different model gets its own warning.
+    expect(writes.filter((w) => w.includes("other-mystery"))).toHaveLength(1);
+  });
+
+  it("does not warn for a priced model", () => {
+    _resetUnpricedWarningsForTests();
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    sumUsageCost([usage()]);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

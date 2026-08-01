@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
+
 import {
   SMOKE_JD,
   SMOKE_RESUME,
@@ -11,10 +13,12 @@ import {
   computeFlowCount,
   estimatePlannedSpend,
   filterToLabeledPairs,
+  liveStageFraction,
   offlineOnlyClient,
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
+  scaleSpend,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -41,6 +45,47 @@ function makeOrchestratorResult(
     ...overrides,
   };
 }
+
+describe("liveStageFraction", () => {
+  // Codex P1: the guard projected all flows at the flat $0.75
+  // estimate regardless of cache state, so a fully warm 10x10 corpus
+  // — which performs ZERO paid calls — exceeded the Anthropic cap and
+  // exited 1, breaking the headline offline matching-tuning workflow.
+  it("returns 0 for a fully warm run", () => {
+    expect(liveStageFraction({ hits: 40, misses: 0 })).toBe(0);
+  });
+
+  it("returns 1 for a fully cold run", () => {
+    expect(liveStageFraction({ hits: 0, misses: 40 })).toBe(1);
+  });
+
+  it("returns the miss share for a partially warm run", () => {
+    expect(liveStageFraction({ hits: 30, misses: 10 })).toBeCloseTo(0.25, 10);
+  });
+
+  it("stays conservative when nothing was recorded", () => {
+    // Cache bypassed, or no fixtures ran — keep the pre-#389 estimate.
+    expect(liveStageFraction({ hits: 0, misses: 0 })).toBe(1);
+  });
+
+  it("lets a fully warm 10x10 corpus pass the cap", () => {
+    const checks = checkCaps(
+      { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
+      scaleSpend(estimatePlannedSpend("full", 100), liveStageFraction({ hits: 400, misses: 0 })),
+      DEFAULT_CAPS,
+    );
+    expect(shouldBlock(checks)).toBe(false);
+  });
+
+  it("still blocks that same corpus when cold", () => {
+    const checks = checkCaps(
+      { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
+      scaleSpend(estimatePlannedSpend("full", 100), liveStageFraction({ hits: 0, misses: 400 })),
+      DEFAULT_CAPS,
+    );
+    expect(shouldBlock(checks)).toBe(true);
+  });
+});
 
 describe("offlineOnlyClient", () => {
   // Codex P1: the credential gate used to send warm runs to the stub
@@ -424,6 +469,46 @@ describe("parseSamples", () => {
 });
 
 // -- aggregateSampledFixture (multi-sample averaging) -------------------
+
+describe("aggregateSampledFixture — modeled cost (#389)", () => {
+  // Codex P1. This function — NOT `toFixtureResult` — is what the
+  // real CLI path uses for every executed fixture, and it dropped
+  // `modeledCostUsd` entirely. `totalModeledCostUsd` was therefore
+  // always empty on real runs, silently defeating the
+  // cache-independent cost comparison. The earlier tests missed it
+  // because they only exercised the single-result converter.
+  it("sums modeledCostUsd across samples", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.4 }),
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.6 }),
+    ]);
+    expect(out.modeledCostUsd).toBeCloseTo(1.0, 10);
+  });
+
+  it("keeps modeled cost even when real spend collapses to zero on a warm run", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.41, cacheHits: 4, cacheMisses: 0 }),
+    ]);
+    expect(out.costUsd).toBe(0);
+    expect(out.modeledCostUsd).toBeCloseTo(0.41, 10);
+    expect(out.notes).toContain("4 cached stage(s)");
+  });
+
+  it("omits the cache note when nothing was cached", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ cacheHits: 0, cacheMisses: 4 }),
+    ]);
+    expect(out.notes).not.toContain("cached stage(s)");
+  });
+
+  it("counts partial modeled cost from a failed sample", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ modeledCostUsd: 0.5 }),
+      makeOrchestratorResult({ ok: false, error: "boom", modeledCostUsd: 0.2 }),
+    ]);
+    expect(out.modeledCostUsd).toBeCloseTo(0.7, 10);
+  });
+});
 
 describe("aggregateSampledFixture", () => {
   it("single-sample mode produces the same notes shape as toFixtureResult (backward compat)", () => {

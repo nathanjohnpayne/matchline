@@ -301,11 +301,13 @@ async function main(): Promise<number> {
   // environment. Without keys, fall back to the previous
   // "fixtures listed, not scored" stub so CI's non-blocking
   // smoke run still produces a report shape.
-  const haveKeys =
+  const haveAnthropicKey =
     typeof process.env.ANTHROPIC_API_KEY === "string" &&
-    process.env.ANTHROPIC_API_KEY.length > 0 &&
+    process.env.ANTHROPIC_API_KEY.length > 0;
+  const haveOpenAiKey =
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
+  const haveKeys = haveAnthropicKey && haveOpenAiKey;
 
 
   // Smoke mode pins to a SPECIFIC (resume, JD) pair via
@@ -366,10 +368,15 @@ async function main(): Promise<number> {
   const canAttemptOffline = cacheMode === "read-write";
   const runnable = pairs.length > 0 && (haveKeys || canAttemptOffline);
   if (runnable) {
-    const anthropicClient = haveKeys
+    // Codex P2: select each client on ITS OWN key. Gating both on
+    // `haveKeys` meant a run with only ANTHROPIC_API_KEY set fell back
+    // to placeholders for both providers, so an Anthropic cache miss
+    // failed even though the key needed to fill it was right there —
+    // directly contradicting the placeholder's own advice.
+    const anthropicClient = haveAnthropicKey
       ? anthropicForCli()
       : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
-    const openaiClient = haveKeys
+    const openaiClient = haveOpenAiKey
       ? openaiForCli()
       : offlineOnlyClient<ReturnType<typeof openaiForCli>>("OpenAI", "OPENAI_API_KEY");
     for (const pair of pairs) {
@@ -440,7 +447,17 @@ async function main(): Promise<number> {
   // run on a 100-cell labeled corpus would silently project
   // 1× and let real spend blow past caps.
   const flowCount = pairs.length * samples;
-  const plannedAdd = estimatePlannedSpend(mode, flowCount);
+  // Codex P1: the guard used to project all `flowCount` pairs at the
+  // flat $0.75 estimate regardless of cache state, so a fully warm
+  // 10x10 corpus — which performs ZERO paid calls — would exceed the
+  // Anthropic cap and exit 1, breaking the headline offline
+  // matching-tuning workflow. Scale by the share of stages that
+  // actually needed a live call. This guard runs after execution, so
+  // the real hit/miss split is already known.
+  const plannedAdd = scaleSpend(
+    estimatePlannedSpend(mode, flowCount),
+    liveStageFraction(cache.stats()),
+  );
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
   if (shouldBlock(capChecks)) {
@@ -534,6 +551,14 @@ export function aggregateSampledFixture(
   const meanMat = mat.reduce((a, b) => a + b, 0) / n;
   const meanLatency = results.reduce((a, r) => a + r.latencyMs, 0) / n;
   const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
+  // Codex P1: this function is what the real CLI path uses (
+  // `toFixtureResult` only covers the single-result shape the tests
+  // exercised), and it previously dropped `modeledCostUsd` entirely.
+  // That left `totalModeledCostUsd` empty on every actual run,
+  // silently defeating the cache-independent cost comparison this
+  // change exists to provide.
+  const totalModeledCost = results.reduce((a, r) => a + r.modeledCostUsd, 0);
+  const cacheHits = results.reduce((a, r) => a + r.cacheHits, 0);
 
   // Failure tally — if any sample failed, surface in notes.
   const failed = results.filter((r) => !r.ok);
@@ -574,7 +599,8 @@ export function aggregateSampledFixture(
     matchAccuracy: meanMat,
     latencyMs: Math.round(meanLatency),
     costUsd: totalCost,
-    notes,
+    modeledCostUsd: totalModeledCost,
+    notes: cacheHits > 0 ? `${notes}; ${cacheHits} cached stage(s)` : notes,
   };
 }
 
@@ -870,6 +896,38 @@ export function filterToLabeledPairs(
  * math from real call telemetry (#41).
  */
 const PER_FLOW_USD_ESTIMATE = 0.75;
+
+/**
+ * Fraction of stages this run had to execute live, in [0, 1].
+ *
+ * The projection guard runs after the corpus executes, so the real
+ * hit/miss split is already known and the estimate can be scaled by
+ * it rather than assuming every flow was paid. A fully warm run
+ * returns 0; a cold run returns 1.
+ *
+ * Returns 1 when nothing was recorded (cache bypassed, or no fixtures
+ * ran) so the guard keeps its pre-#389 conservatism by default.
+ */
+export function liveStageFraction(stats: {
+  readonly hits: number;
+  readonly misses: number;
+}): number {
+  const total = stats.hits + stats.misses;
+  if (total <= 0) return 1;
+  return stats.misses / total;
+}
+
+/** Scale a per-provider spend estimate by a factor in [0, 1]. */
+export function scaleSpend(
+  spend: { anthropicUsd: number; openaiUsd: number; firebaseUsd: number },
+  factor: number,
+): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
+  return {
+    anthropicUsd: spend.anthropicUsd * factor,
+    openaiUsd: spend.openaiUsd * factor,
+    firebaseUsd: spend.firebaseUsd * factor,
+  };
+}
 
 export function estimatePlannedSpend(
   _mode: Mode,

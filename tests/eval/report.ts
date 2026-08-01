@@ -132,8 +132,12 @@ export function formatReport(report: EvalReport): string {
       lines.push(
         "      cache, so this excludes the LLM calls it measures. Re-run with",
       );
+      // Codex P3: this used to advise `--token-source api`, a flag
+      // that lives in the split-out half and does not exist here.
+      // Unknown argv is silently ignored, so the command would have
+      // looked accepted while doing nothing.
       lines.push(
-        "      --no-cache --token-source api for a figure comparable to the <20s target.",
+        "      --no-cache for a figure comparable to the <20s production target.",
       );
     }
     lines.push(
