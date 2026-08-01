@@ -196,7 +196,6 @@ export function defaultCacheDir(): string {
  */
 export function cacheKey(input: CacheKeyInput): string {
   const discriminators = Object.entries(input.discriminators ?? {})
-    .map(([k, v]) => [k, String(v)] as const)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const canonical = JSON.stringify([
     ENTRY_SCHEMA_VERSION,

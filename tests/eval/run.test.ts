@@ -88,6 +88,23 @@ describe("liveStageFraction", () => {
   it("stays conservative for a provider with no recorded stages", () => {
     expect(liveStageFraction({ hits: 4, misses: 0, hitsByProvider: { openai: 4 } }, "anthropic")).toBe(1);
   });
+
+  it("does not discount a partially warm provider by its stage count", () => {
+    // Extraction (Sonnet) and requirement parsing (Haiku) cost very
+    // different amounts. One hit and one miss therefore cannot mean
+    // half the provider spend; retain the full estimate until both hit.
+    expect(
+      liveStageFraction(
+        {
+          hits: 1,
+          misses: 1,
+          hitsByProvider: { anthropic: 1 },
+          missesByProvider: { anthropic: 1 },
+        },
+        "anthropic",
+      ),
+    ).toBe(1);
+  });
 });
 
 describe("scaleSpendByProvider", () => {

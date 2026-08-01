@@ -86,6 +86,15 @@ describe("cacheKey", () => {
     expect(a).toBe(b);
   });
 
+  it("preserves discriminator value types", () => {
+    // JSON's canonical encoding distinguishes the supported number and
+    // string value types. Coercing both to strings would make a caller
+    // that distinguishes `seed: 1` from `seed: "1"` receive stale data.
+    const numeric = cacheKey({ ...BASE, discriminators: { seed: 1 } });
+    const textual = cacheKey({ ...BASE, discriminators: { seed: "1" } });
+    expect(numeric).not.toBe(textual);
+  });
+
   it("folds a stage-implementation fingerprint into every key", () => {
     // Codex P2 round 2: model, prompt version, and fixture text can
     // all be unchanged while the code that turns them into Units

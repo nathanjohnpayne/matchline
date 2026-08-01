@@ -421,7 +421,7 @@ async function main(): Promise<number> {
           // it so the operator isn't left guessing (#389).
           `ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set, and the stage cache is ` +
           `in ${cacheMode} mode so it cannot serve the run offline — export the keys, ` +
-          "or drop --no-cache/--samples so a warm cache can be used";
+          "or drop --no-cache/--refresh-cache/--samples so a warm cache can be used";
     for (const r of selectedResumes) {
       fixtureResults.push({
         id: r,
@@ -907,12 +907,14 @@ export function filterToLabeledPairs(
 const PER_FLOW_USD_ESTIMATE = 0.75;
 
 /**
- * Fraction of stages this run had to execute live, in [0, 1].
+ * Fraction of work this run had to execute live, in [0, 1].
  *
  * The projection guard runs after the corpus executes, so the real
  * hit/miss split is already known and the estimate can be scaled by
- * it rather than assuming every flow was paid. A fully warm run
- * returns 0; a cold run returns 1.
+ * it rather than assuming every flow was paid. The aggregate returns
+ * the stage-count fraction; a provider returns 0 only when every one
+ * of its recorded stages hit, because stage counts are not cost
+ * weights. A fully warm run returns 0; a cold run returns 1.
  *
  * Returns 1 when nothing was recorded (cache bypassed, or no fixtures
  * ran) so the guard keeps its pre-#389 conservatism by default.
@@ -926,13 +928,13 @@ export function liveStageFraction(
   },
   provider?: string,
 ): number {
-  // Codex P2: the aggregate ratio is NOT a safe proxy for a single
-  // provider. The cached stages split between Anthropic (extraction,
-  // JD parsing) and OpenAI (two embedding batches), whose costs
-  // differ by orders of magnitude. Embeddings hitting while the
-  // Anthropic stages miss reads as "50% warm" and would halve the
-  // Anthropic projection even though every Anthropic call ran live —
-  // letting a cap check pass that should have blocked.
+  // The provider aggregate cannot safely be discounted by its stage
+  // count. Anthropic extraction uses Sonnet while requirement parsing
+  // uses Haiku, so one hit and one miss are not "50% of the spend".
+  // Until this estimate carries per-stage modeled costs, retain the
+  // full provider estimate whenever any of that provider's stages ran
+  // live. This can over-project a partially warm run, but it cannot
+  // under-project a budget-capped provider.
   if (provider !== undefined) {
     const hits = stats.hitsByProvider?.[provider] ?? 0;
     const misses = stats.missesByProvider?.[provider] ?? 0;
@@ -940,7 +942,7 @@ export function liveStageFraction(
     // No stages recorded for this provider — stay conservative
     // rather than discounting a provider we know nothing about.
     if (total <= 0) return 1;
-    return misses / total;
+    return misses === 0 ? 0 : 1;
   }
   const total = stats.hits + stats.misses;
   if (total <= 0) return 1;
@@ -948,8 +950,8 @@ export function liveStageFraction(
 }
 
 /**
- * Scale a spend estimate, per provider, by that provider's own live
- * fraction. Firebase carries no cached stages, so it is left alone.
+ * Scale a spend estimate only for providers whose stages were fully
+ * cache-served. Firebase carries no cached stages, so it is left alone.
  */
 export function scaleSpendByProvider(
   spend: { anthropicUsd: number; openaiUsd: number; firebaseUsd: number },

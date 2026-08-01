@@ -61,6 +61,10 @@ Notes:
 - **Warm-run latency is not production latency.** A warm run measures
   matching only, so the report labels it. Use
   `--no-cache` for a figure comparable to the <20s p95 target.
+- **Partially warm runs keep a conservative budget projection.** The
+  projection guard discounts a provider only when every one of its
+  stages was cache-served; stage counts are not a safe proxy for cost
+  when those stages use different models.
 - **Bump `STAGE_IMPL_VERSION` in `cache.ts`** when you change
   extraction, JD parsing, embeddings, or their schemas in a way that
   can alter output for unchanged inputs. Otherwise the cache replays
