@@ -12,6 +12,14 @@
  * Usage:
  *   npm run eval               — smoke mode (default)
  *   npm run eval -- --full     — full corpus (projection-guard gated)
+ *
+ * Stage cache (#389). Extraction / JD parsing / embeddings are served
+ * from `tests/eval/.cache/` on a key hit. Matching itself has no LLM
+ * call, so a warm cache makes matching-layer tuning (#177 workstream
+ * A, score weights, ontology) run offline at zero cost — including
+ * with no API keys set at all.
+ *   --no-cache                 — bypass the cache entirely
+ *   --refresh-cache            — ignore stored entries but rewrite them
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -28,6 +36,7 @@ import {
   setPromptVersionOverrides,
 } from "../../functions/src/prompts/loader.js";
 
+import { resolveCacheMode, StageCache } from "./cache.js";
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
 import { runForFixture, type RunForFixtureResult } from "./runForFixture.js";
@@ -224,6 +233,36 @@ function percentile(sorted: readonly number[], p: number): number | null {
   return sorted[idx]!;
 }
 
+/**
+ * A stand-in LLM client for credential-free runs (#389).
+ *
+ * Satisfies both the Anthropic (`messages.create`) and OpenAI
+ * (`embeddings.create`) shapes the pipelines call, and throws on
+ * either. It is only ever installed when the stage cache is in
+ * read-write mode, so the intended path is that every stage hits and
+ * this is never invoked.
+ *
+ * The failure message has to be actionable, because reaching it means
+ * the operator's mental model was wrong: they believed the cache was
+ * warm for this fixture and it wasn't. `runForFixture` captures the
+ * throw into that fixture's `error` field, so one cold cell surfaces
+ * as a failed row rather than aborting the corpus.
+ */
+export function offlineOnlyClient<T>(provider: string, envVar: string): T {
+  const fail = (): never => {
+    throw new Error(
+      `Cache miss needs a live ${provider} call, but ${envVar} is not set. ` +
+        `This run started without credentials because the stage cache was ` +
+        `expected to serve every stage offline. Either export ${envVar} to ` +
+        `fill the gap, or warm the cache for this fixture first.`,
+    );
+  };
+  return {
+    messages: { create: fail },
+    embeddings: { create: fail },
+  } as T;
+}
+
 function mean(values: readonly number[]): number | null {
   if (values.length === 0) return null;
   return values.reduce((a, b) => a + b, 0) / values.length;
@@ -240,6 +279,19 @@ async function main(): Promise<number> {
   // See functions/src/prompts/loader.ts § runtimeOverrides.
   const promptOverrides = parsePromptOverrides(argv);
   setPromptVersionOverrides(promptOverrides);
+  // Stage cache (#389). `resolveCacheMode` forces `bypass` whenever
+  // `--samples N > 1` so repeated samples still measure real
+  // run-to-run variance instead of replaying one cached answer N
+  // times — see cache.ts § Sampling.
+  const cacheMode = resolveCacheMode(argv, samples);
+  const cache = new StageCache({ mode: cacheMode });
+  // Omitted from the report when caching is off, so a `--no-cache`
+  // run's output stays byte-identical to the pre-#389 shape.
+  const cacheRollup = (): EvalReport["cache"] => {
+    if (cacheMode === "bypass") return undefined;
+    const s = cache.stats();
+    return { mode: cacheMode, hits: s.hits, misses: s.misses };
+  };
   const fixturesDir = join(process.cwd(), "tests", "fixtures");
   const resumeFixtures = listFixtures(join(fixturesDir, "resumes"), ".txt");
   const jdFixtures = listFixtures(join(fixturesDir, "jds"), ".txt");
@@ -249,11 +301,14 @@ async function main(): Promise<number> {
   // environment. Without keys, fall back to the previous
   // "fixtures listed, not scored" stub so CI's non-blocking
   // smoke run still produces a report shape.
-  const haveKeys =
+  const haveAnthropicKey =
     typeof process.env.ANTHROPIC_API_KEY === "string" &&
-    process.env.ANTHROPIC_API_KEY.length > 0 &&
+    process.env.ANTHROPIC_API_KEY.length > 0;
+  const haveOpenAiKey =
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
+  const haveKeys = haveAnthropicKey && haveOpenAiKey;
+
 
   // Smoke mode pins to a SPECIFIC (resume, JD) pair via
   // `selectFixturesForMode` (extracted as a pure helper so the
@@ -304,9 +359,35 @@ async function main(): Promise<number> {
         `Label this pair to include in the corpus run.`,
     });
   }
-  if (haveKeys && pairs.length > 0) {
-    const anthropicClient = anthropicForCli();
-    const openaiClient = openaiForCli();
+  // #389: a fully warm cache needs no network at all, so requiring
+  // keys would block the headline use case — offline matching /
+  // ontology tuning at zero cost. When the cache can serve reads we
+  // attempt the run with non-networking placeholder clients; a real
+  // cache MISS then fails that fixture loudly with an actionable
+  // message instead of silently making an unauthenticated call.
+  //
+  // Codex P2 round 3: `cacheMode === "read-write"` alone was not
+  // enough. On a clean checkout with no keys the cache directory is
+  // empty (it's gitignored), so this ran every labeled pair against
+  // throwing placeholders, sat through the extraction retry backoff,
+  // and printed failed 0-score rows — replacing the documented no-key
+  // stub listing that CI's `npm run eval` depends on. Requiring the
+  // cache to be non-empty restores that contract exactly: nothing on
+  // disk means nothing to serve, so fall back to the stub.
+  const canAttemptOffline = cacheMode === "read-write" && cache.hasEntries();
+  const runnable = pairs.length > 0 && (haveKeys || canAttemptOffline);
+  if (runnable) {
+    // Codex P2: select each client on ITS OWN key. Gating both on
+    // `haveKeys` meant a run with only ANTHROPIC_API_KEY set fell back
+    // to placeholders for both providers, so an Anthropic cache miss
+    // failed even though the key needed to fill it was right there —
+    // directly contradicting the placeholder's own advice.
+    const anthropicClient = haveAnthropicKey
+      ? anthropicForCli()
+      : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
+    const openaiClient = haveOpenAiKey
+      ? openaiForCli()
+      : offlineOnlyClient<ReturnType<typeof openaiForCli>>("OpenAI", "OPENAI_API_KEY");
     for (const pair of pairs) {
       // Strip `.txt` from the fixture filename to get the
       // fixture id (resumes/jds are always `<id>.txt`).
@@ -321,7 +402,7 @@ async function main(): Promise<number> {
         samplesForThisPair.push(
           await runForFixture(
             { resumeFixtureId, jdFixtureId },
-            { anthropicClient, openaiClient },
+            { anthropicClient, openaiClient, cache },
           ),
         );
       }
@@ -333,7 +414,14 @@ async function main(): Promise<number> {
     // pre-#136 Phase 0 stub.
     const stubReason = haveKeys
       ? "no JD fixtures available — extraction + matching needs at least one (resume, JD) pair"
-      : "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running for real scoring";
+      : cacheMode === "read-write"
+        ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running for real scoring"
+        : // Keys absent AND the cache was explicitly disabled, so the
+          // offline path isn't available either. Say which flag closed
+          // it so the operator isn't left guessing (#389).
+          `ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set, and the stage cache is ` +
+          `in ${cacheMode} mode so it cannot serve the run offline — export the keys, ` +
+          "or drop --no-cache/--refresh-cache/--samples so a warm cache can be used";
     for (const r of selectedResumes) {
       fixtureResults.push({
         id: r,
@@ -368,7 +456,17 @@ async function main(): Promise<number> {
   // run on a 100-cell labeled corpus would silently project
   // 1× and let real spend blow past caps.
   const flowCount = pairs.length * samples;
-  const plannedAdd = estimatePlannedSpend(mode, flowCount);
+  // Codex P1: the guard used to project all `flowCount` pairs at the
+  // flat $0.75 estimate regardless of cache state, so a fully warm
+  // 10x10 corpus — which performs ZERO paid calls — would exceed the
+  // Anthropic cap and exit 1, breaking the headline offline
+  // matching-tuning workflow. Scale by the share of stages that
+  // actually needed a live call. This guard runs after execution, so
+  // the real hit/miss split is already known.
+  const plannedAdd = scaleSpendByProvider(
+    estimatePlannedSpend(mode, flowCount),
+    cache.stats(),
+  );
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
   if (shouldBlock(capChecks)) {
@@ -393,11 +491,11 @@ async function main(): Promise<number> {
       `\nRefusing to run ${refusedDescriptor}: projection exceeds a monthly cap.\n` +
         "Re-run with --smoke / smaller --samples or wait for next month's cap reset.\n",
     );
-    console.log(formatReport(buildReport(mode, fixtureResults, capChecks)));
+    console.log(formatReport(buildReport(mode, fixtureResults, capChecks, cacheRollup())));
     return 1;
   }
 
-  const report = buildReport(mode, fixtureResults, capChecks);
+  const report = buildReport(mode, fixtureResults, capChecks, cacheRollup());
   console.log(formatReport(report));
   console.log(
     `\n(fixtures available: ${resumeFixtures.length} resumes × ${jdFixtures.length} JDs)`,
@@ -462,6 +560,14 @@ export function aggregateSampledFixture(
   const meanMat = mat.reduce((a, b) => a + b, 0) / n;
   const meanLatency = results.reduce((a, r) => a + r.latencyMs, 0) / n;
   const totalCost = results.reduce((a, r) => a + r.costUsd, 0);
+  // Codex P1: this function is what the real CLI path uses (
+  // `toFixtureResult` only covers the single-result shape the tests
+  // exercised), and it previously dropped `modeledCostUsd` entirely.
+  // That left `totalModeledCostUsd` empty on every actual run,
+  // silently defeating the cache-independent cost comparison this
+  // change exists to provide.
+  const totalModeledCost = results.reduce((a, r) => a + r.modeledCostUsd, 0);
+  const cacheHits = results.reduce((a, r) => a + r.cacheHits, 0);
 
   // Failure tally — if any sample failed, surface in notes.
   const failed = results.filter((r) => !r.ok);
@@ -502,7 +608,8 @@ export function aggregateSampledFixture(
     matchAccuracy: meanMat,
     latencyMs: Math.round(meanLatency),
     costUsd: totalCost,
-    notes,
+    modeledCostUsd: totalModeledCost,
+    notes: cacheHits > 0 ? `${notes}; ${cacheHits} cached stage(s)` : notes,
   };
 }
 
@@ -586,7 +693,11 @@ function buildReport(
   mode: Mode,
   fixtureResults: readonly FixtureResult[],
   capChecks: ReturnType<typeof checkCaps>,
+  cache?: EvalReport["cache"],
 ): EvalReport {
+  const modeledCosts = fixtureResults
+    .map((r) => r.modeledCostUsd)
+    .filter((n): n is number => n !== null && n !== undefined);
   const latencies = fixtureResults
     .map((r) => r.latencyMs)
     .filter((n): n is number => n !== null)
@@ -615,8 +726,11 @@ function buildReport(
       costP50: percentile(costs, 50),
       costP95: percentile(costs, 95),
       totalCostUsd: costs.reduce((a, b) => a + b, 0),
+      totalModeledCostUsd:
+        modeledCosts.length > 0 ? modeledCosts.reduce((a, b) => a + b, 0) : null,
     },
     promptVersions: resolvePromptVersionsForReport(),
+    ...(cache !== undefined && { cache }),
   };
 }
 
@@ -791,6 +905,64 @@ export function filterToLabeledPairs(
  * math from real call telemetry (#41).
  */
 const PER_FLOW_USD_ESTIMATE = 0.75;
+
+/**
+ * Fraction of work this run had to execute live, in [0, 1].
+ *
+ * The projection guard runs after the corpus executes, so the real
+ * hit/miss split is already known and the estimate can be scaled by
+ * it rather than assuming every flow was paid. The aggregate returns
+ * the stage-count fraction; a provider returns 0 only when every one
+ * of its recorded stages hit, because stage counts are not cost
+ * weights. A fully warm run returns 0; a cold run returns 1.
+ *
+ * Returns 1 when nothing was recorded (cache bypassed, or no fixtures
+ * ran) so the guard keeps its pre-#389 conservatism by default.
+ */
+export function liveStageFraction(
+  stats: {
+    readonly hits: number;
+    readonly misses: number;
+    readonly hitsByProvider?: Readonly<Record<string, number>>;
+    readonly missesByProvider?: Readonly<Record<string, number>>;
+  },
+  provider?: string,
+): number {
+  // The provider aggregate cannot safely be discounted by its stage
+  // count. Anthropic extraction uses Sonnet while requirement parsing
+  // uses Haiku, so one hit and one miss are not "50% of the spend".
+  // Until this estimate carries per-stage modeled costs, retain the
+  // full provider estimate whenever any of that provider's stages ran
+  // live. This can over-project a partially warm run, but it cannot
+  // under-project a budget-capped provider.
+  if (provider !== undefined) {
+    const hits = stats.hitsByProvider?.[provider] ?? 0;
+    const misses = stats.missesByProvider?.[provider] ?? 0;
+    const total = hits + misses;
+    // No stages recorded for this provider — stay conservative
+    // rather than discounting a provider we know nothing about.
+    if (total <= 0) return 1;
+    return misses === 0 ? 0 : 1;
+  }
+  const total = stats.hits + stats.misses;
+  if (total <= 0) return 1;
+  return stats.misses / total;
+}
+
+/**
+ * Scale a spend estimate only for providers whose stages were fully
+ * cache-served. Firebase carries no cached stages, so it is left alone.
+ */
+export function scaleSpendByProvider(
+  spend: { anthropicUsd: number; openaiUsd: number; firebaseUsd: number },
+  stats: Parameters<typeof liveStageFraction>[0],
+): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
+  return {
+    anthropicUsd: spend.anthropicUsd * liveStageFraction(stats, "anthropic"),
+    openaiUsd: spend.openaiUsd * liveStageFraction(stats, "openai"),
+    firebaseUsd: spend.firebaseUsd,
+  };
+}
 
 export function estimatePlannedSpend(
   _mode: Mode,

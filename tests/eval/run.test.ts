@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
+
 import {
   SMOKE_JD,
   SMOKE_RESUME,
@@ -11,9 +13,12 @@ import {
   computeFlowCount,
   estimatePlannedSpend,
   filterToLabeledPairs,
+  liveStageFraction,
+  offlineOnlyClient,
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
+  scaleSpendByProvider,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -29,6 +34,9 @@ function makeOrchestratorResult(
     matchAccuracy: 0.75,
     latencyMs: 1234,
     costUsd: 0.05,
+    modeledCostUsd: 0.05,
+    cacheHits: 0,
+    cacheMisses: 4,
     extractedUnitCount: 10,
     parsedRequirementCount: 8,
     matchCount: 25,
@@ -37,6 +45,146 @@ function makeOrchestratorResult(
     ...overrides,
   };
 }
+
+describe("liveStageFraction", () => {
+  // Codex P1: the guard projected all flows at the flat $0.75
+  // estimate regardless of cache state, so a fully warm 10x10 corpus
+  // — which performs ZERO paid calls — exceeded the Anthropic cap and
+  // exited 1, breaking the headline offline matching-tuning workflow.
+  it("returns 0 for a fully warm run", () => {
+    expect(liveStageFraction({ hits: 40, misses: 0 })).toBe(0);
+  });
+
+  it("returns 1 for a fully cold run", () => {
+    expect(liveStageFraction({ hits: 0, misses: 40 })).toBe(1);
+  });
+
+  it("returns the miss share for a partially warm run", () => {
+    expect(liveStageFraction({ hits: 30, misses: 10 })).toBeCloseTo(0.25, 10);
+  });
+
+  it("stays conservative when nothing was recorded", () => {
+    // Cache bypassed, or no fixtures ran — keep the pre-#389 estimate.
+    expect(liveStageFraction({ hits: 0, misses: 0 })).toBe(1);
+  });
+
+  // Codex P2 round 2: the aggregate ratio is not a safe proxy for a
+  // single provider. Embeddings (OpenAI) hitting while extraction and
+  // parsing (Anthropic) miss reads as 50% warm, which would halve the
+  // Anthropic projection even though every Anthropic call ran live.
+  it("scales each provider by its OWN miss rate", () => {
+    const stats = {
+      hits: 2,
+      misses: 2,
+      hitsByProvider: { openai: 2 },
+      missesByProvider: { anthropic: 2 },
+    };
+    expect(liveStageFraction(stats, "anthropic")).toBe(1);
+    expect(liveStageFraction(stats, "openai")).toBe(0);
+    // The aggregate would have said 50% for both.
+    expect(liveStageFraction(stats)).toBe(0.5);
+  });
+
+  it("stays conservative for a provider with no recorded stages", () => {
+    expect(liveStageFraction({ hits: 4, misses: 0, hitsByProvider: { openai: 4 } }, "anthropic")).toBe(1);
+  });
+
+  it("does not discount a partially warm provider by its stage count", () => {
+    // Extraction (Sonnet) and requirement parsing (Haiku) cost very
+    // different amounts. One hit and one miss therefore cannot mean
+    // half the provider spend; retain the full estimate until both hit.
+    expect(
+      liveStageFraction(
+        {
+          hits: 1,
+          misses: 1,
+          hitsByProvider: { anthropic: 1 },
+          missesByProvider: { anthropic: 1 },
+        },
+        "anthropic",
+      ),
+    ).toBe(1);
+  });
+});
+
+describe("scaleSpendByProvider", () => {
+  const warm = {
+    hits: 4,
+    misses: 0,
+    hitsByProvider: { anthropic: 2, openai: 2 },
+    missesByProvider: {},
+  };
+  const cold = {
+    hits: 0,
+    misses: 4,
+    hitsByProvider: {},
+    missesByProvider: { anthropic: 2, openai: 2 },
+  };
+
+  it("lets a fully warm 10x10 corpus pass the cap", () => {
+    const checks = checkCaps(
+      { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
+      scaleSpendByProvider(estimatePlannedSpend("full", 100), warm),
+      DEFAULT_CAPS,
+    );
+    expect(shouldBlock(checks)).toBe(false);
+  });
+
+  it("still blocks that same corpus when cold", () => {
+    const checks = checkCaps(
+      { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
+      scaleSpendByProvider(estimatePlannedSpend("full", 100), cold),
+      DEFAULT_CAPS,
+    );
+    expect(shouldBlock(checks)).toBe(true);
+  });
+
+  it("does not discount Anthropic when only the embeddings were warm", () => {
+    // The bug: aggregate scaling halved this and let it through.
+    const mixed = {
+      hits: 2,
+      misses: 2,
+      hitsByProvider: { openai: 2 },
+      missesByProvider: { anthropic: 2 },
+    };
+    const full = estimatePlannedSpend("full", 100);
+    const scaled = scaleSpendByProvider(full, mixed);
+    expect(scaled.anthropicUsd).toBe(full.anthropicUsd);
+    expect(scaled.openaiUsd).toBe(0);
+    expect(shouldBlock(checkCaps({ anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 }, scaled, DEFAULT_CAPS))).toBe(true);
+  });
+});
+
+describe("offlineOnlyClient", () => {
+  // Codex P1: the credential gate used to send warm runs to the stub
+  // path, blocking the cache's headline use case — $0 offline
+  // matching / ontology tuning. Credential-free runs now install this
+  // placeholder, so a fully cached corpus completes and a genuine
+  // miss fails that fixture loudly instead of attempting an
+  // unauthenticated call.
+  it("throws an actionable error naming the missing variable", () => {
+    const client = offlineOnlyClient<{
+      messages: { create: () => never };
+      embeddings: { create: () => never };
+    }>("Anthropic", "ANTHROPIC_API_KEY");
+
+    expect(() => client.messages.create()).toThrow(/ANTHROPIC_API_KEY is not set/);
+    expect(() => client.messages.create()).toThrow(/warm the cache for this fixture/);
+  });
+
+  it("satisfies both the Anthropic and OpenAI call shapes", () => {
+    // One placeholder stands in for both clients, so it has to carry
+    // `messages.create` AND `embeddings.create`.
+    const client = offlineOnlyClient<{
+      messages: { create: () => never };
+      embeddings: { create: () => never };
+    }>("OpenAI", "OPENAI_API_KEY");
+
+    expect(typeof client.messages.create).toBe("function");
+    expect(typeof client.embeddings.create).toBe("function");
+    expect(() => client.embeddings.create()).toThrow(/OPENAI_API_KEY/);
+  });
+});
 
 describe("computeFlowCount", () => {
   it("returns 0 when there are no resume fixtures", () => {
@@ -389,6 +537,46 @@ describe("parseSamples", () => {
 });
 
 // -- aggregateSampledFixture (multi-sample averaging) -------------------
+
+describe("aggregateSampledFixture — modeled cost (#389)", () => {
+  // Codex P1. This function — NOT `toFixtureResult` — is what the
+  // real CLI path uses for every executed fixture, and it dropped
+  // `modeledCostUsd` entirely. `totalModeledCostUsd` was therefore
+  // always empty on real runs, silently defeating the
+  // cache-independent cost comparison. The earlier tests missed it
+  // because they only exercised the single-result converter.
+  it("sums modeledCostUsd across samples", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.4 }),
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.6 }),
+    ]);
+    expect(out.modeledCostUsd).toBeCloseTo(1.0, 10);
+  });
+
+  it("keeps modeled cost even when real spend collapses to zero on a warm run", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ costUsd: 0, modeledCostUsd: 0.41, cacheHits: 4, cacheMisses: 0 }),
+    ]);
+    expect(out.costUsd).toBe(0);
+    expect(out.modeledCostUsd).toBeCloseTo(0.41, 10);
+    expect(out.notes).toContain("4 cached stage(s)");
+  });
+
+  it("omits the cache note when nothing was cached", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ cacheHits: 0, cacheMisses: 4 }),
+    ]);
+    expect(out.notes).not.toContain("cached stage(s)");
+  });
+
+  it("counts partial modeled cost from a failed sample", () => {
+    const out = aggregateSampledFixture([
+      makeOrchestratorResult({ modeledCostUsd: 0.5 }),
+      makeOrchestratorResult({ ok: false, error: "boom", modeledCostUsd: 0.2 }),
+    ]);
+    expect(out.modeledCostUsd).toBeCloseTo(0.7, 10);
+  });
+});
 
 describe("aggregateSampledFixture", () => {
   it("single-sample mode produces the same notes shape as toFixtureResult (backward compat)", () => {

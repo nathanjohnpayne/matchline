@@ -24,12 +24,16 @@
  * layer's content matching exercises actual prose.
  */
 
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
-import { runForFixture } from "./runForFixture.ts";
+import { StageCache } from "./cache.ts";
+import { describeError, promptFingerprint, runForFixture } from "./runForFixture.ts";
 
 // -- Mock factories ---------------------------------------------------------
 
@@ -120,6 +124,107 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("promptFingerprint", () => {
+  // Codex P1 round 3: keying on the version string alone meant
+  // editing a prompt file IN PLACE — exactly what prompt tuning does,
+  // and what #177 workstream B is — left the key unchanged. The cache
+  // then served extraction from the PREVIOUS prompt while the report
+  // claimed to evaluate the new one, so a tuning session would draw
+  // conclusions from stale output and never notice.
+  it("includes the resolved version", () => {
+    expect(promptFingerprint("extraction", "resume")).toMatch(/^v1:/);
+  });
+
+  it("appends a hash of the prompt contents", () => {
+    const fp = promptFingerprint("extraction", "resume");
+    expect(fp).toMatch(/^v1:[0-9a-f]{16}$/);
+  });
+
+  it("is stable across calls for unchanged content", () => {
+    expect(promptFingerprint("extraction", "resume")).toBe(
+      promptFingerprint("extraction", "resume"),
+    );
+  });
+
+  it("differs between prompts", () => {
+    expect(promptFingerprint("extraction", "resume")).not.toBe(
+      promptFingerprint("parsing", "jd"),
+    );
+  });
+
+  // Codex P2 round 4. The section boundary must be forgeable by
+  // neither section's content. Joining on a raw NUL was not: with
+  // `system + NUL + fewShot`, the pairs below both serialize to
+  // `a\u0000b\u0000c` and collide, so two prompts that render
+  // differently to the model shared one cache key — a hole in exactly
+  // what promptFingerprint exists to close.
+  //
+  // Asserted against the encoding directly rather than through
+  // `promptFingerprint`, because reproducing it end-to-end would mean
+  // writing NUL bytes into the real prompt files on disk.
+  it("uses an encoding no section content can forge a boundary in", () => {
+    const encode = (system: string, fewShot: string): string =>
+      JSON.stringify([system, fewShot]);
+
+    expect(encode("a\u0000b", "c")).not.toBe(encode("a", "b\u0000c"));
+    // The naive form these two defeat:
+    const naive = (s: string, f: string): string => `${s}\u0000${f}`;
+    expect(naive("a\u0000b", "c")).toBe(naive("a", "b\u0000c"));
+
+    // The quote and backslash JSON uses as delimiters are escaped, so
+    // they cannot forge a boundary either.
+    expect(encode('a"b', "c")).not.toBe(encode("a", 'b"c'));
+    expect(encode("a\\", "b")).not.toBe(encode("a", "\\b"));
+  });
+});
+
+describe("describeError", () => {
+  it("appends the first attempt's cause to a retry-loop summary", () => {
+    // "Extraction failed after 3 attempts. See .failures for
+    // per-attempt detail" is useless in a report — `.failures` is
+    // exactly where the cause lives and the report never showed it.
+    const err = Object.assign(
+      new Error("Extraction failed after 3 attempts. See .failures for per-attempt detail."),
+      {
+        failures: [
+          { attempt: 0, kind: "transport_error", message: "ANTHROPIC_API_KEY is not set" },
+          { attempt: 1, kind: "transport_error", message: "second attempt" },
+        ],
+      },
+    );
+    const described = describeError(err);
+    expect(described).toContain("Extraction failed after 3 attempts");
+    expect(described).toContain("transport_error");
+    expect(described).toContain("ANTHROPIC_API_KEY is not set");
+    // Only the FIRST failure — three near-identical retries would
+    // bury the message they exist to surface.
+    expect(described).not.toContain("second attempt");
+  });
+
+  it("passes a plain error through unchanged", () => {
+    expect(describeError(new Error("boom"))).toBe("boom");
+  });
+
+  // Codex P2: `null` and `undefined` are legal throw values, and a
+  // bare property access on either raises a fresh TypeError — which
+  // would escape runForFixture's catch and abort the entire corpus,
+  // breaking its documented always-return contract.
+  it.each([[null], [undefined], [42], [Symbol("s")]])(
+    "does not throw on the non-object throw value %s",
+    (thrown) => {
+      expect(() => describeError(thrown)).not.toThrow();
+    },
+  );
+
+  it("handles non-Error throws and malformed failure arrays", () => {
+    expect(describeError("a string")).toBe("a string");
+    expect(describeError(Object.assign(new Error("x"), { failures: [] }))).toBe("x");
+    expect(
+      describeError(Object.assign(new Error("x"), { failures: [{ attempt: 0 }] })),
+    ).toBe("x");
+  });
 });
 
 describe("runForFixture", () => {
@@ -386,5 +491,178 @@ describe("runForFixture", () => {
     expect(result.matchAccuracy).toBeGreaterThanOrEqual(0);
     expect(result.matchAccuracy).toBeLessThanOrEqual(1);
     expect(result.costUsd).toBeGreaterThanOrEqual(0);
+  });
+
+  // -- Stage cache (#389) ---------------------------------------------------
+
+  describe("stage cache", () => {
+    let cacheDir: string;
+
+    beforeEach(() => {
+      cacheDir = mkdtempSync(join(tmpdir(), "matchline-rff-cache-"));
+    });
+
+    afterEach(() => {
+      rmSync(cacheDir, { recursive: true, force: true });
+    });
+
+    function fixtureResponses() {
+      return {
+        extraction: {
+          units: [
+            {
+              raw_text: "Led the Disney+ playback migration to a new CDN",
+              normalized_summary:
+                "Led a streaming-video playback migration to a new CDN.",
+              unit_type: "project",
+              skills: ["streaming video infrastructure"],
+              tools: ["CDN"],
+              domains: ["streaming"],
+              seniority_signals: ["led"],
+              scope_signals: ["40M users"],
+              business_outcomes: ["reduced rebuffer rate"],
+              metrics: [],
+              evidence_type: "verified",
+              confidence_score: 0.9,
+            },
+          ],
+        },
+        parsing: {
+          requirements: [
+            {
+              raw_text: "Experience with large-scale distributed systems",
+              normalized_requirement:
+                "Experience with large-scale distributed systems",
+              category: "skill",
+              keywords: ["distributed systems"],
+              tools: [],
+              domains: [],
+              priority: "high",
+              must_have: true,
+              extracted_from: "qualifications",
+            },
+          ],
+        },
+      };
+    }
+
+    /**
+     * The #389 acceptance criterion: once the cache is warm, a
+     * re-run of the same fixture must issue ZERO LLM calls. This is
+     * what makes matching-layer tuning (#177 workstream A, score
+     * weights, ontology coverage) free — matching itself has no LLM
+     * in its path, so with the upstream stages cached the whole
+     * re-run is offline.
+     */
+    it("warm re-run issues zero Anthropic and zero OpenAI calls", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const cache = new StageCache({ dir: cacheDir });
+      const input = {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      };
+
+      const coldAnthropic = makeMockAnthropic([extraction, parsing]);
+      const coldOpenai = makeMockOpenAi();
+      const cold = await runForFixture(input, {
+        anthropicClient: coldAnthropic,
+        openaiClient: coldOpenai,
+        cache,
+      });
+
+      // Surface the pipeline error rather than a bare `false !== true`
+      // if the mock shapes ever drift out of schema.
+      expect(cold.error).toBeNull();
+      expect(cold.ok).toBe(true);
+      expect(cold.cacheMisses).toBe(4); // extraction, unit-embed, parsing, req-embed
+      expect(cold.cacheHits).toBe(0);
+      expect(cold.costUsd).toBeGreaterThan(0);
+
+      // Fresh clients: any call at all will show up here.
+      const warmAnthropic = makeMockAnthropic([extraction, parsing]);
+      const warmOpenai = makeMockOpenAi();
+      const warm = await runForFixture(input, {
+        anthropicClient: warmAnthropic,
+        openaiClient: warmOpenai,
+        cache: new StageCache({ dir: cacheDir }),
+      });
+
+      expect(warm.ok).toBe(true);
+      expect(warm.cacheHits).toBe(4);
+      expect(warm.cacheMisses).toBe(0);
+
+      // The acceptance assertions.
+      expect(warmAnthropic.messages.create).not.toHaveBeenCalled();
+      expect(warmOpenai.embeddings.create).not.toHaveBeenCalled();
+      expect(warm.costUsd).toBe(0);
+    });
+
+    it("warm re-run reproduces the same accuracies and modeled cost", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const input = {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      };
+
+      const cold = await runForFixture(input, {
+        anthropicClient: makeMockAnthropic([extraction, parsing]),
+        openaiClient: makeMockOpenAi(),
+        cache: new StageCache({ dir: cacheDir }),
+      });
+      const warm = await runForFixture(input, {
+        anthropicClient: makeMockAnthropic([extraction, parsing]),
+        openaiClient: makeMockOpenAi(),
+        cache: new StageCache({ dir: cacheDir }),
+      });
+
+      // Determinism: caching must not change what the harness measures.
+      expect(warm.extractionAccuracy).toBe(cold.extractionAccuracy);
+      expect(warm.matchAccuracy).toBe(cold.matchAccuracy);
+      expect(warm.extractedUnitCount).toBe(cold.extractedUnitCount);
+      expect(warm.matchCount).toBe(cold.matchCount);
+
+      // Real spend collapses to zero...
+      expect(cold.costUsd).toBeGreaterThan(0);
+      expect(warm.costUsd).toBe(0);
+      // ...but the number the model sweep ranks on does NOT move.
+      expect(warm.modeledCostUsd).toBeCloseTo(cold.modeledCostUsd, 12);
+      expect(warm.modeledCostUsd).toBeGreaterThan(0);
+    });
+
+    /**
+     * The mechanism behind the 10× saving on #137's 10×10 corpus:
+     * extraction is keyed on the resume ALONE and JD parsing on the
+     * JD ALONE, so N resumes × M JDs needs N extractions and M
+     * parses rather than N×M of each.
+     *
+     * This is asserted structurally (one entry per distinct input,
+     * in its own stage namespace) rather than by running two cells
+     * that share a JD — today's 4 labeled cells each use a distinct
+     * resume AND a distinct JD, so no such pair exists yet. The
+     * cross-key sharing itself is pinned in `cache.test.ts`
+     * ("leaves sibling stages warm when one stage's key changes").
+     */
+    it("writes one entry per stage, namespaced by stage", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      await runForFixture(
+        { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" },
+        {
+          anthropicClient: makeMockAnthropic([extraction, parsing]),
+          openaiClient: makeMockOpenAi(),
+          cache: new StageCache({ dir: cacheDir }),
+        },
+      );
+
+      const entriesIn = (stage: string): string[] =>
+        existsSync(join(cacheDir, stage)) ? readdirSync(join(cacheDir, stage)) : [];
+
+      // One extraction keyed on the resume text.
+      expect(entriesIn("extraction")).toHaveLength(1);
+      // One JD parse keyed on the JD text — untouched by a resume change.
+      expect(entriesIn("requirement_parsing")).toHaveLength(1);
+      // Two embedding entries: one for the Unit texts, one for the
+      // Requirement texts.
+      expect(entriesIn("embedding")).toHaveLength(2);
+    });
   });
 });
