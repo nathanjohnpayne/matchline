@@ -115,6 +115,20 @@ export interface CacheStats {
   readonly hits: number;
   readonly misses: number;
   readonly writes: number;
+  /**
+   * Hits and misses split by provider (#389, Codex P2).
+   *
+   * The aggregate ratio is not a safe proxy for any single provider's
+   * spend: the cached stages are split between Anthropic (extraction,
+   * JD parsing) and OpenAI (two embedding batches), and their costs
+   * differ by orders of magnitude. If the embeddings hit while the
+   * Anthropic stages miss, the aggregate says 50% warm — which would
+   * halve the Anthropic projection even though every Anthropic call
+   * ran live, and could let a cap check pass that should have
+   * blocked.
+   */
+  readonly hitsByProvider: Readonly<Record<string, number>>;
+  readonly missesByProvider: Readonly<Record<string, number>>;
 }
 
 interface StoredEntry<T> {
@@ -227,6 +241,8 @@ export class StageCache {
    * what PREVIOUS runs wrote" — see the read gate in `run()`.
    */
   private readonly refreshedThisRun = new Set<string>();
+  private readonly hitsByProvider = new Map<string, number>();
+  private readonly missesByProvider = new Map<string, number>();
 
   constructor(options: StageCacheOptions = {}) {
     this.mode = options.mode ?? "read-write";
@@ -234,7 +250,17 @@ export class StageCache {
   }
 
   stats(): CacheStats {
-    return { hits: this.hits, misses: this.misses, writes: this.writes };
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      writes: this.writes,
+      hitsByProvider: Object.fromEntries(this.hitsByProvider),
+      missesByProvider: Object.fromEntries(this.missesByProvider),
+    };
+  }
+
+  private bump(map: Map<string, number>, provider: string): void {
+    map.set(provider, (map.get(provider) ?? 0) + 1);
   }
 
   private pathFor(keyInput: CacheKeyInput, key: string): string {
@@ -283,6 +309,7 @@ export class StageCache {
       const cached = this.readEntry<T>(file);
       if (cached !== null) {
         this.hits += 1;
+        this.bump(this.hitsByProvider, keyInput.provider);
         return { value: cached.value, hit: true, usage: cached.usage, key };
       }
       // Corrupt entry — drop it so the rewrite below is clean.
@@ -294,6 +321,7 @@ export class StageCache {
     }
 
     this.misses += 1;
+    this.bump(this.missesByProvider, keyInput.provider);
     const collected: UsageRecord[] = [];
     const record = async (usage: UsageRecord): Promise<number> => {
       collected.push(usage);

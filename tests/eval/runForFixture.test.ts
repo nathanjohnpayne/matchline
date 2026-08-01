@@ -153,6 +153,17 @@ describe("describeError", () => {
     expect(describeError(new Error("boom"))).toBe("boom");
   });
 
+  // Codex P2: `null` and `undefined` are legal throw values, and a
+  // bare property access on either raises a fresh TypeError — which
+  // would escape runForFixture's catch and abort the entire corpus,
+  // breaking its documented always-return contract.
+  it.each([[null], [undefined], [42], [Symbol("s")]])(
+    "does not throw on the non-object throw value %s",
+    (thrown) => {
+      expect(() => describeError(thrown)).not.toThrow();
+    },
+  );
+
   it("handles non-Error throws and malformed failure arrays", () => {
     expect(describeError("a string")).toBe("a string");
     expect(describeError(Object.assign(new Error("x"), { failures: [] }))).toBe("x");

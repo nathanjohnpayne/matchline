@@ -138,7 +138,17 @@ describe("StageCache", () => {
     // The critical assertion: no recompute, therefore no tokens.
     expect(computeCalls).toBe(1);
     expect(second.value).toEqual({ units: ["a", "b"] });
-    expect(cache.stats()).toEqual({ hits: 1, misses: 1, writes: 1 });
+    expect(cache.stats()).toEqual({
+      hits: 1,
+      misses: 1,
+      writes: 1,
+      // Per-provider split (Codex P2 round 2) — the projection guard
+      // scales each provider by its OWN miss rate, because embeddings
+      // hitting while the Anthropic stages miss would otherwise read
+      // as "50% warm" and halve the Anthropic estimate.
+      hitsByProvider: { anthropic: 1 },
+      missesByProvider: { anthropic: 1 },
+    });
   });
 
   it("replays usage records on a hit so modeled cost is cache-independent", async () => {

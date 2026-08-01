@@ -454,9 +454,9 @@ async function main(): Promise<number> {
   // matching-tuning workflow. Scale by the share of stages that
   // actually needed a live call. This guard runs after execution, so
   // the real hit/miss split is already known.
-  const plannedAdd = scaleSpend(
+  const plannedAdd = scaleSpendByProvider(
     estimatePlannedSpend(mode, flowCount),
-    liveStageFraction(cache.stats()),
+    cache.stats(),
   );
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
 
@@ -908,24 +908,48 @@ const PER_FLOW_USD_ESTIMATE = 0.75;
  * Returns 1 when nothing was recorded (cache bypassed, or no fixtures
  * ran) so the guard keeps its pre-#389 conservatism by default.
  */
-export function liveStageFraction(stats: {
-  readonly hits: number;
-  readonly misses: number;
-}): number {
+export function liveStageFraction(
+  stats: {
+    readonly hits: number;
+    readonly misses: number;
+    readonly hitsByProvider?: Readonly<Record<string, number>>;
+    readonly missesByProvider?: Readonly<Record<string, number>>;
+  },
+  provider?: string,
+): number {
+  // Codex P2: the aggregate ratio is NOT a safe proxy for a single
+  // provider. The cached stages split between Anthropic (extraction,
+  // JD parsing) and OpenAI (two embedding batches), whose costs
+  // differ by orders of magnitude. Embeddings hitting while the
+  // Anthropic stages miss reads as "50% warm" and would halve the
+  // Anthropic projection even though every Anthropic call ran live —
+  // letting a cap check pass that should have blocked.
+  if (provider !== undefined) {
+    const hits = stats.hitsByProvider?.[provider] ?? 0;
+    const misses = stats.missesByProvider?.[provider] ?? 0;
+    const total = hits + misses;
+    // No stages recorded for this provider — stay conservative
+    // rather than discounting a provider we know nothing about.
+    if (total <= 0) return 1;
+    return misses / total;
+  }
   const total = stats.hits + stats.misses;
   if (total <= 0) return 1;
   return stats.misses / total;
 }
 
-/** Scale a per-provider spend estimate by a factor in [0, 1]. */
-export function scaleSpend(
+/**
+ * Scale a spend estimate, per provider, by that provider's own live
+ * fraction. Firebase carries no cached stages, so it is left alone.
+ */
+export function scaleSpendByProvider(
   spend: { anthropicUsd: number; openaiUsd: number; firebaseUsd: number },
-  factor: number,
+  stats: Parameters<typeof liveStageFraction>[0],
 ): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
   return {
-    anthropicUsd: spend.anthropicUsd * factor,
-    openaiUsd: spend.openaiUsd * factor,
-    firebaseUsd: spend.firebaseUsd * factor,
+    anthropicUsd: spend.anthropicUsd * liveStageFraction(stats, "anthropic"),
+    openaiUsd: spend.openaiUsd * liveStageFraction(stats, "openai"),
+    firebaseUsd: spend.firebaseUsd,
   };
 }
 

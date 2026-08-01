@@ -18,7 +18,7 @@ import {
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
-  scaleSpend,
+  scaleSpendByProvider,
   selectFixturesForMode,
   toFixtureResult,
 } from "./run.js";
@@ -68,10 +68,46 @@ describe("liveStageFraction", () => {
     expect(liveStageFraction({ hits: 0, misses: 0 })).toBe(1);
   });
 
+  // Codex P2 round 2: the aggregate ratio is not a safe proxy for a
+  // single provider. Embeddings (OpenAI) hitting while extraction and
+  // parsing (Anthropic) miss reads as 50% warm, which would halve the
+  // Anthropic projection even though every Anthropic call ran live.
+  it("scales each provider by its OWN miss rate", () => {
+    const stats = {
+      hits: 2,
+      misses: 2,
+      hitsByProvider: { openai: 2 },
+      missesByProvider: { anthropic: 2 },
+    };
+    expect(liveStageFraction(stats, "anthropic")).toBe(1);
+    expect(liveStageFraction(stats, "openai")).toBe(0);
+    // The aggregate would have said 50% for both.
+    expect(liveStageFraction(stats)).toBe(0.5);
+  });
+
+  it("stays conservative for a provider with no recorded stages", () => {
+    expect(liveStageFraction({ hits: 4, misses: 0, hitsByProvider: { openai: 4 } }, "anthropic")).toBe(1);
+  });
+});
+
+describe("scaleSpendByProvider", () => {
+  const warm = {
+    hits: 4,
+    misses: 0,
+    hitsByProvider: { anthropic: 2, openai: 2 },
+    missesByProvider: {},
+  };
+  const cold = {
+    hits: 0,
+    misses: 4,
+    hitsByProvider: {},
+    missesByProvider: { anthropic: 2, openai: 2 },
+  };
+
   it("lets a fully warm 10x10 corpus pass the cap", () => {
     const checks = checkCaps(
       { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
-      scaleSpend(estimatePlannedSpend("full", 100), liveStageFraction({ hits: 400, misses: 0 })),
+      scaleSpendByProvider(estimatePlannedSpend("full", 100), warm),
       DEFAULT_CAPS,
     );
     expect(shouldBlock(checks)).toBe(false);
@@ -80,10 +116,25 @@ describe("liveStageFraction", () => {
   it("still blocks that same corpus when cold", () => {
     const checks = checkCaps(
       { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
-      scaleSpend(estimatePlannedSpend("full", 100), liveStageFraction({ hits: 0, misses: 400 })),
+      scaleSpendByProvider(estimatePlannedSpend("full", 100), cold),
       DEFAULT_CAPS,
     );
     expect(shouldBlock(checks)).toBe(true);
+  });
+
+  it("does not discount Anthropic when only the embeddings were warm", () => {
+    // The bug: aggregate scaling halved this and let it through.
+    const mixed = {
+      hits: 2,
+      misses: 2,
+      hitsByProvider: { openai: 2 },
+      missesByProvider: { anthropic: 2 },
+    };
+    const full = estimatePlannedSpend("full", 100);
+    const scaled = scaleSpendByProvider(full, mixed);
+    expect(scaled.anthropicUsd).toBe(full.anthropicUsd);
+    expect(scaled.openaiUsd).toBe(0);
+    expect(shouldBlock(checkCaps({ anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 }, scaled, DEFAULT_CAPS))).toBe(true);
   });
 });
 

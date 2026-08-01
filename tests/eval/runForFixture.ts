@@ -241,6 +241,11 @@ export async function runForFixture(
  */
 export function describeError(err: unknown): string {
   const base = err instanceof Error ? err.message : String(err);
+  // Codex P2: `null` and `undefined` are legal throw values, and a
+  // bare property access on either raises a fresh TypeError — which
+  // would escape `runForFixture`'s catch and abort the whole corpus,
+  // breaking its documented always-return contract. Narrow first.
+  if (typeof err !== "object" || err === null) return base;
   const failures = (err as { failures?: unknown }).failures;
   if (!Array.isArray(failures) || failures.length === 0) return base;
   const first = failures[0] as { kind?: unknown; message?: unknown };
