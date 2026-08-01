@@ -11,6 +11,7 @@ import {
   computeFlowCount,
   estimatePlannedSpend,
   filterToLabeledPairs,
+  offlineOnlyClient,
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
@@ -29,6 +30,9 @@ function makeOrchestratorResult(
     matchAccuracy: 0.75,
     latencyMs: 1234,
     costUsd: 0.05,
+    modeledCostUsd: 0.05,
+    cacheHits: 0,
+    cacheMisses: 4,
     extractedUnitCount: 10,
     parsedRequirementCount: 8,
     matchCount: 25,
@@ -37,6 +41,37 @@ function makeOrchestratorResult(
     ...overrides,
   };
 }
+
+describe("offlineOnlyClient", () => {
+  // Codex P1: the credential gate used to send warm runs to the stub
+  // path, blocking the cache's headline use case — $0 offline
+  // matching / ontology tuning. Credential-free runs now install this
+  // placeholder, so a fully cached corpus completes and a genuine
+  // miss fails that fixture loudly instead of attempting an
+  // unauthenticated call.
+  it("throws an actionable error naming the missing variable", () => {
+    const client = offlineOnlyClient<{
+      messages: { create: () => never };
+      embeddings: { create: () => never };
+    }>("Anthropic", "ANTHROPIC_API_KEY");
+
+    expect(() => client.messages.create()).toThrow(/ANTHROPIC_API_KEY is not set/);
+    expect(() => client.messages.create()).toThrow(/warm the cache for this fixture/);
+  });
+
+  it("satisfies both the Anthropic and OpenAI call shapes", () => {
+    // One placeholder stands in for both clients, so it has to carry
+    // `messages.create` AND `embeddings.create`.
+    const client = offlineOnlyClient<{
+      messages: { create: () => never };
+      embeddings: { create: () => never };
+    }>("OpenAI", "OPENAI_API_KEY");
+
+    expect(typeof client.messages.create).toBe("function");
+    expect(typeof client.embeddings.create).toBe("function");
+    expect(() => client.embeddings.create()).toThrow(/OPENAI_API_KEY/);
+  });
+});
 
 describe("computeFlowCount", () => {
   it("returns 0 when there are no resume fixtures", () => {
