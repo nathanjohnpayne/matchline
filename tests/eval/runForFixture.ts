@@ -249,10 +249,19 @@ export function promptFingerprint<S extends PromptStage, N extends PromptName<S>
 ): string {
   const version = resolvePromptVersion(stage, name);
   const prompt = loadPromptText(stage, name);
+  // Codex P2 round 4: joining the two sections with a NUL
+  // separator was NOT lossless. `("a\u0000b", "c")` and
+  // `("a", "b\u0000c")` both produce the byte stream `a\u0000b\u0000c`,
+  // so two prompts that render differently to the model collided on
+  // one key — a hole in the very thing this function exists to close.
+  // A NUL inside a prompt is unlikely, but "unlikely" is not a
+  // property a hash boundary should rest on.
+  //
+  // `JSON.stringify` of the array is structural: it escapes the
+  // quote/backslash characters it uses as delimiters, so no section
+  // content can forge a boundary.
   const hash = createHash("sha256")
-    .update(prompt.system)
-    .update("\u0000")
-    .update(prompt.userFewShot)
+    .update(JSON.stringify([prompt.system, prompt.userFewShot]))
     .digest("hex")
     .slice(0, 16);
   return `${version}:${hash}`;

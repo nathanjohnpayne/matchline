@@ -153,6 +153,31 @@ describe("promptFingerprint", () => {
       promptFingerprint("parsing", "jd"),
     );
   });
+
+  // Codex P2 round 4. The section boundary must be forgeable by
+  // neither section's content. Joining on a raw NUL was not: with
+  // `system + NUL + fewShot`, the pairs below both serialize to
+  // `a\u0000b\u0000c` and collide, so two prompts that render
+  // differently to the model shared one cache key — a hole in exactly
+  // what promptFingerprint exists to close.
+  //
+  // Asserted against the encoding directly rather than through
+  // `promptFingerprint`, because reproducing it end-to-end would mean
+  // writing NUL bytes into the real prompt files on disk.
+  it("uses an encoding no section content can forge a boundary in", () => {
+    const encode = (system: string, fewShot: string): string =>
+      JSON.stringify([system, fewShot]);
+
+    expect(encode("a\u0000b", "c")).not.toBe(encode("a", "b\u0000c"));
+    // The naive form these two defeat:
+    const naive = (s: string, f: string): string => `${s}\u0000${f}`;
+    expect(naive("a\u0000b", "c")).toBe(naive("a", "b\u0000c"));
+
+    // The quote and backslash JSON uses as delimiters are escaped, so
+    // they cannot forge a boundary either.
+    expect(encode('a"b', "c")).not.toBe(encode("a", 'b"c'));
+    expect(encode("a\\", "b")).not.toBe(encode("a", "\\b"));
+  });
 });
 
 describe("describeError", () => {
