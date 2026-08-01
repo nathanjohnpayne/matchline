@@ -97,12 +97,9 @@ describe("cacheKey", () => {
     // experiment comparisons.
     const key = cacheKey(BASE);
     expect(key).toMatch(/^[0-9a-f]{64}$/);
-    // Bumping STAGE_IMPL_VERSION must change every key. Proxy the
-    // check through a discriminator that occupies the same role: if
-    // the constant were dropped from the canonical tuple, the two
-    // keys below would still differ, but the tuple-position test in
-    // the concatenation case above would start colliding.
-    expect(cacheKey({ ...BASE, promptVersion: "v1 " })).not.toBe(key);
+    // Golden digest: any change to the canonical tuple — including
+    // dropping STAGE_IMPL_VERSION — must update this deliberately.
+    expect(key).toBe("07c6c02a5991901abfd0a74caea19b6defa4f6fdfcc5ac602503e171b75ef100");
   });
 
   it("cannot be collided by concatenation ambiguity across fields", () => {
