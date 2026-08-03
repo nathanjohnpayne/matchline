@@ -138,6 +138,19 @@ export function assertModelsPriced(variants: readonly SweepVariant[]): void {
   }
 }
 
+export interface RunVariantOptions {
+  /**
+   * Prompt overrides supplied command-wide via `--prompt`, which each
+   * variant layers on top of rather than replacing.
+   *
+   * Codex P2: `setPromptVersionOverrides` REPLACES the whole map, so
+   * running `--prompt parsing/jd=v2 --variant 'a:model.extraction=...'`
+   * silently dropped the `--prompt` flag for every variant — the run
+   * used the default JD prompt while the report header claimed v2.
+   */
+  readonly basePromptVersions?: Readonly<Record<string, string>>;
+}
+
 export interface RunVariantDeps {
   /**
    * Run the whole labeled corpus once under the currently-active
@@ -156,9 +169,15 @@ export interface RunVariantDeps {
 export async function runVariant(
   variant: SweepVariant,
   deps: RunVariantDeps,
+  options: RunVariantOptions = {},
 ): Promise<VariantResult> {
   setModelOverrides(variant.models ?? {});
-  setPromptVersionOverrides(variant.promptVersions ?? {});
+  // Variant overrides win on conflict; the command-wide ones survive
+  // for keys the variant does not name.
+  setPromptVersionOverrides({
+    ...(options.basePromptVersions ?? {}),
+    ...(variant.promptVersions ?? {}),
+  });
   try {
     const results = await deps.runCorpus();
     return rollUpVariant(variant, results);
@@ -272,6 +291,12 @@ export const COST_BAR_PER_FLOW_USD = 1;
 export function recommend(results: readonly VariantResult[]): VariantResult | null {
   const clearing = results.filter(
     (r) =>
+      // Codex P2: `paretoFrontier` excludes all-failure variants but
+      // this did not, so a variant whose every flow failed could in
+      // principle be recommended. The two must agree on what counts
+      // as a usable result.
+      r.flows > 0 &&
+      r.failures < r.flows &&
       r.extractionAccuracy !== null &&
       r.matchAccuracy !== null &&
       r.extractionAccuracy >= QUALITY_BAR &&
@@ -535,11 +560,12 @@ export function parseVariants(
 export async function runSweep(
   variants: readonly SweepVariant[],
   deps: RunVariantDeps,
+  options: RunVariantOptions = {},
 ): Promise<{ results: readonly VariantResult[]; report: string }> {
   assertModelsPriced(variants);
   const results: VariantResult[] = [];
   for (const variant of variants) {
-    results.push(await runVariant(variant, deps));
+    results.push(await runVariant(variant, deps, options));
   }
   return { results, report: formatSweepReport(results) };
 }

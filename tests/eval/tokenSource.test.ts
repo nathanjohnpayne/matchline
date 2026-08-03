@@ -312,6 +312,31 @@ describe("claudeCliClient", () => {
     expect(seenEnv?.OPENAI_API_KEY).toBeUndefined();
   });
 
+  // Codex P1. The env allowlist closed the environment channel; this
+  // closes the filesystem one. With the real HOME still attached,
+  // pre-authorized Read let a prompt-injected fixture reach
+  // ~/.claude, ~/.ssh, and the op-preflight PAT cache. `--add-dir`
+  // grants an extra directory; it does not confine Read to it.
+  it("grants Write only — never Read", async () => {
+    let seenArgs: readonly string[] = [];
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        seenArgs = args;
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+    await client.messages.create(params() as never);
+
+    const idx = seenArgs.indexOf("--allowedTools");
+    expect(idx).toBeGreaterThan(-1);
+    const granted = seenArgs.slice(idx + 1, idx + 2);
+    expect(granted).toEqual(["Write"]);
+    expect(seenArgs).not.toContain("Read");
+  });
+
   it("never passes --bare, which would force API-key auth", async () => {
     let seenArgs: readonly string[] = [];
     const client = claudeCliClient({

@@ -168,6 +168,40 @@ describe("runVariant", () => {
     expect(getPromptVersionOverrides()).toEqual({});
   });
 
+  it("layers variant prompt overrides on top of command-wide ones", async () => {
+    // Codex P2: setPromptVersionOverrides REPLACES, so a `--prompt`
+    // flag passed alongside `--variant` was silently dropped for every
+    // variant — the run used the default prompt while the report
+    // header claimed the override.
+    let seen: Readonly<Record<string, string>> = {};
+    await runVariant(
+      { label: "v", promptVersions: { "extraction/resume": "v2" } },
+      {
+        runCorpus: async () => {
+          seen = getPromptVersionOverrides();
+          return [fixtureResult()];
+        },
+      },
+      { basePromptVersions: { "parsing/jd": "v3" } },
+    );
+    expect(seen).toEqual({ "parsing/jd": "v3", "extraction/resume": "v2" });
+  });
+
+  it("lets a variant override win over the command-wide value", async () => {
+    let seen: Readonly<Record<string, string>> = {};
+    await runVariant(
+      { label: "v", promptVersions: { "extraction/resume": "v2" } },
+      {
+        runCorpus: async () => {
+          seen = getPromptVersionOverrides();
+          return [fixtureResult()];
+        },
+      },
+      { basePromptVersions: { "extraction/resume": "v9" } },
+    );
+    expect(seen["extraction/resume"]).toBe("v2");
+  });
+
   it("clears overrides even when the corpus run throws", async () => {
     // A leaked override would silently attribute this variant's config
     // to the NEXT variant's numbers — a ranking corruption that would
@@ -319,6 +353,23 @@ describe("paretoFrontier", () => {
 });
 
 describe("recommend", () => {
+  it("never recommends an all-failure variant", () => {
+    // Codex P2: paretoFrontier excluded these but recommend() did not,
+    // so the two disagreed on what counts as a usable result.
+    expect(
+      recommend([
+        variantResult({
+          label: "all-failed",
+          extractionAccuracy: 0.9,
+          matchAccuracy: 0.9,
+          modeledCostPerFlowUsd: 0.1,
+          flows: 4,
+          failures: 4,
+        }),
+      ]),
+    ).toBeNull();
+  });
+
   it("returns null when nothing clears the 80/80 bar", () => {
     // The honest answer for #177's current baseline. Returning the
     // least-bad option here would read as "ship this".

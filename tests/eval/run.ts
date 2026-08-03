@@ -490,9 +490,18 @@ async function main(): Promise<number> {
     // quality-vs-cost Pareto table instead of a single report.
     if (variants.length > 0) {
       const sweepFlows = pairs.length * samples * variants.length;
+      // Codex P2: the normal path scales by real cache state but this
+      // did not, so a warm sweep — which performs few or no paid
+      // calls — could be refused for spend it will never incur. The
+      // guard runs BEFORE the sweep, so it uses whatever the cache
+      // already holds from previous runs rather than this run's
+      // outcome; that is the conservative direction.
       const sweepChecks = checkCaps(
         currentUsage,
-        estimateSpendForSource(mode, sweepFlows, tokenSource),
+        scaleSpendByProvider(
+          estimateSpendForSource(mode, sweepFlows, tokenSource),
+          cache.stats(),
+        ),
         DEFAULT_CAPS,
       );
       if (shouldBlock(sweepChecks)) {
@@ -527,7 +536,13 @@ async function main(): Promise<number> {
         }
         return out;
       };
-      const { results, report } = await runSweep(variants, { runCorpus });
+      // Command-wide `--prompt` flags survive into every variant;
+      // variant-level prompt overrides layer on top.
+      const { results, report } = await runSweep(
+        variants,
+        { runCorpus },
+        { basePromptVersions: promptOverrides },
+      );
       console.log(report);
       // An all-failure sweep produced no usable measurements; CI and
       // shell callers must not read that as success.

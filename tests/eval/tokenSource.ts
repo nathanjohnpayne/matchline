@@ -45,6 +45,15 @@
  *     `estimateTokens` below.
  *   - Wall-clock latency includes agent startup and is not a usable
  *     production latency signal.
+ *   - **The output-token budget differs.** Production sets
+ *     `max_tokens: 16_384` explicitly (see `extraction/resume.ts`,
+ *     raised in #145 after truncation was observed on a real resume).
+ *     Neither CLI exposes an equivalent flag, so a CLI run gets that
+ *     model's default ceiling instead. A model whose default sits
+ *     below 16k could truncate here and not in production, which
+ *     would read as a quality difference rather than a budget one.
+ *     Another reason the confirmation run on `--token-source api` is
+ *     not optional.
  *
  * Confirm the top 2-3 finalists on the metered API before editing
  * `functions/src/llm/config.ts`.
@@ -434,7 +443,24 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
               "--output-format", "json",
               "--system-prompt", system,
               "--add-dir", workdir,
-              "--allowedTools", "Read", "Write",
+              // Write ONLY. Codex P1: pre-authorizing `Read` let a
+              // prompt-injected fixture inspect files outside the
+              // workdir while the subprocess still holds the real
+              // HOME — which is where Claude credentials, SSH keys,
+              // and the op-preflight PAT cache live. `--add-dir`
+              // ADDS an allowed directory; it is not an OS-level
+              // sandbox, so it does not bound Read.
+              //
+              // Read was vestigial: it survived from an early
+              // prototype that wrote the resume to a file for the
+              // agent to read. The shipped adapter passes the resume
+              // on stdin and the prompt only ever asks for a Write,
+              // so removing it costs nothing.
+              //
+              // This closes the same threat as the env allowlist
+              // through the filesystem channel rather than the
+              // environment one.
+              "--allowedTools", "Write",
               "--disable-slash-commands",
               "--strict-mcp-config",
               "--mcp-config", '{"mcpServers":{}}',
