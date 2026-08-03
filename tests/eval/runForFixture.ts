@@ -89,6 +89,14 @@ export interface RunForFixtureDeps {
    * workstream A, score weights, ontology) run offline at zero cost.
    */
   readonly cache?: StageCache;
+  /**
+   * Discriminators folded into every cache key for this run — e.g.
+   * `{ tokenSource: "claude-cli" }` so subscription-CLI-produced
+   * entries never collide with metered-API entries for the same
+   * model. Comparing the two is the point of the sweep, so they must
+   * occupy separate keyspaces.
+   */
+  readonly cacheDiscriminators?: Readonly<Record<string, string | number>>;
 }
 
 export interface RunForFixtureInput {
@@ -326,7 +334,8 @@ interface StageTally {
 async function runStage<T>(
   tally: StageTally,
   cache: StageCache | undefined,
-  keyInput: CacheKeyInput,
+  discriminators: Readonly<Record<string, string | number>> | undefined,
+  keyInput: Omit<CacheKeyInput, "discriminators">,
   liveRecord: (usage: UsageRecord) => Promise<number>,
   compute: (record: (usage: UsageRecord) => Promise<number>) => Promise<T>,
 ): Promise<T> {
@@ -354,7 +363,7 @@ async function runStage<T>(
   // `outcome.usage` below instead.
   try {
     const outcome = await cache.run(
-      keyInput,
+      { ...keyInput, ...(discriminators !== undefined && { discriminators }) },
       // On a miss the cache hands us its own collector; chain the live
       // recorder so real spend still lands in `costAccum`.
       (cacheRecord) =>
@@ -388,7 +397,7 @@ async function runForFixtureInner(
   getCostAccum: () => number,
   tally: StageTally,
 ): Promise<RunForFixtureResult> {
-  const { cache } = deps;
+  const { cache, cacheDiscriminators } = deps;
   const extractionModel = modelFor("extraction");
   const parsingModel = modelFor("requirement_parsing");
   // 1. Load fixtures.
@@ -410,6 +419,7 @@ async function runForFixtureInner(
   const extractedUnits = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "extraction",
       provider: extractionModel.provider,
@@ -437,6 +447,7 @@ async function runForFixtureInner(
   const unitEmbeddings = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "embedding",
       provider: "openai",
@@ -469,6 +480,7 @@ async function runForFixtureInner(
   const parsedRequirements = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "requirement_parsing",
       provider: parsingModel.provider,
@@ -490,6 +502,7 @@ async function runForFixtureInner(
   const reqEmbeddings = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "embedding",
       provider: "openai",

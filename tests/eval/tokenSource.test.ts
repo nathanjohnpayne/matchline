@@ -1,0 +1,509 @@
+/**
+ * Token-source adapter tests (#389).
+ *
+ * The CLI is injected via `spawnFn`, so these run offline and spend
+ * nothing. The real-binary path was verified by hand during the #389
+ * spike (Claude Code: schema-valid, 23 Units on `nathan-2026`).
+ *
+ * Priority invariants:
+ *   1. API keys are stripped from the child env — otherwise Claude Code
+ *      prefers ANTHROPIC_API_KEY and silently bills the metered API,
+ *      which is the exact cost this path exists to avoid.
+ *   2. A model substitution throws rather than mis-attributing results.
+ *   3. Malformed CLI output degrades to `no_tool_use` so the pipeline's
+ *      existing retry loop handles it.
+ *   4. Reported tokens price the PAYLOAD, never the CLI's
+ *      harness-inflated figure.
+ */
+
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  assertModelMatches,
+  buildChildEnv,
+  buildCliSystemPrompt,
+  claudeCliClient,
+  codexCliClient,
+  estimateTokens,
+  extractPromptParts,
+  firstCodexError,
+  isTokenSourceKind,
+  parseClaudeEnvelope,
+} from "./tokenSource.ts";
+
+let root: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "matchline-ts-test-"));
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+const SCHEMA = {
+  type: "object",
+  required: ["units"],
+  properties: { units: { type: "array", items: { type: "string" } } },
+};
+
+function params(overrides: Record<string, unknown> = {}) {
+  return {
+    model: "haiku",
+    system: "You extract Experience Units.\n\nReturn your response via the `record_experience_units` tool. The schema is strict.",
+    tools: [{ name: "record_experience_units", input_schema: SCHEMA }],
+    tool_choice: { type: "tool", name: "record_experience_units" },
+    messages: [{ role: "user", content: "Resume text here" }],
+    ...overrides,
+  };
+}
+
+/** Claude Code's `--output-format json` envelope. */
+function claudeEnvelope(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    is_error: false,
+    result: "DONE",
+    total_cost_usd: 0.1048,
+    usage: {
+      input_tokens: 26,
+      cache_creation_input_tokens: 18228,
+      cache_read_input_tokens: 62618,
+      output_tokens: 12413,
+    },
+    modelUsage: { "claude-haiku-4-5-20251001": { costUSD: 0.1048 } },
+    ...overrides,
+  });
+}
+
+describe("buildChildEnv", () => {
+  it("starts from empty and admits only allowlisted names", () => {
+    const env = buildChildEnv({}, {
+      PATH: "/bin",
+      HOME: "/home/x",
+      GH_TOKEN: "leak",
+      OP_PREFLIGHT_REVIEWER_PAT: "leak",
+    } as NodeJS.ProcessEnv);
+    expect(env.PATH).toBe("/bin");
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.OP_PREFLIGHT_REVIEWER_PAT).toBeUndefined();
+    // HOME is not in the base allowlist — each client passes it
+    // explicitly, because the right value differs between them.
+    expect(env.HOME).toBeUndefined();
+  });
+
+  it("applies the shell adapters' fallbacks for a sparse parent env", () => {
+    const env = buildChildEnv({}, {} as NodeJS.ProcessEnv);
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.SHELL).toBe("/bin/sh");
+    expect(env.TMPDIR).toBe("/tmp");
+    expect(env.LANG).toBe("C");
+    expect(env.TERM).toBe("dumb");
+  });
+
+  it("lets extras through and drops undefined extras", () => {
+    const env = buildChildEnv(
+      { HOME: "/isolated", CODEX_HOME: "/codex", MISSING: undefined },
+      { PATH: "/bin" } as NodeJS.ProcessEnv,
+    );
+    expect(env.HOME).toBe("/isolated");
+    expect(env.CODEX_HOME).toBe("/codex");
+    expect("MISSING" in env).toBe(false);
+  });
+});
+
+describe("estimateTokens", () => {
+  it("approximates ~4 characters per token", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("a".repeat(4000))).toBe(1000);
+  });
+});
+
+describe("isTokenSourceKind", () => {
+  it("accepts the three known sources and rejects anything else", () => {
+    expect(isTokenSourceKind("api")).toBe(true);
+    expect(isTokenSourceKind("claude-cli")).toBe(true);
+    expect(isTokenSourceKind("codex-cli")).toBe(true);
+    expect(isTokenSourceKind("gemini-cli")).toBe(false);
+  });
+});
+
+describe("extractPromptParts", () => {
+  it("pulls model, system, schema, tool name, and user content", () => {
+    const parts = extractPromptParts(params());
+    expect(parts.model).toBe("haiku");
+    expect(parts.toolName).toBe("record_experience_units");
+    expect(parts.schema).toEqual(SCHEMA);
+    expect(parts.userContent).toBe("Resume text here");
+  });
+
+  it.each([
+    ["model", { model: 123 }],
+    ["system", { system: undefined }],
+    ["tools", { tools: [] }],
+    ["messages", { messages: [] }],
+  ] as const)("throws when %s is malformed", (_label, override) => {
+    // Silently degrading here would produce a sweep ranking built on a
+    // dropped schema — fail at the boundary instead.
+    expect(() => extractPromptParts(params(override))).toThrow();
+  });
+});
+
+describe("buildCliSystemPrompt", () => {
+  it("rewrites the tool-use instruction into a write-file instruction", () => {
+    const prompt = buildCliSystemPrompt(
+      extractPromptParts(params()),
+      "/work/out.json",
+    );
+    expect(prompt).not.toContain("via the `record_experience_units` tool");
+    expect(prompt).toContain("Write your response as a single JSON object");
+    expect(prompt).toContain("/work/out.json");
+  });
+
+  it("preserves the production rules verbatim", () => {
+    // The comparison is only meaningful if everything except the
+    // output mechanism survives untouched.
+    const prompt = buildCliSystemPrompt(
+      extractPromptParts(params()),
+      "/work/out.json",
+    );
+    expect(prompt).toContain("You extract Experience Units.");
+  });
+
+  it("embeds the JSON schema so the CLI has a contract to satisfy", () => {
+    const prompt = buildCliSystemPrompt(
+      extractPromptParts(params()),
+      "/work/out.json",
+    );
+    expect(prompt).toContain(JSON.stringify(SCHEMA));
+  });
+});
+
+describe("assertModelMatches", () => {
+  it("accepts a dated id for an undated alias", () => {
+    expect(() =>
+      assertModelMatches("haiku", ["claude-haiku-4-5-20251001"]),
+    ).not.toThrow();
+  });
+
+  it("accepts an exact match", () => {
+    expect(() =>
+      assertModelMatches("claude-sonnet-4-6", ["claude-sonnet-4-6"]),
+    ).not.toThrow();
+  });
+
+  it("throws when a different model was served", () => {
+    // Silent substitution would attribute one model's quality to
+    // another and corrupt the whole ranking.
+    expect(() =>
+      assertModelMatches("haiku", ["claude-opus-4-1-20250805"]),
+    ).toThrow(/Refusing to attribute/);
+  });
+
+  it("is a no-op when the CLI reported no model", () => {
+    expect(() => assertModelMatches("haiku", [])).not.toThrow();
+  });
+});
+
+describe("parseClaudeEnvelope", () => {
+  it("reads the error flag, result text, output tokens, and models", () => {
+    const parsed = parseClaudeEnvelope(claudeEnvelope());
+    expect(parsed.isError).toBe(false);
+    expect(parsed.resultText).toBe("DONE");
+    expect(parsed.outputTokens).toBe(12413);
+    expect(parsed.models).toEqual(["claude-haiku-4-5-20251001"]);
+  });
+
+  it("throws with a diagnostic on non-JSON stdout", () => {
+    expect(() => parseClaudeEnvelope("Not logged in")).toThrow(/non-JSON stdout/);
+  });
+});
+
+describe("claudeCliClient", () => {
+  it("returns a tool_use block carrying the JSON the agent wrote", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        // Locate --add-dir to find the workdir the adapter created.
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: ["a"] }));
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+
+    const res = await client.messages.create(params() as never);
+    const block = res.content[0] as unknown as { type: string; input: unknown };
+    expect(block.type).toBe("tool_use");
+    expect(block.input).toEqual({ units: ["a"] });
+  });
+
+  // #392. The ORIGINAL test here asserted only that the two model API
+  // keys had been removed — which passes happily while OP_PREFLIGHT_*
+  // PATs, GH_TOKEN, and GCP credential paths sail through. That is the
+  // difference between a test that confirms what you fixed and one
+  // that catches what you forgot, so this asserts the complement:
+  // nothing OUTSIDE the allowlist reaches the child.
+  it("passes only allowlisted variables to the child", async () => {
+    const leaky = {
+      OP_PREFLIGHT_REVIEWER_PAT: "ghp_reviewer",
+      OP_PREFLIGHT_AUTHOR_PAT: "ghp_author",
+      GH_TOKEN: "ghp_ambient",
+      GITHUB_TOKEN: "ghp_ambient2",
+      GOOGLE_APPLICATION_CREDENTIALS: "/Users/x/adc.json",
+      AWS_SECRET_ACCESS_KEY: "aws",
+      ANTHROPIC_API_KEY: "sk-ant-leak",
+      OPENAI_API_KEY: "sk-oai-leak",
+    };
+    for (const [k, v] of Object.entries(leaky)) vi.stubEnv(k, v);
+
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args, opts) => {
+        seenEnv = opts.env;
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+    await client.messages.create(params() as never);
+
+    expect(seenEnv).toBeDefined();
+    for (const name of Object.keys(leaky)) {
+      expect(seenEnv?.[name], `${name} must not reach the child`).toBeUndefined();
+    }
+    // And the allowlist is a closed set, not a denylist of known-bad
+    // names — so a NEW secret added to the parent env later is
+    // withheld without anyone updating this test.
+    const permitted = new Set([
+      "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM",
+      "HOME", "CLAUDE_CODE_OAUTH_TOKEN",
+    ]);
+    for (const key of Object.keys(seenEnv ?? {})) {
+      expect(permitted.has(key), `unexpected variable in child env: ${key}`).toBe(true);
+    }
+  });
+
+  it("strips ANTHROPIC_API_KEY and OPENAI_API_KEY from the child env", async () => {
+    // Load-bearing: Claude Code prefers ANTHROPIC_API_KEY when set, so
+    // leaving it would silently bill the metered API on a run the
+    // operator believes is subscription-billed.
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-should-not-leak");
+    vi.stubEnv("OPENAI_API_KEY", "sk-oai-should-not-leak");
+
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args, opts) => {
+        seenEnv = opts.env;
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+
+    await client.messages.create(params() as never);
+    expect(seenEnv).toBeDefined();
+    expect(seenEnv?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(seenEnv?.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it("never passes --bare, which would force API-key auth", async () => {
+    let seenArgs: readonly string[] = [];
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        seenArgs = args;
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+    await client.messages.create(params() as never);
+    expect(seenArgs).not.toContain("--bare");
+    expect(seenArgs).toContain("--system-prompt");
+  });
+
+  it("prices the payload, not the CLI's harness-inflated token counts", async () => {
+    const body = JSON.stringify({ units: ["a", "b"] });
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), body);
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+
+    const res = await client.messages.create(params() as never);
+    // The envelope claims 80k+ input tokens of agent preamble and
+    // 12,413 output. Neither should reach the cost model.
+    expect(res.usage.input_tokens).toBeLessThan(1000);
+    expect(res.usage.output_tokens).toBe(estimateTokens(body));
+    expect(res.usage.output_tokens).toBeLessThan(12413);
+  });
+
+  it("degrades to no_tool_use when the agent writes no file", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async () => ({ stdout: claudeEnvelope(), stderr: "", exitCode: 0 }),
+    });
+    const res = await client.messages.create(params() as never);
+    // Routes into the pipeline's existing 3-attempt retry loop.
+    expect(res.content.every((b) => (b as { type: string }).type !== "tool_use")).toBe(true);
+  });
+
+  it("degrades to no_tool_use when the written JSON is malformed", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), "{ not json");
+        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+      },
+    });
+    const res = await client.messages.create(params() as never);
+    expect(res.content.every((b) => (b as { type: string }).type !== "tool_use")).toBe(true);
+  });
+
+  it("throws when the CLI serves a different model than requested", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        const workdir = args[args.indexOf("--add-dir") + 1]!;
+        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+        return {
+          stdout: claudeEnvelope({
+            modelUsage: { "claude-opus-4-1-20250805": {} },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    });
+    await expect(client.messages.create(params() as never)).rejects.toThrow(
+      /Refusing to attribute/,
+    );
+  });
+
+  it("surfaces a not-logged-in envelope as an error", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async () => ({
+        stdout: claudeEnvelope({ is_error: true, result: "Not logged in · Please run /login" }),
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+    await expect(client.messages.create(params() as never)).rejects.toThrow(/Not logged in/);
+  });
+});
+
+describe("firstCodexError", () => {
+  it("unwraps the nested API error message", () => {
+    const jsonl = [
+      JSON.stringify({ type: "thread.started" }),
+      JSON.stringify({
+        type: "error",
+        message: JSON.stringify({
+          type: "error",
+          status: 400,
+          error: {
+            type: "invalid_request_error",
+            message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account.",
+          },
+        }),
+      }),
+    ].join("\n");
+    expect(firstCodexError(jsonl)).toBe(
+      "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account.",
+    );
+  });
+
+  it("returns null on a clean stream", () => {
+    const jsonl = [
+      JSON.stringify({ type: "thread.started" }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+    expect(firstCodexError(jsonl)).toBeNull();
+  });
+
+  it("ignores non-JSON lines", () => {
+    expect(firstCodexError("not json\n\n")).toBeNull();
+  });
+});
+
+describe("codexCliClient", () => {
+  it("passes the schema via --output-schema and reads the last message", async () => {
+    let seenArgs: readonly string[] = [];
+    const client = codexCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        seenArgs = args;
+        const outPath = args[args.indexOf("-o") + 1]!;
+        writeFileSync(outPath, JSON.stringify({ units: ["x"] }));
+        return { stdout: JSON.stringify({ type: "turn.completed" }), stderr: "", exitCode: 0 };
+      },
+    });
+
+    const res = await client.messages.create(params({ model: "gpt-5.6-sol" }) as never);
+    expect(seenArgs).toContain("--output-schema");
+    const block = res.content[0] as unknown as { type: string; input: unknown };
+    expect(block.input).toEqual({ units: ["x"] });
+  });
+
+  it("closes stdin, which codex exec blocks on", async () => {
+    let seenStdin: string | undefined;
+    const client = codexCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args, opts) => {
+        seenStdin = opts.stdin;
+        writeFileSync(args[args.indexOf("-o") + 1]!, JSON.stringify({ units: [] }));
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+    await client.messages.create(params() as never);
+    expect(seenStdin).toBe("");
+  });
+
+  it("sets CODEX_HOME when an isolated home is supplied", async () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    const client = codexCliClient({
+      workdirRoot: root,
+      codexHome: "/tmp/isolated-codex",
+      spawnFn: async (_cmd, args, opts) => {
+        seenEnv = opts.env;
+        writeFileSync(args[args.indexOf("-o") + 1]!, JSON.stringify({ units: [] }));
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    });
+    await client.messages.create(params() as never);
+    expect(seenEnv?.CODEX_HOME).toBe("/tmp/isolated-codex");
+  });
+
+  it("surfaces an unsupported-model error even though codex exits 0", async () => {
+    // Codex reports API rejections as JSONL `error` events while still
+    // exiting 0 — checking the exit code alone would let a failed run
+    // masquerade as a quality result.
+    const client = codexCliClient({
+      workdirRoot: root,
+      spawnFn: async () => ({
+        stdout: JSON.stringify({
+          type: "error",
+          message: JSON.stringify({
+            error: { message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account." },
+          }),
+        }),
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+    await expect(client.messages.create(params() as never)).rejects.toThrow(
+      /not supported when using Codex.*brew upgrade codex/s,
+    );
+  });
+});
