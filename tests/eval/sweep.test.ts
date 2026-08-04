@@ -306,6 +306,27 @@ describe("paretoFrontier", () => {
     expect(frontier).toEqual(new Set(["good", "cheap"]));
   });
 
+  it("does not trade extraction accuracy against match accuracy", () => {
+    // An averaged score would wrongly discard "balanced": its lower
+    // extraction score is offset by a higher match score, so neither
+    // variant is better on both independent quality axes.
+    const frontier = paretoFrontier([
+      variantResult({
+        label: "extract",
+        extractionAccuracy: 0.9,
+        matchAccuracy: 0.7,
+        modeledCostPerFlowUsd: 0.1,
+      }),
+      variantResult({
+        label: "balanced",
+        extractionAccuracy: 0.8,
+        matchAccuracy: 0.8,
+        modeledCostPerFlowUsd: 0.1,
+      }),
+    ]);
+    expect(frontier).toEqual(new Set(["extract", "balanced"]));
+  });
+
   it("excludes variants with no successful flows", () => {
     // A run that produced nothing isn't cheap, it's broken — it must
     // not sit on the frontier at $0.

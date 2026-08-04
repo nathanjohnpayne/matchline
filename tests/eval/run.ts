@@ -80,8 +80,8 @@ function parseMode(argv: readonly string[]): Mode {
  * Parse `--token-source <kind>` / `--token-source=<kind>`. Default
  * `api`, so an unflagged run behaves exactly as before.
  *
- * Rejects an unknown kind loudly: a typo'd `--token-source claude`
- * silently falling back to `api` would spend real money on a run the
+ * Rejects an unknown kind or token-source option loudly: a typo that
+ * silently falls back to `api` would spend real money on a run the
  * operator believed was subscription-billed.
  */
 export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
@@ -103,6 +103,11 @@ export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
     if (arg === "--token-source") return read(argv[i + 1]);
     if (arg.startsWith("--token-source=")) {
       return read(arg.slice("--token-source=".length));
+    }
+    if (arg.startsWith("--token-")) {
+      throw new Error(
+        `Unknown token-source option ${JSON.stringify(arg)}. Use --token-source.`,
+      );
     }
   }
   return "api";

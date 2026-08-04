@@ -172,6 +172,9 @@ describe("parseTokenSource", () => {
     expect(() => parseTokenSource(["--token-source"])).toThrow(/requires a value/);
     expect(() => parseTokenSource(["--token-source", "--full"])).toThrow(/requires a value/);
     expect(() => parseTokenSource(["--token-source", "codex-cli"])).toThrow(/must be one of/);
+    expect(() => parseTokenSource(["--token-soruce", "claude-cli"])).toThrow(
+      /Unknown token-source option/,
+    );
   });
 });
 

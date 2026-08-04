@@ -428,7 +428,14 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
         const workdir = mkdtempSync(join(workdirRoot, "matchline-claude-cli-"));
         try {
           const system = buildCliSystemPrompt(parts);
-          const inputTokens = estimateTokens(system) + estimateTokens(parts.userContent);
+          // This schema is sent as prompt input through --json-schema, so
+          // include it in the modeled request cost. Excluding it makes broad
+          // extraction schemas look artificially cheap in a model sweep.
+          const serializedSchema = JSON.stringify(parts.schema);
+          const inputTokens =
+            estimateTokens(system) +
+            estimateTokens(parts.userContent) +
+            estimateTokens(serializedSchema);
 
           const result = await spawnFn(
             "claude",
@@ -436,7 +443,7 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
               "-p",
               "--model", parts.model,
               "--output-format", "json",
-              "--json-schema", JSON.stringify(parts.schema),
+              "--json-schema", serializedSchema,
               "--system-prompt", system,
               // Native schema enforcement replaces the former
               // file-write workaround. An empty list is intentional:
@@ -568,7 +575,12 @@ export function assertModelMatches(
   requested: string,
   served: readonly string[],
 ): void {
-  if (served.length === 0) return; // nothing reported; nothing to check
+  if (served.length === 0) {
+    throw new Error(
+      `tokenSource: requested model "${requested}" but the CLI did not report the served model. ` +
+        "Refusing to attribute unverified results to the requested model.",
+    );
+  }
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const req = norm(requested);
   const ok = served.some((s) => {

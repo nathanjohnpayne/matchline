@@ -227,12 +227,12 @@ export function rollUpVariant(
 
 /**
  * Mark the Pareto frontier: variants that no other variant beats on
- * BOTH quality and cost simultaneously.
+ * extraction accuracy, match accuracy, and cost simultaneously.
  *
- * Quality is the mean of extraction and match accuracy — both are
- * 80/80 gates in #177, so neither alone is the objective. A variant is
- * dominated when some other variant is at least as good on quality AND
- * at least as cheap, and strictly better on one of them.
+ * Extraction and match are independent 80/80 gates in #177, so an
+ * average would hide a regression on one metric behind a gain on the
+ * other. A variant is dominated when another is at least as good on
+ * both quality axes, at least as cheap, and strictly better on one.
  *
  * Variants with no successful flows are never on the frontier — a run
  * that produced nothing isn't "cheap", it's broken.
@@ -259,7 +259,8 @@ export function paretoFrontier(
     )
     .map((r) => ({
       label: r.label,
-      quality: (r.extractionAccuracy + r.matchAccuracy) / 2,
+      extractionAccuracy: r.extractionAccuracy,
+      matchAccuracy: r.matchAccuracy,
       cost: r.modeledCostPerFlowUsd ?? Number.POSITIVE_INFINITY,
     }));
 
@@ -268,9 +269,12 @@ export function paretoFrontier(
     const dominated = scored.some(
       (other) =>
         other.label !== candidate.label &&
-        other.quality >= candidate.quality &&
+        other.extractionAccuracy >= candidate.extractionAccuracy &&
+        other.matchAccuracy >= candidate.matchAccuracy &&
         other.cost <= candidate.cost &&
-        (other.quality > candidate.quality || other.cost < candidate.cost),
+        (other.extractionAccuracy > candidate.extractionAccuracy ||
+          other.matchAccuracy > candidate.matchAccuracy ||
+          other.cost < candidate.cost),
     );
     if (!dominated) frontier.add(candidate.label);
   }

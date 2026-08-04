@@ -193,8 +193,10 @@ describe("assertModelMatches", () => {
     ).toThrow(/Refusing to attribute/);
   });
 
-  it("is a no-op when the CLI reported no model", () => {
-    expect(() => assertModelMatches("haiku", [])).not.toThrow();
+  it("fails closed when the CLI reported no model", () => {
+    expect(() => assertModelMatches("haiku", [])).toThrow(
+      /did not report the served model/,
+    );
   });
 });
 
@@ -333,7 +335,7 @@ describe("claudeCliClient", () => {
     expect(seenArgs).toContain("--system-prompt");
   });
 
-  it("prices the payload, not the CLI's harness-inflated token counts", async () => {
+  it("prices the prompt payload, including its native JSON schema", async () => {
     const body = JSON.stringify({ units: ["a", "b"] });
     const client = claudeCliClient({
       workdirRoot: root,
@@ -344,8 +346,15 @@ describe("claudeCliClient", () => {
 
     const res = await client.messages.create(params() as never);
     // The envelope claims 80k+ input tokens of agent preamble and
-    // 12,413 output. Neither should reach the cost model.
+    // 12,413 output. Neither should reach the cost model, but the
+    // serialized native schema is request input and must be modeled.
+    const promptParts = extractPromptParts(params());
     expect(res.usage.input_tokens).toBeLessThan(1000);
+    expect(res.usage.input_tokens).toBe(
+      estimateTokens(buildCliSystemPrompt(promptParts)) +
+        estimateTokens(promptParts.userContent) +
+        estimateTokens(JSON.stringify(promptParts.schema)),
+    );
     expect(res.usage.output_tokens).toBe(estimateTokens(body));
     expect(res.usage.output_tokens).toBeLessThan(12413);
   });
