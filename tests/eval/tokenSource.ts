@@ -74,18 +74,17 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
 
-export type TokenSourceKind = "api" | "claude-cli" | "codex-cli";
+export type TokenSourceKind = "api" | "claude-cli";
 
 export const TOKEN_SOURCE_KINDS: readonly TokenSourceKind[] = [
   "api",
   "claude-cli",
-  "codex-cli",
 ];
 
 export function isTokenSourceKind(v: string): v is TokenSourceKind {
@@ -106,14 +105,6 @@ export interface CliClientOptions {
   readonly workdirRoot?: string;
   /** Injectable for tests; defaults to spawning the real binary. */
   readonly spawnFn?: SpawnFn;
-  /**
-   * `CODEX_HOME` for the codex-cli source. The default `~/.codex`
-   * config starts MCP servers (playwright via npx, node_repl with a
-   * 120s startup budget) that stall `codex exec` past four minutes, so
-   * a sweep must point at an isolated home holding just `auth.json`
-   * plus a minimal `config.toml`.
-   */
-  readonly codexHome?: string;
 }
 
 /** Result of one CLI invocation, normalized across both CLIs. */
@@ -591,196 +582,4 @@ export function assertModelMatches(
         `requested model — that would corrupt the sweep's ranking.`,
     );
   }
-}
-
-/**
- * Anthropic-shaped client backed by `codex exec` on the ChatGPT
- * subscription.
- *
- * Uses `--output-schema`, Codex's native JSON Schema structured output
- * — strictly higher fidelity than the file-write workaround the Claude
- * Code path needs, and the closest CLI analog to the API's `tool_use`
- * enforcement.
- *
- * ## ⚠️ Unverified
- *
- * This path could NOT be exercised end-to-end during the #389 spike.
- * The installed `codex-cli 0.143.0` rejects every model reachable from
- * a ChatGPT account — `gpt-5.1-codex`, `gpt-5.1`, `gpt-5-codex`, and
- * `gpt-5.2-codex` all return *"not supported when using Codex with a
- * ChatGPT account"*, while the configured `gpt-5.6-sol` returns
- * *"requires a newer version of Codex"*. Homebrew has 0.146.0.
- *
- * Run `brew upgrade codex` before selecting this source. The adapter
- * surfaces the CLI's own error verbatim so a version/entitlement
- * mismatch is unmistakable rather than looking like a quality problem.
- *
- * Two operational gotchas are encoded below: `codex exec` blocks
- * reading stdin even when the prompt is an argument (so stdin is closed
- * immediately), and the default `~/.codex/config.toml` starts MCP
- * servers that stall startup (so `codexHome` should point at an
- * isolated home).
- */
-export function codexCliClient(options: CliClientOptions = {}): Anthropic {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const spawnFn = options.spawnFn ?? realSpawn;
-  const workdirRoot = options.workdirRoot ?? tmpdir();
-
-  return {
-    messages: {
-      create: async (params: unknown): Promise<Anthropic.Messages.Message> => {
-        const parts = extractPromptParts(params);
-        const workdir = mkdtempSync(join(workdirRoot, "matchline-codex-cli-"));
-        let isolatedHome: string | undefined;
-        try {
-          const schemaPath = join(workdir, "schema.json");
-          const outPath = join(workdir, "last-message.txt");
-          writeFileSync(schemaPath, JSON.stringify(parts.schema), "utf8");
-
-          // Codex takes one prompt; fold the system prompt in as a
-          // preamble so the production rules still reach the model.
-          const prompt = `${parts.system}\n\n---\n\n${parts.userContent}`;
-          const inputTokens = estimateTokens(prompt);
-
-          // Codex authenticates from CODEX_HOME/auth.json, not from
-          // HOME, so HOME can be — and is — isolated to a throwaway
-          // directory. This matches review-via-codex.sh, which points
-          // both HOME and CODEX_HOME at mktemp dirs.
-          isolatedHome = mkdtempSync(join(workdirRoot, "matchline-codex-home-"));
-          const env = buildChildEnv({
-            HOME: isolatedHome,
-            ...(options.codexHome !== undefined && { CODEX_HOME: options.codexHome }),
-          });
-
-          const result = await spawnFn(
-            "codex",
-            [
-              "exec",
-              "--model", parts.model,
-              "--output-schema", schemaPath,
-              "-o", outPath,
-              "--sandbox", "read-only",
-              "--skip-git-repo-check",
-              "--json",
-              prompt,
-            ],
-            // `codex exec` blocks reading stdin even with the prompt
-            // passed as an argument; an empty string closes it.
-            { cwd: workdir, env, stdin: "", timeoutMs },
-          );
-
-          const cliError = firstCodexError(result.stdout);
-          if (cliError !== null) {
-            throw new Error(
-              `codex exec failed: ${cliError}\n` +
-                `If this says the model is unsupported or needs a newer CLI, run ` +
-                `\`brew upgrade codex\` — the #389 spike hit exactly that on 0.143.0.`,
-            );
-          }
-          if (result.exitCode !== 0) {
-            throw new Error(
-              `codex exec exited ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
-            );
-          }
-          if (!existsSync(outPath)) {
-            return noToolUseResponse(
-              parts.model,
-              `codex exec wrote no last-message file at ${outPath}`,
-              inputTokens,
-              0,
-            );
-          }
-
-          const body = readFileSync(outPath, "utf8");
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(body);
-          } catch (err) {
-            return noToolUseResponse(
-              parts.model,
-              `codex exec returned unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
-              inputTokens,
-              estimateTokens(body),
-            );
-          }
-
-          return toolUseResponse(
-            parts.model,
-            parts.toolName,
-            parsed,
-            inputTokens,
-            estimateTokens(body),
-          );
-        } finally {
-          rmSync(workdir, { recursive: true, force: true });
-          if (isolatedHome !== undefined) {
-            rmSync(isolatedHome, { recursive: true, force: true });
-          }
-        }
-      },
-    },
-  } as unknown as Anthropic;
-}
-
-/**
- * Pull the first error message out of `codex exec --json`'s JSONL
- * event stream. Codex reports API-level rejections (unsupported model,
- * stale CLI) as `type: "error"` events while still exiting 0, so
- * checking the exit code alone would let a failed run look like a
- * quality result.
- */
-export function firstCodexError(stdout: string): string | null {
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    let event: { type?: string; message?: unknown };
-    try {
-      event = JSON.parse(trimmed) as typeof event;
-    } catch {
-      continue;
-    }
-    if (event.type !== "error") continue;
-    const message = typeof event.message === "string" ? event.message : JSON.stringify(event.message);
-    // The message is often itself a JSON error envelope; unwrap the
-    // human-readable part when it is.
-    try {
-      const inner = JSON.parse(message) as { error?: { message?: string } };
-      if (typeof inner.error?.message === "string") return inner.error.message;
-    } catch {
-      // Not nested JSON — use it as-is.
-    }
-    return message;
-  }
-  return null;
-}
-
-/**
- * Prepare an isolated `CODEX_HOME` holding a copy of the user's
- * `auth.json` and a minimal `config.toml`.
- *
- * The default `~/.codex/config.toml` starts MCP servers (playwright via
- * `npx`, `node_repl` with a 120s startup budget) that stalled
- * `codex exec` past four minutes during the spike. A sweep needs a
- * config with nothing in it but the model.
- *
- * `auth.json` is copied with 0600. Callers are responsible for removing
- * the directory when the sweep finishes — `sweep.ts` does so in a
- * `finally`.
- */
-export function prepareCodexHome(sourceHome: string, targetHome: string): void {
-  const auth = join(sourceHome, "auth.json");
-  if (!existsSync(auth)) {
-    throw new Error(
-      `prepareCodexHome: no auth.json at ${auth}. Run \`codex login\` first — ` +
-        `the codex-cli token source needs ChatGPT OAuth credentials.`,
-    );
-  }
-  mkdirSync(targetHome, { recursive: true });
-  writeFileSync(join(targetHome, "auth.json"), readFileSync(auth), { mode: 0o600 });
-  writeFileSync(
-    join(targetHome, "config.toml"),
-    // Deliberately minimal: no MCP servers, no notify hook.
-    'model_reasoning_effort = "low"\n',
-    "utf8",
-  );
 }

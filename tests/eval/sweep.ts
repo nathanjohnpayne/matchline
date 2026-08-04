@@ -470,15 +470,9 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
             `the results table. Sweepable stages: ${SWEEPABLE_STAGES.join(", ")}.`,
         );
       }
-      // Codex P1 round 1: inferring `provider: "openai"` from a
-      // `gpt-*` id produced an override no pipeline can consume —
-      // `extractFromResume` and `parseJobRequirements` both throw
-      // when `modelFor(stage).provider !== "anthropic"`, BEFORE the
-      // injected CLI client is ever called. So the advertised
-      // codex-cli sweep had no viable model configuration: name a
-      // gpt model and it throws, omit it and Codex is sent
-      // `claude-*` ids. Refuse at parse time with the real reason
-      // rather than failing mid-corpus.
+      // The eval pipeline currently accepts Anthropic extraction and
+      // parsing models only. Refuse an OpenAI model here rather than
+      // displaying a variant name that will fail before a client call.
       const provider = /^(gpt|o[0-9])/.test(value) ? "openai" : "anthropic";
       if (provider !== "anthropic") {
         throw new Error(

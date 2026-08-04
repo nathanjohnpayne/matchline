@@ -530,12 +530,9 @@ describe("parseVariantFlag", () => {
   });
 
   it("rejects an OpenAI model with the real reason", () => {
-    // Codex P1: inferring provider "openai" produced an override no
-    // pipeline can consume — extractFromResume throws on a
-    // non-anthropic provider BEFORE the injected CLI client is
-    // called. So the advertised codex-cli sweep had no viable model
-    // configuration at all. Fail at parse time with the cause.
-    expect(() => parseVariantFlag("g:model.extraction=gpt-5.6-sol", "codex-cli")).toThrow(
+    // The pipeline rejects OpenAI models before calling a token-source
+    // adapter, so fail at parse time rather than mislabeling a sweep.
+    expect(() => parseVariantFlag("g:model.extraction=gpt-5.6-sol", "claude-cli")).toThrow(
       /hard-require provider "anthropic"/,
     );
   });

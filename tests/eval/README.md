@@ -91,19 +91,9 @@ npm run eval -- --token-source claude-cli
 |---|---|---|
 | `api` (default) | metered Anthropic + OpenAI | the fidelity reference, and the only source that yields meaningful latency |
 | `claude-cli` | Claude Code subscription | verified end-to-end: 27 schema-valid Units on `nathan-2026` |
-| `codex-cli` | ChatGPT subscription | transport verified on `codex` 0.146.0, but **not usable end-to-end** — see #402 |
 
 `OPENAI_API_KEY` is required by **every** source, because embeddings
 have no CLI equivalent. `ANTHROPIC_API_KEY` is required only by `api`.
-
-**`codex-cli` cannot currently run.** `extractFromResume` and
-`parseJobRequirements` throw when `modelFor(stage).provider !==
-"anthropic"`, before the injected client is called — so the default
-config sends `claude-sonnet-4-6` to Codex (rejected) and naming a
-`gpt-*` model is refused at parse time. Tracked in #402. Point
-`MATCHLINE_CODEX_HOME` at an isolated home when that is resolved; the
-default `~/.codex/config.toml` starts MCP servers that stall
-`codex exec`.
 
 #### Fidelity — the CLI path ranks, it does not replicate
 
@@ -187,7 +177,7 @@ tests/eval/
 ├── loadFixtures.ts    typed fixture-file readers (#136)
 ├── mapping.ts         runtime UUID → labeler mnemonic (#136)
 ├── cache.ts           content-addressed stage cache (#389)
-├── tokenSource.ts     api / claude-cli / codex-cli adapters (#389)
+├── tokenSource.ts     api / claude-cli adapters (#389)
 ├── sweep.ts           pure: model×prompt matrix + Pareto table (#389)
 ├── scoring.ts         pure: jaccard, unit-set accuracy, top-K overlap
 ├── projection.ts      pure: monthly-spend cap check

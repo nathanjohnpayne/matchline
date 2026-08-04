@@ -16,7 +16,7 @@
  *      harness-inflated figure.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,10 +26,8 @@ import {
   buildChildEnv,
   buildCliSystemPrompt,
   claudeCliClient,
-  codexCliClient,
   estimateTokens,
   extractPromptParts,
-  firstCodexError,
   isTokenSourceKind,
   parseClaudeEnvelope,
 } from "./tokenSource.ts";
@@ -124,10 +122,10 @@ describe("estimateTokens", () => {
 });
 
 describe("isTokenSourceKind", () => {
-  it("accepts the three known sources and rejects anything else", () => {
+  it("accepts the supported sources and rejects anything else", () => {
     expect(isTokenSourceKind("api")).toBe(true);
     expect(isTokenSourceKind("claude-cli")).toBe(true);
-    expect(isTokenSourceKind("codex-cli")).toBe(true);
+    expect(isTokenSourceKind("codex-cli")).toBe(false);
     expect(isTokenSourceKind("gemini-cli")).toBe(false);
   });
 });
@@ -402,110 +400,5 @@ describe("claudeCliClient", () => {
       }),
     });
     await expect(client.messages.create(params() as never)).rejects.toThrow(/Not logged in/);
-  });
-});
-
-describe("firstCodexError", () => {
-  it("unwraps the nested API error message", () => {
-    const jsonl = [
-      JSON.stringify({ type: "thread.started" }),
-      JSON.stringify({
-        type: "error",
-        message: JSON.stringify({
-          type: "error",
-          status: 400,
-          error: {
-            type: "invalid_request_error",
-            message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account.",
-          },
-        }),
-      }),
-    ].join("\n");
-    expect(firstCodexError(jsonl)).toBe(
-      "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account.",
-    );
-  });
-
-  it("returns null on a clean stream", () => {
-    const jsonl = [
-      JSON.stringify({ type: "thread.started" }),
-      JSON.stringify({ type: "turn.completed" }),
-    ].join("\n");
-    expect(firstCodexError(jsonl)).toBeNull();
-  });
-
-  it("ignores non-JSON lines", () => {
-    expect(firstCodexError("not json\n\n")).toBeNull();
-  });
-});
-
-describe("codexCliClient", () => {
-  it("passes the schema via --output-schema and reads the last message", async () => {
-    let seenArgs: readonly string[] = [];
-    const client = codexCliClient({
-      workdirRoot: root,
-      spawnFn: async (_cmd, args) => {
-        seenArgs = args;
-        const outPath = args[args.indexOf("-o") + 1]!;
-        writeFileSync(outPath, JSON.stringify({ units: ["x"] }));
-        return { stdout: JSON.stringify({ type: "turn.completed" }), stderr: "", exitCode: 0 };
-      },
-    });
-
-    const res = await client.messages.create(params({ model: "gpt-5.6-sol" }) as never);
-    expect(seenArgs).toContain("--output-schema");
-    const block = res.content[0] as unknown as { type: string; input: unknown };
-    expect(block.input).toEqual({ units: ["x"] });
-  });
-
-  it("closes stdin, which codex exec blocks on", async () => {
-    let seenStdin: string | undefined;
-    const client = codexCliClient({
-      workdirRoot: root,
-      spawnFn: async (_cmd, args, opts) => {
-        seenStdin = opts.stdin;
-        writeFileSync(args[args.indexOf("-o") + 1]!, JSON.stringify({ units: [] }));
-        return { stdout: "", stderr: "", exitCode: 0 };
-      },
-    });
-    await client.messages.create(params() as never);
-    expect(seenStdin).toBe("");
-  });
-
-  it("sets CODEX_HOME when an isolated home is supplied", async () => {
-    let seenEnv: NodeJS.ProcessEnv | undefined;
-    const client = codexCliClient({
-      workdirRoot: root,
-      codexHome: "/tmp/isolated-codex",
-      spawnFn: async (_cmd, args, opts) => {
-        seenEnv = opts.env;
-        writeFileSync(args[args.indexOf("-o") + 1]!, JSON.stringify({ units: [] }));
-        return { stdout: "", stderr: "", exitCode: 0 };
-      },
-    });
-    await client.messages.create(params() as never);
-    expect(seenEnv?.CODEX_HOME).toBe("/tmp/isolated-codex");
-  });
-
-  it("surfaces an unsupported-model error even though codex exits 0", async () => {
-    // Codex reports API rejections as JSONL `error` events while still
-    // exiting 0 — checking the exit code alone would let a failed run
-    // masquerade as a quality result.
-    const client = codexCliClient({
-      workdirRoot: root,
-      spawnFn: async () => ({
-        stdout: JSON.stringify({
-          type: "error",
-          message: JSON.stringify({
-            error: { message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account." },
-          }),
-        }),
-        stderr: "",
-        exitCode: 0,
-      }),
-    });
-    await expect(client.messages.create(params() as never)).rejects.toThrow(
-      /not supported when using Codex.*brew upgrade codex/s,
-    );
   });
 });

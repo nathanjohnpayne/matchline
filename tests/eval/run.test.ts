@@ -11,10 +11,12 @@ import {
   SMOKE_RESUME,
   aggregateSampledFixture,
   computeFlowCount,
+  estimateSpendForSource,
   estimatePlannedSpend,
   filterToLabeledPairs,
   liveStageFraction,
   offlineOnlyClient,
+  parseTokenSource,
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
@@ -152,6 +154,38 @@ describe("scaleSpendByProvider", () => {
     expect(scaled.anthropicUsd).toBe(full.anthropicUsd);
     expect(scaled.openaiUsd).toBe(0);
     expect(shouldBlock(checkCaps({ anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 }, scaled, DEFAULT_CAPS))).toBe(true);
+  });
+});
+
+describe("parseTokenSource", () => {
+  it("defaults to the metered API when the flag is absent", () => {
+    expect(parseTokenSource([])).toBe("api");
+    expect(parseTokenSource(["--full"])).toBe("api");
+  });
+
+  it("accepts both token-source flag forms", () => {
+    expect(parseTokenSource(["--token-source", "claude-cli"])).toBe("claude-cli");
+    expect(parseTokenSource(["--token-source=api"])).toBe("api");
+  });
+
+  it("rejects missing, flag-like, and unsupported values", () => {
+    expect(() => parseTokenSource(["--token-source"])).toThrow(/requires a value/);
+    expect(() => parseTokenSource(["--token-source", "--full"])).toThrow(/requires a value/);
+    expect(() => parseTokenSource(["--token-source", "codex-cli"])).toThrow(/must be one of/);
+  });
+});
+
+describe("estimateSpendForSource", () => {
+  it("preserves the metered estimate for the API source", () => {
+    expect(estimateSpendForSource("full", 7, "api")).toEqual(estimatePlannedSpend("full", 7));
+  });
+
+  it("charges CLI sources for embeddings only", () => {
+    expect(estimateSpendForSource("smoke", 10, "claude-cli")).toEqual({
+      anthropicUsd: 0,
+      openaiUsd: 0.01,
+      firebaseUsd: 0,
+    });
   });
 });
 

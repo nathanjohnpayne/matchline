@@ -39,7 +39,6 @@ import {
 import { resolveCacheMode, StageCache } from "./cache.js";
 import {
   claudeCliClient,
-  codexCliClient,
   isTokenSourceKind,
   TOKEN_SOURCE_KINDS,
   type TokenSourceKind,
@@ -482,11 +481,9 @@ async function main(): Promise<number> {
     const anthropicClient =
       tokenSource === "claude-cli"
         ? claudeCliClient()
-        : tokenSource === "codex-cli"
-          ? codexCliClient({ codexHome: process.env.MATCHLINE_CODEX_HOME })
-          : haveAnthropicKey
-            ? anthropicForCli()
-            : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
+        : haveAnthropicKey
+          ? anthropicForCli()
+          : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
     const openaiClient = haveOpenAiKey
       ? openaiForCli()
       : offlineOnlyClient<ReturnType<typeof openaiForCli>>("OpenAI", "OPENAI_API_KEY");
