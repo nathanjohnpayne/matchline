@@ -154,32 +154,23 @@ describe("extractPromptParts", () => {
 });
 
 describe("buildCliSystemPrompt", () => {
-  it("rewrites the tool-use instruction into a write-file instruction", () => {
-    const prompt = buildCliSystemPrompt(
-      extractPromptParts(params()),
-      "/work/out.json",
-    );
+  it("rewrites the tool-use instruction into a structured-output instruction", () => {
+    const prompt = buildCliSystemPrompt(extractPromptParts(params()));
     expect(prompt).not.toContain("via the `record_experience_units` tool");
-    expect(prompt).toContain("Write your response as a single JSON object");
-    expect(prompt).toContain("/work/out.json");
+    expect(prompt).toContain("Return your response as one JSON object");
   });
 
   it("preserves the production rules verbatim", () => {
     // The comparison is only meaningful if everything except the
     // output mechanism survives untouched.
-    const prompt = buildCliSystemPrompt(
-      extractPromptParts(params()),
-      "/work/out.json",
-    );
+    const prompt = buildCliSystemPrompt(extractPromptParts(params()));
     expect(prompt).toContain("You extract Experience Units.");
   });
 
-  it("embeds the JSON schema so the CLI has a contract to satisfy", () => {
-    const prompt = buildCliSystemPrompt(
-      extractPromptParts(params()),
-      "/work/out.json",
-    );
-    expect(prompt).toContain(JSON.stringify(SCHEMA));
+  it("leaves schema delivery to the native CLI flag", () => {
+    const prompt = buildCliSystemPrompt(extractPromptParts(params()));
+    expect(prompt).toContain("CLI validates it against the supplied JSON Schema");
+    expect(prompt).not.toContain(JSON.stringify(SCHEMA));
   });
 });
 
@@ -224,15 +215,14 @@ describe("parseClaudeEnvelope", () => {
 });
 
 describe("claudeCliClient", () => {
-  it("returns a tool_use block carrying the JSON the agent wrote", async () => {
+  it("returns a tool_use block carrying the CLI's structured JSON", async () => {
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args) => {
-        // Locate --add-dir to find the workdir the adapter created.
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: ["a"] }));
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
-      },
+      spawnFn: async () => ({
+        stdout: claudeEnvelope({ result: JSON.stringify({ units: ["a"] }) }),
+        stderr: "",
+        exitCode: 0,
+      }),
     });
 
     const res = await client.messages.create(params() as never);
@@ -263,11 +253,9 @@ describe("claudeCliClient", () => {
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args, opts) => {
+      spawnFn: async (_cmd, _args, opts) => {
         seenEnv = opts.env;
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+        return { stdout: claudeEnvelope({ result: JSON.stringify({ units: [] }) }), stderr: "", exitCode: 0 };
       },
     });
     await client.messages.create(params() as never);
@@ -298,11 +286,9 @@ describe("claudeCliClient", () => {
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args, opts) => {
+      spawnFn: async (_cmd, _args, opts) => {
         seenEnv = opts.env;
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+        return { stdout: claudeEnvelope({ result: JSON.stringify({ units: [] }) }), stderr: "", exitCode: 0 };
       },
     });
 
@@ -312,29 +298,27 @@ describe("claudeCliClient", () => {
     expect(seenEnv?.OPENAI_API_KEY).toBeUndefined();
   });
 
-  // Codex P1. The env allowlist closed the environment channel; this
-  // closes the filesystem one. With the real HOME still attached,
-  // pre-authorized Read let a prompt-injected fixture reach
-  // ~/.claude, ~/.ssh, and the op-preflight PAT cache. `--add-dir`
-  // grants an extra directory; it does not confine Read to it.
-  it("grants Write only — never Read", async () => {
+  // The real HOME remains available for OAuth, so the adapter must
+  // provide no model tools at all. This closes the prompt-injection
+  // write path rather than merely limiting it to one tool.
+  it("enables native JSON-schema output with no model tools", async () => {
     let seenArgs: readonly string[] = [];
     const client = claudeCliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, args) => {
         seenArgs = args;
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+        return { stdout: claudeEnvelope({ result: JSON.stringify({ units: [] }) }), stderr: "", exitCode: 0 };
       },
     });
     await client.messages.create(params() as never);
 
-    const idx = seenArgs.indexOf("--allowedTools");
-    expect(idx).toBeGreaterThan(-1);
-    const granted = seenArgs.slice(idx + 1, idx + 2);
-    expect(granted).toEqual(["Write"]);
-    expect(seenArgs).not.toContain("Read");
+    expect(seenArgs).toContain("--json-schema");
+    expect(seenArgs[seenArgs.indexOf("--json-schema") + 1]).toBe(JSON.stringify(SCHEMA));
+    expect(seenArgs).toContain("--tools");
+    expect(seenArgs[seenArgs.indexOf("--tools") + 1]).toBe("");
+    expect(seenArgs).toContain("--safe-mode");
+    expect(seenArgs).not.toContain("--allowedTools");
+    expect(seenArgs).not.toContain("--add-dir");
   });
 
   it("never passes --bare, which would force API-key auth", async () => {
@@ -343,9 +327,7 @@ describe("claudeCliClient", () => {
       workdirRoot: root,
       spawnFn: async (_cmd, args) => {
         seenArgs = args;
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
+        return { stdout: claudeEnvelope({ result: JSON.stringify({ units: [] }) }), stderr: "", exitCode: 0 };
       },
     });
     await client.messages.create(params() as never);
@@ -357,11 +339,9 @@ describe("claudeCliClient", () => {
     const body = JSON.stringify({ units: ["a", "b"] });
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args) => {
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), body);
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
-      },
+      spawnFn: async () => ({
+        stdout: claudeEnvelope({ result: body }), stderr: "", exitCode: 0,
+      }),
     });
 
     const res = await client.messages.create(params() as never);
@@ -372,7 +352,7 @@ describe("claudeCliClient", () => {
     expect(res.usage.output_tokens).toBeLessThan(12413);
   });
 
-  it("degrades to no_tool_use when the agent writes no file", async () => {
+  it("degrades to no_tool_use when the CLI result is not JSON", async () => {
     const client = claudeCliClient({
       workdirRoot: root,
       spawnFn: async () => ({ stdout: claudeEnvelope(), stderr: "", exitCode: 0 }),
@@ -382,14 +362,12 @@ describe("claudeCliClient", () => {
     expect(res.content.every((b) => (b as { type: string }).type !== "tool_use")).toBe(true);
   });
 
-  it("degrades to no_tool_use when the written JSON is malformed", async () => {
+  it("degrades to no_tool_use when structured output is malformed", async () => {
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args) => {
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), "{ not json");
-        return { stdout: claudeEnvelope(), stderr: "", exitCode: 0 };
-      },
+      spawnFn: async () => ({
+        stdout: claudeEnvelope({ result: "{ not json" }), stderr: "", exitCode: 0,
+      }),
     });
     const res = await client.messages.create(params() as never);
     expect(res.content.every((b) => (b as { type: string }).type !== "tool_use")).toBe(true);
@@ -398,11 +376,10 @@ describe("claudeCliClient", () => {
   it("throws when the CLI serves a different model than requested", async () => {
     const client = claudeCliClient({
       workdirRoot: root,
-      spawnFn: async (_cmd, args) => {
-        const workdir = args[args.indexOf("--add-dir") + 1]!;
-        writeFileSync(join(workdir, "response.json"), JSON.stringify({ units: [] }));
+      spawnFn: async () => {
         return {
           stdout: claudeEnvelope({
+            result: JSON.stringify({ units: [] }),
             modelUsage: { "claude-opus-4-1-20250805": {} },
           }),
           stderr: "",

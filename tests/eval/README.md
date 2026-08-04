@@ -107,9 +107,9 @@ default `~/.codex/config.toml` starts MCP servers that stall
 
 #### Fidelity — the CLI path ranks, it does not replicate
 
-- **No `tool_use` enforcement.** The API constrains output with
-  `tool_choice`; the CLI is instructed to write JSON to a file and the
-  result is validated after the fact.
+- **Different structured-output semantics.** The API constrains output
+  with `tool_choice`; Claude CLI validates its final JSON response
+  against the same schema but does not replicate an API tool call.
 - **No output-token budget.** Production sets `max_tokens: 16_384`
   (raised in #145 after real truncation). Neither CLI exposes an
   equivalent, so a model whose default ceiling is lower could truncate
@@ -127,13 +127,13 @@ The subprocess environment is built by **allowlist**, not by filtering
 `scripts/phase-4b/adapters/`. No ambient credentials —
 `OP_PREFLIGHT_*`, `GH_TOKEN`, GCP paths — reach the child.
 
-⚠️ **Fixture text is untrusted input to a process that can execute
-things.** Resume and JD text is embedded verbatim in the agent prompt.
-The Claude adapter grants `Write` only (never `Read`), but `--add-dir`
-is not an OS-level sandbox and the Claude subprocess retains the real
-`HOME` because its OAuth lives there. **Do not point a CLI token
-source at scraped or third-party fixtures until that is sandboxed.**
-The corpus is repo-controlled today; #38, #87, and #28 change that.
+⚠️ **Fixture text is untrusted prompt input.** Resume and JD text is
+embedded verbatim in the agent prompt. The Claude adapter uses native
+JSON-schema output with `--tools ""` and `--safe-mode`: it grants the
+model neither filesystem nor shell tools, while the environment
+allowlist keeps ambient credentials out of the child. Keep those flags
+in place before widening the corpus to scraped or third-party fixtures
+(#38, #87, and #28).
 
 ### Model sweep (#389)
 

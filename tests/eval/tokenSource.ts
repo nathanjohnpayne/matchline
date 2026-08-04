@@ -30,12 +30,12 @@
  *
  * The CLI path is a **ranking proxy, not a replica**:
  *
- *   - The API enforces the schema via `tool_use` + `tool_choice`. The
- *     CLI has no such enforcement, so this adapter instructs the agent
- *     to write JSON to a file and validates it after the fact. A
- *     malformed result is surfaced as a missing `tool_use` block, which
- *     routes into the pipeline's existing 3-attempt retry loop rather
- *     than needing its own.
+ *   - The API enforces the schema via `tool_use` + `tool_choice`.
+ *     Claude CLI validates a JSON Schema final response but does not
+ *     reproduce API tool choice semantics. A malformed result is
+ *     surfaced as a missing `tool_use` block, which routes into the
+ *     pipeline's existing 3-attempt retry loop rather than needing its
+ *     own.
  *   - Claude Code injects ~20-80k tokens of its own tool definitions
  *     that a production call would never carry. Its reported
  *     `total_cost_usd` is therefore shadow cost of the agent harness,
@@ -65,12 +65,12 @@
  * read-only shell commands. Fixture text is therefore untrusted input
  * to a process that can execute things.
  *
- * The mitigation is `buildChildEnv`: the subprocess starts from an
- * empty environment and receives only allowlisted variables, so there
- * are no ambient credentials for an injected fixture to read. That
- * property is what makes it safe to point this at real resumes and
- * scraped JDs (#38, #87, #28) — do not weaken it by passing
- * `process.env` through.
+ * The mitigations are `buildChildEnv` and the CLI's native structured
+ * output mode: the subprocess starts from an empty environment and the
+ * model receives no tools at all. That removes both the ambient-secret
+ * and arbitrary-write paths from fixture-controlled prompt text — do
+ * not weaken either property by passing `process.env` through or by
+ * re-enabling tools.
  */
 
 import { spawn } from "node:child_process";
@@ -211,11 +211,16 @@ const realSpawn: SpawnFn = (command, args, options) =>
     let stderr = "";
     let settled = false;
 
-    const timer = setTimeout(() => {
+    const fail = (err: Error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
       child.kill("SIGKILL");
-      reject(
+      reject(err);
+    };
+
+    const timer = setTimeout(() => {
+      fail(
         new Error(
           `${command} exceeded ${options.timeoutMs}ms. Raise timeoutMs, or check that the CLI is authenticated and not waiting on a prompt.`,
         ),
@@ -228,12 +233,12 @@ const realSpawn: SpawnFn = (command, args, options) =>
     child.stderr.on("data", (c) => {
       stderr += String(c);
     });
-    child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(err);
-    });
+    child.on("error", fail);
+    // An executable that exits before it reads stdin emits EPIPE on
+    // this stream. Handle it explicitly: without this listener Node
+    // treats it as an unhandled EventEmitter error and can terminate
+    // the whole eval process instead of returning a failed fixture.
+    child.stdin.on("error", fail);
     child.on("close", (exitCode) => {
       if (settled) return;
       settled = true;
@@ -241,8 +246,11 @@ const realSpawn: SpawnFn = (command, args, options) =>
       resolve({ stdout, stderr, exitCode });
     });
 
-    child.stdin.write(options.stdin);
-    child.stdin.end();
+    try {
+      child.stdin.end(options.stdin);
+    } catch (err) {
+      fail(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 
 /**
@@ -374,7 +382,7 @@ export function extractPromptParts(params: unknown): PromptParts {
 
 /**
  * Rewrite a production system prompt's tool-use instruction into a
- * write-this-file instruction.
+ * native structured-output instruction.
  *
  * The prompts say "Return your response via the `<tool>` tool" (see
  * `functions/src/prompts/extraction/resume.v1.md`). Left as-is, the
@@ -384,21 +392,18 @@ export function extractPromptParts(params: unknown): PromptParts {
  */
 export function buildCliSystemPrompt(
   parts: PromptParts,
-  outPath: string,
 ): string {
   const rewritten = parts.system.replace(
     new RegExp(
       `Return your response via the \`${parts.toolName}\` tool\\.`,
       "g",
     ),
-    "Write your response as a single JSON object to the output file named below.",
+    "Return your response as one JSON object.",
   );
   return (
     `${rewritten}\n\n` +
-    `OUTPUT CONTRACT: Write ONE JSON object — nothing else, no prose, no ` +
-    `markdown fence — to ${outPath}, using the Write tool. It must validate ` +
-    `against this JSON Schema:\n\n${JSON.stringify(parts.schema)}\n\n` +
-    `When the file is written, reply with exactly: DONE`
+    "OUTPUT CONTRACT: Return ONE JSON object — nothing else, no prose, no " +
+    "markdown fence. The CLI validates it against the supplied JSON Schema."
   );
 }
 
@@ -416,9 +421,9 @@ export function buildCliSystemPrompt(
  *     `apiKeyHelper` auth and never reads OAuth, so it returns
  *     "Not logged in" — it is the one overhead-reducing flag that
  *     defeats the entire purpose.
- *   - Asking for JSON on stdout does not survive real payloads (a
- *     ~20.8k-token response came back malformed at char 24,691). The
- *     agent writes to a file instead.
+ *   - `--json-schema` gives the CLI an output contract without giving
+ *     the model filesystem tools. It is deliberately paired with
+ *     `--tools ""`; real resumes and JDs are untrusted prompt input.
  */
 export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -431,8 +436,7 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
         const parts = extractPromptParts(params);
         const workdir = mkdtempSync(join(workdirRoot, "matchline-claude-cli-"));
         try {
-          const outPath = join(workdir, "response.json");
-          const system = buildCliSystemPrompt(parts, outPath);
+          const system = buildCliSystemPrompt(parts);
           const inputTokens = estimateTokens(system) + estimateTokens(parts.userContent);
 
           const result = await spawnFn(
@@ -441,26 +445,15 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
               "-p",
               "--model", parts.model,
               "--output-format", "json",
+              "--json-schema", JSON.stringify(parts.schema),
               "--system-prompt", system,
-              "--add-dir", workdir,
-              // Write ONLY. Codex P1: pre-authorizing `Read` let a
-              // prompt-injected fixture inspect files outside the
-              // workdir while the subprocess still holds the real
-              // HOME — which is where Claude credentials, SSH keys,
-              // and the op-preflight PAT cache live. `--add-dir`
-              // ADDS an allowed directory; it is not an OS-level
-              // sandbox, so it does not bound Read.
-              //
-              // Read was vestigial: it survived from an early
-              // prototype that wrote the resume to a file for the
-              // agent to read. The shipped adapter passes the resume
-              // on stdin and the prompt only ever asks for a Write,
-              // so removing it costs nothing.
-              //
-              // This closes the same threat as the env allowlist
-              // through the filesystem channel rather than the
-              // environment one.
-              "--allowedTools", "Write",
+              // Native schema enforcement replaces the former
+              // file-write workaround. An empty list is intentional:
+              // fixture text must not be able to grant itself a
+              // filesystem or shell capability through prompt
+              // injection.
+              "--tools", "",
+              "--safe-mode",
               "--disable-slash-commands",
               "--strict-mcp-config",
               "--mcp-config", '{"mcpServers":{}}',
@@ -497,35 +490,14 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
           }
           assertModelMatches(parts.model, envelope.models);
 
-          if (!existsSync(outPath)) {
-            // No file written — hand the pipeline a no_tool_use so its
-            // existing retry loop takes over.
-            //
-            // Codex P2 round 1: this used to report
-            // `envelope.outputTokens`, which is the CLI's TOTAL
-            // output — agent reasoning, tool-call scaffolding, and
-            // all — not the payload a production call would emit.
-            // Charging it as payload cost is the same category error
-            // as propagating `total_cost_usd`, and it lands
-            // specifically on failed attempts, so a model that fails
-            // often would look disproportionately expensive. Price
-            // the text the agent actually returned instead.
-            return noToolUseResponse(
-              parts.model,
-              `claude -p wrote no file at ${outPath}. Agent said: ${envelope.resultText.slice(0, 200)}`,
-              inputTokens,
-              estimateTokens(envelope.resultText),
-            );
-          }
-
-          const body = readFileSync(outPath, "utf8");
+          const body = envelope.resultText;
           let parsed: unknown;
           try {
             parsed = JSON.parse(body);
           } catch (err) {
             return noToolUseResponse(
               parts.model,
-              `claude -p wrote unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
+              `claude -p returned unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
               inputTokens,
               estimateTokens(body),
             );

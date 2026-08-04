@@ -395,7 +395,12 @@ async function main(): Promise<number> {
   const haveOpenAiKey =
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
-  const haveKeys = haveAnthropicKey && haveOpenAiKey;
+  // CLI token sources replace only Anthropic completion tokens;
+  // embeddings still call OpenAI. Requiring ANTHROPIC_API_KEY for a
+  // claude-cli run turned an otherwise authenticated subscription run
+  // into the no-key stub before the adapter could ever execute.
+  const hasLiveCredentials =
+    haveOpenAiKey && (tokenSource === "api" ? haveAnthropicKey : true);
 
 
   // Smoke mode pins to a SPECIFIC (resume, JD) pair via
@@ -463,7 +468,7 @@ async function main(): Promise<number> {
   // cache to be non-empty restores that contract exactly: nothing on
   // disk means nothing to serve, so fall back to the stub.
   const canAttemptOffline = cacheMode === "read-write" && cache.hasEntries();
-  const runnable = pairs.length > 0 && (haveKeys || canAttemptOffline);
+  const runnable = pairs.length > 0 && (hasLiveCredentials || canAttemptOffline);
   if (runnable) {
     // Codex P2: select each client on ITS OWN key. Gating both on
     // `haveKeys` meant a run with only ANTHROPIC_API_KEY set fell back
@@ -587,15 +592,17 @@ async function main(): Promise<number> {
     // No API keys (or no JD fixtures yet) — list each
     // resume fixture without scoring. Same shape as the
     // pre-#136 Phase 0 stub.
-    const stubReason = haveKeys
+    const stubReason = hasLiveCredentials
       ? "no JD fixtures available — extraction + matching needs at least one (resume, JD) pair"
       : cacheMode === "read-write"
-        ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running for real scoring"
+        ? tokenSource === "api"
+          ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running API scoring"
+          : "OPENAI_API_KEY not set — embeddings require it even with a subscription CLI token source"
         : // Keys absent AND the cache was explicitly disabled, so the
           // offline path isn't available either. Say which flag closed
           // it so the operator isn't left guessing (#389).
-          `ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set, and the stage cache is ` +
-          `in ${cacheMode} mode so it cannot serve the run offline — export the keys, ` +
+          `${tokenSource === "api" ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY" : "OPENAI_API_KEY"} not set, and the stage cache is ` +
+          `in ${cacheMode} mode so it cannot serve the run offline — export the required key, ` +
           "or drop --no-cache/--refresh-cache/--samples so a warm cache can be used";
     for (const r of selectedResumes) {
       fixtureResults.push({

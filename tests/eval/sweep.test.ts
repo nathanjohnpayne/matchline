@@ -174,7 +174,7 @@ describe("runVariant", () => {
     // variant — the run used the default prompt while the report
     // header claimed the override.
     let seen: Readonly<Record<string, string>> = {};
-    await runVariant(
+    const result = await runVariant(
       { label: "v", promptVersions: { "extraction/resume": "v2" } },
       {
         runCorpus: async () => {
@@ -185,6 +185,7 @@ describe("runVariant", () => {
       { basePromptVersions: { "parsing/jd": "v3" } },
     );
     expect(seen).toEqual({ "parsing/jd": "v3", "extraction/resume": "v2" });
+    expect(result.promptVersions).toEqual({ "parsing/jd": "v3", "extraction/resume": "v2" });
   });
 
   it("lets a variant override win over the command-wide value", async () => {
@@ -370,6 +371,21 @@ describe("recommend", () => {
     ).toBeNull();
   });
 
+  it("never recommends a partially failing variant", () => {
+    expect(
+      recommend([
+        variantResult({
+          label: "flaky-but-high-scoring",
+          extractionAccuracy: 0.95,
+          matchAccuracy: 0.95,
+          modeledCostPerFlowUsd: 0.1,
+          flows: 4,
+          failures: 1,
+        }),
+      ]),
+    ).toBeNull();
+  });
+
   it("returns null when nothing clears the 80/80 bar", () => {
     // The honest answer for #177's current baseline. Returning the
     // least-bad option here would read as "ship this".
@@ -437,6 +453,7 @@ describe("parseVariantFlag", () => {
 
   it.each([
     ["no label separator", "model.extraction=x"],
+    ["blank label", " :model.extraction=x"],
     ["no clause equals", "label:model.extraction"],
     ["empty value", "label:model.extraction="],
     ["unknown key prefix", "label:temperature=0.5"],

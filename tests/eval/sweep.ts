@@ -174,13 +174,18 @@ export async function runVariant(
   setModelOverrides(variant.models ?? {});
   // Variant overrides win on conflict; the command-wide ones survive
   // for keys the variant does not name.
-  setPromptVersionOverrides({
+  const effectivePromptVersions = {
     ...(options.basePromptVersions ?? {}),
     ...(variant.promptVersions ?? {}),
-  });
+  };
+  setPromptVersionOverrides(effectivePromptVersions);
   try {
     const results = await deps.runCorpus();
-    return rollUpVariant(variant, results);
+    // Report the configuration that actually ran. Returning the raw
+    // variant here used to hide command-wide --prompt flags behind
+    // "(defaults)", making a valid sweep look like it used a
+    // different prompt from the one that produced its measurements.
+    return rollUpVariant({ ...variant, promptVersions: effectivePromptVersions }, results);
   } finally {
     clearModelOverrides();
     clearPromptVersionOverrides();
@@ -296,7 +301,10 @@ export function recommend(results: readonly VariantResult[]): VariantResult | nu
       // principle be recommended. The two must agree on what counts
       // as a usable result.
       r.flows > 0 &&
-      r.failures < r.flows &&
+      // A recommendation is an instruction to ship, not a Pareto
+      // datapoint. Partial failures may remain useful in the table,
+      // but no failing variant may clear the production bar.
+      r.failures === 0 &&
       r.extractionAccuracy !== null &&
       r.matchAccuracy !== null &&
       r.extractionAccuracy >= QUALITY_BAR &&
@@ -414,6 +422,11 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
     );
   }
   const label = spec.slice(0, sep).trim();
+  if (label.length === 0) {
+    throw new Error(
+      `--variant label must not be empty (got ${JSON.stringify(spec)})`,
+    );
+  }
   const body = spec.slice(sep + 1);
   const models: Partial<Record<Stage, ModelConfig>> = {};
   const promptVersions: Record<string, string> = {};
