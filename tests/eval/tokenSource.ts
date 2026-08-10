@@ -384,13 +384,25 @@ export function extractPromptParts(params: unknown): PromptParts {
 export function buildCliSystemPrompt(
   parts: PromptParts,
 ): string {
-  const rewritten = parts.system.replace(
-    new RegExp(
-      `Return your response via the \`${parts.toolName}\` tool\\.`,
-      "g",
-    ),
-    "Return your response as one JSON object.",
-  );
+  const rewritten = parts.system
+    .replace(
+      new RegExp(
+        `Return your response via the \`${parts.toolName}\` tool\\.`,
+        "g",
+      ),
+      "Return your response as one JSON object.",
+    )
+    // Codex P2: the pipelines APPEND a retry reminder to the system
+    // prompt on attempts 2 and 3, and those reminders tell the model to
+    // match "the tool schema". The replacement above only touches the
+    // opening instruction, so a retrying CLI run was being told to
+    // satisfy a "tool schema" while having no tools at all — the exact
+    // confusion most likely to make the retry fail the same way again.
+    //
+    // (The finding described the reminder as naming
+    // `record_job_requirements`; it actually says "the tool schema".
+    // Same substance.)
+    .replace(/\bthe tool schema\b/g, "the required schema");
   return (
     `${rewritten}\n\n` +
     "OUTPUT CONTRACT: Return ONE JSON object — nothing else, no prose, no " +
@@ -452,6 +464,15 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
               // injection.
               "--tools", "",
               "--safe-mode",
+              // Codex P2: without this, `claude -p` writes the session
+              // — including the resume/JD text pasted into the prompt
+              // and the model's output — into Claude Code's on-disk
+              // store under the operator's real HOME. Fixture content
+              // is the user's actual career history, and once the
+              // corpus widens to real scraped material (#38, #87, #28)
+              // it is third-party data too. An eval run should leave
+              // no transcript behind.
+              "--no-session-persistence",
               "--disable-slash-commands",
               "--strict-mcp-config",
               "--mcp-config", '{"mcpServers":{}}',
@@ -488,27 +509,35 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
           }
           assertModelMatches(parts.model, envelope.models);
 
-          const body = envelope.resultText;
+          // Prefer the CLI's already-parsed structured output; fall
+          // back to parsing `result` for older CLI builds that only
+          // populate the string form.
           let parsed: unknown;
-          try {
-            parsed = JSON.parse(body);
-          } catch (err) {
-            return noToolUseResponse(
-              parts.model,
-              `claude -p returned unparseable JSON: ${err instanceof Error ? err.message : String(err)}`,
-              inputTokens,
-              estimateTokens(body),
-            );
+          if (envelope.structuredOutput !== undefined && envelope.structuredOutput !== null) {
+            parsed = envelope.structuredOutput;
+          } else {
+            try {
+              parsed = JSON.parse(envelope.resultText);
+            } catch (err) {
+              // Degrade to a missing tool_use block so the pipeline's
+              // existing 3-attempt retry loop handles it.
+              return noToolUseResponse(
+                parts.model,
+                `claude -p returned neither structured_output nor parseable result: ${
+                  err instanceof Error ? err.message : String(err)
+                }. First 200 chars: ${envelope.resultText.slice(0, 200)}`,
+                inputTokens,
+                estimateTokens(envelope.resultText),
+              );
+            }
           }
 
-          // Price the payload the model actually emitted, not the
-          // CLI's harness-inflated figure.
-          return toolUseResponse(
+        return toolUseResponse(
             parts.model,
             parts.toolName,
             parsed,
             inputTokens,
-            estimateTokens(body),
+            estimateTokens(envelope.resultText),
           );
         } finally {
           rmSync(workdir, { recursive: true, force: true });
@@ -521,6 +550,19 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
 interface ClaudeEnvelope {
   readonly isError: boolean;
   readonly resultText: string;
+  /**
+   * The `--json-schema` payload, already parsed by the CLI.
+   *
+   * Codex P1: this is the canonical field for structured output and
+   * is what the headless docs specify. `result` also carries the same
+   * content as a JSON string — measured, both are populated — so the
+   * previous `result`-only parser was not broken, and a 29-Unit
+   * end-to-end run through the real pipeline confirms that. But
+   * relying on the stringified copy means an extra `JSON.parse` that
+   * can fail, and depends on a field the docs do not promise for this
+   * mode. Prefer the parsed one; keep `result` as the fallback.
+   */
+  readonly structuredOutput: unknown;
   readonly outputTokens: number;
   /** Model ids Claude Code reports actually serving the request. */
   readonly models: readonly string[];
@@ -530,6 +572,7 @@ export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
   let raw: {
     is_error?: boolean;
     result?: string;
+    structured_output?: unknown;
     usage?: { output_tokens?: number };
     modelUsage?: Record<string, unknown>;
   };
@@ -545,6 +588,7 @@ export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
   return {
     isError: raw.is_error === true,
     resultText: typeof raw.result === "string" ? raw.result : "",
+    structuredOutput: raw.structured_output,
     outputTokens: raw.usage?.output_tokens ?? 0,
     models: Object.keys(raw.modelUsage ?? {}),
   };

@@ -13,6 +13,7 @@ import {
   computeFlowCount,
   estimateSpendForSource,
   estimatePlannedSpend,
+  cacheDiscriminatorsFor,
   filterToLabeledPairs,
   liveStageFraction,
   offlineOnlyClient,
@@ -154,6 +155,23 @@ describe("scaleSpendByProvider", () => {
     expect(scaled.anthropicUsd).toBe(full.anthropicUsd);
     expect(scaled.openaiUsd).toBe(0);
     expect(shouldBlock(checkCaps({ anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 }, scaled, DEFAULT_CAPS))).toBe(true);
+  });
+});
+
+describe("cacheDiscriminatorsFor", () => {
+  // Codex P1: unconditionally adding { tokenSource } changed all four
+  // stage hashes for ordinary `api` runs, because every entry the
+  // pre-#389 harness wrote had NO discriminator. An operator upgrading
+  // with a warm cache silently lost it and paid to re-warm — the exact
+  // cost the cache exists to remove.
+  it("keeps the legacy keyspace for the api source", () => {
+    expect(cacheDiscriminatorsFor("api")).toBeUndefined();
+  });
+
+  it("still separates CLI-produced entries from metered ones", () => {
+    // The property the discriminator was introduced for: comparing the
+    // two sources is only meaningful if they cannot collide.
+    expect(cacheDiscriminatorsFor("claude-cli")).toEqual({ tokenSource: "claude-cli" });
   });
 });
 

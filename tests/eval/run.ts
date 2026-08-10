@@ -84,6 +84,27 @@ function parseMode(argv: readonly string[]): Mode {
  * silently falls back to `api` would spend real money on a run the
  * operator believed was subscription-billed.
  */
+/**
+ * Cache-key discriminators for a token source.
+ *
+ * Codex P1: unconditionally adding `{ tokenSource }` changed all four
+ * stage hashes for ordinary `api` runs, because every entry written by
+ * the pre-#389 harness was keyed with NO discriminator. An operator
+ * upgrading with a fully warm cache would silently lose all of it and
+ * pay to re-warm — the exact cost #391 exists to remove.
+ *
+ * `api` therefore keeps the legacy keyspace (no discriminator), and
+ * only the CLI sources add one. That still gives the property the
+ * discriminator was introduced for: CLI-produced entries never collide
+ * with metered-API entries, which is what makes comparing them
+ * meaningful.
+ */
+export function cacheDiscriminatorsFor(
+  tokenSource: TokenSourceKind,
+): Readonly<Record<string, string>> | undefined {
+  return tokenSource === "api" ? undefined : { tokenSource };
+}
+
 export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
   const read = (raw: string | undefined): TokenSourceKind => {
     if (raw === undefined || raw.startsWith("--")) {
@@ -367,6 +388,19 @@ async function main(): Promise<number> {
   const tokenSource = parseTokenSource(argv);
   // Parsed and pricing-validated up front so a malformed --variant
   // fails loudly even on the no-keys stub path.
+  // Codex P3: `--varaint 'haiku:...'` was ignored, so `main` proceeded
+  // with an ordinary run that still spends the default model's tokens
+  // while producing none of the comparison the operator asked for.
+  for (const arg of argv) {
+    const flag = arg.split("=")[0]!;
+    if (flag !== "--variant" && /^--var/i.test(flag)) {
+      throw new Error(
+        `Unknown flag ${JSON.stringify(flag)} — did you mean --variant? ` +
+          `Refusing to run, because ignoring it would spend tokens on a ` +
+          `non-sweep run while looking like the sweep you asked for.`,
+      );
+    }
+  }
   const variants = parseVariants(argv, tokenSource);
   assertModelsPriced(variants);
   const cacheMode = resolveCacheMode(argv, samples);
@@ -518,7 +552,7 @@ async function main(): Promise<number> {
             "Reduce --variant count, or use --token-source claude-cli so LLM tokens " +
             "come from the subscription instead of the metered API.\n",
         );
-        console.log(formatReport(buildReport(mode, fixtureResults, sweepChecks, cacheRollup())));
+        console.log(formatReport(buildReport(mode, fixtureResults, sweepChecks, cacheRollup(), tokenSource)));
         return 1;
       }
       const runCorpus = async (): Promise<readonly RunForFixtureResult[]> => {
@@ -535,7 +569,7 @@ async function main(): Promise<number> {
                   anthropicClient,
                   openaiClient,
                   cache,
-                  cacheDiscriminators: { tokenSource },
+                  cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
                 },
               ),
             );
@@ -583,13 +617,25 @@ async function main(): Promise<number> {
               cache,
               // Keep API- and CLI-produced entries in separate
               // keyspaces — comparing them is the point.
-              cacheDiscriminators: { tokenSource },
+              cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
             },
           ),
         );
       }
       fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
     }
+  } else if (variants.length > 0) {
+    // Codex P2: a requested sweep that cannot run used to print the
+    // ordinary no-key fixture listing and exit 0, so CI and shell
+    // callers read "produced no comparison at all" as success. If the
+    // operator asked for a matrix, silence is the wrong answer.
+    console.error(
+      `\nRefusing to sweep ${variants.length} variant(s): ` +
+        (pairs.length === 0
+          ? "no labeled (resume, JD) pairs are available. Label at least one pair under tests/fixtures/expected-matches/.\n"
+          : `credentials for --token-source ${tokenSource} are missing.\n`),
+    );
+    return 2;
   } else {
     // No API keys (or no JD fixtures yet) — list each
     // resume fixture without scoring. Same shape as the
@@ -674,11 +720,11 @@ async function main(): Promise<number> {
       `\nRefusing to run ${refusedDescriptor}: projection exceeds a monthly cap.\n` +
         "Re-run with --smoke / smaller --samples or wait for next month's cap reset.\n",
     );
-    console.log(formatReport(buildReport(mode, fixtureResults, capChecks, cacheRollup())));
+    console.log(formatReport(buildReport(mode, fixtureResults, capChecks, cacheRollup(), tokenSource)));
     return 1;
   }
 
-  const report = buildReport(mode, fixtureResults, capChecks, cacheRollup());
+  const report = buildReport(mode, fixtureResults, capChecks, cacheRollup(), tokenSource);
   console.log(formatReport(report));
   console.log(
     `\n(fixtures available: ${resumeFixtures.length} resumes × ${jdFixtures.length} JDs)`,
@@ -877,6 +923,7 @@ function buildReport(
   fixtureResults: readonly FixtureResult[],
   capChecks: ReturnType<typeof checkCaps>,
   cache?: EvalReport["cache"],
+  tokenSource?: string,
 ): EvalReport {
   const modeledCosts = fixtureResults
     .map((r) => r.modeledCostUsd)
@@ -914,6 +961,10 @@ function buildReport(
     },
     promptVersions: resolvePromptVersionsForReport(),
     ...(cache !== undefined && { cache }),
+    // Codex P2: without this a `--token-source claude-cli` run's report
+    // was indistinguishable from a metered one, even though the source
+    // changes both execution and accounting.
+    ...(tokenSource !== undefined && { tokenSource }),
   };
 }
 

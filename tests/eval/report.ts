@@ -45,6 +45,12 @@ export interface EvalReport {
     readonly totalModeledCostUsd?: number | null;
   };
   /**
+   * Token source that produced this run (#389). Present whenever the
+   * harness knows it, so a subscription-billed report is not mistaken
+   * for a metered one.
+   */
+  readonly tokenSource?: string;
+  /**
    * Stage-cache rollup for the run (#389). Omitted when caching is
    * off, so a `--no-cache` run's report is byte-identical to the
    * pre-#389 shape.
@@ -78,7 +84,10 @@ export interface EvalReport {
  */
 export function formatReport(report: EvalReport): string {
   const lines: string[] = [];
-  lines.push(`# Matchline eval — mode: ${report.mode}`);
+  lines.push(
+    `# Matchline eval — mode: ${report.mode}` +
+      (report.tokenSource !== undefined ? `  token-source: ${report.tokenSource}` : ""),
+  );
 
   if (report.promptVersions && report.promptVersions.length > 0) {
     lines.push("");

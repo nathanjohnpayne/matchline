@@ -26,6 +26,7 @@ import {
 import type { RunForFixtureResult } from "./runForFixture.ts";
 import {
   assertModelsPriced,
+  assertPromptsExist,
   formatSweepReport,
   paretoFrontier,
   parseVariantFlag,
@@ -124,7 +125,7 @@ describe("assertModelsPriced", () => {
   it("allows variants that only override prompts", () => {
     expect(() =>
       assertModelsPriced([
-        { label: "prompt-only", promptVersions: { "extraction/resume": "v2" } },
+        { label: "prompt-only", promptVersions: { "extraction/resume": "v1" } },
       ]),
     ).not.toThrow();
   });
@@ -156,7 +157,7 @@ describe("runVariant", () => {
   it("applies prompt overrides and clears them afterwards", async () => {
     let seen: Readonly<Record<string, string>> = {};
     await runVariant(
-      { label: "v2-prompt", promptVersions: { "extraction/resume": "v2" } },
+      { label: "v2-prompt", promptVersions: { "extraction/resume": "v1" } },
       {
         runCorpus: async () => {
           seen = getPromptVersionOverrides();
@@ -164,7 +165,7 @@ describe("runVariant", () => {
         },
       },
     );
-    expect(seen).toEqual({ "extraction/resume": "v2" });
+    expect(seen).toEqual({ "extraction/resume": "v1" });
     expect(getPromptVersionOverrides()).toEqual({});
   });
 
@@ -173,6 +174,12 @@ describe("runVariant", () => {
     // flag passed alongside `--variant` was silently dropped for every
     // variant — the run used the default prompt while the report
     // header claimed the override.
+    //
+    // Distinct versions on purpose: with the same value on both keys
+    // this test cannot tell "layered" from "replaced". `runVariant`
+    // does not touch the filesystem — the prompt-file existence check
+    // is a `runSweep` pre-flight — so a not-yet-authored version is
+    // fine here.
     let seen: Readonly<Record<string, string>> = {};
     const result = await runVariant(
       { label: "v", promptVersions: { "extraction/resume": "v2" } },
@@ -182,25 +189,25 @@ describe("runVariant", () => {
           return [fixtureResult()];
         },
       },
-      { basePromptVersions: { "parsing/jd": "v3" } },
+      { basePromptVersions: { "parsing/jd": "v1" } },
     );
-    expect(seen).toEqual({ "parsing/jd": "v3", "extraction/resume": "v2" });
-    expect(result.promptVersions).toEqual({ "parsing/jd": "v3", "extraction/resume": "v2" });
+    expect(seen).toEqual({ "parsing/jd": "v1", "extraction/resume": "v2" });
+    expect(result.promptVersions).toEqual({ "parsing/jd": "v1", "extraction/resume": "v2" });
   });
 
   it("lets a variant override win over the command-wide value", async () => {
     let seen: Readonly<Record<string, string>> = {};
     await runVariant(
-      { label: "v", promptVersions: { "extraction/resume": "v2" } },
+      { label: "v", promptVersions: { "extraction/resume": "v1" } },
       {
         runCorpus: async () => {
           seen = getPromptVersionOverrides();
           return [fixtureResult()];
         },
       },
-      { basePromptVersions: { "extraction/resume": "v9" } },
+      { basePromptVersions: { "extraction/resume": "v1" } },
     );
-    expect(seen["extraction/resume"]).toBe("v2");
+    expect(seen["extraction/resume"]).toBe("v1");
   });
 
   it("clears overrides even when the corpus run throws", async () => {
@@ -212,7 +219,7 @@ describe("runVariant", () => {
         {
           label: "boom",
           models: { extraction: { provider: "anthropic", model: "claude-haiku-4-5-20251001" } },
-          promptVersions: { "extraction/resume": "v9" },
+          promptVersions: { "extraction/resume": "v1" },
         },
         {
           runCorpus: async () => {
@@ -459,17 +466,17 @@ describe("parseVariantFlag", () => {
   });
 
   it("parses a prompt override", () => {
-    const v = parseVariantFlag("v2:prompt.extraction/resume=v2", "api");
-    expect(v.promptVersions).toEqual({ "extraction/resume": "v2" });
+    const v = parseVariantFlag("v2:prompt.extraction/resume=v1", "api");
+    expect(v.promptVersions).toEqual({ "extraction/resume": "v1" });
   });
 
   it("parses several clauses in one variant", () => {
     const v = parseVariantFlag(
-      "both:model.extraction=claude-haiku-4-5-20251001,prompt.extraction/resume=v2",
+      "both:model.extraction=claude-haiku-4-5-20251001,prompt.extraction/resume=v1",
       "api",
     );
     expect(v.models?.extraction?.model).toBe("claude-haiku-4-5-20251001");
-    expect(v.promptVersions).toEqual({ "extraction/resume": "v2" });
+    expect(v.promptVersions).toEqual({ "extraction/resume": "v1" });
   });
 
   it.each([
@@ -529,8 +536,8 @@ describe("parseVariantFlag", () => {
   });
 
   it("accepts the two prompt keys the corpus does resolve", () => {
-    expect(() => parseVariantFlag("a:prompt.extraction/resume=v2", "api")).not.toThrow();
-    expect(() => parseVariantFlag("b:prompt.parsing/jd=v2", "api")).not.toThrow();
+    expect(() => parseVariantFlag("a:prompt.extraction/resume=v1", "api")).not.toThrow();
+    expect(() => parseVariantFlag("b:prompt.parsing/jd=v1", "api")).not.toThrow();
   });
 
   it("rejects a prompt version containing path separators", () => {
@@ -546,8 +553,8 @@ describe("parseVariantFlag", () => {
   });
 
   it("still accepts ordinary version strings", () => {
-    expect(() => parseVariantFlag("a:prompt.extraction/resume=v2", "api")).not.toThrow();
-    expect(() => parseVariantFlag("b:prompt.parsing/jd=v2-rc1", "api")).not.toThrow();
+    expect(() => parseVariantFlag("a:prompt.extraction/resume=v1", "api")).not.toThrow();
+    expect(() => parseVariantFlag("b:prompt.parsing/jd=v1-rc1", "api")).not.toThrow();
   });
 
   it("rejects an OpenAI model with the real reason", () => {
@@ -590,6 +597,42 @@ describe("parseVariants", () => {
     expect(() => parseVariants(["--variant", "--full"], "api")).toThrow(
       /requires a value/,
     );
+  });
+});
+
+describe("assertPromptsExist", () => {
+  // Codex P2: a nonexistent version used to fail only once its variant
+  // ran — after earlier variants had already spent a full corpus.
+  it("passes for versions that exist on disk", () => {
+    expect(() =>
+      assertPromptsExist([{ label: "a", promptVersions: { "extraction/resume": "v1" } }]),
+    ).not.toThrow();
+  });
+
+  it("refuses to start when a version file is missing", () => {
+    expect(() =>
+      assertPromptsExist([{ label: "b", promptVersions: { "extraction/resume": "v22" } }]),
+    ).toThrow(/not found/);
+  });
+
+  it("checks command-wide overrides too", () => {
+    expect(() =>
+      assertPromptsExist([], { "parsing/jd": "v99" }),
+    ).toThrow(/not found/);
+  });
+
+  it("reports every missing file at once", () => {
+    try {
+      assertPromptsExist([
+        { label: "a", promptVersions: { "extraction/resume": "v22" } },
+        { label: "b", promptVersions: { "parsing/jd": "v33" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      const m = (err as Error).message;
+      expect(m).toContain("v22");
+      expect(m).toContain("v33");
+    }
   });
 });
 

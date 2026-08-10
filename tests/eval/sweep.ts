@@ -52,7 +52,21 @@ import {
   setPromptVersionOverrides,
 } from "../../functions/src/prompts/loader.ts";
 
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { RunForFixtureResult } from "./runForFixture.ts";
+
+/** Where `loadPromptText` resolves `<stage>/<name>.<version>.md` from. */
+const PROMPTS_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "functions",
+  "src",
+  "prompts",
+);
 
 /**
  * Stages the eval corpus actually exercises.
@@ -116,6 +130,43 @@ export interface VariantResult {
  * by design (telemetry must never break a pipeline), so the guard has
  * to live here, up front, where it can still refuse to start.
  */
+/**
+ * Verify every prompt version a sweep names exists on disk, BEFORE any
+ * tokens are spent.
+ *
+ * Codex P2: `--variant a:model.extraction=... --variant
+ * b:prompt.extraction/resume=v22` used to fail only once variant b ran
+ * — after variant a had already spent a full corpus of tokens.
+ *
+ * This is a pre-flight rather than a parse-time check on purpose:
+ * `parseVariantFlag` validates SYNTAX and stays pure, so it remains
+ * testable without a filesystem, and the filesystem question is asked
+ * once, up front, alongside `assertModelsPriced`.
+ */
+export function assertPromptsExist(
+  variants: readonly SweepVariant[],
+  base: Readonly<Record<string, string>> = {},
+  promptsRoot: string = PROMPTS_ROOT,
+): void {
+  const missing: string[] = [];
+  const check = (key: string, version: string): void => {
+    const [stage, name] = key.split("/") as [string, string];
+    const file = join(promptsRoot, stage, `${name}.${version}.md`);
+    if (!existsSync(file)) missing.push(`${key}=${version} (${file})`);
+  };
+  for (const [k, v] of Object.entries(base)) check(k, v);
+  for (const variant of variants) {
+    for (const [k, v] of Object.entries(variant.promptVersions ?? {})) check(k, v);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `sweep: prompt version file(s) not found:\n  ${missing.join("\n  ")}\n` +
+        `Refusing to start — the failure would otherwise surface only after ` +
+        `earlier variants had already spent tokens.`,
+    );
+  }
+}
+
 export function assertModelsPriced(variants: readonly SweepVariant[]): void {
   const missing = new Set<string>();
   for (const variant of variants) {
@@ -171,6 +222,21 @@ export async function runVariant(
   deps: RunVariantDeps,
   options: RunVariantOptions = {},
 ): Promise<VariantResult> {
+  // Codex P2: a command-wide `--prompt validation/traceability=v2` (or
+  // a typo) was merged into every variant and reported as part of it,
+  // even though the corpus only resolves extraction/resume and
+  // parsing/jd. The table then credited a variant with a prompt that
+  // never ran. Variant-level keys are already checked at parse time;
+  // this checks the ones arriving from the command line.
+  for (const key of Object.keys(options.basePromptVersions ?? {})) {
+    if (!SWEEPABLE_PROMPT_KEYS.includes(key)) {
+      throw new Error(
+        `--prompt ${key} is not exercised by the eval corpus, so a sweep would ` +
+          `report it as part of every variant while changing nothing. ` +
+          `Sweepable prompt keys: ${SWEEPABLE_PROMPT_KEYS.join(", ")}.`,
+      );
+    }
+  }
   setModelOverrides(variant.models ?? {});
   // Variant overrides win on conflict; the command-wide ones survive
   // for keys the variant does not name.
@@ -574,6 +640,7 @@ export async function runSweep(
   options: RunVariantOptions = {},
 ): Promise<{ results: readonly VariantResult[]; report: string }> {
   assertModelsPriced(variants);
+  assertPromptsExist(variants, options.basePromptVersions ?? {});
   const results: VariantResult[] = [];
   for (const variant of variants) {
     results.push(await runVariant(variant, deps, options));
