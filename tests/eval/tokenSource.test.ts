@@ -231,6 +231,28 @@ describe("claudeCliClient", () => {
     expect(block.input).toEqual({ units: ["a"] });
   });
 
+  // Codex P2: when the CLI populates ONLY `structured_output` and
+  // leaves `result` empty (the documented preferred-field case above),
+  // pricing `estimateTokens(envelope.resultText)` on the empty string
+  // recorded zero output tokens for a real, non-empty response —
+  // understating `$ / flow` for every structured-output run.
+  it("prices the structured output, not the empty result string, when structured_output is populated", async () => {
+    const structuredOutput = { units: ["a", "b", "c"] };
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async () => ({
+        stdout: claudeEnvelope({ result: "", structured_output: structuredOutput }),
+        stderr: "",
+        exitCode: 0,
+      }),
+    });
+
+    const res = await client.messages.create(params() as never);
+    const usage = (res as unknown as { usage: { output_tokens: number } }).usage;
+    expect(usage.output_tokens).toBeGreaterThan(0);
+    expect(usage.output_tokens).toBe(estimateTokens(JSON.stringify(structuredOutput)));
+  });
+
   // #392. The ORIGINAL test here asserted only that the two model API
   // keys had been removed — which passes happily while OP_PREFLIGHT_*
   // PATs, GH_TOKEN, and GCP credential paths sail through. That is the

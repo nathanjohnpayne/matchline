@@ -119,19 +119,37 @@ export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
     }
     return raw;
   };
+  // Codex P2: scan every occurrence rather than returning on the
+  // first. A composed command (a wrapper prepending `--token-source
+  // api`, a caller appending `--token-source claude-cli`) previously
+  // selected the wrapper's value silently — the metered API ran a
+  // billing source the caller explicitly overrode. Repeats of the
+  // SAME value are harmless (composition can legitimately produce
+  // them); a genuine conflict between two different values is a
+  // caller error and fails loudly rather than picking one silently.
+  let found: TokenSourceKind | undefined;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg === "--token-source") return read(argv[i + 1]);
-    if (arg.startsWith("--token-source=")) {
-      return read(arg.slice("--token-source=".length));
-    }
-    if (arg.startsWith("--token-")) {
+    let value: TokenSourceKind | undefined;
+    if (arg === "--token-source") {
+      value = read(argv[i + 1]);
+      i += 1;
+    } else if (arg.startsWith("--token-source=")) {
+      value = read(arg.slice("--token-source=".length));
+    } else if (arg.startsWith("--token-")) {
       throw new Error(
         `Unknown token-source option ${JSON.stringify(arg)}. Use --token-source.`,
       );
     }
+    if (value === undefined) continue;
+    if (found !== undefined && found !== value) {
+      throw new Error(
+        `--token-source specified with conflicting values (${found} vs ${value}); pass it once`,
+      );
+    }
+    found = value;
   }
-  return "api";
+  return found ?? "api";
 }
 
 /**
@@ -567,6 +585,10 @@ async function main(): Promise<number> {
                 },
                 {
                   anthropicClient,
+                  // Codex P2: only `api` is metered — CLI sources are
+                  // subscription-billed, so their Anthropic usage must
+                  // not count as real spend in `costUsd`.
+                  anthropicIsMetered: tokenSource === "api",
                   openaiClient,
                   cache,
                   cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
@@ -613,6 +635,10 @@ async function main(): Promise<number> {
             { resumeFixtureId, jdFixtureId },
             {
               anthropicClient,
+              // Codex P2: only `api` is metered — CLI sources are
+              // subscription-billed, so their Anthropic usage must
+              // not count as real spend in `costUsd`.
+              anthropicIsMetered: tokenSource === "api",
               openaiClient,
               cache,
               // Keep API- and CLI-produced entries in separate

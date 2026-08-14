@@ -64,6 +64,17 @@ const EVAL_ROLE_ID = "eval-role";
 export interface RunForFixtureDeps {
   /** Anthropic client used by extraction + parsing. */
   readonly anthropicClient: Anthropic;
+  /**
+   * Whether `anthropicClient` is billed by the metered API. Defaults
+   * to `true`. Codex P2: a subscription-backed `claude-cli` token
+   * source produced usage records that were priced into `costUsd`
+   * exactly like a real API call, so a `--token-source claude-cli`
+   * run reported the modeled Anthropic cost as "real new spend" —
+   * only the OpenAI embeddings were actually metered. Set to `false`
+   * so the Anthropic-served stages still feed `modeledCostUsd` (via
+   * `modeledUsage`, unconditionally) but contribute $0 to `costUsd`.
+   */
+  readonly anthropicIsMetered?: boolean;
   /** OpenAI client used by embedding. */
   readonly openaiClient: OpenAI;
   /** Override fixture root for tests. */
@@ -397,7 +408,16 @@ async function runForFixtureInner(
   getCostAccum: () => number,
   tally: StageTally,
 ): Promise<RunForFixtureResult> {
-  const { cache, cacheDiscriminators } = deps;
+  const { cache, cacheDiscriminators, anthropicIsMetered = true } = deps;
+  // Codex P2: the Anthropic-served stages (extraction, parsing) must
+  // not add to `costAccum` when `anthropicClient` is a subscription
+  // CLI adapter — real spend there is $0. `modeledUsage` still gets
+  // every usage record regardless (via `runStage`'s own tracking), so
+  // `modeledCostUsd` is unaffected and still ranks the CLI source
+  // correctly against `api`.
+  const recordAnthropicCost = anthropicIsMetered
+    ? recordCost
+    : async (): Promise<number> => 0;
   const extractionModel = modelFor("extraction");
   const parsingModel = modelFor("requirement_parsing");
   // 1. Load fixtures.
@@ -427,7 +447,7 @@ async function runForFixtureInner(
       promptVersion: promptFingerprint("extraction", "resume"),
       input: resumeText,
     },
-    recordCost,
+    recordAnthropicCost,
     (record) =>
       extractFromResume(
         resumeText,
@@ -488,7 +508,7 @@ async function runForFixtureInner(
       promptVersion: promptFingerprint("parsing", "jd"),
       input: jdText,
     },
-    recordCost,
+    recordAnthropicCost,
     (record) =>
       parseJobRequirements(
         jdText,

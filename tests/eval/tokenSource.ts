@@ -513,8 +513,15 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
           // back to parsing `result` for older CLI builds that only
           // populate the string form.
           let parsed: unknown;
+          let outputText: string;
           if (envelope.structuredOutput !== undefined && envelope.structuredOutput !== null) {
             parsed = envelope.structuredOutput;
+            // Codex P2: `resultText` is empty when the CLI populates
+            // only `structured_output`. Pricing the empty string
+            // recorded zero output tokens for a real response,
+            // understating `$ / flow`. Price the serialized structured
+            // payload instead — it's the actual output content.
+            outputText = JSON.stringify(parsed);
           } else {
             try {
               parsed = JSON.parse(envelope.resultText);
@@ -530,6 +537,7 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
                 estimateTokens(envelope.resultText),
               );
             }
+            outputText = envelope.resultText;
           }
 
         return toolUseResponse(
@@ -537,7 +545,7 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
             parts.toolName,
             parsed,
             inputTokens,
-            estimateTokens(envelope.resultText),
+            estimateTokens(outputText),
           );
         } finally {
           rmSync(workdir, { recursive: true, force: true });

@@ -325,6 +325,73 @@ describe("runForFixture", () => {
     expect(result.costUsd).toBeLessThan(1); // a tiny test run; sanity bound
   });
 
+  it("anthropicIsMetered=false: costUsd excludes Anthropic usage, modeledCostUsd does not", async () => {
+    // Codex P2: a subscription-backed `claude-cli` token source was
+    // priced into `costUsd` exactly like a real API call. Same
+    // extraction/parsing responses as the HAPPY PATH test above (2
+    // Units, 2 Requirements — 100/50 mock Anthropic token counts per
+    // call), run twice: once metered (default), once not.
+    const extractionResp = {
+      units: [
+        {
+          raw_text: "Led Amazon Kepler launch",
+          normalized_summary:
+            "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack",
+          unit_type: "project",
+          skills: ["platform launch", "partner integration"],
+          tools: ["NCP", "Fire TV"],
+          domains: ["streaming video infrastructure"],
+          seniority_signals: [],
+          scope_signals: [],
+          business_outcomes: [],
+          metrics: [],
+          evidence_type: "verified",
+          confidence_score: 0.9,
+        },
+      ],
+    };
+    const parsingResp = {
+      requirements: [
+        {
+          raw_text: "8 years of experience in product management",
+          normalized_requirement: "8 years of product management experience",
+          category: "experience_level",
+          keywords: [],
+          tools: [],
+          domains: [],
+          priority: "high",
+          must_have: true,
+          extracted_from: "qualifications",
+        },
+      ],
+    };
+    const input = {
+      resumeFixtureId: "nathan-2026",
+      jdFixtureId: "google-compute-spm-2026",
+    };
+
+    const metered = await runForFixture(input, {
+      anthropicClient: makeMockAnthropic([extractionResp, parsingResp]),
+      openaiClient: makeMockOpenAi(),
+      // anthropicIsMetered omitted — defaults to true.
+    });
+    const unmetered = await runForFixture(input, {
+      anthropicClient: makeMockAnthropic([extractionResp, parsingResp]),
+      openaiClient: makeMockOpenAi(),
+      anthropicIsMetered: false,
+    });
+
+    expect(metered.ok).toBe(true);
+    expect(unmetered.ok).toBe(true);
+    // Both runs modeled identical usage, so modeledCostUsd must match
+    // regardless of which billing source actually paid for it.
+    expect(unmetered.modeledCostUsd).toBeCloseTo(metered.modeledCostUsd, 12);
+    // costUsd must drop by exactly the Anthropic-priced portion —
+    // only the OpenAI embeddings remain real spend.
+    expect(unmetered.costUsd).toBeLessThan(metered.costUsd);
+    expect(unmetered.costUsd).toBeGreaterThan(0); // OpenAI embeddings are still metered
+  });
+
   it("FAILURE CAPTURE: extraction throws → result.ok=false, result.error populated, accuracies=0", async () => {
     const failingAnthropic = {
       messages: {

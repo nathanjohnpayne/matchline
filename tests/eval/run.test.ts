@@ -194,6 +194,21 @@ describe("parseTokenSource", () => {
       /Unknown token-source option/,
     );
   });
+
+  // Codex P2: composed commands (a wrapper prepending one value, a
+  // caller appending another) previously selected whichever occurrence
+  // came first in argv and silently ignored the rest.
+  it("scans every occurrence: repeats of the same value are fine, conflicts throw", () => {
+    expect(
+      parseTokenSource(["--token-source", "api", "--token-source", "api"]),
+    ).toBe("api");
+    expect(() =>
+      parseTokenSource(["--token-source", "api", "--token-source", "claude-cli"]),
+    ).toThrow(/conflicting values/);
+    expect(() =>
+      parseTokenSource(["--token-source=claude-cli", "--token-source=api"]),
+    ).toThrow(/conflicting values/);
+  });
 });
 
 describe("estimateSpendForSource", () => {
