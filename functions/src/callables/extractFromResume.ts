@@ -24,6 +24,41 @@ interface ExtractFromResumeData {
   readonly text?: string;
 }
 
+/**
+ * Wall-clock budget for one `extractFromResume` invocation.
+ *
+ * **Why this is not the default.** Firebase Functions v2 defaults
+ * `timeoutSeconds` to 60. The pipeline behind this callable cannot
+ * finish in 60s on a real resume: `extraction/resume.ts` runs up to
+ * `MAX_ATTEMPTS` (3) Anthropic calls at `MAX_OUTPUT_TOKENS`
+ * (16,384), and that module's own comment records that Nathan's
+ * 9k-character resume serializes to ~10-12k output tokens — a
+ * multi-minute single call before any retry fires. Embeddings and
+ * the Firestore batch commit land on top of that.
+ *
+ * When the budget is exceeded, Cloud Run kills the container
+ * mid-request. The terminated response never gets the CORS headers
+ * the callable protocol needs, so the browser's `fetch` rejects and
+ * the client SDK reports a bare `internal` with no diagnostic —
+ * which is exactly the failure #422 reported from `/onboarding`.
+ *
+ * **Why 540 and not more.** 540s (9 min) covers a full-length first
+ * attempt plus one full-length retry, with room for the embed +
+ * persist tail. A pathological run that burns all three attempts at
+ * the token ceiling can still exceed it; that is a deliberate
+ * trade — the alternative is making a user wait ~13 minutes to be
+ * told extraction failed. Reducing the wall clock itself (streaming,
+ * chunking the resume, or a tighter output budget) is the real
+ * long-term fix and is tracked separately.
+ *
+ * Exported so `tests/extract-timeout-budget.test.ts` can assert the
+ * client-side callable timeout in `src/services/extraction.ts` stays
+ * strictly greater than this value. If the client gives up first,
+ * the server's structured `HttpsError` is lost and the user sees a
+ * bare code again.
+ */
+export const EXTRACT_TIMEOUT_SECONDS = 540;
+
 export const extractFromResumeCallable = onCall(
   {
     // Secret binding: the pipeline's Anthropic client (extraction)
@@ -31,6 +66,7 @@ export const extractFromResumeCallable = onCall(
     // via Firebase secret params at call time. Listing both here
     // materializes the secrets into the function's runtime env.
     secrets: [anthropicKey, openaiKey],
+    timeoutSeconds: EXTRACT_TIMEOUT_SECONDS,
   },
   async (request) => {
     if (!request.auth?.uid) {
