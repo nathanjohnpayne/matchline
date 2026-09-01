@@ -78,6 +78,16 @@ export interface MatchCardProps {
  *
  * Same conservative default `buildBreakdownRows` already
  * applies to these rows. Issue #440.
+ *
+ * **Deliberately states no remedy.** The obvious copy — "re-run
+ * matching to regenerate it" — describes an action that can
+ * destroy data. A rematch clear-and-replaces the Role's match
+ * set, and Units that are `reembed_pending` are excluded from
+ * scoring, so their rows are deleted with no replacement and
+ * the user's approve/reject flags on those pairs go with them.
+ * Telling someone to trigger that in order to fix a display
+ * gap would be advising the worst available action. Flagged by
+ * nathanpayne-codex in the Phase 4b review of #438.
  */
 function isRationaleTrustworthy(match: UnitMatch): boolean {
   return match.component_applicability !== undefined;
@@ -142,8 +152,8 @@ export default function MatchCard({
           data-testid="match-rationale-untrusted"
         >
           Explanation unavailable — this match predates the check that stops a
-          rationale describing an axis the engine never evaluated. Re-run
-          matching to regenerate it.
+          rationale describing an axis the engine never evaluated, so its
+          stored wording can&rsquo;t be trusted. The score above is unchanged.
         </p>
       )}
       <footer className="flex items-center gap-2 pt-1">

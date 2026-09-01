@@ -215,6 +215,11 @@ describe("MatchCard: legacy rationale is not presented as a claim (#440)", () =>
     expect(html).not.toContain("Matched on skill overlap");
     expect(html).not.toContain("Evidence:");
     expect(html).toContain("Explanation unavailable");
+    // Must not advise a rematch: that clear-and-replaces the
+    // Role's matches, and rows for `reembed_pending` Units are
+    // dropped with their approval flags. Suggesting it to fix a
+    // display gap would advise the worst available action.
+    expect(html).not.toMatch(/re-?run matching/i);
   });
 
   it("renders both normally once the match carries applicability", () => {
