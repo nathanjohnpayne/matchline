@@ -151,8 +151,18 @@ The sweep refuses to start rather than produce a mislabeled table. It
 rejects a model with no `rates.ts` entry (it would report $0.00 and win
 on cost), a misspelled stage, a stage the corpus never runs
 (`generation`, `validation`, `rationale`), an OpenAI model (see #402),
+a prompt key the corpus never resolves — only `extraction/resume` and
+`parsing/jd` are exercised, so `--variant
+'x:prompt.validation/traceability=v2'` and a command-wide `--prompt`
+naming any other key both fail before the run starts — a variant label
+outside `[A-Za-z0-9._-]` (it would corrupt the Markdown results table),
 and a prompt version containing path separators (it would resolve to a
 different prompt file while the table credited this variant).
+
+Unknown command-line flags are rejected too, for the same reason one
+level up: an ignored `--tokn-source claude-cli` would leave the default
+metered API selected and spend real money on a run you meant to bill to
+a subscription.
 
 ### API keys
 

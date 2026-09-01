@@ -13,6 +13,7 @@ import {
   computeFlowCount,
   estimateSpendForSource,
   estimatePlannedSpend,
+  assertKnownFlags,
   cacheDiscriminatorsFor,
   filterToLabeledPairs,
   liveStageFraction,
@@ -190,6 +191,54 @@ describe("cacheDiscriminatorsFor", () => {
     });
     // The api source keeps the legacy keyspace — no adapter is involved.
     expect(cacheDiscriminatorsFor("api")).toBeUndefined();
+  });
+});
+
+describe("assertKnownFlags", () => {
+  it("accepts every documented flag, in both value forms", () => {
+    expect(() =>
+      assertKnownFlags([
+        "--full",
+        "--smoke",
+        "--samples", "5",
+        "--samples=5",
+        "--prompt", "extraction/resume=v1",
+        "--prompt=extraction/resume=v1",
+        "--variant", "a:model.extraction=claude-haiku-4-5-20251001",
+        "--token-source", "claude-cli",
+        "--token-source=claude-cli",
+        "--no-cache",
+        "--refresh-cache",
+      ]),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["--tokn-source", "a typo before the --token- prefix"],
+    ["--token_source", "an underscore instead of a hyphen"],
+    ["--tokensource", "a missing separator"],
+    ["--nocache", "a missing hyphen"],
+    ["--verbose", "a flag this harness never had"],
+  ])("rejects %j — %s", (flag) => {
+    // Codex P1: each per-parser guard only covers typos near its own
+    // flag, so these all slipped through and left the metered-API
+    // default selected. With both keys present that is a full corpus of
+    // real Anthropic spend on a run the operator asked to bill to a
+    // subscription.
+    expect(() => assertKnownFlags([flag, "claude-cli"])).toThrow(/Unknown option/);
+  });
+
+  it("does not mistake a flag's value for a flag", () => {
+    expect(() => assertKnownFlags(["--samples", "5"])).not.toThrow();
+    expect(() =>
+      assertKnownFlags(["--variant", "a:prompt.extraction/resume=v1"]),
+    ).not.toThrow();
+  });
+
+  it("reports every unknown flag at once", () => {
+    expect(() => assertKnownFlags(["--nope", "--also-nope"])).toThrow(
+      /"--nope", "--also-nope"/,
+    );
   });
 });
 

@@ -115,6 +115,54 @@ export function cacheDiscriminatorsFor(
     : { tokenSource, cliAdapter: String(CLI_ADAPTER_VERSION) };
 }
 
+/**
+ * Every flag `main` understands. Anything else is an operator typo.
+ */
+const KNOWN_FLAGS: readonly string[] = [
+  "--full",
+  "--smoke",
+  "--samples",
+  "--prompt",
+  "--variant",
+  "--token-source",
+  "--no-cache",
+  "--refresh-cache",
+];
+
+/**
+ * Reject unknown argv before any dispatch decision is made.
+ *
+ * Codex P1: the per-parser guards each catch only their own
+ * neighbourhood — `parseTokenSource` rejects `--token-*`,
+ * `parseVariants` rejects `--variant*`. A typo that misses those
+ * prefixes entirely (`--tokn-source claude-cli`, `--token_source
+ * claude-cli`) matched no guard, was silently ignored, and left
+ * `parseTokenSource` returning its `api` default. With both keys
+ * present `main` then dispatched a full run of METERED Anthropic calls
+ * for an operator who had asked for the subscription — the exact
+ * silent-spend failure the token-source flag exists to prevent, one
+ * keystroke away.
+ *
+ * A closed allowlist is the only shape that closes the whole class:
+ * per-parser prefix checks can only ever cover the typos near their
+ * own flag. Unknown argv is now a hard error rather than a no-op.
+ */
+export function assertKnownFlags(argv: readonly string[]): void {
+  const unknown = argv.filter((arg) => {
+    if (!arg.startsWith("--")) return false;
+    const eq = arg.indexOf("=");
+    return !KNOWN_FLAGS.includes(eq === -1 ? arg : arg.slice(0, eq));
+  });
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown option(s): ${unknown.map((u) => JSON.stringify(u)).join(", ")}. ` +
+        `Known flags: ${KNOWN_FLAGS.join(", ")}. Refusing to run — an ignored ` +
+        `flag silently falls back to the metered API default, spending real ` +
+        `money on a run you may have meant to bill to a subscription.`,
+    );
+  }
+}
+
 export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
   const read = (raw: string | undefined): TokenSourceKind => {
     if (raw === undefined || raw.startsWith("--")) {
@@ -400,6 +448,9 @@ function mean(values: readonly number[]): number | null {
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
+  // Codex P1: before ANY dispatch decision, including the metered-API
+  // default that an ignored `--token-source` typo silently selects.
+  assertKnownFlags(argv);
   const mode = parseMode(argv);
   const samples = parseSamples(argv);
   // Apply `--prompt stage/name=version` overrides BEFORE any
