@@ -693,6 +693,34 @@ describe("parseVariantFlag", () => {
     expect(() => parseVariantFlag("b:prompt.parsing/jd=v1-rc1", "api")).not.toThrow();
   });
 
+  it("rejects a priced non-Anthropic model that the old heuristic missed", () => {
+    // Codex P2: the previous OpenAI denylist (`/^(gpt|o[0-9])/`)
+    // classified anything unrecognized as Anthropic.
+    // `text-embedding-3-small` matched neither pattern AND has a
+    // rates.ts entry, so both pre-flights passed it and the sweep would
+    // have sent an OpenAI model id to the Anthropic client mid-run,
+    // after earlier variants had already spent.
+    expect(() =>
+      parseVariantFlag("x:model.extraction=text-embedding-3-small", "api"),
+    ).toThrow(/not an Anthropic model/);
+  });
+
+  it("rejects an unknown provider's model id outright", () => {
+    // The allowlist's point: refuse ids for providers this repo has no
+    // client for, rather than defaulting them to Anthropic.
+    for (const id of ["gemini-2.5-pro", "llama-4-70b", "mistral-large"]) {
+      expect(() => parseVariantFlag(`x:model.extraction=${id}`, "api")).toThrow(
+        /not an Anthropic model/,
+      );
+    }
+  });
+
+  it("still accepts the real Anthropic model ids", () => {
+    for (const id of ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"]) {
+      expect(() => parseVariantFlag(`x:model.extraction=${id}`, "api")).not.toThrow();
+    }
+  });
+
   it("rejects an OpenAI model with the real reason", () => {
     // The pipeline rejects OpenAI models before calling a token-source
     // adapter, so fail at parse time rather than mislabeling a sweep.

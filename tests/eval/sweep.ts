@@ -695,18 +695,31 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
         );
       }
       // The eval pipeline currently accepts Anthropic extraction and
-      // parsing models only. Refuse an OpenAI model here rather than
+      // parsing models only. Refuse anything else here rather than
       // displaying a variant name that will fail before a client call.
-      const provider = /^(gpt|o[0-9])/.test(value) ? "openai" : "anthropic";
-      if (provider !== "anthropic") {
+      //
+      // Codex P2: this was an OpenAI DENYLIST by name shape
+      // (`/^(gpt|o[0-9])/`), which classified anything unrecognized as
+      // Anthropic. `text-embedding-3-small` matched neither pattern, so
+      // it was labelled `anthropic` — and because it has a `rates.ts`
+      // entry, `assertModelsPriced` passed too. Both pre-flights waved
+      // through a matrix that would send an OpenAI model id to the
+      // Anthropic client, and only mid-run, after earlier variants had
+      // already spent a corpus of tokens.
+      //
+      // An ALLOWLIST inverts the failure: every Anthropic model id is
+      // `claude-*`, so anything else is refused up front whatever
+      // provider it belongs to, including one that does not exist yet.
+      if (!/^claude-/.test(value)) {
         throw new Error(
-          `--variant: model ${JSON.stringify(value)} is an OpenAI model, but ` +
+          `--variant: model ${JSON.stringify(value)} is not an Anthropic model, but ` +
             `extractFromResume/parseJobRequirements hard-require provider "anthropic" ` +
-            `and throw before the injected client is called. Sweeping OpenAI models ` +
-            `needs that guard relaxed first — model sweeps are Anthropic-only today.`,
+            `and throw before the injected client is called. Model sweeps are ` +
+            `Anthropic-only today (ids beginning "claude-"); sweeping another ` +
+            `provider needs that guard relaxed first.`,
         );
       }
-      models[stageRaw] = { provider, model: value };
+      models[stageRaw] = { provider: "anthropic", model: value };
     } else if (key.startsWith("prompt.")) {
       const promptKey = key.slice("prompt.".length);
       // Codex P2 round 2: the same silent-mislabel hazard the stage

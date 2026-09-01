@@ -391,6 +391,16 @@ describe("claudeCliClient", () => {
       OPENAI_API_KEY: "sk-oai-leak",
     };
     for (const [k, v] of Object.entries(leaky)) vi.stubEnv(k, v);
+    // Codex P2: stub the proxy / CA settings rather than relying on
+    // whatever the runner happens to export. Without this the test only
+    // exercised them on a proxied machine — and on such a machine it
+    // FAILED, because the permitted set below had not been updated when
+    // they were added to the allowlist. Stubbing makes the assertion
+    // deterministic everywhere instead of environment-dependent.
+    vi.stubEnv("HTTPS_PROXY", "http://proxy:8080");
+    vi.stubEnv("HTTP_PROXY", "http://proxy:8080");
+    vi.stubEnv("NO_PROXY", "localhost");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/etc/ssl/corp.pem");
 
     let seenEnv: NodeJS.ProcessEnv | undefined;
     const client = cliClient({
@@ -409,9 +419,18 @@ describe("claudeCliClient", () => {
     // And the allowlist is a closed set, not a denylist of known-bad
     // names — so a NEW secret added to the parent env later is
     // withheld without anyone updating this test.
+    //
+    // Deliberately hand-written rather than derived from
+    // `ENV_ALLOWLIST`: duplicating it is what makes widening the
+    // allowlist fail here until someone updates this list on purpose.
+    // Deriving it would let a future `GH_TOKEN` entry pass silently,
+    // which is the whole thing this test exists to prevent.
     const permitted = new Set([
       "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM",
       "HOME", "CLAUDE_CODE_OAUTH_TOKEN",
+      // Network reachability, not credentials — see ENV_ALLOWLIST.
+      "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+      "NO_PROXY", "no_proxy", "NODE_EXTRA_CA_CERTS",
     ]);
     for (const key of Object.keys(seenEnv ?? {})) {
       expect(permitted.has(key), `unexpected variable in child env: ${key}`).toBe(true);
