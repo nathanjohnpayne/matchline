@@ -32,22 +32,35 @@
  * the Matches tab; they just can't silently satisfy a hard
  * requirement.
  *
- * **`structural_evidence === undefined` counts as satisfying,
- * and that is the pre-existing behaviour, not a claim that
- * such rows are sound.** They aren't: matches written before
- * this field existed were scored under a rule that paid the
- * same neutrals (both-empty Jaccard stored 0.5; unconstrained
- * seniority and scope stored 1.0), so a legacy row can carry
- * the identical unearned credit. Treating it as satisfying
- * simply leaves those rows behaving exactly as they did
- * before this change — a Role the user has already matched
- * does not silently sprout gaps — and they gain the gate the
- * next time matching runs for any reason.
+ * **Legacy rows and the third state (#441).** Matches written
+ * before `structural_evidence` existed were scored under a rule
+ * that paid the same neutrals (both-empty Jaccard stored 0.5;
+ * unconstrained seniority and scope stored 1.0), so a legacy row
+ * can carry the identical unearned credit. #435 let them count
+ * as satisfying anyway, so that deploying the gate could not
+ * make an already-matched Role sprout gaps overnight — a
+ * deliberate stopgap, not a claim that such rows are sound.
  *
- * Healing them automatically on Role open is deliberately NOT
- * part of this change. That mechanism is a data migration
- * with its own failure modes, and it is being reviewed on its
- * own PR rather than riding along with the scoring fix.
+ * `deriveMatchEvidence` (#441) is what retires the stopgap. It
+ * resolves each legacy row from its ID-linked Unit/Requirement
+ * pair, read-only, and hands the verdicts in through `evidence`.
+ * Three outcomes, not two:
+ *
+ *   - `evidenced`     → can cover a must-have.
+ *   - `unevidenced`   → cannot, exactly like a stored `false`.
+ *   - `unverifiable`  → we could not check. Reported as a gap of
+ *     its own kind rather than silently passing or silently
+ *     failing, because "there is no match for this" and "there
+ *     is a match we could not verify" are different things to
+ *     tell someone about to write an application.
+ *
+ * **Absent `evidence`, the permissive rule stands.** The map is
+ * optional and a match missing from it falls back to the old
+ * reading. That is the required degradation: a derivation that
+ * fails must never tighten into inventing gaps, so a failed or
+ * still-in-flight call leaves the view exactly as it was in
+ * #435. The caller surfaces the failure; it does not change the
+ * verdicts.
  *
  * **Rejected matches do NOT count as satisfying.**
  * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
@@ -82,35 +95,93 @@ import type {
   JobRequirementUnit,
   UnitMatch,
 } from "../../types/capability.ts";
+// Type-only, and therefore erased before bundling: nothing from
+// the deployed functions package reaches the client. Declaring a
+// second copy of this union in the app is the drift #443 exists
+// to stop, so the callable's response shape has exactly one
+// author. `types/evidence.ts` is a leaf with no imports —
+// importing the *logic* module instead would drag `node:fs` in
+// through the ontology loader, which the app has no types for.
+import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
 
 export const GAP_THRESHOLD = 0.4;
+
+/**
+ * Why a Requirement appears in the Gaps list.
+ *
+ * `unmet` is the original meaning: nothing qualifies. `unverifiable`
+ * is #441's addition: something might qualify, but the evidence
+ * derivation could not reach a verdict on it — an orphaned
+ * Requirement id, a deleted Unit, or a Unit the matching pipeline
+ * currently declines to score. The user's next action differs
+ * between the two, so the view must not merge them.
+ */
+export type GapStatus = "unmet" | "unverifiable";
+
+export interface Gap {
+  readonly requirement: JobRequirementUnit;
+  readonly status: GapStatus;
+}
+
+/**
+ * Resolve one match to the verdict this function should act on.
+ *
+ * The derived map wins when it has an entry, because it already
+ * folds in the stored field. Otherwise fall back to the persisted
+ * boolean, and finally to the #435 permissive reading for a
+ * legacy row we have no verdict for.
+ */
+function verdictFor(
+  match: UnitMatch,
+  evidence: ReadonlyMap<string, EvidenceVerdict> | undefined,
+): EvidenceVerdict {
+  const derived = evidence?.get(match.id);
+  if (derived !== undefined) return derived;
+  if (match.structural_evidence === false) return "unevidenced";
+  // `true` is evidence; `undefined` is the legacy permissive pass.
+  return "evidenced";
+}
 
 export function computeGaps(
   requirements: readonly JobRequirementUnit[],
   matches: readonly UnitMatch[],
+  evidence?: ReadonlyMap<string, EvidenceVerdict>,
   threshold: number = GAP_THRESHOLD,
-): readonly JobRequirementUnit[] {
-  // Index matches by requirement id with their max
-  // final_score AMONG NON-REJECTED matches. Rejected
-  // matches don't count toward satisfying the Requirement
-  // — same semantics as the matching pipeline's filter at
-  // #82.
-  const bestScoreByReq = new Map<string, number>();
+): readonly Gap[] {
+  // Best final_score among non-rejected matches that can cover
+  // the Requirement, and separately whether any non-rejected
+  // match clears the threshold but could not be verified.
+  // Rejected matches count for neither — same semantics as the
+  // matching pipeline's filter at #82.
+  const bestCovering = new Map<string, number>();
+  const doubted = new Set<string>();
   for (const m of matches) {
     if (m.user_rejected) continue;
-    // A match with no structural evidence can't cover a
-    // must-have no matter how it scored — see the docstring.
-    // `undefined` is legacy data and passes.
-    if (m.structural_evidence === false) continue;
-    const prev = bestScoreByReq.get(m.job_requirement_unit_id);
+    const verdict = verdictFor(m, evidence);
+    if (verdict === "unevidenced") continue;
+    if (verdict === "unverifiable") {
+      // Only a match that would otherwise have covered the
+      // Requirement casts doubt. One scoring 0.1 was never going
+      // to satisfy it, so being unable to verify it changes
+      // nothing the user needs to know.
+      if (m.final_score >= threshold) doubted.add(m.job_requirement_unit_id);
+      continue;
+    }
+    const prev = bestCovering.get(m.job_requirement_unit_id);
     if (prev === undefined || m.final_score > prev) {
-      bestScoreByReq.set(m.job_requirement_unit_id, m.final_score);
+      bestCovering.set(m.job_requirement_unit_id, m.final_score);
     }
   }
 
-  return requirements.filter((req) => {
-    if (!req.must_have) return false;
-    const best = bestScoreByReq.get(req.id);
-    return best === undefined || best < threshold;
-  });
+  const gaps: Gap[] = [];
+  for (const req of requirements) {
+    if (!req.must_have) continue;
+    const best = bestCovering.get(req.id);
+    if (best !== undefined && best >= threshold) continue;
+    gaps.push({
+      requirement: req,
+      status: doubted.has(req.id) ? "unverifiable" : "unmet",
+    });
+  }
+  return gaps;
 }

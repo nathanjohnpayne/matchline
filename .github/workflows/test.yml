@@ -88,11 +88,17 @@ jobs:
         run: npm --prefix functions ci
 
       - name: Rules + integration tests (Firestore emulator)
-        # `test:rules` runs:
+        # `test:rules` names its suites EXPLICITLY in
+        # package.json — it is not a glob. A new
+        # *.integration.test.ts that is not added to that list
+        # will never run here, and its absence looks exactly
+        # like a pass. It currently runs:
         #   - tests/firestore-rules.test.ts (per-collection
         #     owner_uid invariant from #60)
-        #   - tests/**/*.integration.test.ts including the
-        #     rejected-exclusion test from #82 — the
+        #   - the rejected-exclusion test from #82 — the
         #     zero-fabrication invariant pinned end-to-end on
-        #     real Firestore semantics.
+        #     real Firestore semantics
+        #   - matching-replace, validation-fabrication,
+        #     generation-persistence, and derive-match-evidence
+        #     (#441, read-only: asserts no write happens)
         run: npm run test:rules

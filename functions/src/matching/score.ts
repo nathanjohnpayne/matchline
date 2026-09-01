@@ -282,13 +282,13 @@ export function requirementAxes(
  * something the employer asked for, so neither can substantiate
  * a must-have on its own.
  */
-const STRUCTURAL_AXES: readonly (keyof ScoreComponents)[] = [
+const STRUCTURAL_AXES = [
   "skill_overlap",
   "domain_overlap",
   "tool_overlap",
   "seniority_alignment",
   "scope_alignment",
-];
+] as const satisfies readonly (keyof ScoreComponents)[];
 
 /**
  * Did THIS PAIR produce real evidence on an axis the Requirement
@@ -317,7 +317,19 @@ const STRUCTURAL_AXES: readonly (keyof ScoreComponents)[] = [
  * conditions have to be read together.
  */
 export interface EvidenceInputs {
-  readonly components: ScoreComponents;
+  /**
+   * Only the five structural axes are read, so only those are
+   * required. A full `ScoreComponents` satisfies this — `score()`
+   * passes one — but the narrower type lets the read-only
+   * derivation in `evidence.ts` (#441) recompute exactly the five
+   * values it needs instead of fabricating a `semantic_similarity`
+   * and a `recency` it has no way to measure. Inventing those two
+   * to satisfy a type would be the same neutral-as-measurement
+   * move this predicate exists to prevent.
+   */
+  readonly components: Readonly<
+    Pick<ScoreComponents, (typeof STRUCTURAL_AXES)[number]>
+  >;
   readonly axes: RequirementAxes;
   /**
    * Did the Unit attest to at least one seniority signal the

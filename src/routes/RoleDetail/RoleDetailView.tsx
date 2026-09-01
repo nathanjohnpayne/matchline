@@ -29,6 +29,8 @@ import RequirementsTab, {
   type RequirementsTabStatus,
 } from "./RequirementsTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
+import type { EvidenceStatus } from "./GapsView.tsx";
+import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
@@ -49,6 +51,15 @@ export interface RoleDetailViewProps {
   readonly role: Role | null;
   readonly requirements: readonly JobRequirementUnit[];
   readonly matches: readonly UnitMatch[];
+  /**
+   * Derived structural-evidence verdicts keyed by match id
+   * (#441). `undefined` while the derivation is in flight or
+   * after it failed — `computeGaps` then falls back to the
+   * permissive pre-#441 reading, and `evidenceStatus` is what
+   * discloses that to the user.
+   */
+  readonly matchEvidence?: ReadonlyMap<string, EvidenceVerdict>;
+  readonly evidenceStatus?: EvidenceStatus;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
   readonly error: Error | null;
   readonly activeTab: Tab;
@@ -108,6 +119,8 @@ export default function RoleDetailView({
   role,
   requirements,
   matches,
+  matchEvidence,
+  evidenceStatus,
   unitsById,
   error,
   activeTab,
@@ -144,8 +157,8 @@ export default function RoleDetailView({
     [requirements, matches],
   );
   const gaps = useMemo(
-    () => computeGaps(requirements, matches),
-    [requirements, matches],
+    () => computeGaps(requirements, matches, matchEvidence),
+    [requirements, matches, matchEvidence],
   );
 
   if (status === "loading") {
@@ -250,6 +263,7 @@ export default function RoleDetailView({
           <MatchesTab
             groups={groups}
             gaps={gaps}
+            evidenceStatus={evidenceStatus}
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}

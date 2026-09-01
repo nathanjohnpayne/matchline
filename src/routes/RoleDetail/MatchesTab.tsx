@@ -15,9 +15,11 @@
 
 import type { ReactElement } from "react";
 
-import type { ExperienceUnit, JobRequirementUnit } from "../../types/capability.ts";
+import type { ExperienceUnit } from "../../types/capability.ts";
 
 import GapsView from "./GapsView.tsx";
+import type { EvidenceStatus } from "./GapsView.tsx";
+import type { Gap } from "./computeGaps.ts";
 import MatchCard from "./MatchCard.tsx";
 import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
@@ -25,7 +27,8 @@ import type { MatchApprovalState } from "../../services/matches.ts";
 export interface MatchesTabProps {
   readonly groups: readonly RequirementWithMatches[];
   /** Pre-computed unmet must-haves (#130). */
-  readonly gaps: readonly JobRequirementUnit[];
+  readonly gaps: readonly Gap[];
+  readonly evidenceStatus?: EvidenceStatus;
   /**
    * Lookup map for pre-resolving each Match's source Unit
    * by id. The container builds this from a single Units
@@ -52,6 +55,7 @@ export interface MatchesTabProps {
 export default function MatchesTab({
   groups,
   gaps,
+  evidenceStatus,
   unitsById,
   onApprovalStateChange,
   computingMatches,
@@ -84,7 +88,7 @@ export default function MatchesTab({
           Computing matches…
         </p>
       )}
-      <GapsView gaps={gaps} />
+      <GapsView gaps={gaps} evidenceStatus={evidenceStatus} />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (
         <li
