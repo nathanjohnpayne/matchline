@@ -183,6 +183,13 @@ export default function RoleDetail(): ReactElement {
   // to outlive the promise, not the transaction. Codex P2 on
   // #435.
   const awaitingReplacementRef = useRef(false);
+  // Live match count, for callbacks that must read it at CALL
+  // time rather than capture it at definition time. The re-parse
+  // handler is a `useCallback` keyed on `[role, roleId]`, so
+  // closing over `matches.length` directly would pin whatever
+  // the count was when the callback was last created — and that
+  // count decides whether a run is the write-free no-op below.
+  const matchCountRef = useRef(0);
   // Set when a legacy-backfill rerun (the one that populates
   // `structural_evidence` on pre-#435 matches) fails. While true,
   // `computeGaps` stops extending the transitional benefit of the
@@ -402,7 +409,7 @@ export default function RoleDetail(): ReactElement {
           // arrives, since this run also goes through
           // `replaceMatchesForRole()` and rewrites every id.
           awaitingReplacementRef.current = true;
-          const reparseMatchCount = matches.length;
+          const reparseMatchCount = matchCountRef.current;
           setComputingMatches(true);
           void invokeRunMatching(roleId)
             .then((persistedCount) => {
@@ -490,6 +497,7 @@ export default function RoleDetail(): ReactElement {
     // first snapshot before evaluating).
     triggeredRef.current = false;
     awaitingReplacementRef.current = false;
+    matchCountRef.current = 0;
     setComputingMatches(false);
     setMatchesSnapshotRoleId(null);
     setLegacyBackfillFailedFor(null);
@@ -561,6 +569,7 @@ export default function RoleDetail(): ReactElement {
       (next) => {
         if (!active) return;
         setMatches(next);
+        matchCountRef.current = next.length;
         // Mark the matches subscription as "delivered
         // at least once" so the auto-trigger gate
         // (cursor #134 r1) treats matches.length=0 as
@@ -584,6 +593,7 @@ export default function RoleDetail(): ReactElement {
         if (!active) return;
         hasErrored = true;
         setMatches([]);
+        matchCountRef.current = 0;
         setError(err);
         setStatus("error");
       },
