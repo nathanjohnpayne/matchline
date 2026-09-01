@@ -129,26 +129,15 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, run_id?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
-  - `components`, `structural_evidence`, `component_applicability` and
-    `run_id` are **optional**: records written before those fields
-    existed carry none of them, and the coverage gate depends on being
-    able to recognize such a record during the backfill window. A rerun
-    of matching populates all four.
-  - `run_id` names the matching run that wrote the row. Persistence
-    is a clear-and-replace under fresh document ids, so a client
-    cannot recognise its own replacement by id alone — a concurrent
-    run produces unseen ids too. The run id is issued server-side and
-    returned by the callable so a caller can correlate a delivered
-    snapshot with the request it made.
-  - Matching **refuses to run** while any approved Unit is awaiting
-    re-embedding. Those Units cannot be scored (their stored vector is
-    stale), and the replace would delete their existing matches with
-    no replacements — discarding the user's approve/reject decisions
-    on those pairs irrecoverably. The refusal is enforced server-side
-    in the pipeline: a client-side check is a time-of-check /
-    time-of-use race, since another tab can set the flag between the
-    check and the read.
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+  - `components`, `structural_evidence` and `component_applicability`
+    are **optional**: records written before those fields existed carry
+    none of them, and the coverage gate depends on being able to
+    recognize such a record. A rerun of matching populates all three.
+    A record missing `structural_evidence` retains its pre-existing
+    coverage behaviour rather than being treated as unevidenced, so
+    deploying the gate cannot make an already-matched Role sprout
+    gaps.
   - `component_applicability` records, per axis, whether the engine
     actually evaluated it for this pair. A `false` axis means the
     corresponding value in `components` is a no-constraint neutral, and

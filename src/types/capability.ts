@@ -208,12 +208,13 @@ export interface UnitMatch {
    *
    * Optional because rows written before this field existed
    * won't have it. Readers treat `undefined` as "legacy, don't
-   * block", but legacy rows are NOT inherently safe — the
-   * pre-#430 rule paid the same neutral when both sides
-   * canonicalized to empty. The allowance holds because the
-   * Role Detail auto-trigger reruns matching whenever a loaded
-   * match lacks the field (no LLM call needed), and is
-   * withdrawn if that backfill fails.
+   * block" — NOT because such rows are sound (the pre-#430 rule
+   * paid the same neutrals), but because that is exactly how
+   * they already behaved, so deploying the gate cannot make an
+   * already-matched Role silently sprout gaps. They gain the
+   * gate the next time matching runs for any reason. Healing
+   * them automatically on Role open is a data migration with
+   * its own failure modes and is reviewed on its own PR.
    */
   structural_evidence?: boolean;
   /**
@@ -244,27 +245,6 @@ export interface UnitMatch {
 
   approved_for_use: boolean;
   user_rejected: boolean;
-
-  /**
-   * Id of the matching run that wrote this row.
-   *
-   * `replaceMatchesForRole()` rewrites every match under a fresh
-   * document id, so "an id I haven't seen" looked like a way for
-   * a client to recognise its own replacement. It isn't: a
-   * CONCURRENT run — the same Role open in a second tab —
-   * produces unseen ids too, so the first run's snapshot
-   * satisfies the second tab's test while its own request is
-   * still pending. That tab re-enables approvals early and a
-   * click after the second commit targets a deleted document.
-   *
-   * The run id is issued server-side and returned by the
-   * callable, so a client can correlate a snapshot with the
-   * request it actually made. Codex P2 on #438.
-   *
-   * Optional: rows written before this field existed lack it,
-   * and readers must not treat its absence as a match.
-   */
-  run_id?: string;
 
   created_at: ISOTimestamp;
 }

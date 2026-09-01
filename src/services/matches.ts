@@ -238,22 +238,7 @@ export async function setMatchApprovalState(
  * Client surfaces these via the rejection path; the caller
  * decides whether to log + retry or surface to the user.
  */
-export interface RunMatchingResult {
-  /** Number of matches the run persisted. */
-  readonly count: number;
-  /**
-   * The run that wrote them, read off the persisted rows. Lets a
-   * caller recognise ITS replacement snapshot rather than any
-   * snapshot — a concurrent run on the same Role also produces
-   * unseen document ids, so id comparison can't tell them apart.
-   * `null` when the run persisted nothing (no rows to carry it).
-   */
-  readonly runId: string | null;
-}
-
-export async function invokeRunMatching(
-  roleId: string,
-): Promise<RunMatchingResult> {
+export async function invokeRunMatching(roleId: string): Promise<void> {
   const fn = httpsCallable<
     { roleId: string },
     { matches: UnitMatch[] }
@@ -262,15 +247,5 @@ export async function invokeRunMatching(
     "runMatching",
     callableOptions("runMatching"),
   );
-  const res = await fn({ roleId });
-  // Returns the persisted count AND the run id rather than void.
-  // Callers need the count to distinguish a run that wrote from
-  // one that was a no-op, and the run id to recognise their own
-  // replacement snapshot. `replaceMatchesForRole()` short-circuits its
-  // transaction when there is nothing to delete and nothing to
-  // write, so that case produces NO Firestore write and
-  // therefore no snapshot — a caller waiting on the listener to
-  // learn the run finished would wait forever. Codex P2 on #435.
-  const matches = res.data?.matches ?? [];
-  return { count: matches.length, runId: matches[0]?.run_id ?? null };
+  await fn({ roleId });
 }

@@ -53,37 +53,6 @@ const ROLES_COLLECTION = "roles";
 const REQUIREMENTS_COLLECTION = "jobRequirementUnits";
 const UNITS_COLLECTION = "experienceUnits";
 
-/**
- * Refusal: an approved Unit is awaiting re-embedding, so a
- * replace would destroy review state.
- *
- * `defaultListUnits` excludes `reembed_pending` Units because
- * their stored vector is stale. But persistence is a wholesale
- * replace — every match for the Role is deleted and only this
- * run's are written — so running anyway deletes the excluded
- * Unit's matches with no replacements, and the carry-forward
- * that preserves `approved_for_use` / `user_rejected` has
- * nothing to carry them onto. The decisions are unrecoverable.
- *
- * **This check has to live here, not on the client.** The Role
- * Detail container also defers, but a client-side snapshot
- * check is a time-of-check/time-of-use race: another tab can
- * set `reembed_pending` between the check and this function's
- * read. The client guard is a UX fast path; this is the
- * correctness boundary. Codex P1 on PR #438.
- */
-export class PendingReembedError extends Error {
-  constructor(count: number) {
-    super(
-      `runMatchingPipeline: ${count} approved Unit(s) are awaiting re-embedding. ` +
-        "Refusing to run, because the replace would delete their matches — and the " +
-        "user's approve/reject decisions on those pairs — with no replacements to " +
-        "carry the flags onto. Re-run once re-embedding completes.",
-    );
-    this.name = "PendingReembedError";
-  }
-}
-
 export interface RunMatchingContext {
   readonly ownerUid: string;
   readonly roleId: string;
@@ -176,22 +145,6 @@ export async function runMatchingPipeline(
     listRequirements(ctx),
   ]);
 
-  // Refuse BEFORE scoring, so a run that cannot safely persist
-  // doesn't burn the work first. See PendingReembedError.
-  //
-  // Detected from the SAME read that produces the scorable set
-  // rather than a second query, so the refusal and the exclusion
-  // can't disagree about which Units are pending.
-  const pendingReembed = units.filter(
-    (u) => u.reembed_pending === true,
-  ).length;
-  if (pendingReembed > 0) throw new PendingReembedError(pendingReembed);
-
-  // One id per run, stamped on every row it writes, so a client
-  // can tell ITS replacement snapshot from a concurrent run's.
-  // Codex P2 on #438.
-  const runId = generateId();
-
   const matches: UnitMatch[] = [];
   // Track candidate-pair scoring outcomes so a wholesale-failure
   // run (e.g. a bad deploy where score() throws on every pair)
@@ -279,7 +232,6 @@ export async function runMatchingPipeline(
         surface_evidence: rationaleResult.surface_evidence,
         approved_for_use: false,
         user_rejected: false,
-        run_id: runId,
         created_at: now(),
       });
     }
@@ -335,20 +287,25 @@ async function defaultListUnits(
     .where("owner_uid", "==", ctx.ownerUid)
     .where("user_approved", "==", true)
     .get();
-  // Returns `reembed_pending` Units too, deliberately.
+  // Filter out units with `reembed_pending: true` — their stored
+  // embedding is invalid (set by an edit or manual insert; cleared
+  // by the reembed callable at #84 after the embedding is
+  // regenerated). Including them would feed a stale vector into
+  // semanticSimilarity. CodeRabbit Major #2 on PR #104.
   //
-  // #104 filtered them here, because their stored vector is
-  // stale and scoring against it would be wrong. But silently
-  // dropping them let the run proceed and REPLACE the Role's
-  // match set without them — deleting their matches, and the
-  // user's approve/reject decisions on those pairs, with nothing
-  // to carry the flags onto (Codex P1 on PR #438).
-  //
-  // The orchestrator now refuses the whole run when any are
-  // present, which subsumes the filter: a pending Unit is never
-  // scored, because nothing is scored. Surfacing them here is
-  // what lets it see them.
-  return snap.docs.map((d) => d.data() as ExperienceUnit);
+  // Done as an in-memory filter rather than a Firestore
+  // .where("reembed_pending", "==", false) for two reasons:
+  //   1. The field is OPTIONAL — a unit that's never been
+  //      re-embedded won't have it set, and Firestore's `==`
+  //      doesn't match missing fields, so a query filter would
+  //      drop fully-valid units. The negation (`!=`) requires a
+  //      separate index AND still has the missing-field problem.
+  //   2. V1 single-user data volume is small — the in-memory
+  //      filter cost is negligible vs. the additional index
+  //      complexity.
+  return snap.docs
+    .map((d) => d.data() as ExperienceUnit)
+    .filter((unit) => unit.reembed_pending !== true);
 }
 
 async function defaultListRequirements(

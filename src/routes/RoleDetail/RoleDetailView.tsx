@@ -73,15 +73,6 @@ export interface RoleDetailViewProps {
    */
   readonly computingMatches: boolean;
   /**
-   * True when the legacy `structural_evidence` backfill rerun
-   * failed (#435, Codex P2 r4). Matches written before that
-   * field existed lose the benefit of the doubt in
-   * `computeGaps`, and the Matches tab says so — a Role can
-   * otherwise show more gaps than the user's data warrants
-   * with no explanation.
-   */
-  readonly legacyBackfillFailed: boolean;
-  /**
    * Requirements tab parse state (#201). The container holds
    * `parseJobRequirements`-call state + the in-flight save
    * for the JD textarea so re-renders don't drop them on
@@ -123,7 +114,6 @@ export default function RoleDetailView({
   onTabChange,
   onApprovalStateChange,
   computingMatches,
-  legacyBackfillFailed,
   parsingStatus,
   parseError,
   savingJd,
@@ -154,11 +144,8 @@ export default function RoleDetailView({
     [requirements, matches],
   );
   const gaps = useMemo(
-    () =>
-      computeGaps(requirements, matches, undefined, {
-        trustLegacyMatches: !legacyBackfillFailed,
-      }),
-    [requirements, matches, legacyBackfillFailed],
+    () => computeGaps(requirements, matches),
+    [requirements, matches],
   );
 
   if (status === "loading") {
@@ -266,7 +253,6 @@ export default function RoleDetailView({
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}
-            legacyBackfillFailed={legacyBackfillFailed}
           />
         )}
         {activeTab === "applications" && (
