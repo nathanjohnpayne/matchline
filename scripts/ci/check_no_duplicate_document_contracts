@@ -152,25 +152,37 @@ for t in "${CONTRACTS[@]}"; do
   # loop spawned ~3,300 processes per run (17 contracts x 196
   # sources) and took ~10s. `grep -l` prints each matching path
   # once and exits 1 when nothing matches, which `|| true` absorbs.
+  # `grep -c`, not `grep -l`: the count is per DECLARATION, not per
+  # file. Interfaces support declaration merging, so a second
+  # `export interface Metric` appended to the canonical file is
+  # valid TypeScript and silently reopens the drift this guard
+  # exists to close — and a path-based check cannot see it, because
+  # the one path it reports is the right one. Codex P2 on PR #445.
   declarers=()
-  while IFS= read -r f; do
-    [ -n "$f" ] && declarers+=("${f#"$ROOT/"}")
-  done < <(grep -lE "$(decl_pattern "$t")" "${SOURCES[@]}" || true)
+  total=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    f="${line%:*}"
+    n="${line##*:}"
+    [ "$n" -gt 0 ] || continue
+    total=$((total + n))
+    declarers+=("${f#"$ROOT/"}:$n")
+  done < <(grep -cE "$(decl_pattern "$t")" "${SOURCES[@]}" || true)
 
-  if [ "${#declarers[@]}" -eq 1 ] && \
-     [ "${declarers[0]}" = "functions/src/types/capability.ts" ]; then
+  if [ "$total" -eq 1 ] && \
+     [ "${declarers[0]}" = "functions/src/types/capability.ts:1" ]; then
     continue
   fi
 
   fail=1
-  if [ "${#declarers[@]}" -eq 0 ]; then
+  if [ "$total" -eq 0 ]; then
     echo "FAIL: $t is not declared anywhere. The canonical site is" >&2
     echo "      functions/src/types/capability.ts." >&2
     continue
   fi
-  echo "FAIL: $t is declared in ${#declarers[@]} place(s):" >&2
+  echo "FAIL: $t has $total declaration(s); expected exactly 1:" >&2
   for d in "${declarers[@]}"; do
-    echo "        $d" >&2
+    echo "        ${d%:*} (${d##*:})" >&2
   done
   echo "      The document contracts have exactly one declaration site" >&2
   echo "      (functions/src/types/capability.ts). Re-export instead:" >&2
@@ -178,13 +190,41 @@ for t in "${CONTRACTS[@]}"; do
   echo "      See issue #443 for why hand-synced copies were removed." >&2
 done
 
-# The re-export itself must survive — deleting it and redeclaring
-# locally would pass the checks above only if the type names changed,
-# so pin the import path too.
-if ! grep -q 'from "../../functions/src/types/capability.ts"' "$APP"; then
+# The app must re-export every contract BY NAME.
+#
+# The path-only form this replaced asked whether any export from the
+# canonical module survived, which stayed true after a contract was
+# dropped from the list — `UnitCluster`, having no app consumer today,
+# could be removed and the guard still reported OK. The frontend would
+# then quietly stop exposing part of the persisted contract surface
+# this check promises to preserve, and the first consumer to need it
+# would reach for a local declaration. Codex P2 on PR #445.
+#
+# Read the export block once rather than grepping the file 17 times:
+# from the first `export type {` at column zero to its closing brace,
+# which must be the canonical re-export.
+app_reexport_block="$(
+  awk '
+    /^export type \{/ { inblock = 1 }
+    inblock { print }
+    inblock && /^\} from ".*functions\/src\/types\/capability\.ts";/ { exit }
+  ' "$APP"
+)"
+
+if ! printf '%s' "$app_reexport_block" | grep -q 'from "../../functions/src/types/capability.ts"'; then
   echo "FAIL: src/types/capability.ts no longer re-exports from the canonical" >&2
   echo "      declaration site. The contracts must not be re-duplicated." >&2
   fail=1
+else
+  for t in "${CONTRACTS[@]}"; do
+    if ! printf '%s' "$app_reexport_block" | grep -qE "^[[:space:]]*$t,?[[:space:]]*$"; then
+      echo "FAIL: $t is declared canonically but not re-exported by" >&2
+      echo "      src/types/capability.ts. Add it to the export block —" >&2
+      echo "      dropping a contract from the app surface is how the next" >&2
+      echo "      local redeclaration starts." >&2
+      fail=1
+    fi
+  done
 fi
 
 if [ "$fail" -ne 0 ]; then
