@@ -377,7 +377,7 @@ export function effectiveAxes(
   return {
     ...axes,
     seniority_alignment:
-      axes.seniority_alignment && hasMappedSenioritySignal(unit),
+      axes.seniority_alignment && hasMeasurableSeniority(unit),
     recency: axes.recency && hasMeasurableRecency(unit),
   };
 }
@@ -411,6 +411,32 @@ export function hasMeasurableRecency(
     range.end.length > 0 &&
     !Number.isNaN(new Date(range.end).getTime())
   );
+}
+
+/**
+ * Is this Unit's seniority score a MEASUREMENT rather than a
+ * statement of ignorance?
+ *
+ * `seniorityAlignment` has three outcomes for a constrained
+ * Requirement, and only one of them is ignorance:
+ *
+ *   - `seniority_signals: []` → **0**. The Unit attests to no
+ *     level at all; that is a real negative finding, not a
+ *     shrug. Marking it inapplicable would hide an actual
+ *     "doesn't meet the bar" behind "not evaluated". Codex P2
+ *     on PR #435 caught exactly that.
+ *   - signals present but NONE ladder-mapped → **0.5**. This is
+ *     the ignorance case: the Unit says something we can't
+ *     interpret.
+ *   - signals present and mapped → a real gap-based score.
+ *
+ * So the axis is unmeasurable only in the middle case.
+ */
+export function hasMeasurableSeniority(
+  unit: Pick<ExperienceUnit, "seniority_signals">,
+): boolean {
+  if (unit.seniority_signals.length === 0) return true; // hard zero is a measurement
+  return hasMappedSenioritySignal(unit);
 }
 
 /**

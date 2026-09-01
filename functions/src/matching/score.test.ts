@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasMappedSenioritySignal,
+  hasMeasurableSeniority,
   hasStructuralEvidence,
   recency,
   requirementAxes,
@@ -1080,6 +1081,50 @@ describe("hasStructuralEvidence: unmapped seniority (Codex P1 round 4 on #435)",
     );
     expect(
       hasMappedSenioritySignal({ seniority_signals: ["mentored", "led"] }),
+    ).toBe(true);
+  });
+});
+
+describe("hasMeasurableSeniority: a hard zero is a measurement (Codex P2 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("treats NO signals as measurable — the 0 is a real negative finding", () => {
+    // `seniorityAlignment` hard-zeroes a Unit with no signals:
+    // "no evidence of meeting the bar". An intermediate revision
+    // of #435 marked that inapplicable because there was no
+    // MAPPED signal, so the breakdown reported "not evaluated"
+    // and concealed an actual negative measurement.
+    expect(hasMeasurableSeniority({ seniority_signals: [] })).toBe(true);
+    const unit = makeUnit({
+      seniority_signals: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.component_applicability.seniority_alignment).toBe(true);
+  });
+
+  it("treats signals-present-but-unmapped as UNmeasurable — that 0.5 is ignorance", () => {
+    expect(hasMeasurableSeniority({ seniority_signals: ["mentored"] })).toBe(
+      false,
+    );
+    const unit = makeUnit({
+      seniority_signals: ["mentored"],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(result.component_applicability.seniority_alignment).toBe(false);
+  });
+
+  it("treats a mapped signal as measurable whatever it scores", () => {
+    expect(hasMeasurableSeniority({ seniority_signals: ["led"] })).toBe(true);
+    expect(
+      hasMeasurableSeniority({ seniority_signals: ["mentored", "led"] }),
     ).toBe(true);
   });
 });

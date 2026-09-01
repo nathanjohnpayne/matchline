@@ -134,3 +134,55 @@ describe("MatchCard: applicability reaches the score badge", () => {
     expect(html.match(/not evaluated/g)?.length).toBe(7);
   });
 });
+
+describe("MatchCard: the breakdown must reconcile with the badge (Codex P2 on #435)", () => {
+  it("discloses what unevaluated axes contribute, so the footer equation holds", () => {
+    // `score()` includes an unevaluated axis's neutral in
+    // `rule_score`. Hiding those rows outright left the footer
+    // asserting "Final score = Σ(score × weight) × confidence"
+    // while the visible rows summed to something else entirely —
+    // a breakdown that explains a different number than the one
+    // above it.
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({
+          component_applicability: {
+            semantic_similarity: true,
+            skill_overlap: false,
+            domain_overlap: false,
+            tool_overlap: false,
+            seniority_alignment: false,
+            scope_alignment: false,
+            recency: true,
+          },
+        })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Unevaluated axes still contribute");
+    // 0.6*0.2 + 0.5*0.15 + 0.5*0.1 + 1*0.1 + 1*0.1 = 0.445
+    expect(html).toContain("0.445");
+  });
+
+  it("omits the disclosure when every axis was measured", () => {
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({
+          component_applicability: {
+            semantic_similarity: true,
+            skill_overlap: true,
+            domain_overlap: true,
+            tool_overlap: true,
+            seniority_alignment: true,
+            scope_alignment: true,
+            recency: true,
+          },
+        })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).not.toContain("Unevaluated axes still contribute");
+  });
+});

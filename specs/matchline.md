@@ -194,8 +194,15 @@ Acceptance criteria:
   ignorance, not a measurement**, and no consumer may read it as
   evidence. This covers the Jaccard neutral above, the `1.0` that
   seniority and scope alignment return when the Requirement doesn't
-  constrain them, and the `0.5` seniority alignment returns when a
-  Unit's signals are all unmapped by the ladder.
+  constrain them, the `0.5` seniority alignment returns when a Unit's
+  signals are all unmapped by the ladder, and the `0.5` recency
+  returns when a Unit carries no usable date.
+- The rule is about MEANING, not about values. Seniority alignment
+  also returns a hard `0` when a Unit has no seniority signals at
+  all, and that IS a measurement — "no evidence of meeting the bar" —
+  so it must be presented as one. Only the signals-present-but-
+  unmapped case is ignorance. A consumer that keys off the number
+  rather than the reason will get this backwards.
 - `UnitMatch.structural_evidence` records, per (Unit, Requirement)
   pair, whether the Unit scored above zero on at least one axis the
   Requirement actually constrains. It is a property of the pair, not

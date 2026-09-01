@@ -67,6 +67,17 @@ export default function MatchScoreBadge({
   const popoverId = useId();
   const score100 = (finalScore * 100).toFixed(1);
   const rows = buildBreakdownRows(components, componentApplicability);
+  // `score()` includes an unevaluated axis's neutral in
+  // `rule_score`, so hiding those rows outright left the footer
+  // stating an equation the visible rows could not reproduce —
+  // e.g. a badge reading 51.9 while the shown contributions sum
+  // to 15.7. Surfacing the aggregate keeps the breakdown an
+  // explanation of the number rather than a different number.
+  // Codex P2 on PR #435. Removing them from the arithmetic
+  // entirely is #433.
+  const hiddenContribution = (rows ?? [])
+    .filter((r) => !r.evaluated)
+    .reduce((sum, r) => sum + r.contribution, 0);
 
   return (
     <span
@@ -146,6 +157,19 @@ export default function MatchScoreBadge({
                 </span>
               ))}
             </div>
+            {hiddenContribution > 0 && (
+              <p
+                className="border-t border-zinc-200 dark:border-zinc-700 pt-1.5 mt-1.5 text-zinc-500 italic"
+                data-testid="match-score-unevaluated-contribution"
+              >
+                Unevaluated axes still contribute{" "}
+                <span className="font-mono tabular-nums not-italic">
+                  {hiddenContribution.toFixed(3)}
+                </span>{" "}
+                to the rule score as neutral placeholders. They are shown
+                separately because they are not measurements — see #433.
+              </p>
+            )}
             <div className="border-t border-zinc-200 dark:border-zinc-700 pt-1.5 mt-1.5 text-zinc-600 dark:text-zinc-400">
               {confidence !== null ? (
                 <p data-testid="match-score-confidence">

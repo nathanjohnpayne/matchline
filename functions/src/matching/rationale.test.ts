@@ -549,21 +549,21 @@ describe("generateRationale: empty-data fallback honesty (round 1)", () => {
       },
     });
     const result = generateRationale(input);
-    // Round 5 (#435) narrowed this. Seniority can no longer drive
-    // the rationale unless the Unit carries a LADDER-MAPPED
-    // signal, and a Unit with `seniority_signals: []` carries
-    // none — so the case this test was built around now falls
-    // through to semantic similarity. (The synthetic
-    // `seniority_alignment: 1` above was always an impossible
-    // pairing: the real `seniorityAlignment` hard-zeroes a Unit
-    // with no signals at all.)
-    //
-    // The assertion that matters is unchanged and still checked:
-    // nothing fabricates a placeholder string into
-    // `surface_evidence`. It traces to Unit content or is empty.
-    expect(result.driving_component).toBe("semantic_similarity");
-    expect(result.surface_evidence).toBe("x");
-    expect(result.rationale).not.toMatch(/none recorded/);
+    // Restored to its original expectation. An intermediate
+    // revision of #435 made seniority inapplicable whenever the
+    // Unit had no ladder-MAPPED signal, which swept in the
+    // empty-signals case and pushed this to semantic similarity.
+    // That was wrong, and editing this test to match was
+    // compensating for the bug rather than catching it: a Unit
+    // with `seniority_signals: []` gets a hard 0 from
+    // `seniorityAlignment`, which is a real negative measurement
+    // ("no evidence of meeting the bar"), not the 0.5 ignorance
+    // neutral. Only the signals-present-but-unmapped case is
+    // unmeasurable. Codex P2 on #435.
+    expect(result.driving_component).toBe("seniority_alignment");
+    expect(result.surface_evidence).toBe("");
+    // Rationale acknowledges absence without fabricating.
+    expect(result.rationale).toContain("no explicit signals");
     // And the seniority template's own no-signals branch keeps
     // its zero-fab contract for any future caller that reaches
     // it directly — pinned via a mapped-signal Unit whose
