@@ -70,7 +70,14 @@
 #                           would leave the mis-tag in place for every
 #                           operator who misses the log line. A thread
 #                           that is NOT demonstrably actioned keeps
-#                           deferred-to-followup.
+#                           deferred-to-followup — which since #990
+#                           includes a thread whose only evidence is that
+#                           some commit touched its file. The mode's
+#                           resolve contract is unchanged (it still
+#                           resolves every current-HEAD bot thread, on the
+#                           operator's explicit instruction); only the
+#                           recorded class is held to the finding-bound
+#                           standard.
 #                           Per REVIEW_POLICY.md § Implementation notes
 #                           for branch protection gates: this is a
 #                           CLEAN-UP mechanism, not a policy override.
@@ -102,6 +109,28 @@
 #                           class that can't be positively determined, are
 #                           LEFT UNRESOLVED so the weekly unresolved-
 #                           feedback sweep keeps surfacing them (#564).
+#                           The class is NECESSARY BUT NOT SUFFICIENT
+#                           (#990). addressed-elsewhere rests on evidence
+#                           about the anchored FILE, which says nothing
+#                           about a particular finding once the PR is down
+#                           to a file or two — at ONE file it is vacuous,
+#                           since every commit touches every thread's file
+#                           and the next fix push sweeps the whole round.
+#                           So a resolve additionally requires an artifact
+#                           bound to the FINDING: a non-marker agent reply
+#                           on the thread after the latest re-raise, or a
+#                           verdict row for the finding's comment id in
+#                           .mergepath/{codex,coderabbit}-feedback-
+#                           ledger.jsonl recorded after that same floor.
+#                           Neither can be produced by pushing an
+#                           unrelated commit. Threads with none are
+#                           counted as never-dispositioned and LEFT
+#                           UNRESOLVED. The same requirement gates every
+#                           tag auto-upgrade below, because the tag is the
+#                           disposition of RECORD and the daily rollup
+#                           SKIPS the actioned classes — a false tag
+#                           buries a finding exactly as a false resolve
+#                           does.
 #                           The action evidence is checked against the
 #                           thread's ENTIRE comment history: threads with
 #                           more comments than the enumeration window get
@@ -324,6 +353,10 @@
 #       --auto-resolve-bots run, the helper re-reads each thread it
 #       resolved via a `nodes(ids:)` readback and refuses to report success
 #       unless GitHub confirms isResolved:true for all of them.
+#   4 — COULD NOT LOOK (#1104): a read needed to decide anything failed after
+#       retries, most often a rate-limited token. Distinct from 2 on purpose:
+#       2 means "we looked and it went wrong", 4 means "we never got to look",
+#       and a sweep loop must not treat the second as a completed pass.
 #   3 — unresolved threads exist (in --list mode), or a resolve mode left
 #       threads unresolved (human-authored, stale-HEAD, not-actioned,
 #       comments-incomplete, not-propagation-routed, drifted,
@@ -359,6 +392,29 @@ if [ -r "$__RESOLVE_THREADS_DIR/lib/gh-token-resolver.sh" ]; then
   # shellcheck source=lib/gh-token-resolver.sh
   . "$__RESOLVE_THREADS_DIR/lib/gh-token-resolver.sh"
 fi
+
+# Retry helper for the reads below (#1104). Existence-guarded ON PURPOSE, and
+# the distinction matters: retrying a rate-limited read is an IMPROVEMENT, but
+# CLASSIFYING the failure is the actual fix. The #1104 defect was never "we
+# only tried once" -- it was that any failure was reported as though the sweep
+# had completed. So the classification below runs unconditionally and a missing
+# helper costs only the retry, degrading loudly rather than silently.
+HAVE_GH_RETRY=0
+if [ -r "$__RESOLVE_THREADS_DIR/lib/gh-retry-helpers.sh" ]; then
+  # shellcheck source=lib/gh-retry-helpers.sh
+  . "$__RESOLVE_THREADS_DIR/lib/gh-retry-helpers.sh"
+  HAVE_GH_RETRY=1
+fi
+
+# Run a read through the retry helper when it is present, directly otherwise.
+# Either way the caller classifies the failure; only the attempt count changes.
+gh_pat_read() {
+  if [ "$HAVE_GH_RETRY" -eq 1 ]; then
+    with_gh_retry gh_pat "$@"
+  else
+    gh_pat "$@"
+  fi
+}
 
 usage() {
   cat <<'EOF' >&2
@@ -429,7 +485,13 @@ NO_TAG_REPLY=false
 # either form so the auto-resolve mode works with the GraphQL data
 # this script reads. Caught on PR #180 review when every CR thread
 # was skipped as a non-bot author — see #182.
-BOT_LOGINS_RE='^(coderabbitai|chatgpt-codex-connector|dependabot)(\[bot\])?$'
+#
+# github-advanced-security added for #1101: without it, every GHAS
+# code-scanning (CodeQL) thread fell through this gate as a "non-bot
+# author" and was never eligible for --resolve-actioned / --auto-
+# resolve-bots, so a disposed CodeQL finding's thread could only be
+# closed by hand.
+BOT_LOGINS_RE='^(coderabbitai|chatgpt-codex-connector|dependabot|github-advanced-security)(\[bot\])?$'
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -555,10 +617,61 @@ trap 'rm -rf "$COMMIT_FILES_CACHE_DIR"' EXIT
 # to verify each thread's latest comment is on the current HEAD before
 # resolving. Codex P2 on PR #172 caught that the docstring promised
 # this check but the code didn't enforce it.
-HEAD_OID=$(gh_pat api "repos/$OWNER/$NAME/pulls/$PR_NUM" --jq .head.sha 2>/dev/null) || {
-  echo "Could not resolve PR HEAD oid for $REPO#$PR_NUM" >&2
-  exit 2
-}
+# #1104: this is the FIRST call every disposition sweep makes, so whatever it
+# does on failure is what the whole sweep does. It used to discard the error
+# body with `2>/dev/null` and exit 2, which made a rate-limited reviewer PAT
+# indistinguishable from a genuinely missing PR -- and the message named the
+# PR, so it read as "that PR is wrong". Replies still post (an earlier, separate
+# call), so the loop looked healthy while nothing was ever resolved. Threads
+# then accumulated across rounds and the PR could not converge.
+#
+# Three changes, matching the three ways that failed:
+#   1. keep the error body and classify it, rather than discarding it;
+#   2. retry the transient class where the helper is available
+#      (with_gh_retry already distinguishes rate-limit / 5xx from a
+#      permanent 4xx); this is an improvement, not the fix;
+#   3. exit 4, NOT 2, when the answer is "could not look". Exit 2 also means
+#      "gh failure", and a sweep loop reads any known code as a completed pass.
+#      A distinct code lets a caller tell "checked, nothing to do" from
+#      "never managed to check" -- the distinction whose absence is the bug.
+HEAD_READ_ERR=$(mktemp "${TMPDIR:-/tmp}/resolve-pr-headread.XXXXXX")
+HEAD_READ_OUT=$(mktemp "${TMPDIR:-/tmp}/resolve-pr-headout.XXXXXX")
+# BOTH streams are captured because `gh api` writes its HTTP error body to
+# STDOUT, not stderr (#799). Reading only stderr would discard the very text
+# that distinguishes a 403 rate limit from a 404 -- the discard this change
+# exists to stop, reintroduced one path over.
+if gh_pat_read api "repos/$OWNER/$NAME/pulls/$PR_NUM" --jq .head.sha \
+     >"$HEAD_READ_OUT" 2>"$HEAD_READ_ERR"; then
+  HEAD_OID=$(cat "$HEAD_READ_OUT" 2>/dev/null || true)
+  rm -f "$HEAD_READ_ERR" "$HEAD_READ_OUT"
+else
+  HEAD_READ_MSG=$(cat "$HEAD_READ_ERR" "$HEAD_READ_OUT" 2>/dev/null || true)
+  rm -f "$HEAD_READ_ERR" "$HEAD_READ_OUT"
+  case "$HEAD_READ_MSG" in
+    *"rate limit exceeded"*|*"secondary rate limit"*|*"abuse detection"*)
+      # Name the exhausted account and when it recovers. `/rate_limit` is NOT
+      # consulted here on purpose: it is exempt from the limit and reports a
+      # fresh window while real calls 403, so it would contradict this message.
+      RL_USER=$(printf '%s' "$HEAD_READ_MSG" | sed -n 's/.*for user ID \([0-9][0-9]*\).*/\1/p' | head -1)
+      echo "Could not READ the PR HEAD oid for $REPO#$PR_NUM: the token is RATE LIMITED${RL_USER:+ (user ID $RL_USER)}." >&2
+      echo "  This is not a missing PR and not a completed sweep -- nothing was resolved." >&2
+      echo "  Read the failing call's own x-ratelimit-remaining/x-ratelimit-reset headers for the window; do not trust gh api rate_limit, which is exempt and reports a fresh window while real calls fail." >&2
+      echo "  Retry after the reset. The reviewer identity exhausts well before the author identity." >&2
+      echo "  gh said: $HEAD_READ_MSG" >&2
+      exit 4
+      ;;
+    *"Not Found"*|*"404"*)
+      echo "Could not resolve PR HEAD oid for $REPO#$PR_NUM: the PR does not exist or the token cannot see it (HTTP 404)." >&2
+      echo "  gh said: $HEAD_READ_MSG" >&2
+      exit 2
+      ;;
+    *)
+      echo "Could not resolve PR HEAD oid for $REPO#$PR_NUM after retries." >&2
+      echo "  gh said: ${HEAD_READ_MSG:-(no stderr captured)}" >&2
+      exit 4
+      ;;
+  esac
+fi
 
 # Fetch all review threads with isResolved state. Three design
 # choices, all load-bearing:
@@ -2440,6 +2553,7 @@ derive_tag_class() {
     while [ "$k" -lt "$reply_count" ]; do
       local r_login
       local r_body
+      local r_body_trimmed
       local r_body_len
       r_login=$(printf '%s' "$thread_json" | jq -r ".all_comments[$k].author.login // \"\"")
       r_body=$(printf '%s' "$thread_json" | jq -r ".all_comments[$k].body // \"\"")
@@ -2447,8 +2561,17 @@ derive_tag_class() {
       # Skip our own [mergepath-resolve: ...] marker replies — a resolution
       # marker is not a rebuttal (step 0 already honored a recognized one;
       # this also covers an unrecognized-class marker). Codex P2 on #565.
-      case "$r_body" in
-        *"[mergepath-resolve:"*) k=$((k + 1)); continue ;;
+      # Anchored at the START of the body, which is the generated format
+      # (post_tag_reply emits "[mergepath-resolve: $class] $rationale"): a
+      # substring test also discarded a substantive rebuttal that merely
+      # MENTIONS a marker, e.g. "the [mergepath-resolve: deferred-to-followup]
+      # tag is stale; fixed in abc1234" (Codex P2, round 1 of #998). Kept
+      # byte-identical to thread_reply_disposition's scan so the
+      # rebuttal-recorded ⇒ dispositioned invariant still holds by
+      # construction.
+      r_body_trimmed="${r_body#"${r_body%%[![:space:]]*}"}"
+      case "$r_body_trimmed" in
+        "[mergepath-resolve:"*) k=$((k + 1)); continue ;;
       esac
       if [ -n "$r_login" ] && [ "$r_body_len" -ge 30 ] && is_agent_author_local "$r_login"; then
         echo "rebuttal-recorded"
@@ -2502,6 +2625,201 @@ class_is_actioned() {
     *)
       return 1 ;;
   esac
+}
+
+# --- #990: bind action evidence to the FINDING, not to the file --------------
+#
+# class_is_actioned above is necessary but NOT sufficient. Its
+# addressed-elsewhere arm is satisfied by "an agent commit touching the
+# anchored FILE after the latest re-raise" — evidence about the file, not
+# about the finding. That proxy degrades as files-per-PR shrinks and carries
+# ZERO information at one file: on a single-file PR every commit touches the
+# only file, so EVERY outstanding thread reads as actioned and the next fix
+# push sweeps the whole round — including findings nobody ever read. Measured
+# on gaycruisebingo#778: 13 Codex findings, three of them P1, resolved and
+# tagged addressed-elsewhere without ever being triaged (#990). The failure is
+# silent and reads as success: the resolve readback confirms isResolved:true,
+# the `Codex P1 unresolved threads` check goes green (it verifies resolution
+# state, not disposition), and the conversation-resolution gate clears.
+#
+# The invariant the file proxy fails to express is "an agent DISPOSITIONED
+# THIS finding". Two artifacts prove that, and both are per-finding:
+#
+#   reply    a non-marker agent reply ON THIS THREAD, after the latest
+#            bot/reviewer comment. The agent wrote something about this
+#            specific finding after its last re-raise.
+#   ledger   a verdict row for THIS finding's comment id in the durable
+#            per-finding disposition ledgers written by
+#            scripts/codex-record-feedback.sh (#487) and
+#            scripts/coderabbit-record-feedback.sh (#584), recorded after
+#            that same staleness floor.
+#
+# Neither can be produced by pushing an unrelated commit, so neither degrades
+# with files-per-PR. A thread with a qualifying class but no finding-bound
+# evidence is LEFT UNRESOLVED (never swept) — the same fail-safe outcome the
+# rest of this gate uses, so the weekly unresolved-feedback sweep keeps
+# surfacing it. Deliberate deferral remains available and honest via
+# --auto-resolve-bots --rationale.
+#
+# The requirement rides on every conclusion of the form "this finding was
+# actioned", not just the --resolve-actioned resolve gate: the
+# [mergepath-resolve:<class>] tag is the disposition of RECORD (#575) and the
+# daily rollup SKIPS the actioned classes, so a file-proxy auto-upgrade of a
+# deferral tag to addressed-elsewhere buries the finding exactly as a false
+# resolve does. thread_is_actioned is therefore the single predicate used by
+# the resolve gate and by all three tag auto-upgrade paths.
+
+# ledger_paths → newline-separated candidate disposition-ledger files.
+# Mirrors the defaults (and env overrides) of the two recorder scripts, so a
+# repo that relocates its ledgers keeps working without a second knob.
+ledger_paths() {
+  local dir="${MERGEPATH_FEEDBACK_LEDGER_DIR:-$REPO_ROOT_FOR_MANIFEST/.mergepath}"
+  printf '%s\n%s\n' \
+    "${CODEX_FEEDBACK_LEDGER:-$dir/codex-feedback-ledger.jsonl}" \
+    "${CODERABBIT_FEEDBACK_LEDGER:-$dir/coderabbit-feedback-ledger.jsonl}"
+}
+
+# ledger_verdict_for_finding <comment_id> <floor-iso> → prints the matching
+# ledger path, exit 0; exit 1 when no row qualifies.
+#
+# A row qualifies only when it is about THIS finding in THIS repo, carries a
+# real verdict, and was recorded AFTER the staleness floor — a verdict logged
+# before the bot's latest re-raise dispositioned the earlier round, not the
+# live one. FAIL CLOSED throughout: an absent ledger, a malformed line (jq -s
+# errors on the whole file), or an unusable id all read as "no evidence".
+#
+# The fail-closed status is deliberately the same either way — no evidence
+# means the thread stays unresolved regardless of WHY. But "the ledger has no
+# row for this finding" and "the ledger could not be read at all" are not the
+# same operator problem (#1002): the append-only logs are written by two
+# scripts across many sessions, so one interrupted write or one partial line
+# from a killed process silently loses every row in the file to a single `jq
+# -s` parse failure. `jq -e -s` distinguishes the two on exit status alone —
+# 1 is "parsed fine, no row matched"; anything else is jq itself failing to
+# read the file — so a WARN naming the file is cheap and, unlike the SKIP
+# reason printed by callers, tells the operator something they can fix in a
+# second.
+ledger_verdict_for_finding() {
+  local cid="$1" floor="$2" f rc
+  case "$cid" in
+    ''|null|*[!0-9]*) return 1 ;;
+  esac
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$f" ] || continue
+    rc=0
+    jq -e -s --argjson cid "$cid" --arg repo "$REPO" --arg floor "$floor" '
+          any(.[];
+            (.comment_id == $cid)
+            and (.repo == $repo)
+            and (((.verdict // "") | tostring) != "")
+            and (((.recorded_at // "") | tostring) != "")
+            and ($floor == "" or (.recorded_at > $floor)))
+        ' "$f" >/dev/null 2>/dev/null || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf '%s' "$f"
+      return 0
+    elif [ "$rc" -ne 1 ]; then
+      echo "WARN: ledger $f could not be parsed (jq exit $rc); treating finding $cid as having no recorded verdict there" >&2
+    fi
+  done <<EOF
+$(ledger_paths)
+EOF
+  return 1
+}
+
+# thread_reply_disposition <thread_json> — exit 0 when an agent replied on
+# this thread after the latest bot/reviewer comment.
+#
+# Same last-word scan as derive_tag_class step 3 (rebuttal-recorded) minus its
+# ≥30-char substance floor: a terse "fixed in abc1234" is a weaker rebuttal but
+# an equally valid record that the agent read and dispositioned the finding.
+# Keeping the index-based scan identical guarantees rebuttal-recorded ⇒
+# dispositioned, so the new requirement can never reject a thread the ladder
+# already proved was answered on-thread.
+#
+# Our own [mergepath-resolve: ...] marker replies are excluded: a marker is
+# this script's OUTPUT, and counting it would let a previous file-proxy run
+# bootstrap the evidence for the next one.
+#
+# The exclusion matches the GENERATED format only — the marker at the START of
+# the body, which is exactly how post_tag_reply emits it
+# ("[mergepath-resolve: $class] $rationale"). A substring match would discard a
+# substantive reply that merely MENTIONS a marker ("the
+# [mergepath-resolve: deferred-to-followup] tag is stale; fixed in abc1234"),
+# reporting a genuinely dispositioned finding as never-dispositioned and leaving
+# it unresolved — the exclusion is meant to reject this script's own output, not
+# every reply that talks about it (Codex P2, round 1 of #998). Leading
+# whitespace is stripped first so a body GitHub normalizes with a leading
+# newline is still recognized as generated.
+thread_reply_disposition() {
+  local tj="$1"
+  local cnt i login body body_trimmed last_nonagent_idx=-1
+  cnt=$(printf '%s' "$tj" | jq '.all_comments | length' 2>/dev/null || echo 0)
+  case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
+  i=0
+  while [ "$i" -lt "$cnt" ]; do
+    login=$(printf '%s' "$tj" | jq -r ".all_comments[$i].author.login // \"\"")
+    is_agent_author_local "$login" || last_nonagent_idx=$i
+    i=$((i + 1))
+  done
+  local k=$((last_nonagent_idx + 1))
+  [ "$k" -lt 1 ] && k=1
+  while [ "$k" -lt "$cnt" ]; do
+    login=$(printf '%s' "$tj" | jq -r ".all_comments[$k].author.login // \"\"")
+    body=$(printf '%s' "$tj" | jq -r ".all_comments[$k].body // \"\"")
+    # Strip leading whitespace, then reject ONLY a body that STARTS with the
+    # marker — i.e. this script's own generated tag reply.
+    body_trimmed="${body#"${body%%[![:space:]]*}"}"
+    case "$body_trimmed" in
+      "[mergepath-resolve:"*) k=$((k + 1)); continue ;;
+    esac
+    if [ -n "$login" ] && [ -n "$body" ] && is_agent_author_local "$login"; then
+      return 0
+    fi
+    k=$((k + 1))
+  done
+  return 1
+}
+
+# finding_dispositioned <thread_json> → prints the evidence description,
+# exit 0; exit 1 when this specific finding was never dispositioned.
+#
+# The finding's comment id is .all_comments[0].databaseId — the thread's
+# ORIGINAL comment, which is the id both recorder scripts key their ledger
+# rows on. That index is only trustworthy over a COMPLETE comment list, which
+# every caller already guarantees via complete_thread_comments (fail-closed on
+# a re-fetch failure, #573 item 2).
+finding_dispositioned() {
+  local tj="$1" cid floor lf
+  if thread_reply_disposition "$tj"; then
+    printf 'agent reply on the thread after the latest re-raise'
+    return 0
+  fi
+  cid=$(printf '%s' "$tj" | jq -r '.all_comments[0].databaseId // ""' 2>/dev/null) || cid=""
+  floor=$(latest_nonagent_created "$tj")
+  if lf=$(ledger_verdict_for_finding "$cid" "$floor"); then
+    printf 'verdict for finding %s recorded in %s' "$cid" "${lf##*/}"
+    return 0
+  fi
+  return 1
+}
+
+# thread_is_actioned <class> <thread_json> — THE actioned predicate (#990).
+# Exit 0 only when the class proves action AND the evidence is bound to this
+# finding. Replaces bare class_is_actioned at every decision site.
+#
+# Only stdout (the evidence description this caller has no use for) is
+# discarded. Stderr is left connected to the caller's, because
+# finding_dispositioned's ledger read can print an unparseable-ledger WARN
+# (#1002) that every caller needs to see — swallowing it here silently
+# downgraded that diagnostic to invisible on the --auto-resolve-bots and
+# --resolve-verified-propagation paths, the only two callers that route
+# through this wrapper instead of calling finding_dispositioned directly.
+thread_is_actioned() {
+  local class="$1" tj="$2"
+  class_is_actioned "$class" || return 1
+  finding_dispositioned "$tj" >/dev/null
 }
 
 # synth_rationale <class> <thread_json> → one-line free-form rationale
@@ -2661,6 +2979,12 @@ SKIPPED_STALE=0
 # followup). Left unresolved on purpose so the weekly sweep still surfaces
 # them; counted so the exit code reflects that work remains.
 SKIPPED_NOT_ACTIONED=0
+# #990 --resolve-actioned: threads whose class qualifies but whose only
+# evidence is file-level — no on-thread agent reply and no per-finding ledger
+# verdict. These are the ones the file proxy used to sweep unread (100% of
+# them on a single-file PR). Left unresolved so the weekly sweep still
+# surfaces them; counted into the exit-3 predicate.
+SKIPPED_NOT_DISPOSITIONED=0
 # #573 item 2 --resolve-actioned: threads skipped because their comment
 # list is TRUNCATED (>50 comments) and the full re-fetch failed — the
 # staleness floor cannot be trusted, so the thread is left unresolved
@@ -2807,6 +3131,23 @@ while IFS= read -r thread; do
       SKIPPED_NOT_ACTIONED=$((SKIPPED_NOT_ACTIONED + 1))
       continue
     fi
+    # #990: the class is necessary, not sufficient. addressed-elsewhere is
+    # satisfied by evidence about the anchored FILE, which proves nothing
+    # about THIS finding once the PR is down to a file or two. Require an
+    # artifact bound to the finding itself — an on-thread agent reply or a
+    # per-finding ledger verdict — before the resolve decision is made here.
+    if ! disposition_evidence=$(finding_dispositioned "$thread"); then
+      echo "  SKIP (never dispositioned: $thread_class rests on file-level evidence only): [$AUTHOR] $PATH_"
+      echo "    $EXCERPT"
+      echo "    A commit touching $PATH_ does not show THIS finding was read — on a"
+      echo "    one-file PR every commit touches every thread's file (#990). Left"
+      echo "    unresolved. Reply on the thread, record a verdict via"
+      echo "    codex-record-feedback.sh / coderabbit-record-feedback.sh, or defer it"
+      echo "    explicitly via --auto-resolve-bots --rationale."
+      SKIPPED_NOT_DISPOSITIONED=$((SKIPPED_NOT_DISPOSITIONED + 1))
+      continue
+    fi
+    echo "  INFO: finding-bound evidence for [$AUTHOR] $PATH_ — $disposition_evidence (#990)"
   fi
 
   # #572 --resolve-verified-propagation: gate the resolve on a byte-verified
@@ -2897,7 +3238,12 @@ while IFS= read -r thread; do
     # for these (exactly what --resolve-actioned would resolve on), so the
     # byte-compare is skipped; non-actioned threads fall through to it.
     upgraded_class=$(derive_tag_class "$thread" skip-routing)
-    if class_is_actioned "$upgraded_class"; then
+    # #990: thread_is_actioned, not class_is_actioned — an upgrade on
+    # file-level evidence alone would record addressed-elsewhere for a
+    # finding nobody dispositioned, and the rollup SKIPS that class. Without
+    # finding-bound evidence the thread falls through to the byte-compare,
+    # which is stronger evidence anyway.
+    if thread_is_actioned "$upgraded_class" "$thread"; then
       echo "  INFO: tag auto-upgraded verified-propagation → $upgraded_class for [$AUTHOR] $PATH_ (demonstrably actioned; #575)"
       thread_class="$upgraded_class"
       VERIFIED_RATIONALE=$(synth_rationale "$upgraded_class" "$thread")
@@ -2984,9 +3330,15 @@ while IFS= read -r thread; do
       # cannot be demonstrated on a truncated window (fail safe, #573).
       fetch_pr_tag_data
       augment_pr_commits_with_sha
+      # #990: the upgrade needs finding-bound evidence too. A file-proxy
+      # upgrade would relabel an operator's honest deferral as
+      # addressed-elsewhere — which the daily rollup skips — so the finding
+      # would stop resurfacing without anyone having read it. Absent that
+      # evidence the operator's deferred-to-followup stands, which is both
+      # truthful and self-correcting.
       if thread=$(complete_thread_comments "$thread"); then
         upgraded_class=$(derive_tag_class "$thread" skip-routing)
-        if class_is_actioned "$upgraded_class"; then
+        if thread_is_actioned "$upgraded_class" "$thread"; then
           echo "  INFO: tag auto-upgraded deferred-to-followup → $upgraded_class for [$AUTHOR] $PATH_ (demonstrably actioned; #575)"
           tag_class="$upgraded_class"
         fi
@@ -3060,11 +3412,29 @@ while IFS= read -r thread; do
             deferred-to-followup|canonical-coverage|templated-render)
               orig_class="$thread_class"
               upgraded_class=$(derive_tag_class "$thread" skip-routing)
-              if class_is_actioned "$upgraded_class"; then
+              # #990: finding-bound evidence required, same as the other two
+              # upgrade paths — the tag is the disposition of record and the
+              # actioned classes are the ones the rollup stops re-surfacing.
+              if thread_is_actioned "$upgraded_class" "$thread"; then
                 echo "  INFO: tag auto-upgraded $orig_class → $upgraded_class for [$AUTHOR] $PATH_ (demonstrably actioned; #575)"
                 thread_class="$upgraded_class"
               elif [ "$orig_class" != "deferred-to-followup" ]; then
                 echo "  INFO: routing class $orig_class recorded as deferred-to-followup for [$AUTHOR] $PATH_ (explicit deferral, not actioned; #616)"
+                thread_class="deferred-to-followup"
+              fi
+              ;;
+            addressed-elsewhere|rebuttal-recorded)
+              # #990: the ladder can reach an ACTIONED class DIRECTLY, without
+              # passing through the upgrade branch above — a non-manifest path
+              # skips routing, so step 2 emits addressed-elsewhere off the
+              # fix-commit proxy alone. Same burial risk as the routing arm and
+              # the same remedy: the rollup skips actioned classes, so record
+              # the operator's honest deferral unless the evidence is bound to
+              # this finding. (rebuttal-recorded is listed for uniformity of the
+              # rule; it carries an on-thread reply by construction and so can
+              # never be downgraded here.)
+              if ! thread_is_actioned "$thread_class" "$thread"; then
+                echo "  INFO: actioned class $thread_class recorded as deferred-to-followup for [$AUTHOR] $PATH_ (file-level evidence only, finding never dispositioned; #990)"
                 thread_class="deferred-to-followup"
               fi
               ;;
@@ -3123,7 +3493,7 @@ done < <(printf '%s\n' "$UNRESOLVED")
 
 echo ""
 if $DRY_RUN; then
-  echo "(dry-run; no threads modified) — would-resolve: $WOULD_RESOLVE_COUNT, skipped (human): $SKIPPED_HUMAN, skipped (stale-HEAD): $SKIPPED_STALE, skipped (not-actioned): $SKIPPED_NOT_ACTIONED, skipped (comments-incomplete): $SKIPPED_COMMENTS_INCOMPLETE, skipped (not-propagation): $SKIPPED_NOT_PROPAGATION, skipped (drift): $SKIPPED_DRIFT, skipped (verify-error): $SKIPPED_VERIFY_ERROR, skipped (no-upstream-evidence): $SKIPPED_NO_UPSTREAM_EVIDENCE"
+  echo "(dry-run; no threads modified) — would-resolve: $WOULD_RESOLVE_COUNT, skipped (human): $SKIPPED_HUMAN, skipped (stale-HEAD): $SKIPPED_STALE, skipped (not-actioned): $SKIPPED_NOT_ACTIONED, skipped (never-dispositioned): $SKIPPED_NOT_DISPOSITIONED, skipped (comments-incomplete): $SKIPPED_COMMENTS_INCOMPLETE, skipped (not-propagation): $SKIPPED_NOT_PROPAGATION, skipped (drift): $SKIPPED_DRIFT, skipped (verify-error): $SKIPPED_VERIFY_ERROR, skipped (no-upstream-evidence): $SKIPPED_NO_UPSTREAM_EVIDENCE"
   # Codex r2 on PR #172: dry-run previously exited 0 when only
   # current-HEAD bot threads remained (because dry-run does not mutate
   # them and they didn't increment SKIPPED_*). Callers would treat
@@ -3132,7 +3502,7 @@ if $DRY_RUN; then
   # human-skipped, or stale-skipped). The only exit-0 path through
   # auto-resolve-bots --dry-run is "no unresolved threads at all"
   # which is already short-circuited above (UNRESOLVED is empty).
-  if [ "$WOULD_RESOLVE_COUNT" -gt 0 ] || [ "$SKIPPED_HUMAN" -gt 0 ] || [ "$SKIPPED_STALE" -gt 0 ] || [ "$SKIPPED_NOT_ACTIONED" -gt 0 ] || [ "$SKIPPED_COMMENTS_INCOMPLETE" -gt 0 ] || [ "$SKIPPED_NOT_PROPAGATION" -gt 0 ] || [ "$SKIPPED_DRIFT" -gt 0 ] || [ "$SKIPPED_VERIFY_ERROR" -gt 0 ] || [ "$SKIPPED_NO_UPSTREAM_EVIDENCE" -gt 0 ]; then
+  if [ "$WOULD_RESOLVE_COUNT" -gt 0 ] || [ "$SKIPPED_HUMAN" -gt 0 ] || [ "$SKIPPED_STALE" -gt 0 ] || [ "$SKIPPED_NOT_ACTIONED" -gt 0 ] || [ "$SKIPPED_NOT_DISPOSITIONED" -gt 0 ] || [ "$SKIPPED_COMMENTS_INCOMPLETE" -gt 0 ] || [ "$SKIPPED_NOT_PROPAGATION" -gt 0 ] || [ "$SKIPPED_DRIFT" -gt 0 ] || [ "$SKIPPED_VERIFY_ERROR" -gt 0 ] || [ "$SKIPPED_NO_UPSTREAM_EVIDENCE" -gt 0 ]; then
     exit 3
   fi
   exit 0
@@ -3198,7 +3568,7 @@ if [ "${#RESOLVED_IDS[@]}" -gt 0 ]; then
   fi
 fi
 
-echo "Resolved: $RESOLVED_COUNT  Skipped (human): $SKIPPED_HUMAN  Skipped (stale-HEAD): $SKIPPED_STALE  Skipped (not-actioned): $SKIPPED_NOT_ACTIONED  Skipped (comments-incomplete): $SKIPPED_COMMENTS_INCOMPLETE  Skipped (not-propagation): $SKIPPED_NOT_PROPAGATION  Skipped (drift): $SKIPPED_DRIFT  Skipped (verify-error): $SKIPPED_VERIFY_ERROR  Skipped (no-upstream-evidence): $SKIPPED_NO_UPSTREAM_EVIDENCE  Failed: $FAILED_COUNT  Readback-failed: $READBACK_FAILED"
+echo "Resolved: $RESOLVED_COUNT  Skipped (human): $SKIPPED_HUMAN  Skipped (stale-HEAD): $SKIPPED_STALE  Skipped (not-actioned): $SKIPPED_NOT_ACTIONED  Skipped (never-dispositioned): $SKIPPED_NOT_DISPOSITIONED  Skipped (comments-incomplete): $SKIPPED_COMMENTS_INCOMPLETE  Skipped (not-propagation): $SKIPPED_NOT_PROPAGATION  Skipped (drift): $SKIPPED_DRIFT  Skipped (verify-error): $SKIPPED_VERIFY_ERROR  Skipped (no-upstream-evidence): $SKIPPED_NO_UPSTREAM_EVIDENCE  Failed: $FAILED_COUNT  Readback-failed: $READBACK_FAILED"
 if ! $NO_TAG_REPLY; then
   echo "Tag replies: posted=$TAG_REPLY_POSTED  failed=$TAG_REPLY_FAILED"
 fi
@@ -3229,7 +3599,7 @@ fi
 # non-zero; whether that trips `set -e` depends on subtle list-tail
 # rules. The `if` form is unambiguous and matches the block above.
 # (CodeRabbit Major, #271/#272.)
-if [ "$SKIPPED_HUMAN" -gt 0 ] || [ "$SKIPPED_STALE" -gt 0 ] || [ "$SKIPPED_NOT_ACTIONED" -gt 0 ] || [ "$SKIPPED_COMMENTS_INCOMPLETE" -gt 0 ] || [ "$SKIPPED_NOT_PROPAGATION" -gt 0 ] || [ "$SKIPPED_DRIFT" -gt 0 ] || [ "$SKIPPED_VERIFY_ERROR" -gt 0 ] || [ "$SKIPPED_NO_UPSTREAM_EVIDENCE" -gt 0 ]; then
+if [ "$SKIPPED_HUMAN" -gt 0 ] || [ "$SKIPPED_STALE" -gt 0 ] || [ "$SKIPPED_NOT_ACTIONED" -gt 0 ] || [ "$SKIPPED_NOT_DISPOSITIONED" -gt 0 ] || [ "$SKIPPED_COMMENTS_INCOMPLETE" -gt 0 ] || [ "$SKIPPED_NOT_PROPAGATION" -gt 0 ] || [ "$SKIPPED_DRIFT" -gt 0 ] || [ "$SKIPPED_VERIFY_ERROR" -gt 0 ] || [ "$SKIPPED_NO_UPSTREAM_EVIDENCE" -gt 0 ]; then
   exit 3
 fi
 exit 0

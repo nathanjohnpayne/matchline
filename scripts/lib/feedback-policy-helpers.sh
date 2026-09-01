@@ -22,7 +22,11 @@
 #   feedback_policy_field <key> [cfg]      # scalar under feedback_policy:
 #   resolve_required_tiers [cfg]           # one blocking tier per line
 #   codex_tier_of "<comment-body>"         # p0..p3 or empty
+#   codex_tiers_of "<comment-body>"        # every p0..p3 marker, in order
 #   coderabbit_tier_of "<comment-body>"    # p0..p3|nitpick or empty
+#   coderabbit_tiers_of "<comment-body>"   # every graded marker, in order
+#   coderabbit_finding_scan "<body>"       # strip fenced/pre-merge regions
+#   ghas_severity_tier "<security_severity_level>"  # p0..p3 or empty (#1101)
 #
 # cfg defaults to $CONFIG (the global the gate scripts set) and then to
 # .github/review-policy.yml, matching scripts/lib/reviewers-helpers.sh.
@@ -107,20 +111,28 @@ resolve_required_tiers() {
 # and the text fallback `**P0`..`**P3` Codex emits when the badge image is
 # absent. The FIRST marker in document order wins across BOTH forms — a
 # blocking P1 must not be downgraded by a later P2/P3 in quoted/example text
-# (nathanpayne-codex Phase 4b on #581). grep -oE emits matches in position
-# order; head -n1 takes the earliest.
+# (nathanpayne-codex Phase 4b on #581). `codex_tiers_of` exposes the same
+# canonical markers in document order for callers that intentionally model a
+# compound top-level body.
+codex_tiers_of() {
+  local body=${1:-} markers marker n
+  markers=$(printf '%s' "$body" | grep -oE '!\[P[0-3] Badge\]|\*\*P[0-3]' || true)
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
+    n=$(printf '%s' "$marker" | sed -E 's/.*P([0-3]).*/\1/')
+    echo "p$n"
+  done <<EOF
+$markers
+EOF
+}
+
 codex_tier_of() {
-  local body=${1:-} marker n
-  # Status-safe under `set -euo pipefail`: grep exits 1 on no match (and can
-  # take SIGPIPE from `head`), which with pipefail would fail the assignment
-  # and abort a caller doing `tier=$(codex_tier_of "$b")` before this function
-  # returns. `|| true` keeps a markerless body as a clean empty result, rc 0
-  # (nathanpayne-codex Phase 4b P1 on #581). Split into extract-then-parse so
-  # the failable grep is isolated from the always-succeeding sed.
-  marker=$(printf '%s' "$body" | grep -oE '!\[P[0-3] Badge\]|\*\*P[0-3]' | head -n1 || true)
-  [ -n "$marker" ] || return 0
-  n=$(printf '%s' "$marker" | sed -E 's/.*P([0-3]).*/\1/')
-  echo "p$n"
+  local tiers
+  # Keep the single-finding contract: the first marker wins. The all-marker
+  # primitive above exists for compound top-level review surfaces.
+  tiers=$(codex_tiers_of "${1:-}")
+  [ -n "$tiers" ] || return 0
+  printf '%s\n' "$tiers" | sed -n '1p'
 }
 
 # Map a CodeRabbit finding body to a tier, or empty if it is not a gradeable
@@ -140,22 +152,174 @@ codex_tier_of() {
 #
 # CodeRabbit markers → tier (p0 is Codex-only; CodeRabbit never maps to p0):
 #   🟠 Major / Potential issue / ⚠️  → p1
-#   🧹 Nitpick                       → nitpick
-#   🔵 Trivial / Outside diff range  → p3
-#   🟡 Minor                         → p2
+#   🧹 Nitpick                                     → nitpick
+#   🔵 Trivial / Outside diff range                → p3
+#   🟡 Minor                                       → p2
 # Anything else (Refactor suggestion, plain Note, bare titlecase prose) → empty.
+#
+# CodeRabbit's other machine-readable signal — the `cr-indicator-types` tag it
+# appends to a finding body — is deliberately NOT graded here. Grading it needs
+# a definition of where one finding's stanza ends, because CodeRabbit renders a
+# finding's badge and its tag on different lines and both merge-relevant
+# callers grade a PR-level summary line by line; four successive framings of
+# that boundary produced four defects on #936. It is [#945](https://github.com/nathanjohnpayne/mergepath/issues/945),
+# with a spec-derived matrix, and #888 stays open for it.
+coderabbit_finding_scan() {
+  local body=${1:-} out
+  out=$(printf '%s\n' "$body" | awk \
+    -v block_start='<!-- pre_merge_checks_walkthrough_start -->' \
+    -v block_end='<!-- pre_merge_checks_walkthrough_end -->' '
+      function fence_info(s, out,   c, n) {
+        sub(/^ ? ? ?/, "", s)
+        c = substr(s, 1, 1)
+        if (c != "`" && c != "~") return 0
+        n = 0
+        while (substr(s, n + 1, 1) == c) n++
+        if (n < 3) return 0
+        out["rest"] = substr(s, n + 1)
+        if (c == "`" && index(out["rest"], "`") > 0) return 0
+        out["char"] = c
+        out["len"] = n
+        return 1
+      }
+      function fence_update(line,   info) {
+        if (!fence_info(line, info)) return 0
+        if (!in_fence) {
+          in_fence = 1
+          fence_char = info["char"]
+          fence_len = info["len"]
+          return 1
+        }
+        if (info["char"] == fence_char && info["len"] >= fence_len \
+            && info["rest"] ~ /^[ \t]*$/) {
+          in_fence = 0
+          fence_char = ""
+          fence_len = 0
+        }
+        return 1
+      }
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        lines[NR] = line
+        delimiter = fence_update(line)
+        visible[NR] = (!delimiter && !in_fence)
+        structural = line
+        sub(/[ \t]+$/, "", structural)
+        # Pair the block on the NEWEST start seen before the end, not the
+        # oldest. Anchoring on the first start (the old "&& !start_line")
+        # let an unmatched start earlier in the body swallow everything up to
+        # a LATER, properly paired block: a real Major badge sitting between
+        # the two was suppressed, and the inventory then reported clear with
+        # nothing to disposition (#1000 Codex P1). An unpaired start is not a
+        # block, so it must not extend one; re-anchoring keeps the intervening
+        # text classified. Still at most one suppressed region per body -- only
+        # the first properly closed pair is dropped -- so this can never
+        # suppress more than the previous rule did.
+        if (visible[NR] && structural == block_start && !end_line) {
+          pending_start = NR
+        } else if (visible[NR] && structural == block_end \
+                   && pending_start && !end_line) {
+          start_line = pending_start
+          end_line = NR
+          pending_start = 0
+        }
+      }
+      END {
+        # A commanded CodeRabbit review can answer with provider state rather
+        # than reviewer feedback. Its exact "Action not completed" summary
+        # carries the same warning glyph the tier ladder grades p1, so omit
+        # only that one line when it follows a visible, nonempty command-
+        # invocation marker (#1050). Find the pair only after resolving the
+        # pre-merge exclusion above: a marker inside any excluded region must
+        # not authorize suppressing a visible line elsewhere. Do not remove
+        # the surrounding details block; a mixed body can still carry a real
+        # severity badge there and must fail toward classification.
+        for (i = 1; i <= NR; i++) {
+          if (!visible[i]) continue
+          if (end_line && i >= start_line && i <= end_line) continue
+          structural = lines[i]
+          sub(/[ \t]+$/, "", structural)
+          if (!invocation_line \
+              && structural ~ /^<!-- CodeRabbit review command invocation: [^[:space:]<>][^<>]* -->$/) {
+            invocation_line = i
+          } else if (invocation_line && !status_summary_line \
+                     && structural == "<summary>⚠️ Action not completed</summary>") {
+            status_summary_line = i
+          }
+        }
+        for (i = 1; i <= NR; i++) {
+          if (!visible[i]) continue
+          if (end_line && i >= start_line && i <= end_line) continue
+          if (status_summary_line && i == status_summary_line) continue
+          print lines[i]
+        }
+      }
+    ') || {
+      echo "ERROR: could not sanitize a CodeRabbit finding surface" >&2
+      return 2
+    }
+  if [ -n "$out" ]; then
+    printf '%s\n' "$out"
+  fi
+}
+
+coderabbit_tiers_of() {
+  local body=${1:-} markers marker
+  markers=$(printf '%s' "$body" \
+    | grep -oE '🟠 Major|Potential issue|⚠️|🧹 Nitpick|🔵 Trivial|Outside diff range|🟡 Minor' || true)
+  while IFS= read -r marker; do
+    case "$marker" in
+      "🟠 Major"|"Potential issue"|"⚠️") echo p1 ;;
+      "🟡 Minor") echo p2 ;;
+      "🔵 Trivial"|"Outside diff range") echo p3 ;;
+      "🧹 Nitpick") echo nitpick ;;
+    esac
+  done <<EOF
+$markers
+EOF
+}
+
 coderabbit_tier_of() {
-  local head
+  local head tiers wanted
   # Truncate via parameter expansion (not `printf | head -c`): under
   # `set -euo pipefail` a large body makes head close the pipe early and
   # printf exits 141 (SIGPIPE), which aborts every caller. The badge markers
   # matched below are near the start, so a 600-char cut is more than enough.
   head="${1:-}"; head="${head:0:600}"
-  case "$head" in
-    *"🟠 Major"*|*"Potential issue"*|*"⚠️"*)  echo p1; return 0 ;;
-    *"🧹 Nitpick"*)                            echo nitpick; return 0 ;;
-    *"🔵 Trivial"*|*"Outside diff range"*)     echo p3; return 0 ;;
-    *"🟡 Minor"*)                              echo p2; return 0 ;;
-  esac
+  tiers=$(coderabbit_tiers_of "$head")
+  for wanted in p1 nitpick p3 p2; do
+    if printf '%s\n' "$tiers" | grep -Fxq "$wanted"; then
+      echo "$wanted"
+      return 0
+    fi
+  done
   return 0
+}
+
+# Map a GitHub code-scanning alert's `rule.security_severity_level` value
+# (nathanjohnpayne/mergepath#1101) to the shared p0-p3 ladder, or empty for
+# an unrecognized/absent value. A code-scanning inline PR comment carries no
+# severity of its own — only a link to the alert — so unlike codex_tier_of /
+# coderabbit_tier_of (which parse a comment BODY), the caller resolves the
+# severity STRING itself via the `code-scanning/alerts` API and hands it
+# here. This keeps the network fetch in the caller (review-feedback-
+# accounting.sh already talks to the GitHub API) and this file's "no gh, no
+# network" sourcing contract intact — this function only maps a value it is
+# given.
+#
+#   critical -> p0   high -> p1   medium -> p2   low -> p3
+#
+# GHAS never maps to `nitpick` (that tier is CodeRabbit-only) and an
+# unrecognized level (including `none`, which GitHub uses for rules with no
+# CVSS-derived severity) returns empty; the caller decides the fail-open-vs-
+# closed default for that case, matching every other classifier in this file.
+ghas_severity_tier() {
+  case "${1:-}" in
+    critical) echo p0 ;;
+    high) echo p1 ;;
+    medium) echo p2 ;;
+    low) echo p3 ;;
+    *) return 0 ;;
+  esac
 }

@@ -24,6 +24,7 @@
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export MERGEPATH_REVIEW_FEEDBACK_ACCOUNTING_CMD=true
 LIB="$ROOT/scripts/lib/codex-failure-markers.sh"
 REQUEST="$ROOT/scripts/codex-review-request.sh"
 CHECK="$ROOT/scripts/codex-review-check.sh"
@@ -93,7 +94,7 @@ BLOCKED_FILTER='
         | select($reason != null)
         | { reason: $reason, created_at: .created_at, comment_id: .id }
       ]
-      | max_by(.created_at) // null'
+      | max_by([.created_at, .comment_id]) // null'
 
 mk() { jq -n --arg login "$1" --arg body "$2" --arg t "$3" --argjson id "$4" \
   '[{user:{login:$login},body:$body,created_at:$t,id:$id}]'; }
@@ -126,6 +127,31 @@ newer_ul="$(mk "$BOT" "$QUOTA_BODY" "2026-07-07T02:00:00Z" 905)"
 check_blocked "newest marker wins (usage_limit @ 02:00 over not_connected @ 01:00)" \
   '{"reason":"usage_limit","created_at":"2026-07-07T02:00:00Z","comment_id":905}' \
   "$(jq -s 'add' <(printf '%s' "$older_nc") <(printf '%s' "$newer_ul"))"
+# #953: a same-second tie must resolve by the explicit [.created_at, .id] key,
+# not by whichever order the API happened to list the two comments in. Assert
+# BOTH input orders — non-vacuous by mutation, since reverting the filter to
+# max_by(.created_at) alone still passes the ascending order (jq's max_by
+# already keeps the LAST maximal element) and only fails the reversed one.
+tie_low="$(mk "$BOT" "$NOT_CONNECTED_BODY" "2026-07-07T03:00:00Z" 910)"
+tie_high="$(mk "$BOT" "$QUOTA_BODY" "2026-07-07T03:00:00Z" 911)"
+check_blocked "same-second tie (ascending id order) selects the higher id" \
+  '{"reason":"usage_limit","created_at":"2026-07-07T03:00:00Z","comment_id":911}' \
+  "$(jq -s 'add' <(printf '%s' "$tie_low") <(printf '%s' "$tie_high"))"
+check_blocked "same-second tie (descending id order) selects the higher id" \
+  '{"reason":"usage_limit","created_at":"2026-07-07T03:00:00Z","comment_id":911}' \
+  "$(jq -s 'add' <(printf '%s' "$tie_high") <(printf '%s' "$tie_low"))"
+
+# ── 2b. Structural: BLOCKED_FILTER above is a literal copy ("KEEP IN SYNC"),
+#      not extracted from codex-review-request.sh, so the check_blocked
+#      assertions above cannot catch the REAL script regressing to
+#      max_by(.created_at) alone. Assert the tie-break key is present in the
+#      file itself, the same way section 4/5/6 below structurally pin other
+#      behavior this suite cannot drive end-to-end line-for-line.
+if grep -q 'max_by(\[\.created_at, \.comment_id\]) // null' "$REQUEST"; then
+  pass "codex-review-request.sh's blocked filter breaks same-second ties by [.created_at, .comment_id] (#953)"
+else
+  fail "codex-review-request.sh's blocked filter still resolves same-second ties by max_by(.created_at) alone"
+fi
 
 # ── 3. current_blocked_reason's post-trigger anchoring (codex-review-request.sh).
 #      KEEP IN SYNC with the TRIGGER_POSTED=true branch of current_blocked_reason.
@@ -169,6 +195,95 @@ else
   fail "codex-review-check.sh is missing the gate (c) block diagnostic"
 fi
 
+# ── 5b. Behavioural: codex-review-check.sh's block SELECTION (#839).
+#
+# #839's whole point is that a terminal account block must route the Phase 4b
+# barrier to its fallback immediately instead of burning `max_wait_seconds`.
+# That routing chains: this predicate finds the marker → the delegate exits 2
+# under --diagnostic-signal-only → p4b_barrier_class_codex maps 2 to `waived`.
+# The last two links were covered; this one was not — section 5 above is a
+# structural grep, which cannot tell whether the marker ever reaches the guard
+# it checks. Asserted on the extracted sentinel block so a mutation of any
+# filter shows up here rather than as a live 21-minute wait.
+SELSNIP="$(mktemp "${TMPDIR:-/tmp}/codex-block-selector.XXXXXX")"
+E2E_WORKDIR=""
+# One EXIT trap for every temp path this suite creates. Registering a second
+# `trap ... EXIT` later would REPLACE this one and leak whatever the first
+# handler owned, so section 7's workdir is cleaned from here too and is
+# `set -u`-safe before it is assigned.
+cleanup_tmp() {
+  rm -f "$SELSNIP"
+  [ -n "${E2E_WORKDIR:-}" ] && rm -rf "$E2E_WORKDIR"
+  return 0
+}
+trap cleanup_tmp EXIT
+awk '/^# BEGIN codex_block_marker_selector$/{f=1;next} /^# END codex_block_marker_selector$/{f=0} f' \
+  "$CHECK" >"$SELSNIP"
+# shellcheck disable=SC1090
+. "$SELSNIP"
+
+BOT='chatgpt-codex-connector[bot]'
+AFTER='2026-07-01T10:00:00Z'
+sel_reason() { # <comments-json> -> reason or "none"
+  crc_select_codex_block_marker "$1" "$BOT" "$AFTER" \
+    "$CODEX_USAGE_LIMIT_MARKER_RE" "$CODEX_NOT_CONNECTED_MARKER_RE" \
+    | jq -r 'if . == null then "none" else .reason end'
+}
+_c() { # <created_at> <body> [login]
+  jq -nc --arg t "$1" --arg b "$2" --arg l "${3:-$BOT}" \
+    '[{user:{login:$l}, created_at:$t, body:$b}]'
+}
+
+sel_bad=""
+# 1. A fresh quota / not-connected marker IS found — the criterion the barrier
+#    needs (`escalate`, not `not-yet`).
+[ "$(sel_reason "$(_c '2026-07-01T10:05:00Z' "$QUOTA_BODY")")" = "usage_limit" ] \
+  || sel_bad="$sel_bad fresh-quota-missed"
+[ "$(sel_reason "$(_c '2026-07-01T10:05:00Z' "$NOT_CONNECTED_BODY")")" = "not_connected" ] \
+  || sel_bad="$sel_bad fresh-notconnected-missed"
+# 2. Absence of any block marker yields nothing, so an ordinary "Codex has not
+#    answered yet" still classifies not-yet and keeps its bounded wait.
+[ "$(sel_reason "$(_c '2026-07-01T10:05:00Z' 'Working on it.')")" = "none" ] \
+  || sel_bad="$sel_bad noise-classified-as-block"
+[ "$(sel_reason '[]')" = "none" ] || sel_bad="$sel_bad empty-classified-as-block"
+# 3. The three filters. A marker BEFORE the freshness threshold is a prior
+#    head's and must not resurface; a non-bot author cannot speak for the Codex
+#    account; and a `Codex Review:` verdict that merely mentions limits is a
+#    REVIEW, not a block — misreading it would waive a head Codex actually
+#    reviewed.
+[ "$(sel_reason "$(_c '2026-07-01T09:59:59Z' "$QUOTA_BODY")")" = "none" ] \
+  || sel_bad="$sel_bad stale-marker-surfaced"
+[ "$(sel_reason "$(_c '2026-07-01T10:05:00Z' "$QUOTA_BODY" 'nathanjohnpayne')")" = "none" ] \
+  || sel_bad="$sel_bad non-bot-author-accepted"
+[ "$(sel_reason "$(_c '2026-07-01T10:05:00Z' "Codex Review: Didn't find any major issues.
+Quoting the note about Codex usage limits for code reviews here.")")" = "none" ] \
+  || sel_bad="$sel_bad verdict-read-as-block"
+# 4. Latest-wins across several markers, so the reported reason names the
+#    current state rather than whichever the API happened to list first.
+[ "$(sel_reason "$(jq -nc --arg q "$QUOTA_BODY" --arg n "$NOT_CONNECTED_BODY" --arg l "$BOT" \
+      '[{user:{login:$l},created_at:"2026-07-01T10:05:00Z",body:$q},
+        {user:{login:$l},created_at:"2026-07-01T10:09:00Z",body:$n}]')")" = "not_connected" ] \
+  || sel_bad="$sel_bad latest-wins-broken"
+# 5. A same-second tie resolves by an explicit [.created_at, .id] key, in
+#    both input orders (#953) — codex-review-check.sh's copy has no
+#    comment_id in its OUTPUT contract, so this only asserts via `reason`,
+#    but the fixture still forces the tie-break to matter: the two ids carry
+#    opposite reasons, so a wrong id winning is observable as a wrong reason.
+tie_asc="$(jq -nc --arg q "$QUOTA_BODY" --arg n "$NOT_CONNECTED_BODY" --arg l "$BOT" \
+  '[{id:920,user:{login:$l},created_at:"2026-07-01T10:05:00Z",body:$n},
+    {id:921,user:{login:$l},created_at:"2026-07-01T10:05:00Z",body:$q}]')"
+tie_desc="$(jq -nc --arg q "$QUOTA_BODY" --arg n "$NOT_CONNECTED_BODY" --arg l "$BOT" \
+  '[{id:921,user:{login:$l},created_at:"2026-07-01T10:05:00Z",body:$q},
+    {id:920,user:{login:$l},created_at:"2026-07-01T10:05:00Z",body:$n}]')"
+[ "$(sel_reason "$tie_asc")" = "usage_limit" ] || sel_bad="$sel_bad tie-ascending-broken"
+[ "$(sel_reason "$tie_desc")" = "usage_limit" ] || sel_bad="$sel_bad tie-descending-broken"
+
+if [ -z "$sel_bad" ]; then
+  pass "#839: the block selector finds a fresh quota/not-connected marker and rejects stale, non-bot, verdict-quoted and absent ones"
+else
+  fail "#839 block selection:$sel_bad"
+fi
+
 # ── 6. Drift guard: the audit sources the SAME lib (proposal 1). HUB-ONLY —
 #      audit-codex-latency.sh is not propagated, so skip when absent (a
 #      consumer checkout, e.g. the check_repo_lint_consumer_safety fixture).
@@ -198,7 +313,8 @@ fi
 #      gh-as-author (no GitHub network), modeled on
 #      tests/test_codex_review_request_trigger_only.sh.
 E2E_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-blocked-e2e.XXXXXX")"
-trap 'rm -rf "$E2E_WORKDIR"' EXIT
+# No trap here on purpose — `cleanup_tmp` (registered above) already removes
+# this directory. A second EXIT trap would drop the selector snippet's cleanup.
 
 # Build a temp repo whose stubbed gh returns a bot marker comment (created
 # after the trigger). $1 = marker body → drives usage_limit vs not_connected.
@@ -207,6 +323,8 @@ run_blocked_e2e() { # marker_body → prints "rc|blocked_reason|elapsed"
   mkdir -p "$dir/scripts/lib" "$dir/.github" "$dir/bin"
   cp "$REQUEST" "$dir/scripts/codex-review-request.sh"; chmod +x "$dir/scripts/codex-review-request.sh"
   cp "$LIB" "$dir/scripts/lib/codex-failure-markers.sh"
+  cp "$ROOT/scripts/lib/gh-api-scalar.sh" "$dir/scripts/lib/gh-api-scalar.sh"   # #799, hard-sourced
+  cp "$ROOT/scripts/lib/gh-api-array.sh" "$dir/scripts/lib/gh-api-array.sh"     # #1008, hard-sourced
   cat >"$dir/.github/review-policy.yml" <<'EOF'
 author_identity: nathanjohnpayne
 codex:

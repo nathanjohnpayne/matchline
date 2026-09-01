@@ -104,6 +104,21 @@ else
   fail "codex-review-check.sh does not let CODEX_REVIEW_CHECK_ALLOW_PHASE_4B_SUBSTITUTE override the policy value (#727)"
 fi
 
+# ── 3d. Structural (#1062): the completed-workflow continuation can reuse
+#      gates (a) and (b) without imposing gate (c) on an under-threshold PR.
+#      The mode is an explicit non-inheritable flag, requires a real registered
+#      APPROVED review (no same-agent exclusion and no Codex branch-2
+#      substitution), and returns before gate (c).
+if grep -q -- '--approval-readiness-only' "$SCRIPT" \
+   && grep -q 'APPROVAL_READINESS_ONLY=1' "$SCRIPT" \
+   && grep -q 'GATE_B_SAME_AGENT_REVIEWER=""' "$SCRIPT" \
+   && grep -q 'CURRENT_RUN_ID="\$GITHUB_RUN_ID"' "$SCRIPT" \
+   && grep -q 'external clearance intentionally delegated to the threshold-aware merge-clearance gate' "$SCRIPT"; then
+  pass "approval-readiness mode reuses current-head CI/annex plus registered approval without imposing Phase 4 or self-deadlocking (#1062)"
+else
+  fail "approval-readiness mode is missing its explicit flag, reviewer semantics, self-run guard, or pre-gate-(c) return (#1062)"
+fi
+
 # ── 4. Inline logic: the verdict-matching jq filter. KEEP IN SYNC with
 #      scripts/codex-review-check.sh CODEX_VERDICT_JSON. The filter selects the
 #      LATEST HEAD-anchored verdict FIRST (any disposition), then requires that
@@ -286,6 +301,156 @@ gc "verdict-only affirmative + unaddressed findings → NO"           no  ""    
 gc "thumbs-only → YES"                                              yes "2026-07-01T10:00:00Z" ""                    ""                    0 0
 gc "review-only clean → YES"                                        yes ""                    "2026-07-01T10:00:00Z" ""                    0 0
 gc "no signals at all → NO"                                         no  ""                    ""                    ""                    0 0
+
+# ── #814: the diagnostic bypass is a FLAG, not an inheritable env var.
+#
+# This script is the delegate of a REQUIRED status check in every fleet repo.
+# --diagnostic-signal-only skips gate (b) and disables the #705 carry-forward,
+# which WEAKENS the gate — so the risk is not what it does when asked for, but
+# whether a caller can get it without asking. An environment variable is
+# inherited by every child process, so merge-clearance-gate.sh, agent-review.yml
+# and the auto-clear workflow would pick it up from a runner env or a
+# workflow-level `env:` block and silently stop checking reviewer approval
+# (CodeRabbit Major on #835). A flag cannot be inherited.
+#
+# Structural, matching this file's documented approach; the behavioural check
+# (env var inert, flag effective) was run live against a real PR and is not
+# automated here, because driving the full flow needs a gh stub harness this
+# suite does not have.
+knob_ok=1
+# The bypass is reachable ONLY through the flag.
+grep -q -- '--diagnostic-signal-only) DIAGNOSTIC_SIGNAL_ONLY=1 ;;' "$SCRIPT" || knob_ok=0
+grep -q '^SKIP_REVIEWER_APPROVAL="\$DIAGNOSTIC_SIGNAL_ONLY"' "$SCRIPT" || knob_ok=0
+grep -q '^REQUIRE_HEAD_SIGNAL="\$DIAGNOSTIC_SIGNAL_ONLY"' "$SCRIPT" || knob_ok=0
+# No environment variable may enable it. This is the assertion that fails if
+# anyone reintroduces the inheritable form.
+if grep -qE 'CODEX_REVIEW_CHECK_(SKIP_REVIEWER_APPROVAL|REQUIRE_HEAD_SIGNAL)' "$SCRIPT"; then
+  knob_ok=0
+fi
+# Defaults off, and the skip cannot mask a real approval.
+grep -q '^DIAGNOSTIC_SIGNAL_ONLY=0' "$SCRIPT" || knob_ok=0
+grep -q 'if \[ -z "\$APPROVING_REVIEWER" \] && \[ "\$SKIP_REVIEWER_APPROVAL" = "1" \]; then' "$SCRIPT" || knob_ok=0
+# The gate (b) hard failure is still reachable without the flag.
+grep -q 'fail_gate "no reviewer identity in available_reviewers has a latest-state APPROVED' "$SCRIPT" || knob_ok=0
+if [ "$knob_ok" = 1 ]; then
+  pass "#814: the gate bypass is flag-only, defaults off, has no env-var path, and cannot mask a real approval"
+else
+  fail "#814: the gate bypass lost one of its non-inheritability guarantees"
+fi
+
+# Diagnostic mode asks only whether Codex produced a current-head signal for
+# the Phase 4b barrier. Its caller supplies the author explicitly, so a legacy
+# or external-contributor PR without an Authoring-Agent marker must not abort
+# before that signal check runs. Execute the real script with fixture PR bodies
+# and stop it at the immediately-following commit read: this proves the parser
+# branch was bypassed, rather than merely proving that expected source text
+# exists somewhere in the file.
+BEHAVIOR_TMP="$(mktemp -d "${TMPDIR:-/tmp}/codex-check-body.XXXXXX")"
+trap 'rm -rf "$BEHAVIOR_TMP"' EXIT
+mkdir -p "$BEHAVIOR_TMP/bin"
+cat >"$BEHAVIOR_TMP/policy.yml" <<'POLICY'
+author_identity: nathanjohnpayne
+available_reviewers:
+  - nathanpayne-claude
+  - nathanpayne-codex
+codex:
+  enabled: true
+  require_ci_green: false
+POLICY
+cat >"$BEHAVIOR_TMP/bin/gh" <<'GHSTUB'
+#!/usr/bin/env bash
+if [ "$1" = api ] && [[ "$2" == repos/*/pulls/7 ]]; then
+  jq -n --arg author "${FIXTURE_PR_AUTHOR:?}" --arg body "${FIXTURE_PR_BODY-}" \
+    '{head:{sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},user:{login:$author},body:$body}'
+  exit 0
+fi
+echo "fixture commit stop" >&2
+exit 1
+GHSTUB
+chmod +x "$BEHAVIOR_TMP/bin/gh"
+
+run_body_fixture() {
+  local author=$1 mode=$2 body=${3:-} output rc
+  set +e
+  output=$(PATH="$BEHAVIOR_TMP/bin:$PATH" GH_TOKEN=fixture \
+    MERGEPATH_REVIEW_POLICY_PATH="$BEHAVIOR_TMP/policy.yml" \
+    FIXTURE_PR_AUTHOR="$author" FIXTURE_PR_BODY="$body" \
+    "$SCRIPT" $mode 7 owner/repo 2>&1)
+  rc=$?
+  set -e
+  printf '%s\n%s\n' "$rc" "$output"
+}
+
+fixture_result="$(run_body_fixture nathanjohnpayne --diagnostic-signal-only)"
+fixture_rc="${fixture_result%%$'\n'*}"
+fixture_output="${fixture_result#*$'\n'}"
+if [ "$fixture_rc" = "3" ] \
+   && grep -q 'diagnostic-signal-only: skipping Authoring-Agent' <<<"$fixture_output" \
+   && grep -q 'failed to fetch commit date' <<<"$fixture_output" \
+   && ! grep -q 'PR body declares' <<<"$fixture_output"; then
+  pass "#1121: diagnostic-signal-only executes past a markerless PR body"
+else
+  fail "#1121: diagnostic markerless fixture did not bypass identity parsing (rc=$fixture_rc output=$fixture_output)"
+fi
+
+fixture_result="$(run_body_fixture external-contributor '')"
+fixture_rc="${fixture_result%%$'\n'*}"
+fixture_output="${fixture_result#*$'\n'}"
+if [ "$fixture_rc" = "3" ] \
+   && grep -q 'non-shared-author PR: skipping Authoring-Agent' <<<"$fixture_output" \
+   && grep -q 'failed to fetch commit date' <<<"$fixture_output" \
+   && ! grep -q 'PR body declares' <<<"$fixture_output"; then
+  pass "#1121: a markerless non-shared-author PR executes past identity parsing"
+else
+  fail "#1121: non-shared-author markerless fixture did not bypass identity parsing (rc=$fixture_rc output=$fixture_output)"
+fi
+
+fixture_result="$(run_body_fixture nathanjohnpayne '' 'Authoring-Agent: unknown')"
+fixture_rc="${fixture_result%%$'\n'*}"
+fixture_output="${fixture_result#*$'\n'}"
+if [ "$fixture_rc" = "3" ] && grep -q 'does not map to exactly one configured reviewer' <<<"$fixture_output"; then
+  pass "#1121: an unregistered Authoring-Agent fails closed before gate evaluation"
+else
+  fail "#1121: unregistered Authoring-Agent fixture did not fail closed (rc=$fixture_rc output=$fixture_output)"
+fi
+
+# Positional rather than a text scan — the header documents gate (c) long
+# before it is evaluated, so a "starts matching at the first mention" filter
+# reports a false leak (it did, on the first version of this assertion).
+knob_last=$(grep -n 'SKIP_REVIEWER_APPROVAL\|REQUIRE_HEAD_SIGNAL' "$SCRIPT" | tail -1 | cut -d: -f1)
+gatec_at=$(grep -n 'log "gate (c): checking external clearance' "$SCRIPT" | head -1 | cut -d: -f1)
+if [ -n "$knob_last" ] && [ -n "$gatec_at" ] && [ "$knob_last" -lt "$gatec_at" ]; then
+  pass "#814: every bypass reference precedes the gate (c) evaluation — it cannot influence external clearance"
+else
+  fail "#814: bypass reference at line ${knob_last:-?} is not before gate (c) at ${gatec_at:-?}"
+fi
+
+# #842: the CANNOT-REPORT exit must be diagnostic-mode-only. The barrier reads
+# exit 2 as "Codex is account-blocked, waive it and let Phase 4b run"; a real
+# merge-gate caller must never reach it, because an account-blocked Codex has
+# cleared nothing and the gate has to keep failing closed on 1.
+exit2_at=$(grep -n '^      exit 2$' "$SCRIPT" | head -1 | cut -d: -f1)
+guard_ok=0
+if [ -n "$exit2_at" ]; then
+  # The guard must be within the few lines immediately above the exit, so a
+  # later edit cannot leave the exit reachable from the gate path.
+  guard_at=$(sed -n "$((exit2_at - 4)),$((exit2_at - 1))p" "$SCRIPT" \
+    | grep -c 'DIAGNOSTIC_SIGNAL_ONLY" = "1"' || true)
+  # Proximity alone is not containment (CodeRabbit on #842): moving `fi` above
+  # the exit would leave the guard text nearby while the exit sits outside the
+  # block. Require that no `fi` closes between the guard and the exit.
+  fi_between=$(sed -n "$((exit2_at - 4)),$((exit2_at - 1))p" "$SCRIPT" \
+    | grep -cE '^[[:space:]]*fi[[:space:]]*$' || true)
+  [ "$guard_at" -ge 1 ] && [ "$fi_between" -eq 0 ] && guard_ok=1
+fi
+# And it must be the ONLY exit 2 in the script, so the documented 0/1/3
+# contract still holds for every non-diagnostic caller.
+n_exit2=$(grep -c '^[[:space:]]*exit 2$' "$SCRIPT" || true)
+if [ "$guard_ok" = 1 ] && [ "$n_exit2" = "1" ]; then
+  pass "#842: the CANNOT-REPORT exit is diagnostic-only and unique — the merge gate's 0/1/3 contract is unchanged"
+else
+  fail "#842: exit 2 is unguarded or duplicated (guard_ok=$guard_ok count=$n_exit2)"
+fi
 
 echo ""
 echo "test_codex_review_check_verdict: $PASS passed, $FAIL failed"

@@ -22,8 +22,11 @@
 #   codex_tier_of
 #     13. badge ![P0 Badge]..![P3 Badge]; text **P1; none
 #   coderabbit_tier_of
-#     14. nitpick / potential-issue default / critical / minor / major /
+#     14. nitpick / potential-issue default / minor / major /
 #         refactor / plain-note
+#   ghas_severity_tier (#1101)
+#     15. critical/high/medium/low -> p0/p1/p2/p3; none/empty/unrecognized
+#         -> empty (rc0, caller decides the fallback)
 #
 # Bash 3.2 portable.
 
@@ -162,11 +165,12 @@ eq "p1" "$(codex_tier_of '**P1**: stop retrying endlessly')"     "codex_tier_of:
 eq ""   "$(codex_tier_of 'just a normal comment')"               "codex_tier_of: none -> empty"
 eq "p1" "$(codex_tier_of 'first ![P1 Badge] then later ![P2 Badge]')" "codex_tier_of: first badge wins over later (#581 4b F3)"
 eq "p1" "$(codex_tier_of '**P1** first, then **P3** later')"          "codex_tier_of: first text marker wins over later (#581 4b F3)"
+eq "p3 p1 p2" "$(codex_tiers_of '**P3** first, then ![P1 Badge], then **P2**')" "codex_tiers_of: emits every canonical marker in document order"
 
 # --- coderabbit_tier_of ----------------------------------------------------
 eq "nitpick" "$(coderabbit_tier_of '🧹 Nitpick: rename this var')"                         "cr_tier_of: nitpick"
 eq "p1"      "$(coderabbit_tier_of '⚠️ Potential issue: unhandled error')"                 "cr_tier_of: potential issue -> p1"
-eq "p1"      "$(coderabbit_tier_of '_⚠️ Potential issue_ | _🔴 Critical_: RCE')"            "cr_tier_of: critical/potential-issue -> p1 (CodeRabbit tops at p1)"
+eq "p1"      "$(coderabbit_tier_of '_⚠️ Potential issue_ | _🔴 Critical_: RCE')"            "cr_tier_of: potential-issue -> p1 even when prose names Critical"
 eq "p1"      "$(coderabbit_tier_of '_⚠️ Potential issue_ | _🟠 Major_: breaks on the minor version bump')" "cr_tier_of: major wins over minor-in-prose -> p1 (#581 r1)"
 eq "p2"      "$(coderabbit_tier_of '_📐 Maintainability_ | _🟡 Minor_: rename var')"        "cr_tier_of: minor (no potential-issue marker) -> p2"
 eq "p3"      "$(coderabbit_tier_of '_🔵 Trivial issue_: cosmetic tweak')"                   "cr_tier_of: trivial -> p3 (#581 r2)"
@@ -175,6 +179,85 @@ eq ""        "$(coderabbit_tier_of '📝 Note: verified the change')"           
 eq ""        "$(coderabbit_tier_of 'This is a Minor cleanup note, not a CodeRabbit badge.')" "cr_tier_of: bare titlecase Minor prose -> empty (#581 4b F2)"
 eq ""        "$(coderabbit_tier_of 'This is Trivial, no finding badge.')"                    "cr_tier_of: bare titlecase Trivial prose -> empty (#581 4b F2)"
 eq "p2"      "$(coderabbit_tier_of '_📐 Maintainability_ | _🟡 Minor_: This cleanup is Trivial but visible')" "cr_tier_of: Minor badge beats Trivial-in-prose -> p2 (#581 4b F2)"
+eq "p3 p1 p2" "$(coderabbit_tiers_of '🔵 Trivial first, 🟠 Major second, 🟡 Minor third')" "cr_tiers_of: emits every canonical marker in document order"
+
+# #1050: a CodeRabbit command-invocation reply can use a warning glyph for
+# provider status rather than reviewer feedback. The sanitizer excludes only
+# the exact status-summary line when the same visible body carries the exact
+# invocation marker; all near misses and mixed real findings stay classified.
+coderabbit_scanned_tier() {
+  local sanitized
+  sanitized=$(coderabbit_finding_scan "${1:-}")
+  coderabbit_tier_of "$sanitized"
+}
+
+CR_RATE_LIMIT_STATUS='<!-- This is an auto-generated reply by CodeRabbit -->
+<!-- CodeRabbit review command invocation: v2:40695c92071a7774b4a6b4f0e9eb06deacb14b457ca3ec1044886bf8782b8cc7 -->
+<details>
+<summary>⚠️ Action not completed</summary>
+
+Review rate limited.
+
+</details>'
+eq "" "$(coderabbit_scanned_tier "$CR_RATE_LIMIT_STATUS")" "cr_scan: command-invocation rate-limit status is not a finding (#1050)"
+
+eq "p1" "$(coderabbit_scanned_tier '<!-- This is an auto-generated reply by CodeRabbit -->
+<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>')" "cr_scan: generic auto-reply marker does not suppress status-shaped warning"
+
+eq "p1" "$(coderabbit_scanned_tier '<!-- CodeRabbit review command invocation: -->
+<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>')" "cr_scan: empty invocation identifier fails toward classification"
+
+eq "p1" "$(coderabbit_scanned_tier '> <!-- CodeRabbit review command invocation: quoted-example -->
+<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>')" "cr_scan: quoted invocation marker fails toward classification"
+
+eq "p1" "$(coderabbit_scanned_tier '```text
+<!-- CodeRabbit review command invocation: fenced-example -->
+```
+<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>')" "cr_scan: fenced invocation marker cannot activate the exclusion"
+
+eq "p1" "$(coderabbit_scanned_tier '<!-- pre_merge_checks_walkthrough_start -->
+<!-- CodeRabbit review command invocation: excluded-example -->
+<!-- pre_merge_checks_walkthrough_end -->
+<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>')" "cr_scan: invocation inside another excluded region cannot activate the exclusion"
+
+eq "p1" "$(coderabbit_scanned_tier '<details>
+<summary>⚠️ Action not completed</summary>
+Review rate limited.
+</details>
+<!-- CodeRabbit review command invocation: too-late -->')" "cr_scan: reordered status markers fail toward classification"
+
+eq "p1" "$(coderabbit_scanned_tier '<!-- CodeRabbit review command invocation: live-id -->
+<details>
+<summary>⚠️ Action not completed — retry manually</summary>
+Review rate limited.
+</details>')" "cr_scan: non-exact action summary fails toward classification"
+
+eq "p2" "$(coderabbit_scanned_tier "$CR_RATE_LIMIT_STATUS
+
+_📐 Maintainability & Code Quality_ | _🟡 Minor_
+
+**Keep the retry counter bounded.**")" "cr_scan: mixed status plus real Minor preserves the finding"
+
+eq "p1" "$(coderabbit_scanned_tier '<!-- CodeRabbit review command invocation: live-id -->
+<details>
+<summary>⚠️ Action not completed</summary>
+_🟠 Major_ Real finding embedded beside the provider status.
+</details>')" "cr_scan: real finding inside status details remains classified"
 
 # --- rc-safety under set -euo pipefail (#581 4b F1) ------------------------
 # A markerless / unclassified call must return rc 0 + empty output, NOT abort a
@@ -191,6 +274,18 @@ if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass "coderabbit_tier_of: markerless i
 # head closed the pipe early).
 rc=0; big=$(head -c 100000 /dev/zero | tr '\0' 'x'); out=$(coderabbit_tier_of "🟠 Major $big") || rc=$?
 if [ "$rc" -eq 0 ] && [ "$out" = "p1" ]; then pass "coderabbit_tier_of: large body classifies without SIGPIPE abort (#652)"; else fail "coderabbit_tier_of: large body rc=$rc out=[$out]"; fi
+
+# --- ghas_severity_tier (#1101) ---------------------------------------------
+eq "p0" "$(ghas_severity_tier critical)" "ghas_severity_tier: critical -> p0"
+eq "p1" "$(ghas_severity_tier high)"     "ghas_severity_tier: high -> p1"
+eq "p2" "$(ghas_severity_tier medium)"   "ghas_severity_tier: medium -> p2"
+eq "p3" "$(ghas_severity_tier low)"      "ghas_severity_tier: low -> p3"
+eq ""   "$(ghas_severity_tier none)"     "ghas_severity_tier: none -> empty (caller decides the fallback)"
+eq ""   "$(ghas_severity_tier '')"       "ghas_severity_tier: empty input -> empty"
+eq ""   "$(ghas_severity_tier warning)"  "ghas_severity_tier: unrecognized value -> empty"
+
+rc=0; out=$(ghas_severity_tier bogus) || rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then pass "ghas_severity_tier: unrecognized is rc0+empty under set -e"; else fail "ghas_severity_tier: unrecognized rc=$rc out=[$out]"; fi
 
 # ---------------------------------------------------------------------------
 echo
