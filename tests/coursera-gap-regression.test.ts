@@ -226,8 +226,8 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
   const requirements = SPECS.map(requirementFor);
   const units = loadUnits();
   const matches = matchesFor(units, requirements);
-  const gaps = computeGaps(requirements, matches);
-  const gapIds = new Set(gaps.map((g) => g.id));
+  const { gaps } = computeGaps(requirements, matches);
+  const gapIds = new Set(gaps.map((g) => g.requirement.id));
   const mustHaves = SPECS.filter((s) => s.mustHave);
 
   it("every Requirement is anchored in the committed JD fixture", () => {

@@ -13,6 +13,10 @@ import { httpsCallable } from "firebase/functions";
 import { getFunctionsClient } from "../firebase.ts";
 import { callableOptions } from "./callable-timeouts.ts";
 import type { UnitMatch } from "../types/capability.ts";
+// Leaf contract module in the functions package — type-only, so
+// it is erased before bundling. See `computeGaps.ts` for why the
+// contract lives there rather than being copied into `src/`.
+import type { MatchEvidence } from "../../functions/src/types/evidence.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
@@ -248,4 +252,42 @@ export async function invokeRunMatching(roleId: string): Promise<void> {
     callableOptions("runMatching"),
   );
   await fn({ roleId });
+}
+
+/**
+ * Invoke the `deriveMatchEvidence` HTTPS callable (#441).
+ *
+ * Read-only on the server: it derives a structural-evidence
+ * verdict for every UnitMatch under the Role from the ID-linked
+ * Unit/Requirement pair and returns them keyed by match id. No
+ * document is written, and no persisted id or approval flag
+ * changes — which is the entire reason this exists instead of
+ * #438's re-run-the-matcher-on-open approach.
+ *
+ * Callers should invoke it only when at least one match lacks
+ * `structural_evidence`. A Role whose matches were all scored
+ * under #435 or later needs no round-trip at all.
+ *
+ * Server-side error mapping (per `deriveMatchEvidence.ts`):
+ *   - `unauthenticated` if no auth context
+ *   - `invalid-argument` for missing/malformed roleId
+ *   - `permission-denied` for foreign/missing role_id
+ *
+ * A rejection must degrade to the permissive pre-#441 reading,
+ * never to a stricter one — see `computeGaps`. The caller
+ * surfaces the failure; it does not invent gaps from it.
+ */
+export async function invokeDeriveMatchEvidence(
+  roleId: string,
+): Promise<ReadonlyMap<string, MatchEvidence>> {
+  const fn = httpsCallable<
+    { roleId: string },
+    { evidence: Record<string, MatchEvidence> }
+  >(
+    getFunctionsClient(),
+    "deriveMatchEvidence",
+    callableOptions("deriveMatchEvidence"),
+  );
+  const res = await fn({ roleId });
+  return new Map(Object.entries(res.data.evidence));
 }

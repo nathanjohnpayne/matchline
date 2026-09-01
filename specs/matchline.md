@@ -146,10 +146,11 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
     are **optional**: records written before those fields existed carry
     none of them, and the coverage gate depends on being able to
     recognize such a record. A rerun of matching populates all three.
-    A record missing `structural_evidence` retains its pre-existing
-    coverage behaviour rather than being treated as unevidenced, so
-    deploying the gate cannot make an already-matched Role sprout
-    gaps.
+    A record missing `structural_evidence` is resolved on read by the
+    derivation below, and falls back to its pre-existing coverage
+    behaviour when no verdict is available — never to a stricter
+    reading, so neither deploying the gate nor a failed derivation can
+    make an already-matched Role sprout gaps.
   - `component_applicability` records, per axis, whether the engine
     actually evaluated it for this pair. A `false` axis means the
     corresponding value in `components` is a no-constraint neutral, and
@@ -230,6 +231,41 @@ Acceptance criteria:
   plausible-but-unfounded generated claims downstream. Such matches
   still rank and still render — see the non-goals below — they simply
   cannot silently satisfy a hard requirement.
+- Structural evidence for a record that lacks it is **derived on
+  read**, never backfilled by a write. The derivation recomputes the
+  five structural axes from the ID-linked Unit and Requirement, which
+  is possible because none of those axes reads an embedding, and
+  applies the same predicate the matcher applies at write time.
+  Persisted ids, `approved_for_use` and `user_rejected` are untouched
+  by it; an explicit rematch remains the only path that changes what
+  is stored.
+- The derivation has **three outcomes, not two**. Beyond evidenced and
+  unevidenced, a pair the matching pipeline would currently decline to
+  produce is **unverifiable** — a missing Unit or Requirement, a Unit
+  that is unapproved or awaiting re-embedding, either side lacking a
+  usable embedding, or two embeddings of incompatible dimensions. The test is whether a rematch would yield the
+  pair, not whether the structural axes can be computed: they can be
+  in every one of those cases, and answering anyway would outlive the
+  match the answer describes. A Requirement carrying only an unverifiable match
+  is reported distinctly from one carrying no match at all: they call
+  for different actions, and collapsing them either invents a gap the
+  user cannot act on or hides one they need to see.
+- Stored `structural_evidence` is **authoritative over any derived
+  verdict**. A derivation is a snapshot; the document is live, and a
+  snapshot that folded a value in at build time does not track it
+  afterwards.
+- A match whose Requirement no longer exists is reported at the Role
+  level rather than attributed to a surviving Requirement, and is
+  determined structurally — from whether the id is in the current
+  Requirement set — not from a derived verdict, so it holds for matches
+  of every vintage and needs no round trip. The
+  stranding is a consequence of the Requirement set being replaced
+  wholesale, so tying it to whichever Requirement remains would assert
+  a relationship that does not exist.
+- A derivation that cannot run degrades to the permissive reading and
+  says so, and the affirmative "every must-have is covered" statement
+  is withheld entirely until the check has actually run. Silence would let "every must-have has a qualifying match"
+  stand on a check that never happened.
 - Matching is nearly-free after embeddings exist; no per-match LLM call
   is required. Rationale strings may be LLM-generated but must be
   cached per `UnitMatch`.

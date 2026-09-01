@@ -17,6 +17,10 @@ import { describe, expect, it } from "vitest";
 import type { JobRequirementUnit, UnitMatch } from "../../types/capability.ts";
 
 import { GAP_THRESHOLD, computeGaps } from "./computeGaps.ts";
+import type {
+  MatchEvidence,
+  UnverifiableReason,
+} from "../../../functions/src/types/evidence.ts";
 
 const ALICE = "user-alice";
 
@@ -65,10 +69,23 @@ function makeMatch(
   };
 }
 
+/**
+ * Terse `MatchEvidence` for the verdict-only cases. The reason
+ * field only matters where a test is about the reason.
+ */
+function ev(
+  verdict: "evidenced" | "unevidenced" | "unverifiable",
+  reason?: UnverifiableReason,
+): MatchEvidence {
+  return reason === undefined
+    ? { verdict, stored: false }
+    : { verdict, reason, stored: false };
+}
+
 describe("computeGaps", () => {
   it("flags must_have Requirements with no matches at all", () => {
     const reqs = [makeReq("r-naked-mh")];
-    expect(computeGaps(reqs, []).map((r) => r.id)).toEqual(["r-naked-mh"]);
+    expect(computeGaps(reqs, []).gaps.map((g) => g.requirement.id)).toEqual(["r-naked-mh"]);
   });
 
   it("flags must_have Requirements where ALL matches are below threshold", () => {
@@ -78,7 +95,7 @@ describe("computeGaps", () => {
       makeMatch("m2", "r-weak-mh", 0.35),
       makeMatch("m3", "r-weak-mh", 0.39), // still < 0.4
     ];
-    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-weak-mh"]);
+    expect(computeGaps(reqs, matches).gaps.map((g) => g.requirement.id)).toEqual(["r-weak-mh"]);
   });
 
   it("does NOT flag must_have Requirements with at least one match at threshold", () => {
@@ -87,13 +104,13 @@ describe("computeGaps", () => {
       makeMatch("m-low", "r-met-mh", 0.2),
       makeMatch("m-exact", "r-met-mh", GAP_THRESHOLD), // exactly 0.4
     ];
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
   });
 
   it("does NOT flag must_have Requirements with at least one match above threshold", () => {
     const reqs = [makeReq("r-strong-mh")];
     const matches = [makeMatch("m-strong", "r-strong-mh", 0.85)];
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
   });
 
   it("NEVER flags non-must_have Requirements (even with zero matches)", () => {
@@ -102,16 +119,16 @@ describe("computeGaps", () => {
       makeReq("r-nice-weak", { must_have: false }),
     ];
     const matches = [makeMatch("m-weak", "r-nice-weak", 0.05)];
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
   });
 
   it("respects an override threshold (eval harness use case)", () => {
     const reqs = [makeReq("r-mid")];
     const matches = [makeMatch("m-mid", "r-mid", 0.55)];
     // At default 0.4, this is NOT a gap.
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
     // At 0.7, it IS a gap.
-    expect(computeGaps(reqs, matches, 0.7).map((r) => r.id)).toEqual([
+    expect(computeGaps(reqs, matches, undefined, 0.7).gaps.map((g) => g.requirement.id)).toEqual([
       "r-mid",
     ]);
   });
@@ -122,7 +139,7 @@ describe("computeGaps", () => {
       makeReq("r-a"),
       makeReq("r-m"),
     ];
-    const result = computeGaps(reqs, []).map((r) => r.id);
+    const result = computeGaps(reqs, []).gaps.map((g) => g.requirement.id);
     expect(result).toEqual(["r-z", "r-a", "r-m"]);
   });
 
@@ -141,7 +158,7 @@ describe("computeGaps", () => {
       // r-4-nice-unmet has no matches.
       // r-5-naked-mh has no matches.
     ];
-    const result = computeGaps(reqs, matches).map((r) => r.id);
+    const result = computeGaps(reqs, matches).gaps.map((g) => g.requirement.id);
     expect(result).toEqual(["r-2-unmet-mh", "r-5-naked-mh"]);
   });
 
@@ -154,7 +171,7 @@ describe("computeGaps", () => {
       makeMatch("m-high", "r-mh", 0.9), // 0.9 should pull this above threshold
       makeMatch("m-mid", "r-mh", 0.5),
     ];
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
   });
 
   // -- cursor #133 r1: rejected matches don't satisfy ----------------------
@@ -174,7 +191,7 @@ describe("computeGaps", () => {
         user_rejected: true,
       },
     ];
-    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+    expect(computeGaps(reqs, matches).gaps.map((g) => g.requirement.id)).toEqual(["r-mh"]);
   });
 
   it("REJECTED FILTER: when ALL matches for a must-have are rejected, the Requirement IS a gap", () => {
@@ -184,7 +201,7 @@ describe("computeGaps", () => {
       { ...makeMatch("m2", "r-mh", 0.7), user_rejected: true },
       { ...makeMatch("m3", "r-mh", 0.5), user_rejected: true },
     ];
-    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+    expect(computeGaps(reqs, matches).gaps.map((g) => g.requirement.id)).toEqual(["r-mh"]);
   });
 
   it("REJECTED FILTER: a non-rejected match still satisfies even when there are also rejected matches", () => {
@@ -196,7 +213,7 @@ describe("computeGaps", () => {
       { ...makeMatch("m-rejected", "r-mh", 0.95), user_rejected: true },
       makeMatch("m-good", "r-mh", 0.55), // not rejected, above threshold
     ];
-    expect(computeGaps(reqs, matches)).toEqual([]);
+    expect(computeGaps(reqs, matches).gaps).toEqual([]);
   });
 
   it("REJECTED FILTER: an approved-but-low-scoring match doesn't override threshold (approval is not a gap-clearer)", () => {
@@ -211,7 +228,7 @@ describe("computeGaps", () => {
         approved_for_use: true,
       },
     ];
-    expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+    expect(computeGaps(reqs, matches).gaps.map((g) => g.requirement.id)).toEqual(["r-mh"]);
   });
 });
 
@@ -238,15 +255,15 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
     // semantics alone. Without the gate, "BS in Computer Science
     // required" reads as covered by whichever Unit embedded
     // closest.
-    const gaps = computeGaps(
+    const { gaps } = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
     );
-    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+    expect(gaps.map((g) => g.requirement.id)).toEqual(["r-credential"]);
   });
 
   it("treats a scoring match WITH evidence as covering", () => {
-    const gaps = computeGaps(
+    const { gaps } = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52, { structural_evidence: true })],
     );
@@ -257,7 +274,7 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
     // Pre-existing behaviour preserved deliberately: a Role the
     // user has already matched must not sprout gaps on deploy.
     // Those rows gain the gate the next time matching runs.
-    const gaps = computeGaps(
+    const { gaps } = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52)],
     );
@@ -265,23 +282,332 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
   });
 
   it("still requires the score threshold when evidence IS present", () => {
-    const gaps = computeGaps(
+    const { gaps } = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.39, { structural_evidence: true })],
     );
-    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+    expect(gaps.map((g) => g.requirement.id)).toEqual(["r-credential"]);
   });
 
   it("ignores an evidence-free match when a lower-scoring one has evidence", () => {
     // The evidence-free match must never enter the per-Requirement
     // max in the first place.
-    const gaps = computeGaps(
+    const { gaps } = computeGaps(
       [mustHave],
       [
         makeMatch("m-high", "r-credential", 0.9, { structural_evidence: false }),
         makeMatch("m-low", "r-credential", 0.3, { structural_evidence: true }),
       ],
     );
-    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+    expect(gaps.map((g) => g.requirement.id)).toEqual(["r-credential"]);
+  });
+});
+
+describe("computeGaps: derived verdicts (#441)", () => {
+  const mustHave = makeReq("r-credential");
+
+  it("lets a derived `evidenced` verdict cover a legacy match", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+      new Map([["m1", ev("evidenced")]]),
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("retires the permissive pass when the verdict says unevidenced", () => {
+    // The point of the whole issue: before #441 this row
+    // satisfied the must-have purely because the field was
+    // absent. The derivation is what turns that stopgap into an
+    // answer.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+      new Map([["m1", ev("unevidenced")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("reports an unverifiable match as its own kind of gap", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+      new Map([["m1", ev("unverifiable")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unverifiable", reasons: [] },
+    ]);
+  });
+
+  it("does not let an unverifiable match below threshold cast doubt", () => {
+    // It was never going to cover the Requirement, so being
+    // unable to verify it tells the user nothing. Reporting
+    // "unverified" here would bury the real signal — that there
+    // is simply no qualifying match — under a hedge.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.1)],
+      new Map([["m1", ev("unverifiable")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("prefers a real cover over an unverifiable one", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m-doubt", "r-credential", 0.9),
+        makeMatch("m-good", "r-credential", 0.5),
+      ],
+      new Map([
+        ["m-doubt", ev("unverifiable")],
+        ["m-good", ev("evidenced")],
+      ]),
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("ignores a rejected match even when its verdict is evidenced", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m1", "r-credential", 0.9, { user_rejected: true }),
+      ],
+      new Map([["m1", ev("evidenced")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("falls back to the permissive rule for a match absent from the map", () => {
+    // The required degradation. A verdict map built before a new
+    // match arrived must not tighten into inventing a gap for
+    // the row it does not know about.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m-new", "r-credential", 0.52)],
+      new Map([["m-old", ev("unevidenced")]]),
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("still honours a stored `false` when no map is supplied", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
+      undefined,
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("keeps a stored `false` authoritative over a stale derived `evidenced`", () => {
+    // This asserted the OPPOSITE until CodeRabbit and Codex both
+    // flagged it on PR #446, and the original reasoning was that
+    // the callable returns a verdict for every match — stored
+    // ones included — so the map is a single reconciled source.
+    //
+    // True at the instant the map is built, and worthless
+    // afterwards. The map is a snapshot; the document is live.
+    // An explicit rematch persisting `structural_evidence: false`
+    // must not be overruled by a verdict derived before it ran,
+    // or a must-have keeps reading as covered.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
+      new Map([["m1", ev("evidenced")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("keeps a stored `true` authoritative over a stale derived verdict", () => {
+    // The mirror. `legacyEvidenceKey` tracks only rows that LACK
+    // the field, so a current row whose stored value changes in
+    // place never re-triggers derivation at all — the stale entry
+    // would otherwise win until the route remounted.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: true })],
+      new Map([["m1", ev("unevidenced")]]),
+    );
+    expect(gaps).toEqual([]);
+  });
+});
+
+describe("computeGaps: the reason survives to the view (#446)", () => {
+  const mustHave = makeReq("r-credential");
+
+  it("carries the reason for an unverifiable gap", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+      new Map([["m1", ev("unverifiable", "requirement_embedding_missing")]]),
+    );
+    expect(gaps).toEqual([
+      {
+        requirement: mustHave,
+        status: "unverifiable",
+        reasons: ["requirement_embedding_missing"],
+      },
+    ]);
+  });
+
+  it("collects distinct reasons across several doubting matches", () => {
+    const { gaps } = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m1", "r-credential", 0.52),
+        makeMatch("m2", "r-credential", 0.61),
+        makeMatch("m3", "r-credential", 0.55),
+      ],
+      new Map([
+        ["m1", ev("unverifiable", "unit_missing")],
+        ["m2", ev("unverifiable", "embedding_dimension_mismatch")],
+        ["m3", ev("unverifiable", "unit_missing")],
+      ]),
+    );
+    expect(gaps[0]?.reasons).toEqual([
+      "unit_missing",
+      "embedding_dimension_mismatch",
+    ]);
+  });
+
+  it("leaves reasons empty for an ordinary unmet gap", () => {
+    expect(computeGaps([mustHave], []).gaps[0]?.reasons).toEqual([]);
+  });
+
+  it("ignores reasons from matches below the threshold", () => {
+    // Those matches cast no doubt, so their reasons are not the
+    // user's problem either.
+    const { gaps } = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.1)],
+      new Map([["m1", ev("unverifiable", "unit_missing")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
+  });
+});
+
+describe("computeGaps: stranded matches are counted, not dropped (#446)", () => {
+  const current = makeReq("r-new");
+
+  it("counts a match whose Requirement no longer exists", () => {
+    // A JD re-parse replaced `r-old` with `r-new`. The stranded
+    // match's Requirement is not in the input, so its
+    // `requirement_missing` verdict has nowhere to go — it used
+    // to be silently discarded, which made that reason string
+    // unreachable in the exact scenario it was written for.
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9)],
+      new Map([["m1", ev("unverifiable", "requirement_missing")]]),
+    );
+    expect(report.strandedMatches).toBe(1);
+    // `r-new` is still a genuine unmet gap: nothing points at it.
+    expect(report.gaps).toEqual([
+      { requirement: current, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("does not attribute the stranding to a surviving Requirement", () => {
+    // The stranding belongs to the Role, not to whichever
+    // Requirement happens to remain — inventing that link would
+    // tell the user something untrue about `r-new`.
+    const report = computeGaps(
+      [current],
+      [
+        makeMatch("m1", "r-old", 0.9),
+        makeMatch("m2", "r-new", 0.9),
+      ],
+      new Map([
+        ["m1", ev("unverifiable", "requirement_missing")],
+        ["m2", ev("evidenced")],
+      ]),
+    );
+    expect(report.gaps).toEqual([]);
+    expect(report.strandedMatches).toBe(1);
+  });
+
+  it("ignores stranded matches below the threshold", () => {
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.1)],
+      new Map([["m1", ev("unverifiable", "requirement_missing")]]),
+    );
+    expect(report.strandedMatches).toBe(0);
+  });
+
+  it("ignores a rejected stranded match", () => {
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9, { user_rejected: true })],
+      new Map([["m1", ev("unverifiable", "requirement_missing")]]),
+    );
+    expect(report.strandedMatches).toBe(0);
+  });
+
+  it("is zero on an ordinary Role", () => {
+    expect(computeGaps([current], []).strandedMatches).toBe(0);
+  });
+
+  it("counts a stored-verdict match whose Requirement disappeared", () => {
+    // The first version keyed off the derived
+    // `requirement_missing` verdict, which a post-#435 row never
+    // produces: its stored `structural_evidence` short-circuits
+    // `verdictFor` before any verdict is consulted, so an
+    // `evidenced` stranded row was indexed under the obsolete id
+    // and then ignored. Codex P2 on PR #446.
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9, { structural_evidence: true })],
+    );
+    expect(report.strandedMatches).toBe(1);
+    expect(report.gaps).toEqual([
+      { requirement: current, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("counts it with no evidence map at all", () => {
+    // A Role whose matches are all post-#435 has an empty
+    // `evidenceKey`, so the client never calls the derivation.
+    // Stranding has to be answerable without a round trip, and it
+    // is: whether an id is in the current set is local knowledge.
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9, { structural_evidence: false })],
+      undefined,
+    );
+    expect(report.strandedMatches).toBe(1);
+  });
+
+  it("counts a stranded legacy row with no verdict either", () => {
+    expect(
+      computeGaps([current], [makeMatch("m1", "r-old", 0.9)]).strandedMatches,
+    ).toBe(1);
+  });
+
+  it("does not let a stranded match contribute coverage", () => {
+    // Belt and braces: an `evidenced` stranded row must not be
+    // able to satisfy anything, since the Requirement it answered
+    // no longer exists.
+    const report = computeGaps(
+      [current],
+      [
+        makeMatch("m1", "r-old", 0.95, { structural_evidence: true }),
+        makeMatch("m2", "r-new", 0.2, { structural_evidence: true }),
+      ],
+    );
+    expect(report.gaps.map((g) => g.requirement.id)).toEqual(["r-new"]);
+    expect(report.strandedMatches).toBe(1);
   });
 });

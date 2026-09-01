@@ -96,6 +96,16 @@ export const CALLABLE_TIMEOUT_SECONDS = {
    * corpus rather than a slow dependency.
    */
   runMatching: 120,
+
+  /**
+   * Read-only evidence derivation (#441). Strictly lighter than
+   * `runMatching` — three `get()`s and pure math over already-
+   * persisted fields, with no embeddings, no LLM and no write
+   * transaction — but it scales on the same
+   * (Units × Requirements) axis, so it inherits the same budget
+   * rather than a tighter one guessed from its p50.
+   */
+  deriveMatchEvidence: 120,
 } as const;
 
 export type CallableName = keyof typeof CALLABLE_TIMEOUT_SECONDS;

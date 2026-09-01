@@ -48,6 +48,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -65,6 +66,7 @@ import {
   upsertRole,
 } from "../../services/roles.ts";
 import {
+  invokeDeriveMatchEvidence,
   invokeRunMatching,
   setMatchApprovalState,
   subscribeMatchesByRole,
@@ -84,6 +86,9 @@ import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
 import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
 import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
+import { legacyEvidenceKey } from "./evidenceKey.ts";
+import type { EvidenceStatus } from "./GapsView.tsx";
+import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
@@ -153,6 +158,20 @@ export default function RoleDetail(): ReactElement {
   //     per mount" window.
   const [matchesFirstSnapshotReceived, setMatchesFirstSnapshotReceived] =
     useState(false);
+
+  // Derived structural-evidence verdicts for this Role's matches
+  // (#441), keyed by match id. `undefined` means "no verdicts to
+  // apply" — either every match already carries a persisted
+  // `structural_evidence` (the common case, and no round-trip is
+  // made), or the derivation is in flight, or it failed.
+  // `computeGaps` reads the absence as the permissive pre-#441
+  // rule, so all three degrade identically and none can invent a
+  // gap. `evidenceStatus` is what tells them apart for the user.
+  const [matchEvidence, setMatchEvidence] = useState<
+    ReadonlyMap<string, MatchEvidence> | undefined
+  >(undefined);
+  const [evidenceStatus, setEvidenceStatus] =
+    useState<EvidenceStatus>("current");
   const triggeredRef = useRef(false);
 
   // Requirements tab parse state (#201). Held at the
@@ -434,6 +453,11 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = false;
     setComputingMatches(false);
     setMatchesFirstSnapshotReceived(false);
+    // Role B must never render Role A's verdicts. A cross-Role
+    // state leak of exactly this shape was one of the eleven
+    // findings against #438.
+    setMatchEvidence(undefined);
+    setEvidenceStatus("current");
 
     // Stale-closure guard. If the user navigates to a new
     // roleId before the in-flight Role fetch resolves, we
@@ -688,6 +712,100 @@ export default function RoleDetail(): ReactElement {
     requirements.length,
   ]);
 
+  // Re-derivation trigger. See `evidenceKey.ts` for why it is a
+  // signature over the derivation's actual inputs rather than
+  // over `matches` (fires per approval click) or over the legacy
+  // id set alone (misses Unit and Requirement edits — Codex P2 on
+  // PR #446).
+  const evidenceKey = useMemo(
+    () => legacyEvidenceKey(matches, units, requirements),
+    [matches, units, requirements],
+  );
+
+  // Monotonic request counter for the derivation.
+  //
+  // The visit token guards navigation between Roles. This guards
+  // the other direction: two derivations for the SAME Role, fired
+  // as the inputs changed, can resolve out of order and let the
+  // older answer overwrite the newer one. Codex P2 on PR #446
+  // asked for both.
+  const evidenceSeqRef = useRef(0);
+
+  // Read-only evidence derivation for legacy matches (#441).
+  //
+  // Matches written before #435 carry no `structural_evidence`,
+  // and `computeGaps` lets them satisfy a must-have on the
+  // strength of neutral scores alone. This resolves them from
+  // their ID-linked Unit/Requirement pair, server-side because
+  // only `functions/src/matching/normalize.ts` may canonicalize
+  // vocabulary (#96), and **writes nothing** — the whole reason
+  // this replaced #438's re-run-the-matcher-on-open approach.
+  //
+  // No legacy rows means no call at all: a Role matched under
+  // #435 or later pays nothing for this.
+  //
+  // Failure is deliberately benign. Verdicts stay `undefined`,
+  // `computeGaps` keeps the permissive reading, and the Gaps
+  // panel discloses that the check did not run. Degrading to a
+  // stricter reading would make a failed network call sprout
+  // gaps the user cannot act on.
+  useEffect(() => {
+    if (roleId === undefined || roleId === "") return;
+    if (status !== "ready" || !matchesFirstSnapshotReceived) return;
+    if (evidenceKey === "") {
+      // Advancing the counter is what makes this branch safe. An
+      // explicit rematch replaces every legacy row with a current
+      // one WHILE a derivation is in flight; without the bump the
+      // obsolete request still passes `superseded()`, and on
+      // failure it would overwrite this clean state with
+      // `unavailable` — warning about older matches that no
+      // longer exist. Codex P2 on PR #446, found after the
+      // sequence guard itself landed.
+      evidenceSeqRef.current += 1;
+      setMatchEvidence(undefined);
+      setEvidenceStatus("current");
+      return;
+    }
+
+    // Two guards, for two different races. The visit token is the
+    // same one the auto-trigger uses: a slow derivation for Role A
+    // must not land in Role B's state. The sequence number covers
+    // same-Role reordering, which the visit token cannot see
+    // because it only moves on navigation.
+    const issuedAgainst = roleId;
+    const issuedToken = visitTokenRef.current;
+    const issuedSeq = ++evidenceSeqRef.current;
+    const superseded = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainst ||
+      visitTokenRef.current !== issuedToken ||
+      evidenceSeqRef.current !== issuedSeq;
+
+    // Drop the previous verdicts before asking for new ones.
+    //
+    // They describe inputs that have since changed — that is why
+    // this effect re-fired — so keeping them enforces an obsolete
+    // answer for the whole round trip. An edited Requirement that
+    // turns a pair from `unevidenced` to `evidenced` would go on
+    // rendering an unmet gap until the call returned. The
+    // documented in-flight behaviour is the permissive
+    // pre-derivation reading, and this is what actually makes it
+    // so. Codex P2 on PR #446.
+    setMatchEvidence(undefined);
+    setEvidenceStatus("pending");
+    void invokeDeriveMatchEvidence(roleId)
+      .then((evidence) => {
+        if (superseded()) return;
+        setMatchEvidence(evidence);
+        setEvidenceStatus("current");
+      })
+      .catch((err: unknown) => {
+        if (superseded()) return;
+        console.warn("invokeDeriveMatchEvidence failed", err);
+        setMatchEvidence(undefined);
+        setEvidenceStatus("unavailable");
+      });
+  }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
+
   // Build the unit lookup once per units array. The matching
   // pipeline reads units owner-scoped and the Role's matches
   // can only reference the user's own units, so a single
@@ -813,6 +931,8 @@ export default function RoleDetail(): ReactElement {
       role={role}
       requirements={requirements}
       matches={matches}
+      matchEvidence={matchEvidence}
+      evidenceStatus={evidenceStatus}
       unitsById={unitsById}
       error={error}
       activeTab={activeTab}

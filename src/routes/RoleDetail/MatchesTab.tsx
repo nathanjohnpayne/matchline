@@ -15,9 +15,11 @@
 
 import type { ReactElement } from "react";
 
-import type { ExperienceUnit, JobRequirementUnit } from "../../types/capability.ts";
+import type { ExperienceUnit } from "../../types/capability.ts";
 
-import GapsView from "./GapsView.tsx";
+import GapsView, { EvidenceNotice, StrandedNotice } from "./GapsView.tsx";
+import type { EvidenceStatus } from "./GapsView.tsx";
+import type { Gap } from "./computeGaps.ts";
 import MatchCard from "./MatchCard.tsx";
 import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
@@ -25,7 +27,9 @@ import type { MatchApprovalState } from "../../services/matches.ts";
 export interface MatchesTabProps {
   readonly groups: readonly RequirementWithMatches[];
   /** Pre-computed unmet must-haves (#130). */
-  readonly gaps: readonly JobRequirementUnit[];
+  readonly gaps: readonly Gap[];
+  readonly evidenceStatus?: EvidenceStatus;
+  readonly strandedMatches?: number;
   /**
    * Lookup map for pre-resolving each Match's source Unit
    * by id. The container builds this from a single Units
@@ -52,6 +56,8 @@ export interface MatchesTabProps {
 export default function MatchesTab({
   groups,
   gaps,
+  evidenceStatus,
+  strandedMatches,
   unitsById,
   onApprovalStateChange,
   computingMatches,
@@ -61,14 +67,36 @@ export default function MatchesTab({
     // exist but no matches." This rendering pin avoids
     // confusing an unparsed Role with a Role nobody can
     // qualify for.
+    //
+    // Stranded matches have to appear here as well. This branch
+    // is reached when a re-parse removed every Requirement, which
+    // is exactly the case where every surviving match is stranded
+    // — the one state in which the notice matters most was the
+    // one state that could not render it. Codex P2 on PR #446.
+    //
+    // The copy changes with it: "parse the JD first" is wrong
+    // advice for a Role whose JD was parsed, since that parse is
+    // what stranded the matches.
     return (
-      <p
-        className="text-sm text-zinc-500"
-        data-testid="matches-tab-no-requirements"
-      >
-        No Requirements parsed for this Role yet. Parse the JD on the
-        Requirements tab first.
-      </p>
+      <div className="space-y-2" data-testid="matches-tab-no-requirements">
+        <p className="text-sm text-zinc-500">
+          {strandedMatches !== undefined && strandedMatches > 0
+            ? "This Role has no requirements right now, but it still has " +
+              "matches from a previous version of the job description."
+            : "No Requirements parsed for this Role yet. Parse the JD on " +
+              "the Requirements tab first."}
+        </p>
+        <StrandedNotice count={strandedMatches ?? 0} />
+        {/*
+          No Requirements means no coverage claim is being made
+          here, and the stranded count is structural — it does not
+          depend on the derivation at all. The disclosure is shown
+          anyway because hiding it in one branch and not the other
+          is the inconsistency that produced this whole class of
+          bug. CodeRabbit on PR #446.
+        */}
+        <EvidenceNotice status={evidenceStatus ?? "current"} />
+      </div>
     );
   }
 
@@ -84,7 +112,11 @@ export default function MatchesTab({
           Computing matches…
         </p>
       )}
-      <GapsView gaps={gaps} />
+      <GapsView
+        gaps={gaps}
+        evidenceStatus={evidenceStatus}
+        strandedMatches={strandedMatches}
+      />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (
         <li
