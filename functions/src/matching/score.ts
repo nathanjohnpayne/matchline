@@ -99,46 +99,94 @@ export interface ScoreResult {
 // -- Jaccard primitives -----------------------------------------------------
 
 /**
- * Jaccard similarity on two string sets, with each input
+ * Jaccard similarity between the UNIT side (`unitValues`) and the
+ * REQUIREMENT side (`requirementValues`), with each input
  * normalized through the supplied canonicalizer before
  * comparison. Inputs that don't normalize (return `null`) are
  * dropped — they're typically novel terms not yet in the
  * ontology, and including them as raw strings would defeat the
  * canonical-set discipline.
  *
- * Edge cases:
- *   - Both empty → **0.5 (neutral)**. Originally 1.0 per the
- *     spec's "no constraint on this dimension" framing, BUT
- *     that produced a false-positive cliff: the live matching
- *     trace on PR #148 showed `skill/tool/domain` flattening
- *     to 1.0 across **every** (Unit, Requirement) pair on the
- *     Nathan-2026 × Google SPM fixture — because the seed
- *     ontology only recognizes ~10% of the LLM's extraction
- *     vocabulary, so most Units AND most Requirement keywords
- *     normalize to all-nulls. With empty-empty = 1.0, that
- *     reads as "perfect agreement on every dimension" and
- *     14-year-old CNN broadcast Units rank above current
- *     streaming work. The ontology under-coverage is a
- *     separate fix (Phase 3 #38); this jaccard change closes
- *     the worst-case ranking pathology without waiting for it.
- *   - One empty → 0.0 (signal mismatch).
+ * **The parameter order is load-bearing**: the empty-set rule
+ * below is directional, so every caller must pass the Unit's
+ * values first and the Requirement's values second. All four
+ * call sites (skill / tool / domain / scope) do.
  *
- * 0.5 is the same neutral the seniority component uses for
- * "we don't know" — consistent semantics across the rule
- * components.
+ * Empty-set rule (#148 → this change):
+ *
+ *   - **Requirement side empty → 0.5 (neutral).** The
+ *     Requirement places no evaluable constraint on this axis
+ *     — either the JD genuinely names nothing (very common for
+ *     `tools` on a PM req) or the ontology doesn't recognize
+ *     what it named. Either way we have no signal, and "no
+ *     signal" must not read as "candidate fails this axis."
+ *     Same neutral the seniority component uses for "we don't
+ *     know," so the semantics stay consistent across the rule
+ *     components.
+ *   - **Requirement side non-empty, Unit side empty → 0.0.**
+ *     The employer asked for something the Unit doesn't attest
+ *     to. That IS a signal, and a negative one.
+ *   - Otherwise → ordinary Jaccard.
+ *
+ * Why the rule had to become directional. The prior shape
+ * ("either side empty → 0.0, both empty → 0.5") made the score
+ * depend on how well the extractor did rather than on how well
+ * the candidate fits, in two ways that compounded:
+ *
+ *   1. **Out-of-domain JDs lost 45% of the weight.** When a
+ *      Role's vocabulary sits outside the seed ontology, every
+ *      Requirement keyword normalizes to null, so
+ *      `skill_overlap + domain_overlap + tool_overlap` (0.20 +
+ *      0.15 + 0.10) hard-zeroed for EVERY pair. The remaining
+ *      axes cap `rule_score` around 0.55, and after the
+ *      `confidence_score` multiplier (~0.85 at the extraction
+ *      prompt's anchor) nothing could clear the Gaps view's
+ *      0.4 threshold — so a well-matched Role rendered as
+ *      "every must-have unmet." Reproduced on the
+ *      `coursera-staff-pm-2026` fixture, whose JD-side
+ *      vocabulary the seed ontology recognized at 13% / 9% / 0%
+ *      (keywords / domains / tools) against 100% on the
+ *      unit side.
+ *   2. **Better extraction scored worse.** A Unit whose skills
+ *      and tools all canonicalize got 0.0 against an
+ *      unrecognized Requirement, while a Unit whose vocabulary
+ *      was junk (and so normalized to nothing) got the 0.5
+ *      both-empty neutral. Cleaning up a Unit lowered its
+ *      score.
+ *
+ * The ontology under-coverage that triggers case 1 is still
+ * worth closing on its own (#38, #159 slices) — this rule
+ * change stops an ontology gap from being scored as a
+ * candidate deficiency in the meantime.
+ *
+ * **Known residual — a synthetic neutral is not free.** A
+ * Requirement whose `keywords`, `tools` AND `domains` all
+ * canonicalize to nothing now collects 0.5 on all three axes
+ * (0.225 of rule_score) from every Unit, which is enough for a
+ * recent Unit to clear the 0.4 gap threshold on semantics
+ * alone. That trades the old false negative for a milder false
+ * positive. The principled end state is to drop an unsignalled
+ * axis and renormalize the remaining weights, so the score
+ * stays comparable across Requirements instead of absorbing an
+ * invented 0.5 — deferred because `ScoreComponents` is
+ * persisted on `UnitMatch` and the breakdown tooltip (#131)
+ * renders a fixed weight per row, so per-match effective
+ * weights need a data-contract change. Tracked in #433.
  */
 function jaccard(
-  a: readonly string[],
-  b: readonly string[],
+  unitValues: readonly string[],
+  requirementValues: readonly string[],
   normalize: (raw: string) => string | null,
 ): number {
-  const aSet = canonicalize(a, normalize);
-  const bSet = canonicalize(b, normalize);
-  if (aSet.size === 0 && bSet.size === 0) return 0.5;
-  if (aSet.size === 0 || bSet.size === 0) return 0;
+  const unitSet = canonicalize(unitValues, normalize);
+  const requirementSet = canonicalize(requirementValues, normalize);
+  // Requirement side first: an unconstrained axis is neutral
+  // regardless of what the Unit brings to it.
+  if (requirementSet.size === 0) return 0.5;
+  if (unitSet.size === 0) return 0;
   let intersection = 0;
-  for (const v of aSet) if (bSet.has(v)) intersection += 1;
-  const union = aSet.size + bSet.size - intersection;
+  for (const v of unitSet) if (requirementSet.has(v)) intersection += 1;
+  const union = unitSet.size + requirementSet.size - intersection;
   return intersection / union;
 }
 
@@ -317,10 +365,10 @@ export function seniorityAlignment(
  * Because scope strings are heterogeneous and the JD parser
  * doesn't currently emit a `requirement.scope_signals` field
  * (only `keywords` + `tools` + `domains`), V1 falls back to:
- *   - Both sides empty → 0.5 (neutral; #148 changed this from
- *     the original 1.0 to stop "no signal = perfect match"
- *     ranking inflation — see jaccard's docstring above)
- *   - Only one side empty → 0.0
+ *   - Requirement keywords empty → 0.5 (neutral: the
+ *     Requirement constrains nothing evaluable on this axis)
+ *   - Requirement keywords present but the Unit attests to no
+ *     scope signals → 0.0
  *   - Else: Jaccard on `normalizeKey`-canonicalized signal sets.
  *     Loose: "40M users" and "40M monthly viewers" don't match
  *     even though they're semantically similar; that's what the
@@ -336,9 +384,9 @@ export function seniorityAlignment(
  * Wrap `normalizeKey` to match the `jaccard()` helper's
  * "normalizer returns string | null" contract: empty/whitespace
  * inputs collapse to null and get filtered out by `canonicalize`,
- * preserving the both-empty → 0.5 / one-empty → 0.0 semantics
- * the helper enforces (#148 changed both-empty from 1.0 to 0.5
- * to fix rule_score flattening).
+ * preserving the directional empty-set semantics the helper
+ * enforces (empty Requirement side → 0.5 neutral; empty Unit
+ * side against a populated Requirement → 0.0).
  */
 function normalizeScopeKey(raw: string): string | null {
   const key = normalizeKey(raw);

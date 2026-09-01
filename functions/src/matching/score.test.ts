@@ -121,13 +121,41 @@ describe("skillOverlap", () => {
     expect(skillOverlap(unit, req)).toBe(1);
   });
 
-  it("returns 0.0 when one side is empty and the other isn't", () => {
-    expect(
-      skillOverlap(makeUnit({ skills: ["sql"] }), makeRequirement()),
-    ).toBe(0);
+  it("returns 0.0 when the Requirement asks and the Unit attests to nothing", () => {
     expect(
       skillOverlap(makeUnit(), makeRequirement({ keywords: ["sql"] })),
     ).toBe(0);
+  });
+
+  it("returns 0.5 (neutral) when the REQUIREMENT side is empty, whatever the Unit brings", () => {
+    // Directional empty-set rule. An empty Requirement side means
+    // the Requirement places no evaluable constraint on this axis
+    // — either the JD named nothing, or the seed ontology didn't
+    // recognize what it named. "No signal" must not be scored as
+    // "candidate fails."
+    //
+    // Regression: the `coursera-staff-pm-2026` fixture. Its
+    // JD-side vocabulary canonicalized at 13% / 9% / 0%
+    // (keywords / domains / tools) against 100% on the unit side,
+    // so under the prior symmetric rule skill + domain + tool
+    // hard-zeroed on EVERY pair. That removed 0.45 of the weight,
+    // capped `final_score` below the Gaps view's 0.4 threshold,
+    // and rendered a well-matched Role as "every must-have unmet."
+    //
+    // It also inverted extraction quality: a Unit whose skills all
+    // canonicalized scored 0.0 here, while a Unit whose vocabulary
+    // was junk (and so normalized away to nothing) collected the
+    // both-empty 0.5. Cleaning up a Unit lowered its score. Both
+    // Units now sit at the same honest neutral.
+    expect(
+      skillOverlap(makeUnit({ skills: ["sql"] }), makeRequirement()),
+    ).toBe(0.5);
+    expect(
+      skillOverlap(
+        makeUnit({ skills: ["not-in-any-ontology-xyzzy"] }),
+        makeRequirement(),
+      ),
+    ).toBe(0.5);
   });
 
   it("returns 0.5 (neutral) when BOTH sides are empty (#148 ranking-pathology fix)", () => {
@@ -220,14 +248,19 @@ describe("domainOverlap", () => {
     expect(domainOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 
-  it("returns 0.0 when one side is non-empty and the other empty", () => {
-    // Use a canonical-known domain ("streaming video"); a raw
-    // term that doesn't normalize would drop and produce a
-    // false 1.0 (both-empty after canonicalization).
+  it("returns 0.5 when the Requirement names no domain, 0.0 when it names one the Unit lacks", () => {
+    // Use canonical-known domains so the assertions exercise the
+    // empty-set rule rather than an incidental normalize() miss.
     expect(
       domainOverlap(
         makeUnit({ domains: ["streaming video"] }),
         makeRequirement(),
+      ),
+    ).toBe(0.5);
+    expect(
+      domainOverlap(
+        makeUnit(),
+        makeRequirement({ domains: ["streaming video"] }),
       ),
     ).toBe(0);
   });
@@ -370,12 +403,17 @@ describe("scopeAlignment", () => {
     expect(scopeAlignment(makeUnit(), req)).toBe(0.5);
   });
 
-  it("returns 0 when only one side is non-empty on a scope requirement", () => {
+  it("returns 0 when the scope Requirement asks and the Unit attests to nothing", () => {
     const req = makeRequirement({ category: "scope", keywords: ["40M users"] });
     expect(scopeAlignment(makeUnit(), req)).toBe(0);
+  });
+
+  it("returns 0.5 (neutral) when a scope Requirement carries no keywords", () => {
+    // Same directional rule as skill/tool/domain: a scope-category
+    // Requirement with nothing in `keywords` constrains nothing.
     const reqEmpty = makeRequirement({ category: "scope", keywords: [] });
     const unit = makeUnit({ scope_signals: ["40M users"] });
-    expect(scopeAlignment(unit, reqEmpty)).toBe(0);
+    expect(scopeAlignment(unit, reqEmpty)).toBe(0.5);
   });
 
   it("returns 1.0 for an exact-string scope match", () => {

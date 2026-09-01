@@ -1,0 +1,55 @@
+Staff Product Manager
+
+Coursera + Udemy · United States (remote-flexible) · $212,000–$265,000 base (US Zone 2–4) + bonus + RSUs
+
+Coursera and Udemy are now one company — one of the world's most comprehensive skills development platforms for the AI era. Postings emphasize scaling unique products across Coursera + Udemy.
+
+
+TEAM OVERVIEW
+
+Coursera's Product Management team drives the mission of universal access to world-class learning and skills development. Senior and Staff PMs lead high-impact product initiatives, balancing strategic vision with hands-on problem solving to create integrated learner, partner, and enterprise-level experiences. They partner closely with Engineering, Design, Data, and Business stakeholders in an evolving, AI-driven education landscape.
+
+
+JOB OVERVIEW
+
+As a Staff Product Manager, you will shape Coursera's product vision, deliver exceptional learner and partner experiences, and drive measurable business impact. You will operate at the intersection of strategic thinking and hands-on execution, navigating ambiguity while influencing cross-functional teams.
+
+- Creator-Centric UX Thinking: You think in experiences, not just features. You have a strong point of view on what good authoring and creation tools feel like — and the patience to pressure-test that instinct with real creators until the product earns trust. You can speak fluently with design partners and push back when something that works technically doesn't work humanly.
+- Revenue Awareness: You understand how the products you build connect to the business — creator retention, content quality driving learner outcomes, new monetization surfaces — and you use that line to prioritize.
+- Customer-Centric Curiosity: Deep curiosity to understand customers and all elements influencing their experience.
+- Thriving in Ambiguity: Operate effectively in uncertain, fast-changing, startup-like environments.
+- Balanced Skills vs. Domain Experience: Domain expertise is beneficial, but strong intellectual capacity, curiosity, proactiveness, and solid foundational product skills enable quick adaptation without prior domain exposure.
+- Strategic & Tactical Agility: Switch between long-term vision and execution details.
+- IC Excellence: Senior individual contributor navigating between strategy and execution.
+- Integrated Experience Design: Track record of designing end-to-end integrated experiences is a strong plus.
+- Speed of Innovation: Rapidly prototype, test, and iterate; balance speed with rigor.
+
+
+RESPONSIBILITIES
+
+- Define and drive product strategy and own the roadmap for a high-priority area of the Coursera platform, such as mobile, AI-powered assessment, or agentic enterprise integration.
+- Own the end-to-end content creation experience for Udemy & Coursera — from how instructors and creators author content, to how AI assists and adapts that content for learners — defining what "great" looks like at every step of that journey.
+- Make independent product calls in a fast-moving environment, bringing cross-functional partners along through clear reasoning and well-structured communication rather than consensus-by-committee.
+- Translate customer insights and market trends into integrated solutions that scale to millions of learners.
+- Lead execution from ideation and analysis through development and launch, delivering measurable outcomes.
+- Partner with Engineering, Design, and Data teams to deliver AI-powered product features.
+- Leverage data and customer feedback to inform decisions and continuously improve.
+- Mentor peers and contribute to building a high-performing product organization.
+
+
+BASIC QUALIFICATIONS
+
+- Experience building, using, or experimenting with AI-driven products, particularly workflow automation, conversational AI, decision support, or agentic AI, and transitioning from traditional UI to AI-driven or AI-first product.
+- You have taken a product from zero to launch where the path wasn't clear — defined the problem, made the bet, built the team's confidence, shipped it. You can point to what worked, what didn't, and what you'd do differently.
+- A high bar across the board — your own contributions, the people you work with, the products you work on.
+
+
+PREFERRED QUALIFICATIONS
+
+- A product leader who inspires colleagues to think bigger and tackle challenges with conviction. A builder, not an optimizer.
+- Strong aesthetic sensibility and deep respect for craft in UX. You've worked closely with designers — not just as a stakeholder, but as a genuine creative partner — and your products show it.
+- You understand creator psychology. Course authors, instructional designers, subject-matter experts — you know what makes creation tools feel enabling rather than obstructive, and you've shipped products creators actually want to use.
+- Commercially literate. You can connect product choices to revenue outcomes without reducing every decision to a business case; you know when to push for a quality call without immediate ROI.
+- Energized by hard problems, ambiguity, and rapid technology change.
+- Deeply curious about customers; dives into data and feedback.
+- A sense of responsibility and urgency to invent the future of AI as a force for unlocking human potential.
