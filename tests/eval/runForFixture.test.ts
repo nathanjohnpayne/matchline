@@ -30,6 +30,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
+import { modelFor } from "../../functions/src/llm/config.ts";
+import { priceFor } from "../../functions/src/llm/cost.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
@@ -323,6 +325,92 @@ describe("runForFixture", () => {
     // (100/50 anthropic + N×10 openai) so cost > 0.
     expect(result.costUsd).toBeGreaterThan(0);
     expect(result.costUsd).toBeLessThan(1); // a tiny test run; sanity bound
+  });
+
+  it("anthropicIsMetered=false: costUsd excludes Anthropic usage, modeledCostUsd does not", async () => {
+    // Codex P2: a subscription-backed `claude-cli` token source was
+    // priced into `costUsd` exactly like a real API call. Same
+    // extraction/parsing responses as the HAPPY PATH test above (2
+    // Units, 2 Requirements — 100/50 mock Anthropic token counts per
+    // call), run twice: once metered (default), once not.
+    const extractionResp = {
+      units: [
+        {
+          raw_text: "Led Amazon Kepler launch",
+          normalized_summary:
+            "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack",
+          unit_type: "project",
+          skills: ["platform launch", "partner integration"],
+          tools: ["NCP", "Fire TV"],
+          domains: ["streaming video infrastructure"],
+          seniority_signals: [],
+          scope_signals: [],
+          business_outcomes: [],
+          metrics: [],
+          evidence_type: "verified",
+          confidence_score: 0.9,
+        },
+      ],
+    };
+    const parsingResp = {
+      requirements: [
+        {
+          raw_text: "8 years of experience in product management",
+          normalized_requirement: "8 years of product management experience",
+          category: "experience_level",
+          keywords: [],
+          tools: [],
+          domains: [],
+          priority: "high",
+          must_have: true,
+          extracted_from: "qualifications",
+        },
+      ],
+    };
+    const input = {
+      resumeFixtureId: "nathan-2026",
+      jdFixtureId: "google-compute-spm-2026",
+    };
+
+    const metered = await runForFixture(input, {
+      anthropicClient: makeMockAnthropic([extractionResp, parsingResp]),
+      openaiClient: makeMockOpenAi(),
+      // anthropicIsMetered omitted — defaults to true.
+    });
+    const unmetered = await runForFixture(input, {
+      anthropicClient: makeMockAnthropic([extractionResp, parsingResp]),
+      openaiClient: makeMockOpenAi(),
+      anthropicIsMetered: false,
+    });
+
+    expect(metered.ok).toBe(true);
+    expect(unmetered.ok).toBe(true);
+    // Both runs modeled identical usage, so modeledCostUsd must match
+    // regardless of which billing source actually paid for it.
+    expect(unmetered.modeledCostUsd).toBeCloseTo(metered.modeledCostUsd, 12);
+    // costUsd must drop by exactly the Anthropic-priced portion — only
+    // the OpenAI embeddings remain real spend.
+    //
+    // CodeRabbit: `toBeLessThan` alone did not enforce the invariant
+    // the comment claims. A partial-exclusion regression — dropping
+    // extraction's usage but still pricing the JD parse — decreases the
+    // cost and keeps it positive, so it satisfied both old assertions.
+    // Pin the delta instead.
+    //
+    // The two Anthropic stages run on DIFFERENT default models
+    // (extraction on Sonnet, requirement_parsing on Haiku), so the
+    // expected delta is their sum, not one price doubled. Both are
+    // resolved through `modelFor` rather than hardcoded, so a config.ts
+    // model change updates the expectation instead of reddening this
+    // test for the wrong reason.
+    const anthropicTokens = { inputTokens: 100, outputTokens: 50 };
+    const expectedAnthropicCost =
+      priceFor(modelFor("extraction").model, anthropicTokens) +
+      priceFor(modelFor("requirement_parsing").model, anthropicTokens);
+    expect(metered.costUsd - unmetered.costUsd).toBeCloseTo(expectedAnthropicCost, 12);
+    // The embeddings are still metered, so what remains is exactly them.
+    expect(unmetered.costUsd).toBeGreaterThan(0);
+    expect(unmetered.costUsd).toBeCloseTo(metered.costUsd - expectedAnthropicCost, 12);
   });
 
   it("FAILURE CAPTURE: extraction throws → result.ok=false, result.error populated, accuracies=0", async () => {
@@ -627,6 +715,49 @@ describe("runForFixture", () => {
       // ...but the number the model sweep ranks on does NOT move.
       expect(warm.modeledCostUsd).toBeCloseTo(cold.modeledCostUsd, 12);
       expect(warm.modeledCostUsd).toBeGreaterThan(0);
+    });
+
+    it("switching token source re-runs the LLM stages but reuses embeddings", async () => {
+      // CodeRabbit P1: the token-source discriminator used to be folded
+      // into all four stage keys, embeddings included. Embeddings always
+      // call OpenAI, and their token-source dependence already arrives
+      // via `input` (the upstream Units / Requirements), so
+      // discriminating them could never prevent a wrong hit — it could
+      // only force a miss and re-pay OpenAI for identical vectors on
+      // every `--token-source` flip. This repo runs under a hard
+      // monthly OpenAI ceiling, so that is real money.
+      const { extraction, parsing } = fixtureResponses();
+      const input = {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      };
+
+      const cli = await runForFixture(input, {
+        anthropicClient: makeMockAnthropic([extraction, parsing]),
+        openaiClient: makeMockOpenAi(),
+        cache: new StageCache({ dir: cacheDir }),
+        cacheDiscriminators: { tokenSource: "claude-cli" },
+      });
+      expect(cli.ok).toBe(true);
+      expect(cli.cacheMisses).toBe(4);
+
+      // Same corpus, same upstream mock output, metered-API keyspace.
+      const apiAnthropic = makeMockAnthropic([extraction, parsing]);
+      const apiOpenai = makeMockOpenAi();
+      const api = await runForFixture(input, {
+        anthropicClient: apiAnthropic,
+        openaiClient: apiOpenai,
+        cache: new StageCache({ dir: cacheDir }),
+      });
+
+      expect(api.ok).toBe(true);
+      // The two Anthropic stages are genuinely a different keyspace and
+      // must re-run — separating them is the point of the sweep.
+      expect(apiAnthropic.messages.create).toHaveBeenCalledTimes(2);
+      // The two embedding stages must NOT.
+      expect(apiOpenai.embeddings.create).not.toHaveBeenCalled();
+      expect(api.cacheMisses).toBe(2);
+      expect(api.cacheHits).toBe(2);
     });
 
     /**
