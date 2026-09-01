@@ -74,6 +74,19 @@ function makeMatch(
     final_score: finalScore,
     rationale: `match ${id} rationale`,
     surface_evidence: `match ${id} evidence`,
+    // Freshly-scored shape. Without `component_applicability`
+    // the card treats the row as legacy and withholds the
+    // rationale/evidence prose (#440), which several assertions
+    // below use as position markers.
+    component_applicability: {
+      semantic_similarity: true,
+      skill_overlap: true,
+      domain_overlap: true,
+      tool_overlap: true,
+      seniority_alignment: true,
+      scope_alignment: true,
+      recency: true,
+    },
     approved_for_use: false,
     user_rejected: false,
     created_at: "2026-01-01T00:00:00.000Z",
