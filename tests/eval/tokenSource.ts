@@ -91,6 +91,29 @@ export function isTokenSourceKind(v: string): v is TokenSourceKind {
   return (TOKEN_SOURCE_KINDS as readonly string[]).includes(v);
 }
 
+/**
+ * Version of this adapter's observable behavior, folded into the cache
+ * discriminator for every CLI-backed source.
+ *
+ * `STAGE_IMPL_VERSION` in `cache.ts` guards the production pipeline —
+ * its "bump this when" list names `extraction/resume.ts`,
+ * `parsing/jd.ts`, `llm/embeddings.ts` and their schemas, and
+ * deliberately stops there. This file sits outside that list, so
+ * without a version of its own a warm `claude-cli` cache keeps hitting
+ * after the adapter changes, and a sweep silently replays pre-change
+ * results through the very code path it was run to measure.
+ *
+ * **Bump this when** you change anything that can alter the CLI's
+ * output for unchanged inputs: `buildCliSystemPrompt`'s rewrites, the
+ * `claude -p` flag set, the JSON-schema invocation, or
+ * `parseClaudeEnvelope`'s response adaptation.
+ *
+ * v2: the no-tool-use retry reminder is now rewritten for the CLI, so
+ * v1 entries were produced under a system prompt this adapter no
+ * longer sends.
+ */
+export const CLI_ADAPTER_VERSION = 2 as const;
+
 export interface CliClientOptions {
   /**
    * Per-call wall-clock budget. The verified Nathan-resume extraction

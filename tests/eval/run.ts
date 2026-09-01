@@ -39,6 +39,7 @@ import {
 import { resolveCacheMode, StageCache } from "./cache.js";
 import {
   claudeCliClient,
+  CLI_ADAPTER_VERSION,
   isTokenSourceKind,
   TOKEN_SOURCE_KINDS,
   type TokenSourceKind,
@@ -102,7 +103,16 @@ function parseMode(argv: readonly string[]): Mode {
 export function cacheDiscriminatorsFor(
   tokenSource: TokenSourceKind,
 ): Readonly<Record<string, string>> | undefined {
-  return tokenSource === "api" ? undefined : { tokenSource };
+  // Codex P2: `tokenSource` alone pins WHICH adapter produced an entry,
+  // not WHICH VERSION of it. `cache.ts`'s STAGE_IMPL_VERSION covers the
+  // production pipeline and explicitly not this adapter, so without the
+  // version here a warm CLI cache keeps hitting after `tokenSource.ts`
+  // changes its prompt rewrite, flags, or response adaptation — and the
+  // sweep replays pre-change results through the path it was run to
+  // measure.
+  return tokenSource === "api"
+    ? undefined
+    : { tokenSource, cliAdapter: String(CLI_ADAPTER_VERSION) };
 }
 
 export function parseTokenSource(argv: readonly string[]): TokenSourceKind {

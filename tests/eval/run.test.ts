@@ -26,6 +26,7 @@ import {
   toFixtureResult,
 } from "./run.js";
 import type { RunForFixtureResult } from "./runForFixture.js";
+import { CLI_ADAPTER_VERSION } from "./tokenSource.js";
 
 function makeOrchestratorResult(
   overrides: Partial<RunForFixtureResult> = {},
@@ -171,7 +172,24 @@ describe("cacheDiscriminatorsFor", () => {
   it("still separates CLI-produced entries from metered ones", () => {
     // The property the discriminator was introduced for: comparing the
     // two sources is only meaningful if they cannot collide.
-    expect(cacheDiscriminatorsFor("claude-cli")).toEqual({ tokenSource: "claude-cli" });
+    expect(cacheDiscriminatorsFor("claude-cli")).toMatchObject({
+      tokenSource: "claude-cli",
+    });
+  });
+
+  it("versions the CLI adapter so an adapter change invalidates its entries", () => {
+    // Codex P2: `tokenSource` alone pins which adapter produced an
+    // entry, not which version of it. `cache.ts`'s STAGE_IMPL_VERSION
+    // covers the production pipeline and explicitly not
+    // `tokenSource.ts`, so without this a warm CLI cache keeps hitting
+    // after the adapter's prompt rewrite / flags / response handling
+    // change, and the sweep replays pre-change results.
+    expect(cacheDiscriminatorsFor("claude-cli")).toEqual({
+      tokenSource: "claude-cli",
+      cliAdapter: String(CLI_ADAPTER_VERSION),
+    });
+    // The api source keeps the legacy keyspace — no adapter is involved.
+    expect(cacheDiscriminatorsFor("api")).toBeUndefined();
   });
 });
 
