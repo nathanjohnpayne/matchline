@@ -43,6 +43,15 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  // CodeRabbit: `restoreAllMocks` does NOT revert `vi.stubEnv`, and
+  // `vite.config.ts` does not set `unstubEnvs`. This file stubs
+  // `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GH_TOKEN`,
+  // `OP_PREFLIGHT_*`, `CLAUDE_CODE_OAUTH_TOKEN` and the proxy
+  // settings — without this they persist in `process.env` for every
+  // later test in the same worker, and a fake `ANTHROPIC_API_KEY`
+  // reaching a credential-detection test silently changes what that
+  // test exercises.
+  vi.unstubAllEnvs();
 });
 
 const SCHEMA = {
