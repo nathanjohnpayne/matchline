@@ -100,11 +100,19 @@ SOURCES=()
 while IFS= read -r f; do
   SOURCES+=("$f")
 done < <(
+  # Exclusions are ANCHORED, not `*/lib/*`-style globs. The loose
+  # form was aimed at `functions/lib/` — the compiled output named
+  # by `main: lib/index.js` — but it also swallowed `src/lib/`,
+  # which holds real application code (`auth.tsx`,
+  # `callable-errors.ts`, and more). A duplicate declared there was
+  # invisible to a guard whose whole premise is that it scans every
+  # source. Codex P2 on PR #445.
   find "${SCAN_ROOTS[@]}" \
     -type f \( -name '*.ts' -o -name '*.tsx' \) \
-    -not -path '*/node_modules/*' \
-    -not -path '*/dist/*' \
-    -not -path '*/lib/*' \
+    -not -path "$ROOT/node_modules/*" \
+    -not -path "$ROOT/functions/node_modules/*" \
+    -not -path "$ROOT/dist/*" \
+    -not -path "$ROOT/functions/lib/*" \
     | sort
 )
 
