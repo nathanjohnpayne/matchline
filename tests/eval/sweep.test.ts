@@ -154,6 +154,39 @@ describe("runVariant", () => {
     expect(getModelOverrides()).toEqual({});
   });
 
+  it("records the full effective config, not just the explicit overrides", async () => {
+    // Codex P2: a variant that overrides one stage used to record ONLY
+    // that stage, so a saved report carried no trace of the
+    // requirement_parsing model or either prompt version that also
+    // produced its numbers — and stopped being reproducible the moment
+    // config.ts or PROMPT_CONFIG moved.
+    const result = await runVariant(
+      {
+        label: "haiku-extraction",
+        models: {
+          extraction: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+        },
+      },
+      { runCorpus: async () => [fixtureResult()] },
+    );
+
+    // The explicit override is recorded...
+    expect(result.models.extraction?.model).toBe("claude-haiku-4-5-20251001");
+    // ...and so is the default that silently participated.
+    expect(result.models.requirement_parsing?.model).toBe(
+      modelFor("requirement_parsing").model,
+    );
+    // Both sweepable prompt versions are pinned, not just overridden ones.
+    expect(Object.keys(result.promptVersions).sort()).toEqual([
+      "extraction/resume",
+      "parsing/jd",
+    ]);
+    for (const v of Object.values(result.promptVersions)) {
+      expect(typeof v).toBe("string");
+      expect(v.length).toBeGreaterThan(0);
+    }
+  });
+
   it("applies prompt overrides and clears them afterwards", async () => {
     let seen: Readonly<Record<string, string>> = {};
     await runVariant(

@@ -455,6 +455,88 @@ export function buildCliSystemPrompt(
 }
 
 /**
+ * Shape of the fields this module reads from `claude auth status --json`.
+ * Everything is optional: an older CLI, a different build, or a
+ * truncated response must land in the fail-closed branch rather than
+ * throw a type error.
+ */
+interface ClaudeAuthStatus {
+  readonly loggedIn?: unknown;
+  readonly authMethod?: unknown;
+  readonly apiProvider?: unknown;
+  readonly subscriptionType?: unknown;
+}
+
+/**
+ * Fail-closed preflight proving a `claude-cli` run is actually
+ * subscription-billed before it spends anything.
+ *
+ * Codex P1: withholding `ANTHROPIC_API_KEY` from the child environment
+ * does NOT prove subscription billing. `HOME` is deliberately the
+ * operator's real home (the OAuth credentials live there), which means
+ * an `apiKeyHelper` in `~/.claude/settings.json`, or a login made
+ * through an API-key / Bedrock / Vertex method, can meter the very
+ * invocation this harness is about to record as free. The blast radius
+ * is not a wrong number in a report: `--token-source claude-cli` sets
+ * `anthropicIsMetered: false` and zeroes projected Anthropic spend in
+ * the cap check, so a metered run would bypass the monthly ceiling and
+ * report `$0` while charging the account.
+ *
+ * This mirrors `p4b_require_claude_plan_auth`
+ * (`scripts/phase-4b/lib.sh`), which already enforces exactly this
+ * invariant for the Phase 4b review adapter. Same signals, same
+ * fail-closed posture: anything other than a first-party subscription
+ * login refuses to start.
+ */
+export function assertClaudeSubscriptionAuth(raw: string): void {
+  const refuse = (why: string): never => {
+    throw new Error(
+      `Refusing to start a --token-source claude-cli run: ${why}. ` +
+        `The harness records CLI Anthropic usage as subscription-billed ` +
+        `($0 real spend, excluded from the monthly cap projection), so an ` +
+        `API-key-backed CLI would spend metered money invisibly. ` +
+        `Run \`claude auth login\` and pick the Claude subscription, or use ` +
+        `--token-source api, which prices and caps its spend honestly.`,
+    );
+  };
+
+  let status: ClaudeAuthStatus;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return refuse("`claude auth status --json` did not return an object");
+    }
+    status = parsed as ClaudeAuthStatus;
+  } catch {
+    return refuse("`claude auth status --json` returned unparseable output");
+  }
+
+  if (status.loggedIn !== true) {
+    return refuse("claude is not logged in");
+  }
+  // The two first-party subscription methods, matching the Phase 4b
+  // adapter's allowlist. Anything else — `api_key`, `bedrock`,
+  // `vertex` — is metered somewhere.
+  if (status.authMethod !== "claude.ai" && status.authMethod !== "oauth_token") {
+    return refuse(
+      `claude authMethod is ${JSON.stringify(status.authMethod ?? null)}, ` +
+        `not a first-party subscription method`,
+    );
+  }
+  if (status.apiProvider !== "firstParty") {
+    return refuse(
+      `claude apiProvider is ${JSON.stringify(status.apiProvider ?? null)}, not "firstParty"`,
+    );
+  }
+  if (status.authMethod === "claude.ai") {
+    const sub = status.subscriptionType;
+    if (typeof sub !== "string" || sub.length === 0) {
+      return refuse("claude subscriptionType is missing");
+    }
+  }
+}
+
+/**
  * Anthropic-shaped client backed by `claude -p` on the Claude Code
  * subscription.
  *
@@ -477,10 +559,42 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
   const spawnFn = options.spawnFn ?? realSpawn;
   const workdirRoot = options.workdirRoot ?? tmpdir();
 
+  // Codex P1: prove the subscription before spending. Memoized as a
+  // promise so a sweep pays for one `claude auth status` rather than
+  // one per flow, and so a refusal rejects every caller identically
+  // instead of only the first. Deliberately NOT re-checked per call:
+  // auth does not change mid-run, and a per-call check would add a
+  // subprocess to every cell of the matrix.
+  let authCheck: Promise<void> | undefined;
+  const ensureSubscriptionAuth = async (): Promise<void> => {
+    authCheck ??= (async () => {
+      const status = await spawnFn(
+        "claude",
+        ["auth", "status", "--json"],
+        {
+          cwd: workdirRoot,
+          env: buildChildEnv({ HOME: process.env.HOME }),
+          stdin: "",
+          timeoutMs,
+        },
+      );
+      if (status.exitCode !== 0) {
+        throw new Error(
+          `Refusing to start a --token-source claude-cli run: ` +
+            `\`claude auth status --json\` exited ${status.exitCode}: ` +
+            `${status.stderr.slice(0, 300)}`,
+        );
+      }
+      assertClaudeSubscriptionAuth(status.stdout);
+    })();
+    return authCheck;
+  };
+
   return {
     messages: {
       create: async (params: unknown): Promise<Anthropic.Messages.Message> => {
         const parts = extractPromptParts(params);
+        await ensureSubscriptionAuth();
         const workdir = mkdtempSync(join(workdirRoot, "matchline-claude-cli-"));
         try {
           const system = buildCliSystemPrompt(parts);

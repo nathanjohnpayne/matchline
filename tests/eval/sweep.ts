@@ -41,6 +41,7 @@
 import {
   clearModelOverrides,
   isStage,
+  modelFor,
   setModelOverrides,
   STAGES,
   type ModelConfig,
@@ -49,6 +50,7 @@ import {
 import { rateFor } from "../../functions/src/llm/rates.ts";
 import {
   clearPromptVersionOverrides,
+  resolvePromptVersion,
   setPromptVersionOverrides,
 } from "../../functions/src/prompts/loader.ts";
 
@@ -211,6 +213,38 @@ export interface RunVariantDeps {
 }
 
 /**
+ * The model each sweepable stage actually resolves to right now —
+ * variant override, command-wide override, or `config.ts` default,
+ * whichever wins. Must be called while the overrides are installed.
+ */
+function effectiveModels(): Partial<Record<Stage, ModelConfig>> {
+  const out: Partial<Record<Stage, ModelConfig>> = {};
+  for (const stage of SWEEPABLE_STAGES) out[stage] = modelFor(stage);
+  return out;
+}
+
+/**
+ * The prompt version each sweepable key actually resolves to right
+ * now. `resolvePromptVersion` is the loader's own lookup — the
+ * docstring there calls out this exact use — so the report cannot
+ * drift from what `loadPromptText` read.
+ */
+function resolvedPromptVersions(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of SWEEPABLE_PROMPT_KEYS) {
+    const [stage, name] = key.split("/") as [string, string];
+    // SWEEPABLE_PROMPT_KEYS is a closed list of real (stage, name)
+    // pairs, but it is typed as string[] so the parse-time guards can
+    // compare against it. The cast re-states what the list guarantees.
+    out[key] = resolvePromptVersion(
+      stage as Parameters<typeof resolvePromptVersion>[0],
+      name as Parameters<typeof resolvePromptVersion>[1],
+    );
+  }
+  return out;
+}
+
+/**
  * Run one variant: apply its overrides, run the corpus, roll up.
  *
  * Overrides are cleared in a `finally` so a throwing variant can't
@@ -251,7 +285,27 @@ export async function runVariant(
     // variant here used to hide command-wide --prompt flags behind
     // "(defaults)", making a valid sweep look like it used a
     // different prompt from the one that produced its measurements.
-    return rollUpVariant({ ...variant, promptVersions: effectivePromptVersions }, results);
+    //
+    // Codex P2: carry that the rest of the way. Recording only the
+    // EXPLICIT overrides left an extraction-only variant with no
+    // record of the `requirement_parsing` model or either prompt
+    // version that also participated in its numbers — so a saved
+    // report stopped being reproducible the moment `config.ts` or
+    // `PROMPT_CONFIG` moved. Resolve every sweepable knob through the
+    // same lookups the run itself used, here inside the `try` while
+    // the overrides are still installed; the `finally` below clears
+    // them and the answer would change.
+    return rollUpVariant(
+      {
+        ...variant,
+        models: effectiveModels(),
+        promptVersions: {
+          ...effectivePromptVersions,
+          ...resolvedPromptVersions(),
+        },
+      },
+      results,
+    );
   } finally {
     clearModelOverrides();
     clearPromptVersionOverrides();

@@ -22,10 +22,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  assertClaudeSubscriptionAuth,
   assertModelMatches,
   buildChildEnv,
   buildCliSystemPrompt,
   claudeCliClient,
+  type CliClientOptions,
   estimateTokens,
   extractPromptParts,
   isTokenSourceKind,
@@ -263,8 +265,34 @@ describe("parseClaudeEnvelope", () => {
 });
 
 describe("claudeCliClient", () => {
+  // Codex P1: the client now proves the CLI is subscription-authenticated
+  // before it spends anything, which costs one `claude auth status`
+  // subprocess. These mocks answer it with a valid first-party login so
+  // each test still exercises the behavior it is actually about; the
+  // preflight has its own describe block below.
+  const SUBSCRIBED = {
+    loggedIn: true,
+    authMethod: "claude.ai",
+    apiProvider: "firstParty",
+    subscriptionType: "max",
+  };
+
+  type MockSpawn = NonNullable<CliClientOptions["spawnFn"]>;
+
+  const withPlanAuth =
+    (inner: MockSpawn): MockSpawn =>
+    async (cmd, args, opts) =>
+      args[0] === "auth"
+        ? { stdout: JSON.stringify(SUBSCRIBED), stderr: "", exitCode: 0 }
+        : inner(cmd, args, opts);
+
+  const cliClient = (
+    opts: CliClientOptions & { spawnFn: MockSpawn },
+  ): ReturnType<typeof claudeCliClient> =>
+    claudeCliClient({ ...opts, spawnFn: withPlanAuth(opts.spawnFn) });
+
   it("returns a tool_use block carrying the CLI's structured JSON", async () => {
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({
         stdout: claudeEnvelope({ result: JSON.stringify({ units: ["a"] }) }),
@@ -286,7 +314,7 @@ describe("claudeCliClient", () => {
   // understating `$ / flow` for every structured-output run.
   it("prices the structured output, not the empty result string, when structured_output is populated", async () => {
     const structuredOutput = { units: ["a", "b", "c"] };
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({
         stdout: claudeEnvelope({ result: "", structured_output: structuredOutput }),
@@ -321,7 +349,7 @@ describe("claudeCliClient", () => {
     for (const [k, v] of Object.entries(leaky)) vi.stubEnv(k, v);
 
     let seenEnv: NodeJS.ProcessEnv | undefined;
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, _args, opts) => {
         seenEnv = opts.env;
@@ -354,7 +382,7 @@ describe("claudeCliClient", () => {
     vi.stubEnv("OPENAI_API_KEY", "sk-oai-should-not-leak");
 
     let seenEnv: NodeJS.ProcessEnv | undefined;
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, _args, opts) => {
         seenEnv = opts.env;
@@ -373,7 +401,7 @@ describe("claudeCliClient", () => {
   // write path rather than merely limiting it to one tool.
   it("enables native JSON-schema output with no model tools", async () => {
     let seenArgs: readonly string[] = [];
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, args) => {
         seenArgs = args;
@@ -393,7 +421,7 @@ describe("claudeCliClient", () => {
 
   it("never passes --bare, which would force API-key auth", async () => {
     let seenArgs: readonly string[] = [];
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, args) => {
         seenArgs = args;
@@ -407,7 +435,7 @@ describe("claudeCliClient", () => {
 
   it("prices the prompt payload, including its native JSON schema", async () => {
     const body = JSON.stringify({ units: ["a", "b"] });
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({
         stdout: claudeEnvelope({ result: body }), stderr: "", exitCode: 0,
@@ -430,7 +458,7 @@ describe("claudeCliClient", () => {
   });
 
   it("degrades to no_tool_use when the CLI result is not JSON", async () => {
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({ stdout: claudeEnvelope(), stderr: "", exitCode: 0 }),
     });
@@ -440,7 +468,7 @@ describe("claudeCliClient", () => {
   });
 
   it("degrades to no_tool_use when structured output is malformed", async () => {
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({
         stdout: claudeEnvelope({ result: "{ not json" }), stderr: "", exitCode: 0,
@@ -451,7 +479,7 @@ describe("claudeCliClient", () => {
   });
 
   it("throws when the CLI serves a different model than requested", async () => {
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => {
         return {
@@ -470,7 +498,7 @@ describe("claudeCliClient", () => {
   });
 
   it("surfaces a not-logged-in envelope as an error", async () => {
-    const client = claudeCliClient({
+    const client = cliClient({
       workdirRoot: root,
       spawnFn: async () => ({
         stdout: claudeEnvelope({ is_error: true, result: "Not logged in · Please run /login" }),
@@ -479,5 +507,151 @@ describe("claudeCliClient", () => {
       }),
     });
     await expect(client.messages.create(params() as never)).rejects.toThrow(/Not logged in/);
+  });
+});
+
+/**
+ * Codex P1: withholding `ANTHROPIC_API_KEY` from the child env does not
+ * prove a `claude-cli` run is subscription-billed. `HOME` is
+ * deliberately the operator's real home so the OAuth credentials are
+ * reachable, which also makes an `apiKeyHelper` — or an API-key /
+ * Bedrock / Vertex login — reachable. The harness records CLI Anthropic
+ * usage as $0 and excludes it from the monthly cap projection, so a
+ * metered CLI run would spend real money invisibly. This preflight is
+ * the fail-closed proof, mirroring `p4b_require_claude_plan_auth`.
+ */
+describe("assertClaudeSubscriptionAuth", () => {
+  const ok = {
+    loggedIn: true,
+    authMethod: "claude.ai",
+    apiProvider: "firstParty",
+    subscriptionType: "max",
+  };
+
+  it("accepts a first-party claude.ai subscription login", () => {
+    expect(() => assertClaudeSubscriptionAuth(JSON.stringify(ok))).not.toThrow();
+  });
+
+  it("accepts an oauth_token login without a subscriptionType", () => {
+    // The Phase 4b adapter requires subscriptionType only for the
+    // claude.ai method; oauth_token is already proof on its own.
+    expect(() =>
+      assertClaudeSubscriptionAuth(
+        JSON.stringify({ loggedIn: true, authMethod: "oauth_token", apiProvider: "firstParty" }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["not logged in", { ...ok, loggedIn: false }],
+    ["an API-key login", { ...ok, authMethod: "api_key" }],
+    ["a Bedrock login", { ...ok, authMethod: "bedrock", apiProvider: "bedrock" }],
+    ["a non-first-party provider", { ...ok, apiProvider: "vertex" }],
+    ["a claude.ai login with no subscriptionType", { ...ok, subscriptionType: "" }],
+    ["a claude.ai login with a null subscriptionType", { ...ok, subscriptionType: null }],
+  ])("refuses to start on %s", (_label, status) => {
+    expect(() => assertClaudeSubscriptionAuth(JSON.stringify(status))).toThrow(
+      /Refusing to start a --token-source claude-cli run/,
+    );
+  });
+
+  it.each([
+    ["unparseable output", "Not logged in"],
+    ["a non-object payload", '"nope"'],
+    ["an empty payload", ""],
+  ])("fails closed on %s", (_label, raw) => {
+    // An older CLI, a different build, or a truncated response must
+    // refuse rather than be read as permission to spend.
+    expect(() => assertClaudeSubscriptionAuth(raw)).toThrow(
+      /Refusing to start a --token-source claude-cli run/,
+    );
+  });
+});
+
+describe("claudeCliClient subscription preflight", () => {
+  const authResult = (stdout: string, exitCode = 0) => ({ stdout, stderr: "", exitCode });
+
+  it("checks auth before spawning any billable call", async () => {
+    const calls: string[][] = [];
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        calls.push([...args]);
+        if (args[0] === "auth") {
+          return authResult(
+            JSON.stringify({
+              loggedIn: true,
+              authMethod: "claude.ai",
+              apiProvider: "firstParty",
+              subscriptionType: "max",
+            }),
+          );
+        }
+        return authResult(claudeEnvelope({ result: JSON.stringify({ units: [] }) }));
+      },
+    });
+
+    await client.messages.create(params() as never);
+    expect(calls[0]).toEqual(["auth", "status", "--json"]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("refuses the run — and never spawns the model call — on API-key auth", async () => {
+    const calls: string[][] = [];
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        calls.push([...args]);
+        if (args[0] === "auth") {
+          return authResult(
+            JSON.stringify({ loggedIn: true, authMethod: "api_key", apiProvider: "firstParty" }),
+          );
+        }
+        return authResult(claudeEnvelope());
+      },
+    });
+
+    await expect(client.messages.create(params() as never)).rejects.toThrow(
+      /Refusing to start a --token-source claude-cli run/,
+    );
+    // The point of a preflight: nothing billable ran.
+    expect(calls).toEqual([["auth", "status", "--json"]]);
+  });
+
+  it("checks once per client, not once per flow", async () => {
+    // A sweep runs this client across the whole matrix; re-checking per
+    // call would add a subprocess to every cell for an answer that
+    // cannot change mid-run.
+    let authCalls = 0;
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) => {
+        if (args[0] === "auth") {
+          authCalls++;
+          return authResult(
+            JSON.stringify({ loggedIn: true, authMethod: "oauth_token", apiProvider: "firstParty" }),
+          );
+        }
+        return authResult(claudeEnvelope({ result: JSON.stringify({ units: [] }) }));
+      },
+    });
+
+    await client.messages.create(params() as never);
+    await client.messages.create(params() as never);
+    await client.messages.create(params() as never);
+    expect(authCalls).toBe(1);
+  });
+
+  it("rejects every caller when the preflight fails, not just the first", async () => {
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args) =>
+        args[0] === "auth"
+          ? authResult("", 1)
+          : authResult(claudeEnvelope()),
+    });
+
+    await expect(client.messages.create(params() as never)).rejects.toThrow(/Refusing to start/);
+    await expect(client.messages.create(params() as never)).rejects.toThrow(/Refusing to start/);
   });
 });
