@@ -559,4 +559,55 @@ describe("computeGaps: stranded matches are counted, not dropped (#446)", () => 
   it("is zero on an ordinary Role", () => {
     expect(computeGaps([current], []).strandedMatches).toBe(0);
   });
+
+  it("counts a stored-verdict match whose Requirement disappeared", () => {
+    // The first version keyed off the derived
+    // `requirement_missing` verdict, which a post-#435 row never
+    // produces: its stored `structural_evidence` short-circuits
+    // `verdictFor` before any verdict is consulted, so an
+    // `evidenced` stranded row was indexed under the obsolete id
+    // and then ignored. Codex P2 on PR #446.
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9, { structural_evidence: true })],
+    );
+    expect(report.strandedMatches).toBe(1);
+    expect(report.gaps).toEqual([
+      { requirement: current, status: "unmet", reasons: [] },
+    ]);
+  });
+
+  it("counts it with no evidence map at all", () => {
+    // A Role whose matches are all post-#435 has an empty
+    // `evidenceKey`, so the client never calls the derivation.
+    // Stranding has to be answerable without a round trip, and it
+    // is: whether an id is in the current set is local knowledge.
+    const report = computeGaps(
+      [current],
+      [makeMatch("m1", "r-old", 0.9, { structural_evidence: false })],
+      undefined,
+    );
+    expect(report.strandedMatches).toBe(1);
+  });
+
+  it("counts a stranded legacy row with no verdict either", () => {
+    expect(
+      computeGaps([current], [makeMatch("m1", "r-old", 0.9)]).strandedMatches,
+    ).toBe(1);
+  });
+
+  it("does not let a stranded match contribute coverage", () => {
+    // Belt and braces: an `evidenced` stranded row must not be
+    // able to satisfy anything, since the Requirement it answered
+    // no longer exists.
+    const report = computeGaps(
+      [current],
+      [
+        makeMatch("m1", "r-old", 0.95, { structural_evidence: true }),
+        makeMatch("m2", "r-new", 0.2, { structural_evidence: true }),
+      ],
+    );
+    expect(report.gaps.map((g) => g.requirement.id)).toEqual(["r-new"]);
+    expect(report.strandedMatches).toBe(1);
+  });
 });

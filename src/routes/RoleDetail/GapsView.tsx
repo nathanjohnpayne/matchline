@@ -74,6 +74,12 @@ export interface GapsViewProps {
  */
 const REASON_TEXT: Readonly<Record<UnverifiableReason, string>> = {
   unit_missing: "the linked Experience Unit no longer exists",
+  // Unreachable through `Gap.reasons`: `computeGaps` detects a
+  // stranded match structurally and counts it in
+  // `strandedMatches` before any verdict is read. The key is
+  // required because the map is exhaustive over
+  // `UnverifiableReason`, and the callable does still return this
+  // reason.
   requirement_missing:
     "this requirement was replaced, so the match points at an older version of it",
   unit_unapproved: "the linked Experience Unit is not currently approved",

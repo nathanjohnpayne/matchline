@@ -255,7 +255,10 @@ Acceptance criteria:
   snapshot that folded a value in at build time does not track it
   afterwards.
 - A match whose Requirement no longer exists is reported at the Role
-  level rather than attributed to a surviving Requirement. The
+  level rather than attributed to a surviving Requirement, and is
+  determined structurally — from whether the id is in the current
+  Requirement set — not from a derived verdict, so it holds for matches
+  of every vintage and needs no round trip. The
   stranding is a consequence of the Requirement set being replaced
   wholesale, so tying it to whichever Requirement remains would assert
   a relationship that does not exist.

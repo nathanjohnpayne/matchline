@@ -184,10 +184,20 @@ function verdictFor(
  * cleared the threshold but point at a Requirement id that no
  * longer exists. Those cannot appear in `gaps`: this function
  * iterates the CURRENT Requirements, and a stranded match's
- * Requirement is by definition not among them, so its
- * `requirement_missing` verdict had nowhere to go and was
- * silently dropped — making the reason string unreachable in
- * exactly the scenario it was written for. Codex P2 on PR #446.
+ * Requirement is by definition not among them, so it was
+ * silently dropped — making the `requirement_missing` reason
+ * unreachable in exactly the scenario it was written for. Codex
+ * P2 on PR #446.
+ *
+ * **Determined structurally, from the ids in hand.** The first
+ * version keyed off the derived `requirement_missing` verdict,
+ * which only ever covers legacy rows: a post-#435 match carries
+ * `structural_evidence`, so `verdictFor` short-circuits before
+ * any verdict is consulted, and a Role whose matches are all
+ * post-#435 produces an empty `evidenceKey` and never calls the
+ * derivation at all. Stranding needed no round trip in the first
+ * place — whether an id is in the current set is answerable
+ * here. Codex P2 on PR #446, the round after.
  *
  * It is deliberately a Role-level number rather than an entry in
  * `gaps`. The stranding is not a property of any surviving
@@ -217,9 +227,19 @@ export function computeGaps(
   // matching pipeline's filter at #82.
   const bestCovering = new Map<string, number>();
   const doubted = new Map<string, UnverifiableReason[]>();
+  const currentRequirementIds = new Set(requirements.map((r) => r.id));
   let strandedMatches = 0;
   for (const m of matches) {
     if (m.user_rejected) continue;
+    // Stranding is checked BEFORE the verdict, because it is a
+    // fact about ids rather than about evidence, and because the
+    // verdict path cannot see it: a stored `structural_evidence`
+    // short-circuits `verdictFor`, and a Role with no legacy rows
+    // never asks the server for a verdict at all.
+    if (!currentRequirementIds.has(m.job_requirement_unit_id)) {
+      if (m.final_score >= threshold) strandedMatches += 1;
+      continue;
+    }
     const verdict = verdictFor(m, evidence);
     if (verdict === "unevidenced") continue;
     if (verdict === "unverifiable") {
@@ -228,11 +248,11 @@ export function computeGaps(
       // to satisfy it, so being unable to verify it changes
       // nothing the user needs to know.
       if (m.final_score >= threshold) {
+        // `requirement_missing` cannot arrive here — the id check
+        // above already handled every match whose Requirement is
+        // gone — so any reason reaching this point is about the
+        // Unit or the embedding pair.
         const reason = evidence?.get(m.id)?.reason;
-        if (reason === "requirement_missing") {
-          strandedMatches += 1;
-          continue;
-        }
         const reasons =
           doubted.get(m.job_requirement_unit_id) ??
           doubted.set(m.job_requirement_unit_id, []).get(m.job_requirement_unit_id)!;
