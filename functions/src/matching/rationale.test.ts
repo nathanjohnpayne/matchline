@@ -591,8 +591,16 @@ describe("generateRationale: empty-data fallback honesty (round 1)", () => {
       },
       requirement: {
         normalized_requirement: "y",
+        // A keyword that DOES canonicalize, so the skill axis is
+        // evaluable and may drive the rationale. The Unit's own
+        // term is the un-normalizable side, which is what makes
+        // `canonicalOverlap` come back empty and exercises the
+        // defensive branch. Before #435 the Requirement keyword
+        // here was also un-normalizable; that now makes the axis
+        // inapplicable entirely and it can no longer drive — see
+        // the applicability tests below.
         category: "skill",
-        keywords: ["another-novel-skill"],
+        keywords: ["sql"],
         tools: [],
         domains: [],
       },
@@ -700,8 +708,16 @@ describe("generateRationale: edge cases", () => {
       },
       requirement: {
         normalized_requirement: "y",
+        // A keyword that DOES canonicalize, so the skill axis is
+        // evaluable and may drive the rationale. The Unit's own
+        // term is the un-normalizable side, which is what makes
+        // `canonicalOverlap` come back empty and exercises the
+        // defensive branch. Before #435 the Requirement keyword
+        // here was also un-normalizable; that now makes the axis
+        // inapplicable entirely and it can no longer drive — see
+        // the applicability tests below.
         category: "skill",
-        keywords: ["another-novel-skill"],
+        keywords: ["sql"],
         tools: [],
         domains: [],
       },
@@ -709,5 +725,122 @@ describe("generateRationale: edge cases", () => {
     const result = generateRationale(input);
     expect(result.driving_component).toBe("skill_overlap");
     expect(result.surface_evidence).toBe("totally-novel-skill-xyz");
+  });
+});
+
+describe("generateRationale: axis applicability (CodeRabbit Major on #435)", () => {
+  // #430 made `jaccard()` return the 0.5 neutral when the
+  // Requirement side is empty or unrecognized, so an axis the
+  // employer never constrained still contributes 0.10 — enough
+  // to win the tie-break and drive the rationale. The templates
+  // then narrate a comparison that never happened and hand the
+  // Unit's own skills/tools/domains to `surface_evidence` as
+  // support for it. That is the zero-fabrication boundary this
+  // module's docstring claims to hold.
+  const unit = {
+    normalized_summary: "Led Disney+ launch across living-room platforms",
+    skills: ["product strategy", "platform product management"],
+    tools: ["jira", "github"],
+    domains: ["streaming video"],
+    seniority_signals: ["led"],
+    scope_signals: [],
+  };
+
+  it("does not let an unconstrained skill axis drive the rationale", () => {
+    const result = generateRationale(
+      makeInput({
+        // Neutral skill_overlap outweighs a weak semantic score
+        // on raw contribution: 0.20 x 0.5 = 0.10 vs 0.30 x 0.2 =
+        // 0.06. Without the applicability filter this picks
+        // skill_overlap.
+        components: makeComponents({
+          semantic_similarity: 0.2,
+          skill_overlap: 0.5,
+        }),
+        unit,
+        requirement: {
+          normalized_requirement: "BS in Computer Science",
+          category: "credential",
+          keywords: [],
+          tools: [],
+          domains: [],
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+    expect(result.rationale).not.toMatch(/skill/i);
+    // And critically: the Unit's skills are not offered as
+    // evidence for a requirement that named none.
+    expect(result.surface_evidence).not.toContain("product strategy");
+  });
+
+  it("does not let an unrecognized Requirement vocabulary drive it either", () => {
+    // Populated arrays are not a constraint if nothing survives
+    // canonicalization — the engine had nothing to compare.
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.2,
+          skill_overlap: 0.5,
+          tool_overlap: 0.5,
+          domain_overlap: 0.5,
+        }),
+        unit,
+        requirement: {
+          normalized_requirement: "y",
+          category: "skill",
+          keywords: ["xyzzy-not-a-real-skill"],
+          tools: ["plugh-not-a-real-tool"],
+          domains: ["frobnitz-not-a-real-domain"],
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+  });
+
+  it("does not let an unconstrained seniority or scope axis drive it", () => {
+    // Both return 1.0 when the Requirement doesn't constrain
+    // them — 0.10 of contribution each, same leak as the Jaccard
+    // neutral.
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.2,
+          seniority_alignment: 1,
+          scope_alignment: 1,
+        }),
+        unit,
+        requirement: {
+          normalized_requirement: "y",
+          category: "skill",
+          keywords: [],
+          tools: [],
+          domains: [],
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+  });
+
+  it("still lets a genuinely constrained axis drive", () => {
+    // The filter must not swallow real signal.
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.2,
+          skill_overlap: 1,
+        }),
+        unit,
+        requirement: {
+          normalized_requirement: "y",
+          category: "skill",
+          keywords: ["product strategy"],
+          tools: [],
+          domains: [],
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("skill_overlap");
+    expect(result.surface_evidence).toContain("product strategy");
   });
 });

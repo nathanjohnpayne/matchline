@@ -220,8 +220,8 @@ function jaccard(
 }
 
 /**
- * Does this Requirement constrain ANY structural axis in a way
- * the engine can actually evaluate?
+ * Which axes does this Requirement actually constrain in a way
+ * the engine can evaluate?
  *
  * An axis counts only when the Requirement side survives
  * canonicalization — a `keywords` array full of terms the seed
@@ -230,30 +230,65 @@ function jaccard(
  * is on the ladder; scope counts when the Requirement is
  * scope-category AND its keywords canonicalize.
  *
+ * `semantic_similarity` and `recency` are always applicable:
+ * both are computed from the pair itself rather than from a
+ * Requirement-side constraint, so there's nothing for a
+ * Requirement to leave unspecified.
+ *
  * Deliberately mirrors the branch conditions in `jaccard()`,
  * `seniorityAlignment()` and `scopeAlignment()`. If a future
- * change moves one of those thresholds, this predicate has to
- * move with it — the pairing is pinned in score.test.ts.
+ * change moves one of those thresholds, this has to move with
+ * it — the pairing is pinned in score.test.ts.
+ *
+ * Two consumers, and they need the same answer:
+ *   - `hasStructuralEvidence` → `computeGaps`, so an
+ *     unevaluated Requirement can't be reported as covered.
+ *   - `generateRationale` → so a template can't claim "matched
+ *     on skill overlap" for an axis that was never compared.
+ */
+export type RequirementAxes = Readonly<Record<keyof ScoreComponents, boolean>>;
+
+export function requirementAxes(
+  requirement: Pick<
+    JobRequirementUnit,
+    "category" | "keywords" | "tools" | "domains" | "seniority_level"
+  >,
+): RequirementAxes {
+  return {
+    semantic_similarity: true,
+    recency: true,
+    skill_overlap: canonicalize(requirement.keywords, normalizeSkill).size > 0,
+    tool_overlap: canonicalize(requirement.tools, normalizeTool).size > 0,
+    domain_overlap: canonicalize(requirement.domains, normalizeDomain).size > 0,
+    seniority_alignment:
+      requirement.seniority_level !== undefined &&
+      SENIORITY_LADDER.indexOf(requirement.seniority_level) !== -1,
+    scope_alignment:
+      requirement.category === "scope" &&
+      canonicalize(requirement.keywords, normalizeScopeKey).size > 0,
+  };
+}
+
+/**
+ * Does this Requirement constrain ANY structural axis the
+ * engine can evaluate? Derived from `requirementAxes` so the
+ * two can't drift — `semantic_similarity` and `recency` are
+ * excluded because neither is Requirement-side evidence.
  */
 export function hasStructuralEvidence(
-  requirement: JobRequirementUnit,
+  requirement: Pick<
+    JobRequirementUnit,
+    "category" | "keywords" | "tools" | "domains" | "seniority_level"
+  >,
 ): boolean {
-  if (canonicalize(requirement.keywords, normalizeSkill).size > 0) return true;
-  if (canonicalize(requirement.tools, normalizeTool).size > 0) return true;
-  if (canonicalize(requirement.domains, normalizeDomain).size > 0) return true;
-  if (
-    requirement.seniority_level !== undefined &&
-    SENIORITY_LADDER.indexOf(requirement.seniority_level) !== -1
-  ) {
-    return true;
-  }
-  if (
-    requirement.category === "scope" &&
-    canonicalize(requirement.keywords, normalizeScopeKey).size > 0
-  ) {
-    return true;
-  }
-  return false;
+  const axes = requirementAxes(requirement);
+  return (
+    axes.skill_overlap ||
+    axes.tool_overlap ||
+    axes.domain_overlap ||
+    axes.seniority_alignment ||
+    axes.scope_alignment
+  );
 }
 
 function canonicalize(
@@ -267,6 +302,7 @@ function canonicalize(
   }
   return out;
 }
+
 
 // -- Component scorers ------------------------------------------------------
 

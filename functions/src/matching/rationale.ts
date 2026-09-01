@@ -27,7 +27,12 @@ import {
   normalizeSkill,
   normalizeTool,
 } from "./normalize.js";
-import { WEIGHTS, type ScoreComponents } from "./score.js";
+import {
+  requirementAxes,
+  WEIGHTS,
+  type RequirementAxes,
+  type ScoreComponents,
+} from "./score.js";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -90,7 +95,14 @@ const TIE_BREAKER_ORDER: readonly (keyof ScoreComponents)[] = [
 const SUMMARY_TRUNCATE_AT = 200;
 
 export function generateRationale(input: RationaleInput): RationaleResult {
-  const drivingComponent = pickDrivingComponent(input.components);
+  // Only axes the Requirement actually constrains may drive the
+  // rationale. Applicability is derived from `input.requirement`
+  // rather than passed in, so a caller can't forget it and
+  // reopen the hole below.
+  const drivingComponent = pickDrivingComponent(
+    input.components,
+    requirementAxes(input.requirement),
+  );
   switch (drivingComponent) {
     case "semantic_similarity":
       return semanticTemplate(input, drivingComponent);
@@ -111,12 +123,34 @@ export function generateRationale(input: RationaleInput): RationaleResult {
 
 // -- Driving-component selection --------------------------------------------
 
+/**
+ * Highest weighted contribution wins, but ONLY among axes the
+ * Requirement actually constrains.
+ *
+ * The applicability filter is load-bearing for the module's
+ * zero-fabrication invariant. `jaccard()` returns the 0.5
+ * neutral when the Requirement side is empty or unrecognized
+ * (#430), which is 0.10 of contribution on `skill_overlap` —
+ * enough to win the tie-break against a Requirement that named
+ * no skills at all. `skillTemplate` would then take its
+ * no-canonical-overlap branch and emit "Matched on skill axis"
+ * with the UNIT's raw skills as `surface_evidence`, presenting
+ * them as support for a comparison that never happened.
+ * `seniorityAlignment` and `scopeAlignment` have the same
+ * shape: both return 1.0 when unconstrained, worth another 0.10
+ * each. CodeRabbit Major on PR #435 caught the leak.
+ *
+ * `semantic_similarity` is always applicable, so the filter can
+ * never empty the candidate set.
+ */
 function pickDrivingComponent(
   components: ScoreComponents,
+  axes: RequirementAxes,
 ): keyof ScoreComponents {
   let best: keyof ScoreComponents = TIE_BREAKER_ORDER[0]!;
   let bestContribution = WEIGHTS[best] * components[best];
   for (const key of TIE_BREAKER_ORDER) {
+    if (!axes[key]) continue;
     const contribution = WEIGHTS[key] * components[key];
     if (contribution > bestContribution) {
       best = key;
