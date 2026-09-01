@@ -236,6 +236,23 @@ describe("toolOverlap", () => {
     // dimension neutral when neither side asserts a constraint.
     expect(toolOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
+
+  it("applies the directional rule: 0.5 when the Requirement names no tool, 0.0 when it names one the Unit lacks", () => {
+    // `tools` is the axis where requirement-side-empty dominates in
+    // production — the live Google Compute SPM trace cited above had
+    // 14/15 requirements at `tools = []` — so a Unit that carries
+    // tools meets an empty Requirement side constantly. Pin both
+    // halves here, not just the both-empty case: a refactor that
+    // reintroduced the symmetric rule would keep the both-empty
+    // test green while silently restoring the 0.10-weight hard-zero
+    // this change exists to remove.
+    expect(
+      toolOverlap(makeUnit({ tools: ["jira"] }), makeRequirement()),
+    ).toBe(0.5);
+    expect(
+      toolOverlap(makeUnit(), makeRequirement({ tools: ["jira"] })),
+    ).toBe(0);
+  });
 });
 
 // -- domainOverlap ----------------------------------------------------------
