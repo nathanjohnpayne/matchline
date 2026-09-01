@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# check_no_duplicate_document_contracts (#443)
+#
+# The Firestore document contracts have exactly ONE declaration site:
+# `functions/src/types/capability.ts`. `src/types/capability.ts`
+# type-only re-exports them.
+#
+# They used to be two hand-synced copies, and hand-syncing failed
+# silently: by the time this was unified the copies had drifted, each
+# documenting invariants the other could not see — the frontend had the
+# tri-state approval encoding and the `flagsForApprovalState()` rule,
+# the backend had the matching pipeline's carry-forward behaviour. No
+# test could fail on that, because both files compiled fine.
+#
+# This is the drift guard the old headers said they wanted. Same shape
+# as check_no_other_skill_normalization: a structural invariant enforced
+# rather than remembered.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+APP="$ROOT/src/types/capability.ts"
+FN="$ROOT/functions/src/types/capability.ts"
+
+CONTRACTS=(
+  ExperienceUnit JobRequirementUnit UnitMatch ScoreComponents
+  Metric DateRange EvidenceType MetricConfidence MetricDirection
+  RequirementCategory RequirementPriority RequirementSource
+  SeniorityLevel UnitSourceType UnitType
+)
+
+fail=0
+
+for f in "$APP" "$FN"; do
+  if [ ! -r "$f" ]; then
+    echo "check_no_duplicate_document_contracts: missing $f" >&2
+    exit 1
+  fi
+done
+
+for t in "${CONTRACTS[@]}"; do
+  # Canonical site must declare it exactly once.
+  n_fn=$(grep -cE "^export (interface|type) $t\b" "$FN" || true)
+  if [ "$n_fn" -ne 1 ]; then
+    echo "FAIL: $t is declared $n_fn time(s) in functions/src/types/capability.ts (expected exactly 1)" >&2
+    fail=1
+  fi
+  # App side must NOT redeclare it — re-export only.
+  n_app=$(grep -cE "^export (interface|type) $t\b" "$APP" || true)
+  if [ "$n_app" -ne 0 ]; then
+    echo "FAIL: $t is REDECLARED in src/types/capability.ts." >&2
+    echo "      The document contracts have one declaration site" >&2
+    echo "      (functions/src/types/capability.ts). Re-export it instead:" >&2
+    echo "        export type { $t } from \"../../functions/src/types/capability.ts\";" >&2
+    echo "      See issue #443 for why hand-synced copies were removed." >&2
+    fail=1
+  fi
+done
+
+# The re-export itself must survive — deleting it and redeclaring
+# locally would pass the checks above only if the type names changed,
+# so pin the import path too.
+if ! grep -q 'from "../../functions/src/types/capability.ts"' "$APP"; then
+  echo "FAIL: src/types/capability.ts no longer re-exports from the canonical" >&2
+  echo "      declaration site. The contracts must not be re-duplicated." >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  exit 1
+fi
+
+echo "check_no_duplicate_document_contracts: OK (${#CONTRACTS[@]} contracts, single declaration site)"
