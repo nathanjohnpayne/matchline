@@ -79,19 +79,19 @@ export const WEIGHTS = Object.freeze({
 export interface ScoreResult {
   readonly components: ScoreComponents;
   /**
-   * Did ANY axis carry real, evaluable signal from the
-   * Requirement side?
+   * Did THIS PAIR score on an axis the Requirement actually
+   * constrains? See `hasStructuralEvidence`.
    *
-   * False means every structural axis fell back to a
-   * no-constraint default — `jaccard()`'s 0.5 neutral on
-   * skill / tool / domain, `seniorityAlignment`'s 1.0 for an
-   * undefined level, `scopeAlignment`'s 1.0 for a non-scope
-   * category. Those defaults exist so an unconstrained (or
-   * unrecognizable) Requirement doesn't read as a candidate
-   * deficiency, but stacked together they hand out 0.225 +
-   * 0.20 of `rule_score` that nothing actually earned, and a
-   * recent Unit clears the Gaps view's 0.4 threshold on
-   * semantics alone.
+   * False means the Unit earned nothing on any axis the
+   * employer asked about — either because the Requirement
+   * constrains none (every structural axis fell back to a
+   * no-constraint default: `jaccard()`'s 0.5 neutral, or the
+   * 1.0 from `seniorityAlignment` / `scopeAlignment`), or
+   * because it constrains some and this Unit scored 0.0 on all
+   * of them. Both cases leave `final_score` resting on
+   * semantics plus up to ~0.425 of unearned neutral credit,
+   * which is enough for a recent Unit to clear the Gaps view's
+   * 0.4 threshold.
    *
    * `computeGaps` consumes this so a must-have with no
    * evaluable signal can never be reported as covered. The
@@ -270,25 +270,50 @@ export function requirementAxes(
 }
 
 /**
- * Does this Requirement constrain ANY structural axis the
- * engine can evaluate? Derived from `requirementAxes` so the
- * two can't drift — `semantic_similarity` and `recency` are
- * excluded because neither is Requirement-side evidence.
+ * The five axes that carry Requirement-side evidence.
+ * `semantic_similarity` and `recency` are excluded: neither is
+ * something the employer asked for, so neither can substantiate
+ * a must-have on its own.
+ */
+const STRUCTURAL_AXES: readonly (keyof ScoreComponents)[] = [
+  "skill_overlap",
+  "domain_overlap",
+  "tool_overlap",
+  "seniority_alignment",
+  "scope_alignment",
+];
+
+/**
+ * Did THIS PAIR produce real evidence on an axis the Requirement
+ * constrains?
+ *
+ * Both halves are load-bearing, and the pair half is the subtle
+ * one. `requirementAxes` alone answers "was this axis
+ * evaluable," which is identical for every Unit — so a
+ * Requirement asking for one recognized skill would mark
+ * EVERY Unit as evidenced, including Units scoring 0.0 on that
+ * exact axis. The rest of the neutral credit then carries them
+ * over the 0.4 gap threshold and the must-have reads as covered
+ * by a Unit that matched nothing the employer asked for. Codex
+ * P1 round 3 on PR #435: "adding one recognized but wholly
+ * unmatched term bypasses the new gate while most invented
+ * neutral credit remains."
+ *
+ * So the axis must be constrained AND the Unit must actually
+ * score on it. `> 0` rather than a threshold: this is a
+ * yes/no evidence question, and how MUCH evidence is what
+ * `final_score` and the 0.4 threshold already answer.
+ *
+ * Note the interaction with `jaccard()`'s neutral. On an
+ * unconstrained axis the component is 0.5, which is `> 0` — but
+ * `axes[a]` is false there, so it can't contribute. The two
+ * conditions have to be read together.
  */
 export function hasStructuralEvidence(
-  requirement: Pick<
-    JobRequirementUnit,
-    "category" | "keywords" | "tools" | "domains" | "seniority_level"
-  >,
+  components: ScoreComponents,
+  axes: RequirementAxes,
 ): boolean {
-  const axes = requirementAxes(requirement);
-  return (
-    axes.skill_overlap ||
-    axes.tool_overlap ||
-    axes.domain_overlap ||
-    axes.seniority_alignment ||
-    axes.scope_alignment
-  );
+  return STRUCTURAL_AXES.some((axis) => axes[axis] && components[axis] > 0);
 }
 
 function canonicalize(
@@ -642,7 +667,10 @@ export function score(
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
-    structural_evidence: hasStructuralEvidence(requirement),
+    structural_evidence: hasStructuralEvidence(
+      components,
+      requirementAxes(requirement),
+    ),
     rule_score,
     semantic_score: components.semantic_similarity,
     final_score,

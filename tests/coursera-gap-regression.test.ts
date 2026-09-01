@@ -244,14 +244,35 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
     expect(gapIds.size).toBeLessThan(mustHaves.length);
   });
 
-  it("grounds the Requirements the fit brief calls a pass", () => {
-    // The fit brief scores zero-to-launch and roadmap ownership as
-    // clear passes on 20+ years of shipped product work. If either
-    // regresses to a gap, the engine has drifted back toward the
-    // #430 behaviour.
+  it("grounds zero-to-launch, which the corpus genuinely evidences", () => {
+    // Four Units carry `0-to-1 product` / `0-to-1 product launch`,
+    // and the JD's "zero to launch" canonicalizes onto the same
+    // entry — real shared vocabulary, not neutral credit. If this
+    // regresses to a gap the engine has drifted back toward #430.
     expect(gapIds.has("r-zero-to-launch")).toBe(false);
-    expect(gapIds.has("r-roadmap")).toBe(false);
-    expect(gapIds.has("r-data-informed")).toBe(false);
+  });
+
+  it("reports the PM-craft Requirements as gaps — an extraction finding, not a matching one", () => {
+    // Uncomfortable but honest, and worth pinning so nobody
+    // "fixes" it at the wrong layer.
+    //
+    // The fit brief scores roadmap ownership and data-informed
+    // decision making as clear passes on 20+ years of shipped
+    // product work, and it is right. The engine can't see it
+    // because of what the labeled corpus SAYS: across 22 Units
+    // and 68 distinct skills, not one is `product strategy`,
+    // `product roadmap`, `user research`, or `analytics`. The
+    // extraction prompt describes the work in delivery and
+    // broadcast-engineering vocabulary — `release engineering`,
+    // `platform launch`, `cross-team leadership`.
+    //
+    // So the skill axis finds nothing to compare on any PM-craft
+    // Requirement, for any PM role, not just this one. That is
+    // #38 (extraction prompt tuning), and the fix is richer Units
+    // — NOT loosening this gate, and NOT declaring delivery terms
+    // synonyms of product-craft terms in the ontology.
+    expect(gapIds.has("r-roadmap")).toBe(true);
+    expect(gapIds.has("r-data-informed")).toBe(true);
   });
 
   it("still reports the creator-tools Requirement as a gap — the honest one", () => {
@@ -263,11 +284,60 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
     expect(gapIds.has("r-creation-experience")).toBe(true);
   });
 
-  it("gives every match a structural-evidence verdict", () => {
-    // Each Requirement here names vocabulary the ontology now
-    // canonicalizes, so all of them carry evidence and the
-    // computeGaps gate is not what's driving the result above.
-    expect(matches.every((m) => m.structural_evidence === true)).toBe(true);
+  it("discriminates on evidence rather than marking every pair evidenced", () => {
+    // Codex P1 round 3. Evidence is a property of the PAIR, not
+    // of the Requirement: a Requirement naming one recognized
+    // keyword must not mark every Unit evidenced, including
+    // Units that score 0.0 on that exact axis.
+    const evidenced = matches.filter((m) => m.structural_evidence === true);
+    expect(evidenced.length).toBeGreaterThan(0);
+    expect(evidenced.length).toBeLessThan(matches.length);
+
+    // And the discrimination is the right one: every evidenced
+    // pair scored above zero on some axis its Requirement
+    // actually constrains.
+    for (const m of evidenced) {
+      const c = m.components!;
+      const scoredSomething =
+        c.skill_overlap > 0 ||
+        c.domain_overlap > 0 ||
+        c.tool_overlap > 0 ||
+        c.seniority_alignment > 0 ||
+        c.scope_alignment > 0;
+      expect(scoredSomething).toBe(true);
+    }
+  });
+
+  it("does not let neutral credit alone clear a must-have", () => {
+    // The arithmetic Codex flagged: on a Requirement whose axes
+    // this Unit scores nothing on, the unconstrained-axis
+    // fallbacks still push final_score over 0.4. The gate, not
+    // the score, is what stops it covering the must-have.
+    // The claim is per-Requirement, not per-match: a must-have
+    // whose only threshold-clearing matches lack evidence must
+    // still be a gap. (A Requirement can hold BOTH kinds of
+    // match — zero-to-launch does — and is legitimately covered
+    // by the evidenced ones.)
+    let gatedSomething = false;
+    for (const spec of mustHaves) {
+      const forReq = matches.filter(
+        (m) => m.job_requirement_unit_id === spec.id,
+      );
+      const clearing = forReq.filter((m) => m.final_score >= 0.4);
+      const evidencedClearing = clearing.filter(
+        (m) => m.structural_evidence === true,
+      );
+      if (clearing.length > 0 && evidencedClearing.length === 0) {
+        // Neutral credit alone got these over 0.4. The gate is
+        // the only thing stopping the must-have from reading as
+        // covered.
+        gatedSomething = true;
+        expect(gapIds.has(spec.id)).toBe(true);
+      }
+    }
+    // And at least one Requirement actually exercised that path,
+    // so this test can't pass vacuously.
+    expect(gatedSomething).toBe(true);
   });
 
   it("puts both sides in a shared canonical space — real skill overlap, not neutral credit", () => {

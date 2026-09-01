@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasStructuralEvidence,
   recency,
+  requirementAxes,
   scopeAlignment,
   score,
   semanticSimilarityScore,
@@ -855,101 +856,140 @@ describe("score (master composer)", () => {
 
 // -- hasStructuralEvidence --------------------------------------------------
 
-describe("hasStructuralEvidence (Codex P1 r1 on #435)", () => {
-  it("is false when the Requirement constrains nothing evaluable", () => {
-    // The credential shape `jd.v1.md` emits for "BS in Computer
-    // Science required": category `credential`, no keywords, no
-    // tools, no domains, no seniority level. Every structural
-    // axis falls back to its no-constraint default, so
-    // `rule_score` collects ~0.425 nothing earned.
-    const req = makeRequirement({
-      category: "credential",
-      keywords: [],
-      tools: [],
-      domains: [],
-    });
-    expect(hasStructuralEvidence(req)).toBe(false);
-  });
+describe("hasStructuralEvidence (Codex P1 rounds 1 + 3 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
 
-  it("is false when the Requirement names terms the ontology can't canonicalize", () => {
-    // Populated arrays are not evidence on their own. If nothing
-    // survives canonicalization the engine has nothing to compare,
-    // which is the same position as an empty array.
-    const req = makeRequirement({
-      keywords: ["xyzzy-not-a-real-skill"],
-      tools: ["plugh-not-a-real-tool"],
-      domains: ["frobnitz-not-a-real-domain"],
-    });
-    expect(hasStructuralEvidence(req)).toBe(false);
-  });
-
-  it("is true when any single axis canonicalizes", () => {
-    expect(
-      hasStructuralEvidence(makeRequirement({ keywords: ["product strategy"] })),
-    ).toBe(true);
-    expect(hasStructuralEvidence(makeRequirement({ tools: ["jira"] }))).toBe(
-      true,
-    );
-    expect(
-      hasStructuralEvidence(makeRequirement({ domains: ["streaming video"] })),
-    ).toBe(true);
-    expect(
-      hasStructuralEvidence(makeRequirement({ seniority_level: "staff" })),
-    ).toBe(true);
-  });
-
-  it("tracks scopeAlignment's branch: scope category with canonicalizable keywords", () => {
-    // `scopeAlignment` only evaluates `category === "scope"`, so a
-    // scope-flavoured keyword on a skill-category Requirement is
-    // still evidence via the skill axis, while a scope-category
-    // Requirement with unnormalizable keywords is not.
-    expect(
-      hasStructuralEvidence(
-        makeRequirement({ category: "scope", keywords: ["40M users"] }),
-      ),
-    ).toBe(true);
-    expect(
-      hasStructuralEvidence(
-        makeRequirement({ category: "scope", keywords: ["   "] }),
-      ),
-    ).toBe(false);
-  });
-
-  it("score() surfaces the flag alongside the components", () => {
-    const unit = makeUnit({ skills: ["product strategy"] });
-    const withEvidence = makeRequirement({ keywords: ["product strategy"] });
-    const without = makeRequirement({
-      category: "credential",
-      keywords: [],
-      tools: [],
-      domains: [],
-    });
-    expect(score(unit, withEvidence).structural_evidence).toBe(true);
-    expect(score(unit, without).structural_evidence).toBe(false);
-  });
-
-  it("the no-evidence case is exactly the false positive the flag exists to stop", () => {
-    // Pin the arithmetic Codex called out, so a future weight or
-    // neutral-value change that reopens the hole fails here.
-    const unit = makeUnit({
+  // A well-formed, recent Unit at the extraction prompt's
+  // confidence anchor. Everything below varies the Requirement.
+  function recentUnit(overrides: Partial<ExperienceUnit> = {}): ExperienceUnit {
+    return makeUnit({
       skills: ["product strategy"],
       tools: ["jira"],
       domains: ["streaming video"],
       seniority_signals: ["led"],
       confidence_score: 0.85,
       date_range: { start: "2021-01-01" },
+      ...overrides,
     });
+  }
+
+  it("is false when the Requirement constrains nothing evaluable", () => {
+    // The credential shape `jd.v1.md` emits for "BS in Computer
+    // Science required": no keywords, tools, domains, or
+    // seniority level. Every structural axis falls back to its
+    // no-constraint default, so `rule_score` collects ~0.425
+    // nothing earned.
     const req = makeRequirement({
       category: "credential",
       keywords: [],
       tools: [],
       domains: [],
     });
-    const result = score(unit, req, { asOf: new Date("2026-08-31T00:00:00Z") });
-    // Comfortably over the 0.4 gap threshold on neutral credit
-    // alone — which is why computeGaps gates on the flag rather
-    // than on the score.
+    expect(score(recentUnit(), req, { asOf }).structural_evidence).toBe(false);
+  });
+
+  it("is false when the Requirement names terms the ontology can't canonicalize", () => {
+    // Populated arrays are not evidence on their own. If nothing
+    // survives canonicalization the engine has nothing to
+    // compare, which is the same position as an empty array.
+    const req = makeRequirement({
+      keywords: ["xyzzy-not-a-real-skill"],
+      tools: ["plugh-not-a-real-tool"],
+      domains: ["frobnitz-not-a-real-domain"],
+    });
+    expect(score(recentUnit(), req, { asOf }).structural_evidence).toBe(false);
+  });
+
+  it("is FALSE when the Requirement constrains an axis but this Unit scores 0 on it", () => {
+    // Codex P1 round 3. The round-1 fix asked only "was this axis
+    // evaluable", which is identical for every Unit — so one
+    // recognized keyword marked EVERY Unit as evidenced,
+    // including Units scoring 0.0 on that exact axis, and the
+    // remaining neutral credit carried them over 0.4.
+    //
+    // "adding one recognized but wholly unmatched term bypasses
+    // the new gate while most invented neutral credit remains."
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const unmatched = recentUnit({ skills: ["python"] });
+    const result = score(unmatched, req, { asOf });
+    expect(result.components.skill_overlap).toBe(0);
+    // Still clears the gap threshold on neutral credit alone —
+    // which is exactly why the flag, not the score, is the gate.
     expect(result.final_score).toBeGreaterThan(0.4);
     expect(result.structural_evidence).toBe(false);
+  });
+
+  it("is true when the Unit actually scores on a constrained axis", () => {
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const result = score(recentUnit(), req, { asOf });
+    expect(result.components.skill_overlap).toBeGreaterThan(0);
+    expect(result.structural_evidence).toBe(true);
+  });
+
+  it("accepts evidence from any single structural axis", () => {
+    const unit = recentUnit();
+    expect(
+      score(unit, makeRequirement({ keywords: ["product strategy"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    expect(
+      score(unit, makeRequirement({ tools: ["jira"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    expect(
+      score(unit, makeRequirement({ domains: ["streaming video"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    // "led" maps to `senior`; an exact-level Requirement scores
+    // 1.0 on the seniority axis, which is evidence.
+    expect(
+      score(unit, makeRequirement({ seniority_level: "senior" }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+  });
+
+  it("does not accept a constrained axis the Unit hard-zeroed", () => {
+    // A two-level seniority gap drives `seniorityAlignment` to
+    // 0.0. The Requirement constrained the axis, but this Unit
+    // failed it — that is the opposite of evidence.
+    const unit = recentUnit({ skills: [], tools: [], domains: [] });
+    const result = score(
+      unit,
+      makeRequirement({ seniority_level: "director" }),
+      { asOf },
+    );
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("does not count the neutral on an UNCONSTRAINED axis as evidence", () => {
+    // The interaction that makes the predicate subtle: an
+    // unconstrained axis scores 0.5, which is `> 0`. It must
+    // still not qualify, because `requirementAxes` marks it
+    // inapplicable. Both conditions have to be read together.
+    const req = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    const result = score(recentUnit(), req, { asOf });
+    expect(result.components.skill_overlap).toBe(0.5);
+    expect(result.components.tool_overlap).toBe(0.5);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("pairs with requirementAxes rather than duplicating its branches", () => {
+    // Direct call, so a future refactor that lets the two drift
+    // fails here rather than silently in the Gaps view.
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const axes = requirementAxes(req);
+    expect(axes.skill_overlap).toBe(true);
+    expect(axes.tool_overlap).toBe(false);
+    const components = score(recentUnit(), req, { asOf }).components;
+    expect(hasStructuralEvidence(components, axes)).toBe(true);
+    expect(
+      hasStructuralEvidence({ ...components, skill_overlap: 0 }, axes),
+    ).toBe(false);
   });
 });
