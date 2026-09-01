@@ -88,7 +88,7 @@ import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 import { legacyEvidenceKey } from "./evidenceKey.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
-import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
+import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
@@ -168,7 +168,7 @@ export default function RoleDetail(): ReactElement {
   // rule, so all three degrade identically and none can invent a
   // gap. `evidenceStatus` is what tells them apart for the user.
   const [matchEvidence, setMatchEvidence] = useState<
-    ReadonlyMap<string, EvidenceVerdict> | undefined
+    ReadonlyMap<string, MatchEvidence> | undefined
   >(undefined);
   const [evidenceStatus, setEvidenceStatus] =
     useState<EvidenceStatus>("current");
@@ -780,15 +780,22 @@ export default function RoleDetail(): ReactElement {
       visitTokenRef.current !== issuedToken ||
       evidenceSeqRef.current !== issuedSeq;
 
+    // Drop the previous verdicts before asking for new ones.
+    //
+    // They describe inputs that have since changed — that is why
+    // this effect re-fired — so keeping them enforces an obsolete
+    // answer for the whole round trip. An edited Requirement that
+    // turns a pair from `unevidenced` to `evidenced` would go on
+    // rendering an unmet gap until the call returned. The
+    // documented in-flight behaviour is the permissive
+    // pre-derivation reading, and this is what actually makes it
+    // so. Codex P2 on PR #446.
+    setMatchEvidence(undefined);
     setEvidenceStatus("pending");
     void invokeDeriveMatchEvidence(roleId)
       .then((evidence) => {
         if (superseded()) return;
-        setMatchEvidence(
-          new Map(
-            [...evidence].map(([id, e]) => [id, e.verdict] as const),
-          ),
-        );
+        setMatchEvidence(evidence);
         setEvidenceStatus("current");
       })
       .catch((err: unknown) => {

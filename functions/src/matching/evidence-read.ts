@@ -71,11 +71,29 @@ export async function readAndDeriveEvidence(
       .get(),
   ]);
 
+  // `id` comes from the document id, not from the stored fields.
+  //
+  // `src/services/firestore.ts`'s converter strips `id` in
+  // `toFirestore` — the document id is canonical — and puts it back
+  // in `fromFirestore`. The admin SDK uses no converter, so
+  // `d.data()` on anything written through a client service has no
+  // `id` at all. Without this hydration the verdict map is keyed
+  // `"undefined"`, the browser can never match it to a row, and the
+  // whole derivation degrades silently to the permissive fallback:
+  // a no-op that looks exactly like success. Codex P2 on PR #446.
+  //
+  // The emulator test could not have caught it, because its seeds
+  // wrote `id` into the data like the server-side pipeline does.
+  // `seedsWithoutId` in that suite now covers the client shape.
   return deriveEvidenceForMatches({
-    units: unitSnap.docs.map((d) => d.data() as ExperienceUnit),
-    requirements: requirementSnap.docs.map(
-      (d) => d.data() as JobRequirementUnit,
+    units: unitSnap.docs.map(
+      (d) => ({ ...(d.data() as ExperienceUnit), id: d.id }),
     ),
-    matches: matchSnap.docs.map((d) => d.data() as UnitMatch),
+    requirements: requirementSnap.docs.map(
+      (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+    ),
+    matches: matchSnap.docs.map(
+      (d) => ({ ...(d.data() as UnitMatch), id: d.id }),
+    ),
   });
 }

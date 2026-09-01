@@ -32,6 +32,7 @@ import type { ReactElement } from "react";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 
 import type { Gap } from "./computeGaps.ts";
+import type { UnverifiableReason } from "../../../functions/src/types/evidence.ts";
 
 /**
  * Whether the evidence derivation behind these gaps completed.
@@ -50,10 +51,40 @@ export interface GapsViewProps {
   readonly evidenceStatus?: EvidenceStatus;
 }
 
+/**
+ * Plain-language cause, per reason.
+ *
+ * The panel used to carry one fixed sentence blaming the
+ * Experience Unit — "deleted, edited since, or is not currently
+ * approved" — which is wrong for both of the Requirement-side
+ * reasons. The linked Unit can be present, approved and untouched
+ * while the Requirement's own embedding is missing or has the
+ * wrong dimension, and pointing the user at the Unit sends them to
+ * fix something that was never broken. Codex P2 on PR #446.
+ *
+ * Some of these are not the user's to remedy at all, so the
+ * wording states the cause and stops rather than implying an
+ * action that does not exist.
+ */
+const REASON_TEXT: Readonly<Record<UnverifiableReason, string>> = {
+  unit_missing: "the linked Experience Unit no longer exists",
+  requirement_missing:
+    "this requirement was replaced, so the match points at an older version of it",
+  unit_unapproved: "the linked Experience Unit is not currently approved",
+  unit_reembed_pending:
+    "the linked Experience Unit was edited and is awaiting re-embedding",
+  unit_embedding_missing: "the linked Experience Unit has no usable embedding",
+  requirement_embedding_missing: "this requirement has no usable embedding",
+  embedding_dimension_mismatch:
+    "the requirement and the Experience Unit were embedded by different models",
+};
+
 function RequirementRow({
   req,
+  reasons = [],
 }: {
   readonly req: JobRequirementUnit;
+  readonly reasons?: readonly UnverifiableReason[];
 }): ReactElement {
   return (
     <li
@@ -72,6 +103,11 @@ function RequirementRow({
       {req.raw_text !== req.normalized_requirement && (
         <p className="text-xs italic text-zinc-500 mt-1">
           Original: {req.raw_text}
+        </p>
+      )}
+      {reasons.length > 0 && (
+        <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1">
+          Could not verify: {reasons.map((r) => REASON_TEXT[r]).join("; ")}.
         </p>
       )}
     </li>
@@ -172,15 +208,17 @@ export default function GapsView({
               {unverifiable.length === 1 ? "" : "s"}
             </h3>
             <p className="text-xs text-amber-800 dark:text-amber-300 mt-0.5">
-              These have a match, but its evidence could not be checked — the
-              Experience Unit it points to has been deleted, edited since, or
-              is not currently approved. Treat them as unproven rather than as
-              gaps.
+              These have a match, but its evidence could not be checked. Treat
+              them as unproven rather than as gaps.
             </p>
           </header>
           <ul className="space-y-2">
             {unverifiable.map((g) => (
-              <RequirementRow key={g.requirement.id} req={g.requirement} />
+              <RequirementRow
+                key={g.requirement.id}
+                req={g.requirement}
+                reasons={g.reasons}
+              />
             ))}
           </ul>
         </section>

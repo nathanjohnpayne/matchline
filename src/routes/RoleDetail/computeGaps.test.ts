@@ -17,6 +17,10 @@ import { describe, expect, it } from "vitest";
 import type { JobRequirementUnit, UnitMatch } from "../../types/capability.ts";
 
 import { GAP_THRESHOLD, computeGaps } from "./computeGaps.ts";
+import type {
+  MatchEvidence,
+  UnverifiableReason,
+} from "../../../functions/src/types/evidence.ts";
 
 const ALICE = "user-alice";
 
@@ -63,6 +67,19 @@ function makeMatch(
     created_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
+}
+
+/**
+ * Terse `MatchEvidence` for the verdict-only cases. The reason
+ * field only matters where a test is about the reason.
+ */
+function ev(
+  verdict: "evidenced" | "unevidenced" | "unverifiable",
+  reason?: UnverifiableReason,
+): MatchEvidence {
+  return reason === undefined
+    ? { verdict, stored: false }
+    : { verdict, reason, stored: false };
 }
 
 describe("computeGaps", () => {
@@ -293,7 +310,7 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52)],
-      new Map([["m1", "evidenced" as const]]),
+      new Map([["m1", ev("evidenced")]]),
     );
     expect(gaps).toEqual([]);
   });
@@ -306,10 +323,10 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52)],
-      new Map([["m1", "unevidenced" as const]]),
+      new Map([["m1", ev("unevidenced")]]),
     );
     expect(gaps).toEqual([
-      { requirement: mustHave, status: "unmet" },
+      { requirement: mustHave, status: "unmet", reasons: [] },
     ]);
   });
 
@@ -317,10 +334,10 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52)],
-      new Map([["m1", "unverifiable" as const]]),
+      new Map([["m1", ev("unverifiable")]]),
     );
     expect(gaps).toEqual([
-      { requirement: mustHave, status: "unverifiable" },
+      { requirement: mustHave, status: "unverifiable", reasons: [] },
     ]);
   });
 
@@ -332,9 +349,11 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.1)],
-      new Map([["m1", "unverifiable" as const]]),
+      new Map([["m1", ev("unverifiable")]]),
     );
-    expect(gaps).toEqual([{ requirement: mustHave, status: "unmet" }]);
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
   });
 
   it("prefers a real cover over an unverifiable one", () => {
@@ -345,8 +364,8 @@ describe("computeGaps: derived verdicts (#441)", () => {
         makeMatch("m-good", "r-credential", 0.5),
       ],
       new Map([
-        ["m-doubt", "unverifiable" as const],
-        ["m-good", "evidenced" as const],
+        ["m-doubt", ev("unverifiable")],
+        ["m-good", ev("evidenced")],
       ]),
     );
     expect(gaps).toEqual([]);
@@ -358,9 +377,11 @@ describe("computeGaps: derived verdicts (#441)", () => {
       [
         makeMatch("m1", "r-credential", 0.9, { user_rejected: true }),
       ],
-      new Map([["m1", "evidenced" as const]]),
+      new Map([["m1", ev("evidenced")]]),
     );
-    expect(gaps).toEqual([{ requirement: mustHave, status: "unmet" }]);
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
   });
 
   it("falls back to the permissive rule for a match absent from the map", () => {
@@ -370,7 +391,7 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m-new", "r-credential", 0.52)],
-      new Map([["m-old", "unevidenced" as const]]),
+      new Map([["m-old", ev("unevidenced")]]),
     );
     expect(gaps).toEqual([]);
   });
@@ -381,7 +402,9 @@ describe("computeGaps: derived verdicts (#441)", () => {
       [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
       undefined,
     );
-    expect(gaps).toEqual([{ requirement: mustHave, status: "unmet" }]);
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
   });
 
   it("lets the map override a stored value, since it already folds it in", () => {
@@ -391,8 +414,64 @@ describe("computeGaps: derived verdicts (#441)", () => {
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
-      new Map([["m1", "evidenced" as const]]),
+      new Map([["m1", ev("evidenced")]]),
     );
     expect(gaps).toEqual([]);
+  });
+});
+
+describe("computeGaps: the reason survives to the view (#446)", () => {
+  const mustHave = makeReq("r-credential");
+
+  it("carries the reason for an unverifiable gap", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+      new Map([["m1", ev("unverifiable", "requirement_embedding_missing")]]),
+    );
+    expect(gaps).toEqual([
+      {
+        requirement: mustHave,
+        status: "unverifiable",
+        reasons: ["requirement_embedding_missing"],
+      },
+    ]);
+  });
+
+  it("collects distinct reasons across several doubting matches", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m1", "r-credential", 0.52),
+        makeMatch("m2", "r-credential", 0.61),
+        makeMatch("m3", "r-credential", 0.55),
+      ],
+      new Map([
+        ["m1", ev("unverifiable", "unit_missing")],
+        ["m2", ev("unverifiable", "embedding_dimension_mismatch")],
+        ["m3", ev("unverifiable", "unit_missing")],
+      ]),
+    );
+    expect(gaps[0]?.reasons).toEqual([
+      "unit_missing",
+      "embedding_dimension_mismatch",
+    ]);
+  });
+
+  it("leaves reasons empty for an ordinary unmet gap", () => {
+    expect(computeGaps([mustHave], [])[0]?.reasons).toEqual([]);
+  });
+
+  it("ignores reasons from matches below the threshold", () => {
+    // Those matches cast no doubt, so their reasons are not the
+    // user's problem either.
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.1)],
+      new Map([["m1", ev("unverifiable", "unit_missing")]]),
+    );
+    expect(gaps).toEqual([
+      { requirement: mustHave, status: "unmet", reasons: [] },
+    ]);
   });
 });

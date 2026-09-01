@@ -30,7 +30,7 @@ import RequirementsTab, {
 } from "./RequirementsTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
-import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
+import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
@@ -58,7 +58,7 @@ export interface RoleDetailViewProps {
    * permissive pre-#441 reading, and `evidenceStatus` is what
    * discloses that to the user.
    */
-  readonly matchEvidence?: ReadonlyMap<string, EvidenceVerdict>;
+  readonly matchEvidence?: ReadonlyMap<string, MatchEvidence>;
   readonly evidenceStatus?: EvidenceStatus;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
   readonly error: Error | null;

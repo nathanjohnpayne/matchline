@@ -53,7 +53,11 @@ function unitSignature(unit: ExperienceUnit | undefined): string {
     unit.updated_at,
     unit.user_approved ? "a" : "",
     unit.reembed_pending === true ? "p" : "",
-    (unit.embedding?.length ?? 0) > 0 ? "e" : "",
+    // The LENGTH, not just presence: an in-place embedding
+    // replacement at a different dimension makes the pair
+    // unverifiable (`cosine()` throws), and collapsing every
+    // non-empty vector to one token hid that. Codex P2 on PR #446.
+    `e${unit.embedding?.length ?? 0}`,
   ].join("/");
 }
 
@@ -67,7 +71,7 @@ function requirementSignature(
     requirement.keywords.join("|"),
     requirement.tools.join("|"),
     requirement.domains.join("|"),
-    (requirement.embedding?.length ?? 0) > 0 ? "e" : "",
+    `e${requirement.embedding?.length ?? 0}`,
   ].join("/");
 }
 

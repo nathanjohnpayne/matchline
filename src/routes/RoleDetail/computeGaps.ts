@@ -102,7 +102,11 @@ import type {
 // author. `types/evidence.ts` is a leaf with no imports —
 // importing the *logic* module instead would drag `node:fs` in
 // through the ontology loader, which the app has no types for.
-import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
+import type {
+  EvidenceVerdict,
+  MatchEvidence,
+  UnverifiableReason,
+} from "../../../functions/src/types/evidence.ts";
 
 export const GAP_THRESHOLD = 0.4;
 
@@ -121,6 +125,19 @@ export type GapStatus = "unmet" | "unverifiable";
 export interface Gap {
   readonly requirement: JobRequirementUnit;
   readonly status: GapStatus;
+  /**
+   * Why the covering matches could not be verified. Distinct
+   * reasons, in first-seen order; empty unless `status` is
+   * `unverifiable`.
+   *
+   * Carried through rather than discarded because the remedies
+   * differ and some of them are not the user's to apply. A
+   * Requirement-side embedding failure is not a reason to go and
+   * look at an Experience Unit, and telling someone it is sends
+   * them to fix something that was never broken. Codex P2 on PR
+   * #446.
+   */
+  readonly reasons: readonly UnverifiableReason[];
 }
 
 /**
@@ -133,9 +150,9 @@ export interface Gap {
  */
 function verdictFor(
   match: UnitMatch,
-  evidence: ReadonlyMap<string, EvidenceVerdict> | undefined,
+  evidence: ReadonlyMap<string, MatchEvidence> | undefined,
 ): EvidenceVerdict {
-  const derived = evidence?.get(match.id);
+  const derived = evidence?.get(match.id)?.verdict;
   if (derived !== undefined) return derived;
   if (match.structural_evidence === false) return "unevidenced";
   // `true` is evidence; `undefined` is the legacy permissive pass.
@@ -145,7 +162,7 @@ function verdictFor(
 export function computeGaps(
   requirements: readonly JobRequirementUnit[],
   matches: readonly UnitMatch[],
-  evidence?: ReadonlyMap<string, EvidenceVerdict>,
+  evidence?: ReadonlyMap<string, MatchEvidence>,
   threshold: number = GAP_THRESHOLD,
 ): readonly Gap[] {
   // Best final_score among non-rejected matches that can cover
@@ -154,7 +171,7 @@ export function computeGaps(
   // Rejected matches count for neither — same semantics as the
   // matching pipeline's filter at #82.
   const bestCovering = new Map<string, number>();
-  const doubted = new Set<string>();
+  const doubted = new Map<string, UnverifiableReason[]>();
   for (const m of matches) {
     if (m.user_rejected) continue;
     const verdict = verdictFor(m, evidence);
@@ -164,7 +181,15 @@ export function computeGaps(
       // Requirement casts doubt. One scoring 0.1 was never going
       // to satisfy it, so being unable to verify it changes
       // nothing the user needs to know.
-      if (m.final_score >= threshold) doubted.add(m.job_requirement_unit_id);
+      if (m.final_score >= threshold) {
+        const reasons =
+          doubted.get(m.job_requirement_unit_id) ??
+          doubted.set(m.job_requirement_unit_id, []).get(m.job_requirement_unit_id)!;
+        const reason = evidence?.get(m.id)?.reason;
+        if (reason !== undefined && !reasons.includes(reason)) {
+          reasons.push(reason);
+        }
+      }
       continue;
     }
     const prev = bestCovering.get(m.job_requirement_unit_id);
@@ -178,9 +203,11 @@ export function computeGaps(
     if (!req.must_have) continue;
     const best = bestCovering.get(req.id);
     if (best !== undefined && best >= threshold) continue;
+    const reasons = doubted.get(req.id);
     gaps.push({
       requirement: req,
-      status: doubted.has(req.id) ? "unverifiable" : "unmet",
+      status: reasons === undefined ? "unmet" : "unverifiable",
+      reasons: reasons ?? [],
     });
   }
   return gaps;

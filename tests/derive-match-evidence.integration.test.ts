@@ -398,6 +398,74 @@ describe("readAndDeriveEvidence: verdicts", () => {
   });
 });
 
+describe("readAndDeriveEvidence: documents written through the client", () => {
+  // `src/services/firestore.ts`'s converter strips `id` on write —
+  // the document id is canonical — and restores it on read. The
+  // admin SDK uses no converter, so `d.data()` on a client-written
+  // document has no `id` at all.
+  //
+  // Every seed above writes `id` into the data, like the
+  // server-side pipeline does, so none of them could catch this.
+  // The verdict map came back keyed `"undefined"`, the browser
+  // could never match it to a row, and the whole derivation
+  // degraded to the permissive fallback — a silent no-op shaped
+  // exactly like success. Codex P2 on PR #446.
+  async function seedWithoutId(input: {
+    readonly units: readonly ExperienceUnit[];
+    readonly requirements: readonly JobRequirementUnit[];
+    readonly matches: readonly UnitMatch[];
+  }): Promise<void> {
+    const strip = <T extends { id: string }>(doc: T): Omit<T, "id"> => {
+      const { id: _id, ...rest } = doc;
+      return rest;
+    };
+    const batch = db().batch();
+    batch.set(db().collection("roles").doc(ROLE), {
+      owner_uid: ALICE,
+      title: "Staff PM",
+    });
+    for (const u of input.units) {
+      batch.set(db().collection("experienceUnits").doc(u.id), strip(u));
+    }
+    for (const r of input.requirements) {
+      batch.set(db().collection("jobRequirementUnits").doc(r.id), strip(r));
+    }
+    for (const m of input.matches) {
+      batch.set(db().collection("unitMatches").doc(m.id), strip(m));
+    }
+    await batch.commit();
+  }
+
+  it("keys verdicts by document id, not by a stored id field", async () => {
+    await seedWithoutId({
+      units: [unit()],
+      requirements: [requirement()],
+      matches: [match()],
+    });
+    const out = await readAndDeriveEvidence({
+      ownerUid: ALICE,
+      roleId: ROLE,
+    });
+    expect([...out.keys()]).toEqual(["match-1"]);
+    expect(out.get("match-1")?.verdict).toBe("evidenced");
+  });
+
+  it("resolves the linked pair even when their ids are only document ids", async () => {
+    // Requires hydrating Units and Requirements too: without it
+    // both lookups miss and every pair reports `unit_missing`.
+    await seedWithoutId({
+      units: [unit({ skills: ["Woodworking"] })],
+      requirements: [requirement()],
+      matches: [match()],
+    });
+    const out = await readAndDeriveEvidence({
+      ownerUid: ALICE,
+      roleId: ROLE,
+    });
+    expect(out.get("match-1")?.verdict).toBe("unevidenced");
+  });
+});
+
 describe("readAndDeriveEvidence: ownership scoping", () => {
   it("never reads another owner's matches under the same role_id", async () => {
     await seed({

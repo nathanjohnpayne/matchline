@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 
 import type { Gap } from "./computeGaps.ts";
+import type { UnverifiableReason } from "../../../functions/src/types/evidence.ts";
 import GapsView from "./GapsView.tsx";
 
 function makeReq(id: string): JobRequirementUnit {
@@ -34,10 +35,15 @@ function makeReq(id: string): JobRequirementUnit {
   };
 }
 
-const unmet: Gap = { requirement: makeReq("r-unmet"), status: "unmet" };
+const unmet: Gap = {
+  requirement: makeReq("r-unmet"),
+  status: "unmet",
+  reasons: [],
+};
 const unverifiable: Gap = {
   requirement: makeReq("r-doubt"),
   status: "unverifiable",
+  reasons: ["unit_missing"],
 };
 
 describe("GapsView: the two kinds of gap", () => {
@@ -145,5 +151,55 @@ describe("GapsView: disclosing that the evidence check did not run", () => {
     );
     expect(html).toContain("gaps-view-empty");
     expect(html).toContain("gaps-evidence-unavailable");
+  });
+});
+
+describe("GapsView: the cause must name the right side of the pair (#446)", () => {
+  function gapWith(...reasons: readonly UnverifiableReason[]): Gap {
+    return {
+      requirement: makeReq("r-doubt"),
+      status: "unverifiable",
+      reasons,
+    };
+  }
+
+  it("does not blame the Experience Unit for a Requirement-side failure", () => {
+    // The linked Unit can be present, approved and untouched
+    // while the REQUIREMENT has no usable embedding. The old copy
+    // said the Unit had been "deleted, edited since, or is not
+    // currently approved" for every reason alike, which sent the
+    // user to fix something that was never broken.
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[gapWith("requirement_embedding_missing")]} />,
+    );
+    expect(html).toContain("this requirement has no usable embedding");
+    expect(html).not.toContain("Experience Unit");
+  });
+
+  it("names the model mismatch as being about the pair, not one side", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[gapWith("embedding_dimension_mismatch")]} />,
+    );
+    expect(html).toContain("embedded by different models");
+  });
+
+  it("does blame the Unit when the Unit IS the cause", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[gapWith("unit_unapproved")]} />,
+    );
+    expect(html).toContain("not currently approved");
+  });
+
+  it("lists several distinct causes together", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[gapWith("unit_missing", "requirement_missing")]} />,
+    );
+    expect(html).toContain("no longer exists");
+    expect(html).toContain("older version of it");
+  });
+
+  it("says nothing per-row for an ordinary unmet gap", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[unmet]} />);
+    expect(html).not.toContain("Could not verify");
   });
 });
