@@ -69,7 +69,9 @@ describe("friendlyCallableError", () => {
     it("maps the #422 'internal' case to actionable copy", () => {
       const msg = friendlyCallableError(bareError("internal"));
       expect(msg).toContain("stopped responding");
-      expect(msg).toContain("try again");
+      // Case-insensitive: the retry prompt may lead its own sentence.
+      // What matters is that the user is told to retry, not the casing.
+      expect(msg).toMatch(/try again/i);
     });
 
     it("maps deadline-exceeded to a timeout message", () => {

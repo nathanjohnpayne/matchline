@@ -7,9 +7,11 @@
  * surface, for the same reason: the provider's raw error text is not
  * user-facing copy.
  *
- * **Why this exists (#422).** When a callable dies without returning a
- * well-formed Firebase error body — a Cloud Run request-timeout kill,
- * an uncaught server exception, a CORS-less 500 — `fetch` rejects and
+ * **Why this exists (#424, found via #422).** When a callable dies
+ * without returning a well-formed Firebase error body — a Cloud Run
+ * request-timeout kill, an uncaught server exception, a CORS-less
+ * 500, or a rejected preflight that never reached the function at
+ * all — `fetch` rejects and
  * `@firebase/functions` synthesizes `{ status: 0 }`. Its
  * `_errorForResponse` then defaults `description` to the error *code*,
  * so `FunctionsError.message` is the literal string `"internal"`. The
@@ -150,14 +152,18 @@ export function friendlyCallableError(
 
   switch (code) {
     case "internal":
-      // The #422 case. `internal` on a long-running callable is
-      // almost always the request being killed at the server's
-      // timeout, so lead with the interpretation that's actionable
-      // rather than the literal one ("an internal error occurred"),
-      // which tells the user nothing they can act on.
+      // `internal` is the SDK's catch-all for "the request died
+      // without a well-formed Firebase error body" — it covers a
+      // Cloud Run timeout kill, an uncaught server exception, AND a
+      // request that never reached the function at all (a rejected
+      // CORS preflight surfaces identically; that turned out to be
+      // the real cause of #422). The code alone cannot distinguish
+      // them, so the copy must not assert a specific diagnosis.
+      // "Stopped responding" is true of every one of them, and
+      // "try again" is the right next step for a user in all three.
       return joinHint(
         `The server stopped responding before ${operation} finished. ` +
-          `This usually means it took too long to process — try again.`,
+          `Try again.`,
         hint,
       );
     case "deadline-exceeded":
