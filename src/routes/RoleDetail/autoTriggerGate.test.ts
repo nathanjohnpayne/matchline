@@ -205,3 +205,47 @@ describe("shouldAutoTriggerMatching — deferred while Units await re-embedding"
     ).toBe(true);
   });
 });
+
+describe("shouldAutoTriggerMatching — deferral must not become permanent", () => {
+  // Codex P2 on #438. The container defers the backfill while an
+  // approved Unit awaits re-embedding (or while the Units
+  // snapshot hasn't landed) by passing
+  // `hasEvidenceUnscoredMatches: false`. If it ALSO latched the
+  // idempotency ref during that window, re-embedding would
+  // complete, the Units subscription would re-render, and the
+  // gate would still see `alreadyTriggered: true` — so the
+  // backfill the deferral promised would never happen on this
+  // mount, and the legacy rows would keep their permissive
+  // `undefined` forever.
+  it("fires once the deferral lifts, given the ref was left open", () => {
+    const deferred = {
+      ...HAPPY,
+      matchCount: 12,
+      hasEvidenceUnscoredMatches: false,
+      alreadyTriggered: false,
+    };
+    expect(shouldAutoTriggerMatching(deferred)).toBe(false);
+    // Deferral lifts (Units arrived, nothing pending) and the ref
+    // was NOT latched meanwhile.
+    expect(
+      shouldAutoTriggerMatching({
+        ...deferred,
+        hasEvidenceUnscoredMatches: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("stays closed if the ref was latched during the deferral", () => {
+    // The regression this pins: a latch during deferral is
+    // indistinguishable from a completed run, and there is no
+    // second chance within the mount.
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+        alreadyTriggered: true,
+      }),
+    ).toBe(false);
+  });
+});

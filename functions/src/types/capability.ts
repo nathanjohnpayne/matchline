@@ -238,6 +238,27 @@ export interface UnitMatch {
   approved_for_use: boolean;
   user_rejected: boolean;
 
+  /**
+   * Id of the matching run that wrote this row.
+   *
+   * `replaceMatchesForRole()` rewrites every match under a fresh
+   * document id, so "an id I haven't seen" looked like a way for
+   * a client to recognise its own replacement. It isn't: a
+   * CONCURRENT run — the same Role open in a second tab —
+   * produces unseen ids too, so the first run's snapshot
+   * satisfies the second tab's test while its own request is
+   * still pending. That tab re-enables approvals early and a
+   * click after the second commit targets a deleted document.
+   *
+   * The run id is issued server-side and returned by the
+   * callable, so a client can correlate a snapshot with the
+   * request it actually made. Codex P2 on #438.
+   *
+   * Optional: rows written before this field existed lack it,
+   * and readers must not treat its absence as a match.
+   */
+  run_id?: string;
+
   created_at: ISOTimestamp;
 }
 

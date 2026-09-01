@@ -145,6 +145,11 @@ export async function runMatchingPipeline(
     listRequirements(ctx),
   ]);
 
+  // One id per run, stamped on every row it writes, so a client
+  // can tell ITS replacement snapshot from a concurrent run's.
+  // Codex P2 on #438.
+  const runId = generateId();
+
   const matches: UnitMatch[] = [];
   // Track candidate-pair scoring outcomes so a wholesale-failure
   // run (e.g. a bad deploy where score() throws on every pair)
@@ -232,6 +237,7 @@ export async function runMatchingPipeline(
         surface_evidence: rationaleResult.surface_evidence,
         approved_for_use: false,
         user_rejected: false,
+        run_id: runId,
         created_at: now(),
       });
     }

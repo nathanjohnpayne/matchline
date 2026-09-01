@@ -166,6 +166,18 @@ export default function RoleDetail(): ReactElement {
   const [matchesSnapshotRoleId, setMatchesSnapshotRoleId] = useState<
     string | null
   >(null);
+  // Units arrival, keyed the same way. The re-embed deferral below
+  // reads `units`, which starts as `[]` — and the ready gate can
+  // flip on Role + Requirements while the Units subscription is
+  // still in flight. Deciding "no approved Unit is pending" from
+  // an uninitialized collection is not a decision, it is a
+  // default, and the consequence of getting it wrong is deleted
+  // review state. Codex P1 on #438.
+  const [unitsSnapshotRoleId, setUnitsSnapshotRoleId] = useState<
+    string | null
+  >(null);
+  const unitsFirstSnapshotReceived =
+    roleId !== undefined && unitsSnapshotRoleId === roleId;
   const matchesFirstSnapshotReceived =
     roleId !== undefined && matchesSnapshotRoleId === roleId;
   const triggeredRef = useRef(false);
@@ -190,13 +202,14 @@ export default function RoleDetail(): ReactElement {
   // the count was when the callback was last created — and that
   // count decides whether a run is the write-free no-op below.
   const matchCountRef = useRef(0);
-  // The match ids as they stood when a `runMatching` call was
-  // issued. Used to recognise the replacement snapshot — see the
-  // correlation check in the matches subscription.
-  const matchIdsAtIssueRef = useRef<ReadonlySet<string>>(new Set());
-  // Live id set, mirroring `matchCountRef`, for the `useCallback`
-  // path that must read it at call time.
-  const matchIdsRef = useRef<ReadonlySet<string>>(new Set());
+  // The run id this client is waiting to see land, set when the
+  // callable resolves. Correlating on the RUN rather than on
+  // "any document id I haven't seen" is what makes the guard
+  // correct with the same Role open in two tabs: a concurrent
+  // run also produces unseen ids, so id comparison would let one
+  // tab's snapshot release the other tab's guard while its own
+  // replacement is still pending. Codex P2 on #438.
+  const expectedRunIdRef = useRef<string | null>(null);
   // Set when a legacy-backfill rerun (the one that populates
   // `structural_evidence` on pre-#435 matches) fails. While true,
   // `computeGaps` stops extending the transitional benefit of the
@@ -416,17 +429,21 @@ export default function RoleDetail(): ReactElement {
           // arrives, since this run also goes through
           // `replaceMatchesForRole()` and rewrites every id.
           awaitingReplacementRef.current = true;
-          matchIdsAtIssueRef.current = new Set(matchIdsRef.current);
+          expectedRunIdRef.current = null;
           const reparseMatchCount = matchCountRef.current;
           setComputingMatches(true);
           void invokeRunMatching(roleId)
-            .then((persistedCount) => {
-              // Same no-op release as the auto-trigger path.
-              if (persistedCount === 0 && reparseMatchCount === 0) {
-                if (isStale()) return;
+            .then(({ count, runId }) => {
+              if (isStale()) return;
+              // Same no-op release as the auto-trigger path: a
+              // write-free run produces no snapshot to wait for.
+              if (count === 0 && reparseMatchCount === 0) {
                 awaitingReplacementRef.current = false;
+                expectedRunIdRef.current = null;
                 setComputingMatches(false);
+                return;
               }
+              expectedRunIdRef.current = runId;
             })
             .catch((err: unknown) => {
               console.warn("invokeRunMatching after re-parse failed", err);
@@ -506,10 +523,10 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = false;
     awaitingReplacementRef.current = false;
     matchCountRef.current = 0;
-    matchIdsRef.current = new Set();
-    matchIdsAtIssueRef.current = new Set();
+    expectedRunIdRef.current = null;
     setComputingMatches(false);
     setMatchesSnapshotRoleId(null);
+    setUnitsSnapshotRoleId(null);
     setLegacyBackfillFailedFor(null);
 
     // Stale-closure guard. If the user navigates to a new
@@ -580,7 +597,6 @@ export default function RoleDetail(): ReactElement {
         if (!active) return;
         setMatches(next);
         matchCountRef.current = next.length;
-        matchIdsRef.current = new Set(next.map((m) => m.id));
         // Mark the matches subscription as "delivered
         // at least once" so the auto-trigger gate
         // (cursor #134 r1) treats matches.length=0 as
@@ -607,13 +623,14 @@ export default function RoleDetail(): ReactElement {
         // seen when the run was issued is the replacement.
         // Codex P2 on #435.
         if (awaitingReplacementRef.current) {
-          const issuedIds = matchIdsAtIssueRef.current;
-          const isReplacement =
-            next.length === 0
-              ? issuedIds.size > 0 // every prior row cleared
-              : next.some((m) => !issuedIds.has(m.id));
-          if (isReplacement) {
+          const expected = expectedRunIdRef.current;
+          // Only OUR run releases the guard. Until the callable
+          // resolves we don't know the id yet, so we keep
+          // waiting — a snapshot arriving before then is by
+          // definition not ours.
+          if (expected !== null && next.some((m) => m.run_id === expected)) {
             awaitingReplacementRef.current = false;
+            expectedRunIdRef.current = null;
             setComputingMatches(false);
           }
         }
@@ -623,7 +640,6 @@ export default function RoleDetail(): ReactElement {
         hasErrored = true;
         setMatches([]);
         matchCountRef.current = 0;
-        matchIdsRef.current = new Set();
         setError(err);
         setStatus("error");
       },
@@ -632,6 +648,7 @@ export default function RoleDetail(): ReactElement {
       (next) => {
         if (!active) return;
         setUnits(next);
+        setUnitsSnapshotRoleId(roleId);
       },
       (err) => {
         if (!active) return;
@@ -770,9 +787,9 @@ export default function RoleDetail(): ReactElement {
     // Waiting costs only that the flag stays absent a little
     // longer, which `computeGaps` already tolerates. Codex P1 on
     // #435.
-    const approvedUnitAwaitingReembed = units.some(
-      (u) => u.user_approved && u.reembed_pending === true,
-    );
+    const approvedUnitAwaitingReembed =
+      !unitsFirstSnapshotReceived ||
+      units.some((u) => u.user_approved && u.reembed_pending === true);
 
     // A healed snapshot retires the failure state. Without this
     // the amber warning and the withdrawn trust would outlive
@@ -804,10 +821,13 @@ export default function RoleDetail(): ReactElement {
       matchesFirstSnapshotReceived &&
       matches.length > 0 &&
       // Don't latch the ref on a legacy set — that's exactly the
-      // case that still needs its one backfill rerun. A set we're
-      // deliberately deferring does latch: we are not going to
-      // fire for it on this mount.
-      !(hasEvidenceUnscoredMatches && !approvedUnitAwaitingReembed) &&
+      // case that still needs its one backfill rerun, INCLUDING
+      // one we are currently deferring. Latching on a deferral
+      // would make it permanent for this mount: re-embedding
+      // completes, the Units subscription re-renders, and the
+      // gate still sees `alreadyTriggered: true`, so the backfill
+      // this deferral promised never happens. Codex P2 on #438.
+      !hasEvidenceUnscoredMatches &&
       !triggeredRef.current
     ) {
       triggeredRef.current = true;
@@ -844,14 +864,15 @@ export default function RoleDetail(): ReactElement {
       currentRoleIdRef.current !== issuedAgainstAuto ||
       visitTokenRef.current !== issuedTokenAuto;
     awaitingReplacementRef.current = true;
-    matchIdsAtIssueRef.current = new Set(matches.map((m) => m.id));
+    expectedRunIdRef.current = null;
     // Match count at issue time. Together with the resolved
     // count it identifies the no-op case below without reading
     // state that may have moved.
     const matchCountAtIssue = matches.length;
     setComputingMatches(true);
     void invokeRunMatching(roleId)
-      .then((persistedCount) => {
+      .then(({ count, runId }) => {
+        if (isStaleAuto()) return;
         // `replaceMatchesForRole()` skips its transaction
         // entirely when there is nothing to delete AND nothing
         // to write — a Role with Requirements but no
@@ -860,12 +881,15 @@ export default function RoleDetail(): ReactElement {
         // `computingMatches` never fires and the Role would sit
         // on "Computing matches…" forever with the JD controls
         // disabled. Release it here for exactly that shape.
-        // Codex P2 on #435.
-        if (persistedCount === 0 && matchCountAtIssue === 0) {
-          if (isStaleAuto()) return;
+        if (count === 0 && matchCountAtIssue === 0) {
           awaitingReplacementRef.current = false;
+          expectedRunIdRef.current = null;
           setComputingMatches(false);
+          return;
         }
+        // Otherwise arm the correlation: the guard releases when
+        // a snapshot carrying THIS run's id arrives.
+        expectedRunIdRef.current = runId;
       })
       .catch((err: unknown) => {
       // On SUCCESS the subscription clears `computingMatches`
@@ -900,6 +924,7 @@ export default function RoleDetail(): ReactElement {
     requirements.length,
     legacyBackfillFailedFor,
     units,
+    unitsFirstSnapshotReceived,
   ]);
 
   // Build the unit lookup once per units array. The matching
