@@ -44,25 +44,6 @@ export interface AutoTriggerGateInputs {
   readonly requirementCount: number;
   /** True once we've fired the trigger OR observed a non-empty matches set. */
   readonly alreadyTriggered: boolean;
-  /**
-   * True when at least one persisted match predates
-   * `structural_evidence` (#435) — the field is absent rather
-   * than `false`.
-   *
-   * Such rows can't be evaluated by `computeGaps`'s evidence
-   * gate, so a must-have they cover may be covered on neutral
-   * credit alone. Rerunning matching recomputes the flag, and
-   * matching is cheap — no LLM call once embeddings exist, per
-   * `specs/matchline.md` — so the fix is simply to fire once on
-   * the next Role view rather than leave the Role in a stale
-   * state until the user thinks to rerun by hand.
-   *
-   * Without this, the `matchCount > 0` short-circuit below
-   * would keep legacy Roles stale indefinitely: the user has
-   * no reason to suspect a rerun is needed, and nothing else
-   * triggers one. Codex P2 round 2 on PR #435.
-   */
-  readonly hasEvidenceUnscoredMatches: boolean;
 }
 
 export function shouldAutoTriggerMatching(
@@ -86,15 +67,7 @@ export function shouldAutoTriggerMatching(
   if (inputs.requirementCount === 0) return false;
   // (5) And the Role must currently have no persisted
   //     matches. With one or more, the user already saw
-  //     them; rerun would be a no-op — UNLESS some of them
-  //     predate `structural_evidence`, in which case the
-  //     rerun is what backfills the flag the Gaps view
-  //     depends on. Firing is bounded: the caller sets
-  //     `alreadyTriggered` when it fires, so this is at most
-  //     one rerun per mount even if the backfill somehow
-  //     doesn't take.
-  if (inputs.matchCount > 0 && !inputs.hasEvidenceUnscoredMatches) {
-    return false;
-  }
+  //     them; rerun would be a no-op.
+  if (inputs.matchCount > 0) return false;
   return true;
 }

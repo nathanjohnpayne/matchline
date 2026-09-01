@@ -208,12 +208,13 @@ export interface UnitMatch {
    *
    * Optional because rows written before this field existed
    * won't have it. Readers treat `undefined` as "legacy, don't
-   * block", but legacy rows are NOT inherently safe — the
-   * pre-#430 rule paid the same neutral when both sides
-   * canonicalized to empty. The allowance holds because the
-   * Role Detail auto-trigger reruns matching whenever a loaded
-   * match lacks the field (no LLM call needed), and is
-   * withdrawn if that backfill fails.
+   * block" — NOT because such rows are sound (the pre-#430 rule
+   * paid the same neutrals), but because that is exactly how
+   * they already behaved, so deploying the gate cannot make an
+   * already-matched Role silently sprout gaps. They gain the
+   * gate the next time matching runs for any reason. Healing
+   * them automatically on Role open is a data migration with
+   * its own failure modes and is reviewed on its own PR.
    */
   structural_evidence?: boolean;
   /**

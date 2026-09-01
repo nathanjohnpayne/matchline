@@ -151,7 +151,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -173,7 +172,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -195,7 +193,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -217,7 +214,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -252,7 +248,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -286,7 +281,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -312,7 +306,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -334,7 +327,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -358,7 +350,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -384,7 +375,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -420,7 +410,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         jdDraft="Build great things."
@@ -468,7 +457,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -517,7 +505,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -550,7 +537,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={true}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -580,7 +566,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         parsingStatus="parsing"
@@ -609,7 +594,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         parsingStatus="error"
@@ -634,7 +618,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         savingJd={true}
@@ -665,7 +648,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -690,7 +672,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -718,7 +699,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={false}
@@ -749,7 +729,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
@@ -810,7 +789,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         applications={apps}
@@ -868,7 +846,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         applications={[legacyApp]}
@@ -894,7 +871,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
@@ -924,7 +900,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
         hasApprovedMatches={true}
@@ -950,7 +925,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -983,7 +957,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1019,7 +992,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1050,7 +1022,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1076,7 +1047,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1117,7 +1087,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1158,7 +1127,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1196,7 +1164,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1218,7 +1185,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={true}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1242,7 +1208,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
@@ -1274,7 +1239,6 @@ describe("RoleDetailView", () => {
         onTabChange={NOOP}
         onApprovalStateChange={NOOP_STATE_CHANGE}
         computingMatches={false}
-        legacyBackfillFailed={false}
         {...REQS_TAB_DEFAULTS}
         {...APPS_TAB_DEFAULTS}
       />,
