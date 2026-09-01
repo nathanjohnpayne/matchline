@@ -633,10 +633,22 @@ export default function RoleDetail(): ReactElement {
     // `matchCount > 0` short-circuit returns false for
     // "don't fire," but it doesn't update the ref — that's
     // the container's job.
+    // Matches persisted before #435 have no `structural_evidence`
+    // field. `computeGaps` can't evaluate its honesty gate against
+    // them, so the Role needs one rerun to backfill the flag —
+    // matching is cheap once embeddings exist (no LLM call), and
+    // nothing else would ever trigger it. Codex P2 round 2 on #435.
+    const hasEvidenceUnscoredMatches = matches.some(
+      (m) => m.structural_evidence === undefined,
+    );
+
     if (
       status === "ready" &&
       matchesFirstSnapshotReceived &&
       matches.length > 0 &&
+      // Don't latch the ref on a legacy set — that's exactly the
+      // case that still needs its one backfill rerun.
+      !hasEvidenceUnscoredMatches &&
       !triggeredRef.current
     ) {
       triggeredRef.current = true;
@@ -649,6 +661,7 @@ export default function RoleDetail(): ReactElement {
         matchCount: matches.length,
         requirementCount: requirements.length,
         alreadyTriggered: triggeredRef.current,
+        hasEvidenceUnscoredMatches,
       })
     ) {
       return;
@@ -684,7 +697,10 @@ export default function RoleDetail(): ReactElement {
     status,
     roleId,
     matchesFirstSnapshotReceived,
-    matches.length,
+    // `matches` itself, not just its length: a backfill rerun
+    // replaces the same number of rows, so the legacy-detection
+    // predicate can flip without the length changing.
+    matches,
     requirements.length,
   ]);
 

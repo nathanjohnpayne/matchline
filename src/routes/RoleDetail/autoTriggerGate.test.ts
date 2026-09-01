@@ -36,6 +36,7 @@ const HAPPY: AutoTriggerGateInputs = {
   matchCount: 0,
   requirementCount: 3,
   alreadyTriggered: false,
+  hasEvidenceUnscoredMatches: false,
 };
 
 describe("shouldAutoTriggerMatching", () => {
@@ -111,5 +112,60 @@ describe("shouldAutoTriggerMatching", () => {
         matchCount: 3,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldAutoTriggerMatching — legacy structural_evidence backfill", () => {
+  // Codex P2 round 2 on PR #435. Matches persisted before
+  // `structural_evidence` existed can't be evaluated by
+  // computeGaps's honesty gate, and the `matchCount > 0`
+  // short-circuit meant nothing would ever recompute them: the
+  // user has no reason to suspect a rerun is needed. Matching
+  // costs no LLM call once embeddings exist, so the fix is to
+  // fire once on the next Role view.
+  it("fires despite existing matches when any of them predates the field", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT fire when every existing match already carries the field", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("the backfill path still respects the idempotency guard", () => {
+    // Bounds the rerun to one per mount. Without this, a backfill
+    // that somehow didn't populate the field would re-fire on
+    // every snapshot — an unbounded loop of matching calls.
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+        alreadyTriggered: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("the backfill path still respects the earlier gates", () => {
+    // Legacy matches don't license firing before the Role is
+    // ready, before the first matches snapshot lands, or against
+    // a Role with no Requirements to score.
+    const legacy = { ...HAPPY, matchCount: 12, hasEvidenceUnscoredMatches: true };
+    expect(shouldAutoTriggerMatching({ ...legacy, status: "loading" })).toBe(false);
+    expect(
+      shouldAutoTriggerMatching({ ...legacy, matchesFirstSnapshotReceived: false }),
+    ).toBe(false);
+    expect(shouldAutoTriggerMatching({ ...legacy, requirementCount: 0 })).toBe(false);
   });
 });

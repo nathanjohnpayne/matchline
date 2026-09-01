@@ -195,10 +195,12 @@ export interface UnitMatch {
    *
    * Optional for the same reason as `components`: rows written
    * before this field existed won't have it. Readers treat
-   * `undefined` as "legacy, don't block" — those rows were
-   * scored under the pre-#430 rule that had no neutral credit
-   * to give away, so the gate has nothing to catch. One rerun
-   * of the matching pipeline heals the corpus.
+   * `undefined` as "legacy, don't block", but note that legacy
+   * rows are NOT inherently safe — the pre-#430 rule paid the
+   * same neutral when both sides canonicalized to empty. The
+   * allowance holds because `shouldAutoTriggerMatching` reruns
+   * matching whenever a loaded match lacks the field, so
+   * opening the Role backfills it (no LLM call needed).
    */
   structural_evidence?: boolean;
 

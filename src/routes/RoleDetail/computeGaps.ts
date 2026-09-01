@@ -32,14 +32,23 @@
  * the Matches tab; they just can't silently satisfy a hard
  * requirement.
  *
- * `structural_evidence === undefined` counts as satisfying.
- * Rows written before the field existed were scored under
- * the older rule, where an unrecognized Requirement side
- * hard-zeroed the structural axes instead of paying out a
- * neutral — so there is no unearned credit for the gate to
- * catch, and treating legacy rows as suspect would flip
- * every previously-covered Requirement to a gap until the
- * user reran matching.
+ * `structural_evidence === undefined` counts as satisfying,
+ * and that is a transitional allowance, not a claim that
+ * legacy rows are safe. They aren't: the pre-#430 rule paid
+ * the same 0.5 when the Unit AND Requirement both
+ * canonicalized to empty, so a legacy match can carry the
+ * identical unearned credit. Codex P2 round 2 on PR #435
+ * caught the earlier version of this comment asserting
+ * otherwise.
+ *
+ * The allowance is safe only because the window closes on
+ * its own. `shouldAutoTriggerMatching` fires a rerun when
+ * any loaded match lacks the field, and matching costs no
+ * LLM call once embeddings exist, so opening the Role
+ * backfills the flag. Blocking on `undefined` instead would
+ * flip every previously-covered Requirement to a gap for the
+ * one render before that rerun lands — a corpus-wide false
+ * alarm to buy a few hundred milliseconds of strictness.
  *
  * **Rejected matches do NOT count as satisfying.**
  * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
