@@ -129,7 +129,7 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
   - `components`, `structural_evidence` and `component_applicability`
     are **optional**: records written before those fields existed carry
     none of them, and the coverage gate depends on being able to
