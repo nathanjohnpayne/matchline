@@ -37,6 +37,13 @@ export const CALLABLE_TIMEOUT_MS = {
   parseJobRequirements: 330_000,
   generateResume: 330_000,
   validateAsset: 330_000,
+  /**
+   * No client call site yet: Unit Review sets `reembed_pending: true`
+   * on the document (`services/experienceUnits.ts`) rather than
+   * invoking the callable directly. The entry is here anyway because
+   * the budget test asserts set equality against the server table —
+   * so the day a call site lands, it cannot land on the SDK default.
+   */
   reembedExperienceUnit: 150_000,
   runMatching: 150_000,
 } as const;
