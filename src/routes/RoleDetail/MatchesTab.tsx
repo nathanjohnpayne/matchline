@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 
 import type { ExperienceUnit } from "../../types/capability.ts";
 
-import GapsView, { StrandedNotice } from "./GapsView.tsx";
+import GapsView, { EvidenceNotice, StrandedNotice } from "./GapsView.tsx";
 import type { EvidenceStatus } from "./GapsView.tsx";
 import type { Gap } from "./computeGaps.ts";
 import MatchCard from "./MatchCard.tsx";
@@ -87,6 +87,15 @@ export default function MatchesTab({
               "the Requirements tab first."}
         </p>
         <StrandedNotice count={strandedMatches ?? 0} />
+        {/*
+          No Requirements means no coverage claim is being made
+          here, and the stranded count is structural — it does not
+          depend on the derivation at all. The disclosure is shown
+          anyway because hiding it in one branch and not the other
+          is the inconsistency that produced this whole class of
+          bug. CodeRabbit on PR #446.
+        */}
+        <EvidenceNotice status={evidenceStatus ?? "current"} />
       </div>
     );
   }

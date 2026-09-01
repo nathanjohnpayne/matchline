@@ -126,7 +126,14 @@ function RequirementRow({
   );
 }
 
-function EvidenceNotice({
+/**
+ * Exported for the same reason as `StrandedNotice`: `MatchesTab`'s
+ * zero-Requirements branch returns before `GapsView` mounts, and a
+ * derivation that is pending or failed should be disclosed there
+ * too. CodeRabbit on PR #446, extending Codex's finding on the
+ * stranded count with the half it did not cover.
+ */
+export function EvidenceNotice({
   status,
 }: {
   readonly status: EvidenceStatus;

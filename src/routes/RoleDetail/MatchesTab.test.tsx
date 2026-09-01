@@ -20,6 +20,7 @@ const EMPTY_UNITS = new Map<string, ExperienceUnit>();
 
 function render(props: {
   readonly strandedMatches?: number;
+  readonly evidenceStatus?: "current" | "pending" | "unavailable";
 }): string {
   return renderToStaticMarkup(
     <MatchesTab
@@ -60,5 +61,32 @@ describe("MatchesTab: the no-Requirements branch", () => {
     const html = render({});
     expect(html).toContain("No Requirements parsed for this Role yet");
     expect(html).not.toContain("gaps-stranded");
+  });
+});
+
+describe("MatchesTab: evidence disclosure in the no-Requirements branch", () => {
+  it("discloses an unavailable derivation there too", () => {
+    // Hiding it in one branch and showing it in the other is the
+    // inconsistency that produced this whole class of bug.
+    const html = render({ evidenceStatus: "unavailable" });
+    expect(html).toContain("gaps-evidence-unavailable");
+  });
+
+  it("discloses a pending derivation", () => {
+    expect(render({ evidenceStatus: "pending" })).toContain(
+      "gaps-evidence-pending",
+    );
+  });
+
+  it("says nothing extra when evidence is current", () => {
+    const html = render({ evidenceStatus: "current" });
+    expect(html).not.toContain("gaps-evidence-unavailable");
+    expect(html).not.toContain("gaps-evidence-pending");
+  });
+
+  it("defaults to current when the status is absent", () => {
+    const html = render({});
+    expect(html).not.toContain("gaps-evidence-unavailable");
+    expect(html).not.toContain("gaps-evidence-pending");
   });
 });
