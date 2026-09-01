@@ -186,6 +186,60 @@ export interface UnitMatch {
    */
   components?: ScoreComponents;
 
+  /**
+   * True when THIS PAIR scored above zero on at least one axis
+   * the Requirement actually constrains — canonicalizable
+   * skill / tool / domain vocabulary, a ladder-mapped
+   * `seniority_level` the Unit also carries a mapped signal
+   * for, or a scope-category Requirement with canonicalizable
+   * keywords.
+   *
+   * **It is a property of the pair, not of the Requirement.**
+   * `false` therefore covers two distinct situations, and
+   * consumers must not read it as only the first:
+   *   1. the Requirement constrains nothing evaluable, so every
+   *      structural axis fell back to a no-constraint default; or
+   *   2. it constrains something and this Unit scored 0.0 on all
+   *      of them — an evaluated mismatch.
+   * Either way `final_score` rests on semantics plus unearned
+   * neutral credit, which is why `computeGaps` refuses to let
+   * such a match cover a must-have. The match still ranks and
+   * still renders.
+   *
+   * Optional because rows written before this field existed
+   * won't have it. Readers treat `undefined` as "legacy, don't
+   * block" — NOT because such rows are sound (the pre-#430 rule
+   * paid the same neutrals), but because that is exactly how
+   * they already behaved, so deploying the gate cannot make an
+   * already-matched Role silently sprout gaps. They gain the
+   * gate the next time matching runs for any reason. Healing
+   * them automatically on Role open is a data migration with
+   * its own failure modes and is reviewed on its own PR.
+   */
+  structural_evidence?: boolean;
+  /**
+   * Per-axis applicability for THIS pair: which axes did the
+   * engine actually evaluate?
+   *
+   * `false` on an axis means its value in `components` is a
+   * no-constraint neutral rather than a measurement — the
+   * Requirement named nothing the canonical vocabulary
+   * recognizes, or (for seniority and recency) the Unit carries
+   * no mapped signal / no usable date. Readers MUST NOT present
+   * such a component as a score: the breakdown tooltip renders
+   * it as unavailable, because "0.50 x 0.20 = 0.100" tells the
+   * user they achieved 50% overlap on a comparison that never
+   * happened.
+   *
+   * Optional for the same reason as `components` — legacy rows
+   * predate it. A reader without it MUST fall back to
+   * presenting no per-axis claim: pre-#430 components contain
+   * the very neutrals this flag suppresses (both-empty Jaccard
+   * stored 0.5; unconstrained seniority and scope stored 1.0),
+   * so assuming "measured" for legacy data reintroduces the bug.
+   */
+  component_applicability?: Readonly<Record<keyof ScoreComponents, boolean>>;
+
   rationale: string;
   surface_evidence: string;
 

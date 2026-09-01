@@ -45,6 +45,7 @@ function makeMatch(
   id: string,
   reqId: string,
   finalScore: number,
+  overrides: Partial<UnitMatch> = {},
 ): UnitMatch {
   return {
     id,
@@ -60,6 +61,7 @@ function makeMatch(
     approved_for_use: false,
     user_rejected: false,
     created_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -210,5 +212,76 @@ describe("computeGaps", () => {
       },
     ];
     expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+  });
+});
+
+describe("computeGaps — structural-evidence gate (#430)", () => {
+  const mustHave: JobRequirementUnit = {
+    id: "r-credential",
+    owner_uid: ALICE,
+    role_id: "role-1",
+    raw_text: "BS in Computer Science required",
+    normalized_requirement: "BS in Computer Science",
+    category: "credential",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "low",
+    must_have: true,
+    extracted_from: "qualifications",
+  };
+
+  it("does not treat a high-scoring evidence-free match as covering a must-have", () => {
+    // A credential-shaped Requirement constrains nothing the
+    // engine can evaluate, so every structural axis pays its
+    // no-constraint default and a recent Unit sails past 0.4 on
+    // semantics alone. Without the gate, "BS in Computer Science
+    // required" reads as covered by whichever Unit embedded
+    // closest.
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+  });
+
+  it("treats a scoring match WITH evidence as covering", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: true })],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("treats legacy matches (field absent) as covering", () => {
+    // Pre-existing behaviour preserved deliberately: a Role the
+    // user has already matched must not sprout gaps on deploy.
+    // Those rows gain the gate the next time matching runs.
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("still requires the score threshold when evidence IS present", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.39, { structural_evidence: true })],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+  });
+
+  it("ignores an evidence-free match when a lower-scoring one has evidence", () => {
+    // The evidence-free match must never enter the per-Requirement
+    // max in the first place.
+    const gaps = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m-high", "r-credential", 0.9, { structural_evidence: false }),
+        makeMatch("m-low", "r-credential", 0.3, { structural_evidence: true }),
+      ],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
   });
 });

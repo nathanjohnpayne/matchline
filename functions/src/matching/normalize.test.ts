@@ -426,3 +426,61 @@ describe("category isolation", () => {
     }
   });
 });
+
+// -- JD-side coverage regression -------------------------------------------
+
+describe("Coursera Staff PM vocabulary (regression for the ed-tech coverage gap)", () => {
+  // The seed ontology was curated from Nathan's own corpus plus
+  // streaming/CTV target JDs, so it canonicalized the UNIT side at
+  // 100% while recognizing only 13% of the requirement-side
+  // vocabulary in `tests/fixtures/jds/coursera-staff-pm-2026.txt`
+  // (9% of its domains, 0% of its tools). Under the matching
+  // engine's Jaccard scorers an unrecognized Requirement side
+  // meant skill + domain + tool contributed nothing, so a Role
+  // outside the seeded domains could not clear the Gaps view's
+  // 0.4 threshold on any Requirement.
+  //
+  // These pin the bridges that close it. Each asserts a canonical
+  // form, not merely non-null, so a future re-curation that moves
+  // a term to a different canonical has to do so deliberately.
+  it("canonicalizes the JD's AI-product vocabulary", () => {
+    expect(normalizeSkill("agentic AI")).toBe("agentic ai");
+    expect(normalizeSkill("agentic enterprise integration")).toBe("agentic ai");
+    expect(normalizeSkill("workflow automation")).toBe("workflow automation");
+    expect(normalizeSkill("conversational AI")).toBe("conversational ai");
+    expect(normalizeSkill("decision support")).toBe("decision support");
+    expect(normalizeSkill("AI-driven products")).toBe("ai product management");
+    expect(normalizeSkill("AI-first product")).toBe("ai product management");
+  });
+
+  it("canonicalizes the JD's creation-tools and learning vocabulary", () => {
+    expect(normalizeSkill("authoring tools")).toBe("creation tools");
+    expect(normalizeSkill("content creation experience")).toBe("creation tools");
+    expect(normalizeSkill("creator psychology")).toBe("creator experience");
+    expect(normalizeSkill("instructional design")).toBe("instructional design");
+    expect(normalizeSkill("learner outcomes")).toBe("learning outcomes");
+    expect(normalizeSkill("AI-powered assessment")).toBe("assessment design");
+    expect(normalizeSkill("integrated experience design")).toBe(
+      "end-to-end experience design",
+    );
+  });
+
+  it("canonicalizes the JD's PM-craft vocabulary onto existing canonicals", () => {
+    expect(normalizeSkill("zero to launch")).toBe("0-to-1 product");
+    expect(normalizeSkill("roadmap ownership")).toBe("product roadmap");
+    expect(normalizeSkill("customer insights")).toBe("user research");
+    expect(normalizeSkill("market trends")).toBe("market research");
+    expect(normalizeSkill("aesthetic sensibility")).toBe("ux design");
+    expect(normalizeSkill("craft in UX")).toBe("ux design");
+    expect(normalizeSkill("commercial literacy")).toBe("commercial acumen");
+    expect(normalizeSkill("new monetization surfaces")).toBe("monetization");
+  });
+
+  it("canonicalizes the JD's ed-tech and creator domains", () => {
+    expect(normalizeDomain("online learning")).toBe("edtech");
+    expect(normalizeDomain("skills development platform")).toBe("edtech");
+    expect(normalizeDomain("enterprise learning")).toBe("edtech");
+    expect(normalizeDomain("creator economy")).toBe("creator tools");
+    expect(normalizeDomain("course marketplace")).toBe("marketplace");
+  });
+});

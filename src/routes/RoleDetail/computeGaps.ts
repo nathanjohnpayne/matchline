@@ -4,10 +4,50 @@
  *
  * "Unmet must-have" = a Requirement where:
  *   - `must_have: true`, AND
- *   - no `UnitMatch` for the Requirement is BOTH
+ *   - no `UnitMatch` for the Requirement is ALL THREE of
  *     - non-rejected (`user_rejected: false`), AND
  *     - has `final_score >= GAP_THRESHOLD` (default 0.4
- *       per parent #21 spec)
+ *       per parent #21 spec), AND
+ *     - carries structural evidence
+ *       (`structural_evidence !== false`)
+ *
+ * **A score alone is not evidence.** The scoring components
+ * fall back to no-constraint defaults when a Requirement
+ * doesn't constrain an axis — 0.5 on skill / tool / domain,
+ * 1.0 on seniority and scope. That's deliberate (an
+ * unconstrained axis must not read as a candidate
+ * deficiency), but a Requirement that constrains NOTHING
+ * evaluable stacks those defaults into ~0.425 of unearned
+ * `rule_score`, and a recent Unit then clears 0.4 on
+ * semantics alone. The credential-shaped Requirement
+ * `jd.v1.md` emits with empty `keywords` / `tools` /
+ * `domains` is the canonical case: "BS in Computer Science
+ * required" would show as covered by whichever Unit happened
+ * to embed closest, which is precisely the dishonesty this
+ * view exists to prevent.
+ *
+ * Such matches are NOT hidden — `specs/matchline.md`'s
+ * non-goals are explicit that low-quality matches still
+ * appear in the Gaps view. They render and rank normally on
+ * the Matches tab; they just can't silently satisfy a hard
+ * requirement.
+ *
+ * **`structural_evidence === undefined` counts as satisfying,
+ * and that is the pre-existing behaviour, not a claim that
+ * such rows are sound.** They aren't: matches written before
+ * this field existed were scored under a rule that paid the
+ * same neutrals (both-empty Jaccard stored 0.5; unconstrained
+ * seniority and scope stored 1.0), so a legacy row can carry
+ * the identical unearned credit. Treating it as satisfying
+ * simply leaves those rows behaving exactly as they did
+ * before this change — a Role the user has already matched
+ * does not silently sprout gaps — and they gain the gate the
+ * next time matching runs for any reason.
+ *
+ * Healing them automatically on Role open is deliberately NOT
+ * part of this change. That mechanism is a data migration
+ * with its own failure modes, and it is being reviewed on its
+ * own PR rather than riding along with the scoring fix.
  *
  * **Rejected matches do NOT count as satisfying.**
  * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
@@ -58,6 +98,10 @@ export function computeGaps(
   const bestScoreByReq = new Map<string, number>();
   for (const m of matches) {
     if (m.user_rejected) continue;
+    // A match with no structural evidence can't cover a
+    // must-have no matter how it scored — see the docstring.
+    // `undefined` is legacy data and passes.
+    if (m.structural_evidence === false) continue;
     const prev = bestScoreByReq.get(m.job_requirement_unit_id);
     if (prev === undefined || m.final_score > prev) {
       bestScoreByReq.set(m.job_requirement_unit_id, m.final_score);

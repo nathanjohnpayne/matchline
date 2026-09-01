@@ -208,6 +208,19 @@ const FAKE_SCORE: () => ScoreResult = () => ({
     scope_alignment: 0,
     recency: 0,
   },
+  // Stub scorers assert on rule/final scores only; the
+  // structural-evidence verdict is exercised in
+  // functions/src/matching/score.test.ts (#435).
+  structural_evidence: true,
+  component_applicability: {
+    semantic_similarity: true,
+    skill_overlap: true,
+    domain_overlap: true,
+    tool_overlap: true,
+    seniority_alignment: true,
+    scope_alignment: true,
+    recency: true,
+  },
   rule_score: 0.5,
   semantic_score: 1,
   final_score: 0.5,
@@ -400,6 +413,19 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
           seniority_alignment: 0,
           scope_alignment: 0,
           recency: 0,
+        },
+        // Stub scorers assert on rule/final scores only; the
+        // structural-evidence verdict is exercised in
+        // functions/src/matching/score.test.ts (#435).
+        structural_evidence: true,
+        component_applicability: {
+          semantic_similarity: true,
+          skill_overlap: true,
+          domain_overlap: true,
+          tool_overlap: true,
+          seniority_alignment: true,
+          scope_alignment: true,
+          recency: true,
         },
         rule_score: v,
         semantic_score: 1,

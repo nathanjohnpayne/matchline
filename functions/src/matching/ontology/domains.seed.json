@@ -19,7 +19,7 @@
     { "canonical": "media and entertainment", "synonyms": ["media", "entertainment", "media-tech", "m&e"] },
     { "canonical": "advertising technology", "synonyms": ["adtech", "ad tech", "ad platforms"] },
     { "canonical": "subscription business", "synonyms": ["subscription products", "subscription saas"] },
-    { "canonical": "marketplace", "synonyms": ["two-sided marketplace", "two sided market", "marketplace platform"] },
+    { "canonical": "marketplace", "synonyms": ["two-sided marketplace", "two sided market", "marketplace platform", "course marketplace", "learning marketplace"] },
     { "canonical": "ai and machine learning", "synonyms": ["ai", "ml", "ai/ml", "ml products"] },
     { "canonical": "generative ai", "synonyms": ["gen ai", "genai", "llm products", "applied ai"] },
     { "canonical": "search", "synonyms": ["search products", "search relevance", "information retrieval"] },
@@ -27,7 +27,7 @@
     { "canonical": "data products", "synonyms": ["data platforms", "analytics products"] },
     { "canonical": "fintech", "synonyms": ["financial technology", "finance products"] },
     { "canonical": "healthtech", "synonyms": ["health technology", "digital health"] },
-    { "canonical": "edtech", "synonyms": ["education technology"] },
+    { "canonical": "edtech", "synonyms": ["education technology", "online education", "online learning", "e-learning", "learning platforms", "skills development", "skills development platform", "learning and development", "enterprise learning", "ai in education", "online course platform"] },
     { "canonical": "e-commerce", "synonyms": ["ecommerce", "online retail", "commerce"] },
     { "canonical": "gaming", "synonyms": ["video games", "game industry"] },
     { "canonical": "social", "synonyms": ["social products", "social media", "social platforms"] },
@@ -75,6 +75,8 @@
     { "canonical": "operator devices", "synonyms": ["operator hardware", "mvpd devices", "cable operator devices"] },
     { "canonical": "partner operations", "synonyms": ["partner ops", "partner device operations", "partner management operations"] },
     { "canonical": "post-production", "synonyms": ["post-production workflow", "video post-production", "media post-production"] },
-    { "canonical": "theatrical finance", "synonyms": ["broadway finance", "theatre finance", "live entertainment finance"] }
+    { "canonical": "theatrical finance", "synonyms": ["broadway finance", "theatre finance", "live entertainment finance"] },
+
+    { "canonical": "creator tools", "synonyms": ["creator ecosystem", "creator economy", "content creation tools", "authoring tools", "creator platforms"] }
   ]
 }

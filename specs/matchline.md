@@ -129,7 +129,22 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+  - `components`, `structural_evidence` and `component_applicability`
+    are **optional**: records written before those fields existed carry
+    none of them, and the coverage gate depends on being able to
+    recognize such a record. A rerun of matching populates all three.
+    A record missing `structural_evidence` retains its pre-existing
+    coverage behaviour rather than being treated as unevidenced, so
+    deploying the gate cannot make an already-matched Role sprout
+    gaps.
+  - `component_applicability` records, per axis, whether the engine
+    actually evaluated it for this pair. A `false` axis means the
+    corresponding value in `components` is a no-constraint neutral, and
+    **no consumer may present it as a measurement** — the breakdown
+    renders it as unavailable rather than as a score. When the field is
+    absent, readers must assume nothing was measured: pre-existing
+    records store the same neutrals without marking them.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
 
 ### Invariants
@@ -167,7 +182,42 @@ Acceptance criteria:
 - Recency is exponential decay on the Unit's end date, floored so
   ancient-but-relevant experience still contributes.
 - Skill, tool, and domain overlaps use Jaccard similarity on canonical
-  vocabularies normalized at extraction time.
+  vocabularies normalized at extraction time. The empty-set case is
+  **directional**: when the Requirement side carries nothing the
+  canonical vocabulary recognizes, the axis places no evaluable
+  constraint and scores a neutral `0.5`; when the Requirement side is
+  populated and the Unit's is empty, the axis scores `0.0`. An
+  unrecognized Requirement must not be scored as a candidate
+  deficiency — that inversion made an out-of-domain Role unmatchable
+  in principle (#430).
+- Every neutral fallback in the scoring layer is a **statement of
+  ignorance, not a measurement**, and no consumer may read it as
+  evidence. This covers the Jaccard neutral above, the `1.0` that
+  seniority and scope alignment return when the Requirement doesn't
+  constrain them, the `0.5` seniority alignment returns when a Unit's
+  signals are all unmapped by the ladder, and the `0.5` recency
+  returns when a Unit carries no usable date.
+- The rule is about MEANING, not about values. Seniority alignment
+  also returns a hard `0` when a Unit has no seniority signals at
+  all, and that IS a measurement — "no evidence of meeting the bar" —
+  so it must be presented as one. Only the signals-present-but-
+  unmapped case is ignorance. A consumer that keys off the number
+  rather than the reason will get this backwards.
+- `UnitMatch.structural_evidence` records, per (Unit, Requirement)
+  pair, whether the Unit scored above zero on at least one axis the
+  Requirement actually constrains. It is a property of the pair, not
+  of the Requirement: a Requirement naming one recognized term must
+  not mark every Unit as evidenced. Seniority counts only when the
+  Unit carries a ladder-mapped signal, since the mapped and unmapped
+  cases produce an identical `0.5`.
+- A must-have Requirement is **covered** only by a non-rejected match
+  that both clears the score threshold and carries
+  `structural_evidence`. Semantic similarity alone cannot establish
+  coverage: embedding proximity with no shared skill, tool, domain,
+  seniority or scope vocabulary is what produces
+  plausible-but-unfounded generated claims downstream. Such matches
+  still rank and still render — see the non-goals below — they simply
+  cannot silently satisfy a hard requirement.
 - Matching is nearly-free after embeddings exist; no per-match LLM call
   is required. Rationale strings may be LLM-generated but must be
   cached per `UnitMatch`.
