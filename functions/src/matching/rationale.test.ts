@@ -549,10 +549,49 @@ describe("generateRationale: empty-data fallback honesty (round 1)", () => {
       },
     });
     const result = generateRationale(input);
-    expect(result.driving_component).toBe("seniority_alignment");
-    expect(result.surface_evidence).toBe("");
-    // Rationale acknowledges absence without fabricating.
-    expect(result.rationale).toContain("no explicit signals");
+    // Round 5 (#435) narrowed this. Seniority can no longer drive
+    // the rationale unless the Unit carries a LADDER-MAPPED
+    // signal, and a Unit with `seniority_signals: []` carries
+    // none — so the case this test was built around now falls
+    // through to semantic similarity. (The synthetic
+    // `seniority_alignment: 1` above was always an impossible
+    // pairing: the real `seniorityAlignment` hard-zeroes a Unit
+    // with no signals at all.)
+    //
+    // The assertion that matters is unchanged and still checked:
+    // nothing fabricates a placeholder string into
+    // `surface_evidence`. It traces to Unit content or is empty.
+    expect(result.driving_component).toBe("semantic_similarity");
+    expect(result.surface_evidence).toBe("x");
+    expect(result.rationale).not.toMatch(/none recorded/);
+    // And the seniority template's own no-signals branch keeps
+    // its zero-fab contract for any future caller that reaches
+    // it directly — pinned via a mapped-signal Unit whose
+    // signals list is what surfaces.
+    const mapped = generateRationale(
+      makeInput({
+        components: makeComponents({ seniority_alignment: 1 }),
+        unit: {
+          normalized_summary: "x",
+          skills: [],
+          tools: [],
+          domains: [],
+          seniority_signals: ["led"],
+          scope_signals: [],
+        },
+        requirement: {
+          normalized_requirement: "y",
+          category: "experience_level",
+          keywords: [],
+          tools: [],
+          domains: [],
+          seniority_level: "senior",
+        },
+      }),
+    );
+    expect(mapped.driving_component).toBe("seniority_alignment");
+    expect(mapped.surface_evidence).toBe("led");
+    expect(mapped.rationale).not.toMatch(/none recorded/);
   });
 
   it("recency with no date_range: surface_evidence is empty (NOT 'no date recorded')", () => {
@@ -842,5 +881,72 @@ describe("generateRationale: axis applicability (CodeRabbit Major on #435)", () 
     );
     expect(result.driving_component).toBe("skill_overlap");
     expect(result.surface_evidence).toContain("product strategy");
+  });
+});
+
+describe("generateRationale: unmapped seniority (Codex P2 round 5 on #435)", () => {
+  // Fourth instance of one pattern on this PR: a neutral
+  // introduced so the engine doesn't punish a Unit for something
+  // it couldn't evaluate, then read downstream as a measurement.
+  // The coverage gate learned to exclude the unmapped-seniority
+  // 0.5 in round 4; the rationale hadn't.
+  const base = {
+    normalized_summary: "Ran the living-room launch programme",
+    skills: [],
+    tools: [],
+    domains: [],
+    scope_signals: [],
+  };
+
+  it("does not let an unmapped seniority signal narrate the match", () => {
+    const result = generateRationale(
+      makeInput({
+        // Weak semantic (0.30 x 0.1 = 0.03) against the seniority
+        // neutral (0.10 x 0.5 = 0.05): without the filter the
+        // neutral wins and emits "Matched on seniority alignment"
+        // for a comparison that never ran.
+        components: makeComponents({
+          semantic_similarity: 0.1,
+          seniority_alignment: 0.5,
+          recency: 0,
+        }),
+        unit: { ...base, seniority_signals: ["mentored"] },
+        requirement: {
+          normalized_requirement: "Staff-level product ownership",
+          category: "skill",
+          keywords: [],
+          tools: [],
+          domains: [],
+          seniority_level: "staff",
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+    expect(result.rationale).not.toMatch(/seniority/i);
+  });
+
+  it("still lets a LADDER-MAPPED signal narrate it at the same 0.5", () => {
+    // Same component value, same weights — only the mapping
+    // differs, which is the whole point.
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.1,
+          seniority_alignment: 0.5,
+          recency: 0,
+        }),
+        unit: { ...base, seniority_signals: ["led"] },
+        requirement: {
+          normalized_requirement: "Staff-level product ownership",
+          category: "skill",
+          keywords: [],
+          tools: [],
+          domains: [],
+          seniority_level: "staff",
+        },
+      }),
+    );
+    expect(result.driving_component).toBe("seniority_alignment");
+    expect(result.surface_evidence).toBe("led");
   });
 });

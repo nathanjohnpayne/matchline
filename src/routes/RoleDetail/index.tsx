@@ -151,8 +151,23 @@ export default function RoleDetail(): ReactElement {
   //     either firing the trigger OR observing a non-empty
   //     first matches snapshot. Both close the "fires once
   //     per mount" window.
-  const [matchesFirstSnapshotReceived, setMatchesFirstSnapshotReceived] =
-    useState(false);
+  //
+  // **Keyed by roleId, not a bare boolean.** On client-side
+  // navigation A → B, React renders once with `roleId = B` while
+  // every piece of state still holds A's values. Effects then run
+  // in declaration order, so the subscription effect below resets
+  // the guards — but `setState` isn't visible until the NEXT
+  // render, while the auto-trigger effect runs later in the SAME
+  // commit. A boolean therefore reads `true` (from A) on that
+  // render and the gate evaluates B against A's matches,
+  // requirements and status. Storing the roleId the snapshot
+  // belongs to makes the comparison ordering-proof: it simply
+  // doesn't equal B yet. Codex P2 round 5 on #435.
+  const [matchesSnapshotRoleId, setMatchesSnapshotRoleId] = useState<
+    string | null
+  >(null);
+  const matchesFirstSnapshotReceived =
+    roleId !== undefined && matchesSnapshotRoleId === roleId;
   const triggeredRef = useRef(false);
   // Set when a legacy-backfill rerun (the one that populates
   // `structural_evidence` on pre-#435 matches) fails. While true,
@@ -160,7 +175,16 @@ export default function RoleDetail(): ReactElement {
   // doubt to matches missing the field — the window the allowance
   // depends on didn't close, so the allowance is withdrawn rather
   // than left open indefinitely. Codex P2 round 4 on #435.
-  const [legacyBackfillFailed, setLegacyBackfillFailed] = useState(false);
+  // Keyed by roleId for the same reason as the snapshot gate
+  // above: a failure on Role A must not follow the user to Role
+  // B, where it would withdraw trust from B's legacy matches and
+  // render B's amber "couldn't re-score" warning off A's
+  // outcome. Codex P2 round 5 on #435.
+  const [legacyBackfillFailedFor, setLegacyBackfillFailedFor] = useState<
+    string | null
+  >(null);
+  const legacyBackfillFailed =
+    roleId !== undefined && legacyBackfillFailedFor === roleId;
 
   // Requirements tab parse state (#201). Held at the
   // container so a tab switch + return doesn't drop the
@@ -440,7 +464,8 @@ export default function RoleDetail(): ReactElement {
     // first snapshot before evaluating).
     triggeredRef.current = false;
     setComputingMatches(false);
-    setMatchesFirstSnapshotReceived(false);
+    setMatchesSnapshotRoleId(null);
+    setLegacyBackfillFailedFor(null);
 
     // Stale-closure guard. If the user navigates to a new
     // roleId before the in-flight Role fetch resolves, we
@@ -515,7 +540,11 @@ export default function RoleDetail(): ReactElement {
         // a known-empty signal, not the initial-state
         // default. Idempotent — calling setState with
         // the same value is a React no-op.
-        setMatchesFirstSnapshotReceived(true);
+        // Stamp the roleId this snapshot belongs to, so the
+        // auto-trigger gate can't mistake Role A's delivery
+        // for Role B's during the one render where B's state
+        // hasn't landed yet.
+        setMatchesSnapshotRoleId(roleId);
       },
       (err) => {
         if (!active) return;
@@ -703,7 +732,7 @@ export default function RoleDetail(): ReactElement {
         // trust rather than keep asserting coverage we can no
         // longer substantiate.
         if (isLegacyBackfill && !isStaleAuto()) {
-          setLegacyBackfillFailed(true);
+          setLegacyBackfillFailedFor(issuedAgainstAuto);
         }
       })
       .finally(() => {

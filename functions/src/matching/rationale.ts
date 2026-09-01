@@ -28,6 +28,7 @@ import {
   normalizeTool,
 } from "./normalize.js";
 import {
+  hasMappedSenioritySignal,
   requirementAxes,
   WEIGHTS,
   type RequirementAxes,
@@ -99,10 +100,20 @@ export function generateRationale(input: RationaleInput): RationaleResult {
   // rationale. Applicability is derived from `input.requirement`
   // rather than passed in, so a caller can't forget it and
   // reopen the hole below.
-  const drivingComponent = pickDrivingComponent(
-    input.components,
-    requirementAxes(input.requirement),
-  );
+  const axes = requirementAxes(input.requirement);
+  // `seniorityAlignment` returns the same 0.5 for a real
+  // one-level gap and for the "we don't know" fallback when the
+  // Unit's signals are all unmapped. Only the first is a
+  // comparison; narrating the second as "Matched on seniority
+  // alignment" describes an evaluation that never happened.
+  // The pair-level fact lives in `hasMappedSenioritySignal`,
+  // which the coverage gate already consumes — Codex P2 round 5
+  // caught that the rationale wasn't consuming it too.
+  const drivingComponent = pickDrivingComponent(input.components, {
+    ...axes,
+    seniority_alignment:
+      axes.seniority_alignment && hasMappedSenioritySignal(input.unit),
+  });
   switch (drivingComponent) {
     case "semantic_similarity":
       return semanticTemplate(input, drivingComponent);
