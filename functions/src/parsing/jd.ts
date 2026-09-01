@@ -26,6 +26,7 @@ import { modelFor } from "../llm/config.js";
 import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   JdParsingResponseV1Schema,
   type JdParsingResponseV1,
@@ -48,6 +49,8 @@ export interface JdParsingDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
   readonly generateId?: () => string;
+  /** Optional progress sink (#428); reports each attempt. */
+  readonly onProgress?: ProgressReporter;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -104,6 +107,7 @@ export async function parseJobRequirements(
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
   const generateId = deps.generateId ?? randomUUID;
+  const report = safeProgress(deps.onProgress);
 
   const prompt = loadPromptText("parsing", "jd");
   const { provider, model } = modelFor("requirement_parsing");
@@ -118,6 +122,7 @@ export async function parseJobRequirements(
   const failures: JdParsingAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder =
       prompt.system + retryReminderFor(failures.at(-1), attempt);

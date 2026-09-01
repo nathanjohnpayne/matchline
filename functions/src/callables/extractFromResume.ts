@@ -36,7 +36,7 @@ export const extractFromResumeCallable = onCall(
     // the client-side deadline that has to stay above it.
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.extractFromResume,
   },
-  async (request) => {
+  async (request, response) => {
     if (!request.auth?.uid) {
       throw new HttpsError(
         "unauthenticated",
@@ -54,10 +54,17 @@ export const extractFromResumeCallable = onCall(
     }
 
     try {
-      // Full pipeline: extract → embed → persist → return.
-      const units = await runExtractionPipeline(text, {
-        ownerUid: request.auth.uid,
-      });
+    // `response` is undefined for a non-streaming invocation, and
+    // `sendChunk` resolves false rather than throwing when the request
+    // did not ask for a stream — so emitting unconditionally is safe
+    // and an older client is unaffected. `safeProgress` in
+    // llm/progress.ts additionally guarantees a rejected send (client
+    // disconnected mid-call) cannot fail work already paid for.
+      const units = await runExtractionPipeline(
+        text,
+        { ownerUid: request.auth.uid },
+        { onProgress: (event) => void response?.sendChunk(event) },
+      );
       return { units };
     } catch (err) {
       if (err instanceof ExtractionError) {

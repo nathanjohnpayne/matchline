@@ -45,7 +45,10 @@ describe("runJdParsingPipeline", () => {
       persistBatch,
     });
 
-    expect(parse).toHaveBeenCalledWith("JD text", CTX);
+    // Third argument carries the progress sink (#428).
+    expect(parse).toHaveBeenCalledWith("JD text", CTX, {
+      onProgress: undefined,
+    });
     expect(embed).toHaveBeenCalledWith(["one", "two"], {
       ownerUid: "user-alice",
     });

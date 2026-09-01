@@ -29,6 +29,7 @@ import { modelFor } from "../llm/config.js";
 import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   ExtractionResponseV1Schema,
   type ExtractionResponseV1,
@@ -55,6 +56,11 @@ export interface ExtractionDeps {
   /** Override for tests so ids and timestamps are deterministic. */
   readonly generateId?: () => string;
   readonly now?: () => Date;
+  /**
+   * Optional progress sink (#428). Reports each attempt so a retry is
+   * visible to the user instead of looking like a hang.
+   */
+  readonly onProgress?: ProgressReporter;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -101,6 +107,7 @@ export async function extractFromResume(
   const record = deps.record ?? recordUsage;
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date());
+  const report = safeProgress(deps.onProgress);
 
   const prompt = loadPromptText("extraction", "resume");
   const { provider, model } = modelFor("extraction");
@@ -116,6 +123,9 @@ export async function extractFromResume(
   const failures: ExtractionAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // 1-based for display: "attempt 2 of 3" reads correctly, and a
+    // value above 1 is what tells the user a retry is under way.
+    report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = `${prompt.userFewShot}\n\nResume to extract:\n\n${text}`;

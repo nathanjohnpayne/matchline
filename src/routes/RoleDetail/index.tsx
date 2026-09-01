@@ -72,6 +72,7 @@ import {
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
+import { type ProgressEvent } from "../../services/progress.ts";
 import { friendlyCallableError } from "../../lib/callable-errors.ts";
 import type {
   ExperienceUnit,
@@ -166,6 +167,10 @@ export default function RoleDetail(): ReactElement {
   const [parsingStatus, setParsingStatus] =
     useState<RequirementsTabStatus>("editing");
   const [parseError, setParseError] = useState<Error | null>(null);
+  // JD-parse progress (#428). Same shape as Onboarding's: null until
+  // the first chunk, and the view degrades to elapsed time.
+  const [parseProgress, setParseProgress] = useState<ProgressEvent | null>(null);
+  const [parseStartedAt, setParseStartedAt] = useState<number>(0);
   const [savingJd, setSavingJd] = useState(false);
   // JD textarea draft, lifted from RequirementsTab so a tab
   // switch (which unmounts RequirementsTab via the activeTab
@@ -292,6 +297,8 @@ export default function RoleDetail(): ReactElement {
         visitTokenRef.current !== issuedToken;
       setParsingStatus("parsing");
       setParseError(null);
+      setParseProgress(null);
+      setParseStartedAt(Date.now());
       const trimmed = text.trim();
       const next: Role = { ...role, jd_raw: text };
       void (async () => {
@@ -313,7 +320,7 @@ export default function RoleDetail(): ReactElement {
           // would still hit the LLM pipeline + write
           // Requirements that the user no longer cares about.
           if (isStale()) return;
-          await invokeParseJobRequirements(roleId, trimmed);
+          await invokeParseJobRequirements(roleId, trimmed, setParseProgress);
           // Subscription delivers the parsed Requirements;
           // flip back to editing on success and clear any
           // prior error so a successful retry hides the
@@ -820,6 +827,8 @@ export default function RoleDetail(): ReactElement {
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
       parsingStatus={parsingStatus}
+      parseProgress={parseProgress}
+      parseStartedAt={parseStartedAt}
       parseError={parseError}
       savingJd={savingJd}
       jdDraft={jdDraft}

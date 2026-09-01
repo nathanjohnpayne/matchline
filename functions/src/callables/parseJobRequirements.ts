@@ -32,7 +32,7 @@ export const parseJobRequirementsCallable = onCall(
     // same 3-attempt / 16,384-token loop extraction does.
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.parseJobRequirements,
   },
-  async (request) => {
+  async (request, response) => {
     if (!request.auth?.uid) {
       throw new HttpsError(
         "unauthenticated",
@@ -81,10 +81,13 @@ export const parseJobRequirementsCallable = onCall(
     }
 
     try {
-      const requirements = await runJdParsingPipeline(text, {
-        ownerUid,
-        roleId,
-      });
+      // See extractFromResume.ts: emitting is unconditional and safe —
+      // `sendChunk` resolves false for a non-streaming request (#428).
+      const requirements = await runJdParsingPipeline(
+        text,
+        { ownerUid, roleId },
+        { onProgress: (event) => void response?.sendChunk(event) },
+      );
       return { requirements };
     } catch (err) {
       if (err instanceof JdParsingError) {
