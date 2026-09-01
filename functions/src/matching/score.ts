@@ -78,6 +78,35 @@ export const WEIGHTS = Object.freeze({
 
 export interface ScoreResult {
   readonly components: ScoreComponents;
+  /**
+   * Did ANY axis carry real, evaluable signal from the
+   * Requirement side?
+   *
+   * False means every structural axis fell back to a
+   * no-constraint default — `jaccard()`'s 0.5 neutral on
+   * skill / tool / domain, `seniorityAlignment`'s 1.0 for an
+   * undefined level, `scopeAlignment`'s 1.0 for a non-scope
+   * category. Those defaults exist so an unconstrained (or
+   * unrecognizable) Requirement doesn't read as a candidate
+   * deficiency, but stacked together they hand out 0.225 +
+   * 0.20 of `rule_score` that nothing actually earned, and a
+   * recent Unit clears the Gaps view's 0.4 threshold on
+   * semantics alone.
+   *
+   * `computeGaps` consumes this so a must-have with no
+   * evaluable signal can never be reported as covered. The
+   * score itself is left alone: the spec's non-goals say
+   * matching "does not hide low-quality matches; they appear
+   * in the Gaps view," so the match still renders and still
+   * ranks — it just cannot silently satisfy a hard
+   * requirement.
+   *
+   * Codex P1 round 1 on PR #435 caught the false-positive
+   * path, using the credential-shaped Requirement that
+   * `jd.v1.md` emits with empty `keywords` / `tools` /
+   * `domains` as the worked example.
+   */
+  readonly structural_evidence: boolean;
   /** Weighted sum of components, BEFORE the confidence multiplier. */
   readonly rule_score: number;
   /**
@@ -188,6 +217,43 @@ function jaccard(
   for (const v of unitSet) if (requirementSet.has(v)) intersection += 1;
   const union = unitSet.size + requirementSet.size - intersection;
   return intersection / union;
+}
+
+/**
+ * Does this Requirement constrain ANY structural axis in a way
+ * the engine can actually evaluate?
+ *
+ * An axis counts only when the Requirement side survives
+ * canonicalization — a `keywords` array full of terms the seed
+ * ontology doesn't recognize constrains nothing we can score,
+ * exactly like an empty array. Seniority counts when the level
+ * is on the ladder; scope counts when the Requirement is
+ * scope-category AND its keywords canonicalize.
+ *
+ * Deliberately mirrors the branch conditions in `jaccard()`,
+ * `seniorityAlignment()` and `scopeAlignment()`. If a future
+ * change moves one of those thresholds, this predicate has to
+ * move with it — the pairing is pinned in score.test.ts.
+ */
+export function hasStructuralEvidence(
+  requirement: JobRequirementUnit,
+): boolean {
+  if (canonicalize(requirement.keywords, normalizeSkill).size > 0) return true;
+  if (canonicalize(requirement.tools, normalizeTool).size > 0) return true;
+  if (canonicalize(requirement.domains, normalizeDomain).size > 0) return true;
+  if (
+    requirement.seniority_level !== undefined &&
+    SENIORITY_LADDER.indexOf(requirement.seniority_level) !== -1
+  ) {
+    return true;
+  }
+  if (
+    requirement.category === "scope" &&
+    canonicalize(requirement.keywords, normalizeScopeKey).size > 0
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function canonicalize(
@@ -540,6 +606,7 @@ export function score(
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
+    structural_evidence: hasStructuralEvidence(requirement),
     rule_score,
     semantic_score: components.semantic_similarity,
     final_score,

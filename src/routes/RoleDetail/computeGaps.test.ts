@@ -45,6 +45,7 @@ function makeMatch(
   id: string,
   reqId: string,
   finalScore: number,
+  overrides: Partial<UnitMatch> = {},
 ): UnitMatch {
   return {
     id,
@@ -60,6 +61,7 @@ function makeMatch(
     approved_for_use: false,
     user_rejected: false,
     created_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -210,5 +212,81 @@ describe("computeGaps", () => {
       },
     ];
     expect(computeGaps(reqs, matches).map((r) => r.id)).toEqual(["r-mh"]);
+  });
+});
+
+describe("computeGaps — structural-evidence gate (Codex P1 r1 on #435)", () => {
+  const mustHave: JobRequirementUnit = {
+    id: "r-credential",
+    owner_uid: ALICE,
+    role_id: "role-1",
+    raw_text: "BS in Computer Science required",
+    normalized_requirement: "BS in Computer Science",
+    category: "credential",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "low",
+    must_have: true,
+    extracted_from: "qualifications",
+  };
+
+  it("does not treat a high-scoring evidence-free match as covering a must-have", () => {
+    // The failure this gate exists to stop. A credential-shaped
+    // Requirement constrains nothing the engine can evaluate, so
+    // every structural axis pays its no-constraint default and a
+    // recent Unit sails past 0.4 on semantics alone. Without the
+    // gate, "BS in Computer Science required" reads as covered by
+    // whichever Unit happened to embed closest.
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+  });
+
+  it("treats a scoring match WITH evidence as covering", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52, { structural_evidence: true })],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("treats legacy matches (field absent) as covering", () => {
+    // Rows written before the field existed were scored under the
+    // pre-#430 rule, which hard-zeroed unrecognized structural
+    // axes rather than paying a neutral — there is no unearned
+    // credit for the gate to catch. Blocking them would flip every
+    // previously-covered Requirement to a gap until the user
+    // reran matching.
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.52)],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("still requires the score threshold when evidence IS present", () => {
+    const gaps = computeGaps(
+      [mustHave],
+      [makeMatch("m1", "r-credential", 0.39, { structural_evidence: true })],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+  });
+
+  it("ignores an evidence-free match when a lower-scoring one has evidence", () => {
+    // The evidence-free match must not win the per-Requirement max
+    // and then be discarded — it should never enter the running.
+    // Here the only match with evidence is below threshold, so the
+    // Requirement stays a gap despite the 0.9 alongside it.
+    const gaps = computeGaps(
+      [mustHave],
+      [
+        makeMatch("m-high", "r-credential", 0.9, { structural_evidence: false }),
+        makeMatch("m-low", "r-credential", 0.3, { structural_evidence: true }),
+      ],
+    );
+    expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
   });
 });

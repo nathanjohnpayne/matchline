@@ -4,10 +4,42 @@
  *
  * "Unmet must-have" = a Requirement where:
  *   - `must_have: true`, AND
- *   - no `UnitMatch` for the Requirement is BOTH
+ *   - no `UnitMatch` for the Requirement is ALL THREE of
  *     - non-rejected (`user_rejected: false`), AND
  *     - has `final_score >= GAP_THRESHOLD` (default 0.4
- *       per parent #21 spec)
+ *       per parent #21 spec), AND
+ *     - carries structural evidence
+ *       (`structural_evidence !== false`)
+ *
+ * **A score alone is not evidence.** The scoring components
+ * fall back to no-constraint defaults when a Requirement
+ * doesn't constrain an axis — 0.5 on skill / tool / domain,
+ * 1.0 on seniority and scope. That's deliberate (an
+ * unconstrained axis must not read as a candidate
+ * deficiency), but a Requirement that constrains NOTHING
+ * evaluable stacks those defaults into ~0.425 of unearned
+ * `rule_score`, and a recent Unit then clears 0.4 on
+ * semantics alone. The credential-shaped Requirement
+ * `jd.v1.md` emits with empty `keywords` / `tools` /
+ * `domains` is the canonical case: "BS in Computer Science
+ * required" would show as covered by whichever Unit happened
+ * to embed closest, which is precisely the dishonesty this
+ * view exists to prevent. Codex P1 round 1 on PR #435.
+ *
+ * Such matches are NOT hidden — `specs/matchline.md`'s
+ * non-goals are explicit that low-quality matches still
+ * appear in the Gaps view. They render and rank normally on
+ * the Matches tab; they just can't silently satisfy a hard
+ * requirement.
+ *
+ * `structural_evidence === undefined` counts as satisfying.
+ * Rows written before the field existed were scored under
+ * the older rule, where an unrecognized Requirement side
+ * hard-zeroed the structural axes instead of paying out a
+ * neutral — so there is no unearned credit for the gate to
+ * catch, and treating legacy rows as suspect would flip
+ * every previously-covered Requirement to a gap until the
+ * user reran matching.
  *
  * **Rejected matches do NOT count as satisfying.**
  * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
@@ -58,6 +90,10 @@ export function computeGaps(
   const bestScoreByReq = new Map<string, number>();
   for (const m of matches) {
     if (m.user_rejected) continue;
+    // A match with no structural evidence can't cover a
+    // must-have no matter how it scored — see the docstring.
+    // `undefined` is legacy data and passes.
+    if (m.structural_evidence === false) continue;
     const prev = bestScoreByReq.get(m.job_requirement_unit_id);
     if (prev === undefined || m.final_score > prev) {
       bestScoreByReq.set(m.job_requirement_unit_id, m.final_score);

@@ -215,6 +215,12 @@ export async function runMatchingPipeline(
         // type contract aligned with `ScoreComponents`'s
         // canonical shape in `../types/capability.ts`.
         components: { ...result.components },
+        // Whether the Requirement constrained any axis the
+        // engine could evaluate. Consumed by `computeGaps`
+        // so a must-have with no evaluable signal can't be
+        // reported as covered off neutral credit alone
+        // (Codex P1 round 1 on PR #435).
+        structural_evidence: result.structural_evidence,
         // Rationale + surface_evidence populated by #100's
         // deterministic generator. Cached on the doc so the
         // Matches tab (#21) doesn't re-render compute.

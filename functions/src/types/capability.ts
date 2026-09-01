@@ -179,6 +179,29 @@ export interface UnitMatch {
    */
   components?: ScoreComponents;
 
+  /**
+   * True when the Requirement constrained at least one
+   * structural axis that the engine could actually evaluate —
+   * skill / tool / domain vocabulary that survives
+   * canonicalization, a ladder-mapped `seniority_level`, or a
+   * scope-category Requirement with canonicalizable keywords.
+   *
+   * False means every structural axis fell back to a
+   * no-constraint default, so `final_score` rests on semantics
+   * plus ~0.425 of unearned neutral credit. `computeGaps`
+   * refuses to treat such a match as covering a must-have; the
+   * match still renders and still ranks, per the spec non-goal
+   * "does not hide low-quality matches."
+   *
+   * Optional for the same reason as `components`: rows written
+   * before this field existed won't have it. Readers treat
+   * `undefined` as "legacy, don't block" — those rows were
+   * scored under the pre-#430 rule that had no neutral credit
+   * to give away, so the gate has nothing to catch. One rerun
+   * of the matching pipeline heals the corpus.
+   */
+  structural_evidence?: boolean;
+
   rationale: string;
   surface_evidence: string;
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasStructuralEvidence,
   recency,
   scopeAlignment,
   score,
@@ -849,5 +850,106 @@ describe("score (master composer)", () => {
     const b = score(unit, req, { asOf });
     expect(a.final_score).toBe(b.final_score);
     expect(a.rule_score).toBe(b.rule_score);
+  });
+});
+
+// -- hasStructuralEvidence --------------------------------------------------
+
+describe("hasStructuralEvidence (Codex P1 r1 on #435)", () => {
+  it("is false when the Requirement constrains nothing evaluable", () => {
+    // The credential shape `jd.v1.md` emits for "BS in Computer
+    // Science required": category `credential`, no keywords, no
+    // tools, no domains, no seniority level. Every structural
+    // axis falls back to its no-constraint default, so
+    // `rule_score` collects ~0.425 nothing earned.
+    const req = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    expect(hasStructuralEvidence(req)).toBe(false);
+  });
+
+  it("is false when the Requirement names terms the ontology can't canonicalize", () => {
+    // Populated arrays are not evidence on their own. If nothing
+    // survives canonicalization the engine has nothing to compare,
+    // which is the same position as an empty array.
+    const req = makeRequirement({
+      keywords: ["xyzzy-not-a-real-skill"],
+      tools: ["plugh-not-a-real-tool"],
+      domains: ["frobnitz-not-a-real-domain"],
+    });
+    expect(hasStructuralEvidence(req)).toBe(false);
+  });
+
+  it("is true when any single axis canonicalizes", () => {
+    expect(
+      hasStructuralEvidence(makeRequirement({ keywords: ["product strategy"] })),
+    ).toBe(true);
+    expect(hasStructuralEvidence(makeRequirement({ tools: ["jira"] }))).toBe(
+      true,
+    );
+    expect(
+      hasStructuralEvidence(makeRequirement({ domains: ["streaming video"] })),
+    ).toBe(true);
+    expect(
+      hasStructuralEvidence(makeRequirement({ seniority_level: "staff" })),
+    ).toBe(true);
+  });
+
+  it("tracks scopeAlignment's branch: scope category with canonicalizable keywords", () => {
+    // `scopeAlignment` only evaluates `category === "scope"`, so a
+    // scope-flavoured keyword on a skill-category Requirement is
+    // still evidence via the skill axis, while a scope-category
+    // Requirement with unnormalizable keywords is not.
+    expect(
+      hasStructuralEvidence(
+        makeRequirement({ category: "scope", keywords: ["40M users"] }),
+      ),
+    ).toBe(true);
+    expect(
+      hasStructuralEvidence(
+        makeRequirement({ category: "scope", keywords: ["   "] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("score() surfaces the flag alongside the components", () => {
+    const unit = makeUnit({ skills: ["product strategy"] });
+    const withEvidence = makeRequirement({ keywords: ["product strategy"] });
+    const without = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    expect(score(unit, withEvidence).structural_evidence).toBe(true);
+    expect(score(unit, without).structural_evidence).toBe(false);
+  });
+
+  it("the no-evidence case is exactly the false positive the flag exists to stop", () => {
+    // Pin the arithmetic Codex called out, so a future weight or
+    // neutral-value change that reopens the hole fails here.
+    const unit = makeUnit({
+      skills: ["product strategy"],
+      tools: ["jira"],
+      domains: ["streaming video"],
+      seniority_signals: ["led"],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    const result = score(unit, req, { asOf: new Date("2026-08-31T00:00:00Z") });
+    // Comfortably over the 0.4 gap threshold on neutral credit
+    // alone — which is why computeGaps gates on the flag rather
+    // than on the score.
+    expect(result.final_score).toBeGreaterThan(0.4);
+    expect(result.structural_evidence).toBe(false);
   });
 });
