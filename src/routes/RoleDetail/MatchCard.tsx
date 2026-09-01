@@ -107,6 +107,7 @@ export default function MatchCard({
         <MatchScoreBadge
           finalScore={match.final_score}
           components={match.components}
+          componentApplicability={match.component_applicability}
           confidence={unit !== null ? unit.confidence_score : null}
         />
       </header>

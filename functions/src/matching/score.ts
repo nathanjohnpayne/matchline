@@ -107,6 +107,13 @@ export interface ScoreResult {
    * `domains` as the worked example.
    */
   readonly structural_evidence: boolean;
+  /**
+   * Per-axis applicability for this pair — see `effectiveAxes`.
+   * Persisted on the match so the breakdown tooltip can render
+   * an unevaluated axis as unavailable instead of presenting
+   * its neutral as a measured score.
+   */
+  readonly component_applicability: RequirementAxes;
   /** Weighted sum of components, BEFORE the confidence multiplier. */
   readonly rule_score: number;
   /**
@@ -338,6 +345,41 @@ export function hasStructuralEvidence(input: EvidenceInputs): boolean {
     if (axis === "seniority_alignment") return seniorityMapped;
     return true;
   });
+}
+
+/**
+ * The per-axis applicability for a specific (Unit, Requirement)
+ * PAIR: which axes did the engine actually evaluate?
+ *
+ * `requirementAxes` answers the Requirement-side half. Two axes
+ * need the Unit side too, because both can return a value that
+ * is a statement of ignorance rather than a measurement:
+ * `seniorityAlignment` returns 0.5 when the Unit's signals are
+ * all unmapped, and `recency` returns 0.5 when the Unit has no
+ * usable date.
+ *
+ * Every consumer of "was this axis evaluated" derives from this
+ * one function — the coverage gate, the rationale's driving-axis
+ * filter, and the breakdown persisted for the tooltip — so they
+ * cannot drift apart. Codex P2 on PR #435 found the tooltip
+ * reading a neutral as a measured 50% overlap, which is the
+ * failure this consolidation is meant to make structurally
+ * hard.
+ */
+export function effectiveAxes(
+  unit: Pick<ExperienceUnit, "seniority_signals" | "date_range">,
+  requirement: Pick<
+    JobRequirementUnit,
+    "category" | "keywords" | "tools" | "domains" | "seniority_level"
+  >,
+): RequirementAxes {
+  const axes = requirementAxes(requirement);
+  return {
+    ...axes,
+    seniority_alignment:
+      axes.seniority_alignment && hasMappedSenioritySignal(unit),
+    recency: axes.recency && hasMeasurableRecency(unit),
+  };
 }
 
 /**
@@ -714,6 +756,7 @@ export function score(
   requirement: JobRequirementUnit,
   options?: { readonly asOf?: Date },
 ): ScoreResult {
+  const axes = effectiveAxes(unit, requirement);
   const components: ScoreComponents = {
     semantic_similarity: semanticSimilarityScore(unit, requirement),
     skill_overlap: skillOverlap(unit, requirement),
@@ -734,9 +777,10 @@ export function score(
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
+    component_applicability: axes,
     structural_evidence: hasStructuralEvidence({
       components,
-      axes: requirementAxes(requirement),
+      axes,
       seniorityMapped: hasMappedSenioritySignal(unit),
     }),
     rule_score,

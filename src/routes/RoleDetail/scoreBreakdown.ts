@@ -80,6 +80,23 @@ export interface BreakdownRow {
   readonly weight: number;
   /** `value × weight` — what this row contributes to the final number. */
   readonly contribution: number;
+  /**
+   * Did the engine actually evaluate this axis for this pair?
+   *
+   * `false` means `value` is a no-constraint neutral rather than
+   * a measurement, and the row must NOT be rendered as a score:
+   * "Skill 0.50 × 0.20 = 0.100" tells the user they achieved 50%
+   * overlap on a comparison that never happened, which is the
+   * opposite of what the spec's neutral-fallback rule requires.
+   * Codex P2 on #435.
+   *
+   * Legacy rows (no persisted `component_applicability`) default
+   * to `true` — they predate the field, and their components
+   * were computed under a rule that hard-zeroed unevaluated
+   * axes rather than paying a neutral, so presenting them as
+   * measured is accurate for that data.
+   */
+  readonly evaluated: boolean;
 }
 
 /**
@@ -90,6 +107,7 @@ export interface BreakdownRow {
  */
 export function buildBreakdownRows(
   components: ScoreComponents | undefined,
+  applicability?: Readonly<Record<keyof ScoreComponents, boolean>>,
 ): readonly BreakdownRow[] | null {
   if (components === undefined) return null;
   return COMPONENT_DISPLAY_ORDER.map((key) => {
@@ -101,6 +119,7 @@ export function buildBreakdownRows(
       value,
       weight,
       contribution: value * weight,
+      evaluated: applicability?.[key] ?? true,
     };
   });
 }

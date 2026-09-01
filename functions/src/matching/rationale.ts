@@ -28,9 +28,7 @@ import {
   normalizeTool,
 } from "./normalize.js";
 import {
-  hasMappedSenioritySignal,
-  hasMeasurableRecency,
-  requirementAxes,
+  effectiveAxes,
   WEIGHTS,
   type RequirementAxes,
   type ScoreComponents,
@@ -101,7 +99,7 @@ export function generateRationale(input: RationaleInput): RationaleResult {
   // rationale. Applicability is derived from `input.requirement`
   // rather than passed in, so a caller can't forget it and
   // reopen the hole below.
-  const axes = requirementAxes(input.requirement);
+  const axes = effectiveAxes(input.unit, input.requirement);
   // `seniorityAlignment` returns the same 0.5 for a real
   // one-level gap and for the "we don't know" fallback when the
   // Unit's signals are all unmapped. Only the first is a
@@ -119,12 +117,7 @@ export function generateRationale(input: RationaleInput): RationaleResult {
   // recency axis (no date range on Unit)" — an explicit lack of
   // information offered as the reason for the match. Codex P2
   // on #435.
-  const drivingComponent = pickDrivingComponent(input.components, {
-    ...axes,
-    seniority_alignment:
-      axes.seniority_alignment && hasMappedSenioritySignal(input.unit),
-    recency: axes.recency && hasMeasurableRecency(input.unit),
-  });
+  const drivingComponent = pickDrivingComponent(input.components, axes);
   switch (drivingComponent) {
     case "semantic_similarity":
       return semanticTemplate(input, drivingComponent);

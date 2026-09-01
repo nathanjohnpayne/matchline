@@ -209,6 +209,26 @@ export interface UnitMatch {
    * withdrawn if that backfill fails.
    */
   structural_evidence?: boolean;
+  /**
+   * Per-axis applicability for THIS pair: which axes did the
+   * engine actually evaluate?
+   *
+   * `false` on an axis means its value in `components` is a
+   * no-constraint neutral rather than a measurement — the
+   * Requirement named nothing the canonical vocabulary
+   * recognizes, or (for seniority and recency) the Unit carries
+   * no mapped signal / no usable date. Readers MUST NOT present
+   * such a component as a score: the breakdown tooltip renders
+   * it as unavailable, because "0.50 x 0.20 = 0.100" tells the
+   * user they achieved 50% overlap on a comparison that never
+   * happened.
+   *
+   * Optional for the same reason as `components` — legacy rows
+   * predate it. A reader without it should fall back to
+   * presenting no per-axis claim rather than assuming every
+   * component was measured.
+   */
+  component_applicability?: Readonly<Record<keyof ScoreComponents, boolean>>;
 
   rationale: string;
   surface_evidence: string;

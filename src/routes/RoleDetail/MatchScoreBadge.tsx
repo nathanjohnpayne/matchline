@@ -41,6 +41,15 @@ export interface MatchScoreBadgeProps {
   /** Persisted sub-components — `undefined` for legacy rows. */
   readonly components: ScoreComponents | undefined;
   /**
+   * Persisted per-axis applicability. Rows whose axis wasn't
+   * evaluated render as "not evaluated" rather than as a score,
+   * so a no-constraint neutral is never presented as measured
+   * overlap. `undefined` on legacy rows — see `BreakdownRow`.
+   */
+  readonly componentApplicability?: Readonly<
+    Record<keyof ScoreComponents, boolean>
+  >;
+  /**
    * Source Unit's `confidence_score` in [0, 1]. Multiplied
    * against `rule_score` to produce `final_score`.
    * `null` when the source Unit isn't in the loaded set
@@ -52,11 +61,12 @@ export interface MatchScoreBadgeProps {
 export default function MatchScoreBadge({
   finalScore,
   components,
+  componentApplicability,
   confidence,
 }: MatchScoreBadgeProps): ReactElement {
   const popoverId = useId();
   const score100 = (finalScore * 100).toFixed(1);
-  const rows = buildBreakdownRows(components);
+  const rows = buildBreakdownRows(components, componentApplicability);
 
   return (
     <span
@@ -106,15 +116,33 @@ export default function MatchScoreBadge({
                   <span className="text-zinc-700 dark:text-zinc-300">
                     {row.label}
                   </span>
-                  <span className="font-mono tabular-nums text-right text-zinc-900 dark:text-zinc-100">
-                    {row.value.toFixed(2)}
-                  </span>
-                  <span className="font-mono tabular-nums text-right text-zinc-500">
-                    ×{row.weight.toFixed(2)}
-                  </span>
-                  <span className="font-mono tabular-nums text-right text-zinc-700 dark:text-zinc-300">
-                    {row.contribution.toFixed(3)}
-                  </span>
+                  {row.evaluated ? (
+                    <>
+                      <span className="font-mono tabular-nums text-right text-zinc-900 dark:text-zinc-100">
+                        {row.value.toFixed(2)}
+                      </span>
+                      <span className="font-mono tabular-nums text-right text-zinc-500">
+                        ×{row.weight.toFixed(2)}
+                      </span>
+                      <span className="font-mono tabular-nums text-right text-zinc-700 dark:text-zinc-300">
+                        {row.contribution.toFixed(3)}
+                      </span>
+                    </>
+                  ) : (
+                    // Not a score. The Requirement constrained
+                    // nothing evaluable on this axis (or the Unit
+                    // carries no mapped signal / usable date), so
+                    // the stored value is a neutral placeholder.
+                    // Rendering it as "0.50 ×0.20 = 0.100" would
+                    // claim 50% overlap on a comparison that
+                    // never ran.
+                    <span
+                      className="col-span-3 text-right italic text-zinc-500"
+                      data-testid="match-score-row-unevaluated"
+                    >
+                      not evaluated
+                    </span>
+                  )}
                 </span>
               ))}
             </div>

@@ -221,6 +221,10 @@ export async function runMatchingPipeline(
         // reported as covered off neutral credit alone
         // (Codex P1 round 1 on PR #435).
         structural_evidence: result.structural_evidence,
+        // Per-axis applicability, so the breakdown tooltip can
+        // render an unevaluated axis as unavailable instead of
+        // presenting its neutral as a measured score.
+        component_applicability: { ...result.component_applicability },
         // Rationale + surface_evidence populated by #100's
         // deterministic generator. Cached on the doc so the
         // Matches tab (#21) doesn't re-render compute.
