@@ -133,11 +133,8 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
   - `components`, `structural_evidence` and `component_applicability`
     are **optional**: records written before those fields existed carry
     none of them, and the coverage gate depends on being able to
-    recognize such a record. A rerun of matching populates all three.
-    A record missing `structural_evidence` retains its pre-existing
-    coverage behaviour rather than being treated as unevidenced, so
-    deploying the gate cannot make an already-matched Role sprout
-    gaps.
+    recognize such a record during the backfill window. A rerun of
+    matching populates all three.
   - `component_applicability` records, per axis, whether the engine
     actually evaluated it for this pair. A `false` axis means the
     corresponding value in `components` is a no-constraint neutral, and

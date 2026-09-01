@@ -50,6 +50,19 @@ import MatchScoreBadge from "./MatchScoreBadge.tsx";
 export interface MatchCardProps {
   readonly match: UnitMatch;
   readonly unit: ExperienceUnit | null;
+  /**
+   * True while a matching run is in flight. The run replaces
+   * the Role's entire match set — `replaceMatchesForRole()`
+   * deletes every existing doc and writes replacements under
+   * NEW ids — so a click landing between the transaction
+   * committing and the subscription delivering would target a
+   * deleted id, fail in the console only, and silently lose the
+   * user's decision. Codex P2 on #435.
+   *
+   * Disabling is the honest surface: the decision cannot be
+   * recorded right now, so don't accept it and pretend.
+   */
+  readonly actionsDisabled?: boolean;
   readonly onApprovalStateChange: (
     matchId: string,
     state: MatchApprovalState,
@@ -59,6 +72,7 @@ export interface MatchCardProps {
 export default function MatchCard({
   match,
   unit,
+  actionsDisabled = false,
   onApprovalStateChange,
 }: MatchCardProps): ReactElement {
   const state = approvalStateOf(match);
@@ -108,6 +122,12 @@ export default function MatchCard({
       <footer className="flex items-center gap-2 pt-1">
         <button
           type="button"
+          disabled={actionsDisabled}
+          title={
+            actionsDisabled
+              ? "Re-scoring this Role — approvals are paused so a decision isn't lost."
+              : undefined
+          }
           onClick={onClickApprove}
           aria-pressed={state === "approved"}
           data-testid="match-approve-button"
@@ -122,6 +142,12 @@ export default function MatchCard({
         </button>
         <button
           type="button"
+          disabled={actionsDisabled}
+          title={
+            actionsDisabled
+              ? "Re-scoring this Role — approvals are paused so a decision isn't lost."
+              : undefined
+          }
           onClick={onClickReject}
           aria-pressed={state === "rejected"}
           data-testid="match-reject-button"

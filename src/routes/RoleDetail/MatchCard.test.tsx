@@ -186,3 +186,49 @@ describe("MatchCard: the breakdown must reconcile with the badge (Codex P2 on #4
     expect(html).not.toContain("Unevaluated axes still contribute");
   });
 });
+
+describe("MatchCard: actions during a matching run", () => {
+  it("disables Approve and Reject while the Role is being re-scored", () => {
+    // `replaceMatchesForRole()` deletes every existing match doc
+    // and writes replacements under NEW ids. A click landing
+    // between the transaction committing and the subscription
+    // delivering would target a deleted id, fail in the console
+    // only, and silently lose the user's decision. Disabling is
+    // the honest surface: the decision cannot be recorded right
+    // now, so don't accept it and pretend.
+    const html = renderToStaticMarkup(
+      <MatchCard
+        actionsDisabled
+        match={makeMatch()}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    // Both action buttons, and only those.
+    expect(html.match(/disabled/g)?.length).toBe(2);
+    expect(html).toContain("approvals are paused");
+  });
+
+  it("leaves them enabled when no run is in flight", () => {
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch()}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).not.toContain("disabled");
+    expect(html).not.toContain("approvals are paused");
+  });
+
+  it("defaults to enabled when the prop is omitted (pre-#438 callers)", () => {
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({ approved_for_use: true })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).not.toContain("disabled");
+  });
+});

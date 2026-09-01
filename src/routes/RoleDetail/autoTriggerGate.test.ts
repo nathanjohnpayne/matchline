@@ -36,6 +36,7 @@ const HAPPY: AutoTriggerGateInputs = {
   matchCount: 0,
   requirementCount: 3,
   alreadyTriggered: false,
+  hasEvidenceUnscoredMatches: false,
 };
 
 describe("shouldAutoTriggerMatching", () => {
@@ -111,5 +112,96 @@ describe("shouldAutoTriggerMatching", () => {
         matchCount: 3,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldAutoTriggerMatching — legacy structural_evidence backfill", () => {
+  // Codex P2 round 2 on PR #435. Matches persisted before
+  // `structural_evidence` existed can't be evaluated by
+  // computeGaps's honesty gate, and the `matchCount > 0`
+  // short-circuit meant nothing would ever recompute them: the
+  // user has no reason to suspect a rerun is needed. Matching
+  // costs no LLM call once embeddings exist, so the fix is to
+  // fire once on the next Role view.
+  it("fires despite existing matches when any of them predates the field", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT fire when every existing match already carries the field", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("the backfill path still respects the idempotency guard", () => {
+    // Bounds the rerun to one per mount. Without this, a backfill
+    // that somehow didn't populate the field would re-fire on
+    // every snapshot — an unbounded loop of matching calls.
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+        alreadyTriggered: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("the backfill path still respects the earlier gates", () => {
+    // Legacy matches don't license firing before the Role is
+    // ready, before the first matches snapshot lands, or against
+    // a Role with no Requirements to score.
+    const legacy = { ...HAPPY, matchCount: 12, hasEvidenceUnscoredMatches: true };
+    expect(shouldAutoTriggerMatching({ ...legacy, status: "loading" })).toBe(false);
+    expect(
+      shouldAutoTriggerMatching({ ...legacy, matchesFirstSnapshotReceived: false }),
+    ).toBe(false);
+    expect(shouldAutoTriggerMatching({ ...legacy, requirementCount: 0 })).toBe(false);
+  });
+});
+
+describe("shouldAutoTriggerMatching — deferred while Units await re-embedding", () => {
+  // Codex P1 on #435, the only data-loss finding in the review.
+  //
+  // `defaultListUnits` excludes `reembed_pending` Units, but the
+  // pipeline's persist step is a wholesale replace: it deletes
+  // every match for the Role and writes only what this run
+  // produced. Backfilling in that window deletes the pending
+  // Unit's matches with no replacements, and the carry-forward
+  // that preserves `approved_for_use` / `user_rejected` has
+  // nothing to carry them onto. Re-embedding later cannot
+  // restore the user's decisions.
+  //
+  // The container expresses the deferral by passing
+  // `hasEvidenceUnscoredMatches: false`, so the gate itself
+  // stays a pure function of its inputs.
+  it("does not fire for a legacy set while the deferral is in effect", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("fires once the deferral lifts", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+      }),
+    ).toBe(true);
   });
 });

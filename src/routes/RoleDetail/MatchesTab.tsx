@@ -47,6 +47,12 @@ export interface MatchesTabProps {
    * above the requirements grid.
    */
   readonly computingMatches: boolean;
+  /**
+   * True when the legacy-match backfill failed (#435). Some
+   * matches then can't be evidence-checked, so they stop
+   * covering must-haves and the gap list gets longer. Say why.
+   */
+  readonly legacyBackfillFailed?: boolean;
 }
 
 export default function MatchesTab({
@@ -55,6 +61,7 @@ export default function MatchesTab({
   unitsById,
   onApprovalStateChange,
   computingMatches,
+  legacyBackfillFailed = false,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -82,6 +89,17 @@ export default function MatchesTab({
           aria-live="polite"
         >
           Computing matches…
+        </p>
+      )}
+      {legacyBackfillFailed && (
+        <p
+          className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+          data-testid="matches-legacy-backfill-failed"
+          role="status"
+        >
+          Couldn&rsquo;t re-score this Role&rsquo;s older matches, so they
+          aren&rsquo;t counted as covering must-have requirements. The gap list
+          below may be longer than it should be. Reload to try again.
         </p>
       )}
       <GapsView gaps={gaps} />
@@ -123,6 +141,7 @@ export default function MatchesTab({
               {matches.map((match) => (
                 <li key={match.id}>
                   <MatchCard
+                    actionsDisabled={computingMatches}
                     match={match}
                     unit={unitsById.get(match.experience_unit_id) ?? null}
                     onApprovalStateChange={onApprovalStateChange}

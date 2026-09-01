@@ -215,7 +215,7 @@ describe("computeGaps", () => {
   });
 });
 
-describe("computeGaps — structural-evidence gate (#430)", () => {
+describe("computeGaps — structural-evidence gate (Codex P1 r1 on #435)", () => {
   const mustHave: JobRequirementUnit = {
     id: "r-credential",
     owner_uid: ALICE,
@@ -232,12 +232,12 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
   };
 
   it("does not treat a high-scoring evidence-free match as covering a must-have", () => {
-    // A credential-shaped Requirement constrains nothing the
-    // engine can evaluate, so every structural axis pays its
-    // no-constraint default and a recent Unit sails past 0.4 on
-    // semantics alone. Without the gate, "BS in Computer Science
-    // required" reads as covered by whichever Unit embedded
-    // closest.
+    // The failure this gate exists to stop. A credential-shaped
+    // Requirement constrains nothing the engine can evaluate, so
+    // every structural axis pays its no-constraint default and a
+    // recent Unit sails past 0.4 on semantics alone. Without the
+    // gate, "BS in Computer Science required" reads as covered by
+    // whichever Unit happened to embed closest.
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52, { structural_evidence: false })],
@@ -254,9 +254,12 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
   });
 
   it("treats legacy matches (field absent) as covering", () => {
-    // Pre-existing behaviour preserved deliberately: a Role the
-    // user has already matched must not sprout gaps on deploy.
-    // Those rows gain the gate the next time matching runs.
+    // Rows written before the field existed were scored under the
+    // pre-#430 rule, which hard-zeroed unrecognized structural
+    // axes rather than paying a neutral — there is no unearned
+    // credit for the gate to catch. Blocking them would flip every
+    // previously-covered Requirement to a gap until the user
+    // reran matching.
     const gaps = computeGaps(
       [mustHave],
       [makeMatch("m1", "r-credential", 0.52)],
@@ -273,8 +276,10 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
   });
 
   it("ignores an evidence-free match when a lower-scoring one has evidence", () => {
-    // The evidence-free match must never enter the per-Requirement
-    // max in the first place.
+    // The evidence-free match must not win the per-Requirement max
+    // and then be discarded — it should never enter the running.
+    // Here the only match with evidence is below threshold, so the
+    // Requirement stays a gap despite the 0.9 alongside it.
     const gaps = computeGaps(
       [mustHave],
       [
@@ -283,5 +288,65 @@ describe("computeGaps — structural-evidence gate (#430)", () => {
       ],
     );
     expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
+  });
+});
+
+describe("computeGaps — legacy allowance is withdrawable (Codex P2 r4 on #435)", () => {
+  const mustHave: JobRequirementUnit = {
+    id: "r-credential",
+    owner_uid: ALICE,
+    role_id: "role-1",
+    raw_text: "BS in Computer Science required",
+    normalized_requirement: "BS in Computer Science",
+    category: "credential",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "low",
+    must_have: true,
+    extracted_from: "qualifications",
+  };
+
+  it("stops trusting legacy matches once the backfill has failed", () => {
+    // The allowance for `structural_evidence === undefined` is a
+    // transitional one: the auto-trigger reruns matching on Role
+    // open and backfills the field. When that callable rejects,
+    // the window never closes — `triggeredRef` stays latched, no
+    // retry fires, and every unscored legacy row would keep
+    // covering must-haves for the rest of the mounted view.
+    const legacy = [makeMatch("m1", "r-credential", 0.52)];
+    expect(computeGaps([mustHave], legacy, undefined, {
+      trustLegacyMatches: false,
+    })).toHaveLength(1);
+  });
+
+  it("still trusts them while the backfill is expected to land", () => {
+    const legacy = [makeMatch("m1", "r-credential", 0.52)];
+    expect(computeGaps([mustHave], legacy)).toEqual([]);
+    expect(
+      computeGaps([mustHave], legacy, undefined, { trustLegacyMatches: true }),
+    ).toEqual([]);
+  });
+
+  it("withdrawal does not disturb matches that DO carry evidence", () => {
+    // Only the `undefined` case is affected — a real evidenced
+    // match still covers, and a real evidence-free one still
+    // doesn't.
+    const evidenced = [
+      makeMatch("m1", "r-credential", 0.52, { structural_evidence: true }),
+    ];
+    expect(
+      computeGaps([mustHave], evidenced, undefined, {
+        trustLegacyMatches: false,
+      }),
+    ).toEqual([]);
+    const unevidenced = [
+      makeMatch("m2", "r-credential", 0.52, { structural_evidence: false }),
+    ];
+    expect(
+      computeGaps([mustHave], unevidenced, undefined, {
+        trustLegacyMatches: false,
+      }),
+    ).toHaveLength(1);
   });
 });
