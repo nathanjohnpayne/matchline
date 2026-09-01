@@ -79,7 +79,19 @@ Acceptance criteria:
   `confidence_score`; a low-confidence Unit can never produce a
   high-confidence match.
 - The Role Detail → Matches tab surfaces ranked matches with scores,
-  rationales, and a specific `surface_evidence` string.
+  rationales, and a specific `surface_evidence` string — **except where
+  the stored explanation cannot be trusted.** A match written before the
+  rationale was restricted to axes the engine actually evaluated may
+  describe a comparison that never happened, so its rationale and
+  `surface_evidence` are withheld and the card says so. The score, the
+  ranking, and the approve/reject actions are unaffected; only the
+  explanation is suppressed.
+
+  Withholding is deliberate and follows from the neutral-fallback rule
+  below: an explanation that may describe an unevaluated axis is a
+  claim the data does not support, and no explanation is better than a
+  false one. The card offers no remedy, because the only rematch path
+  available today is destructive.
 - Requirements with no qualifying match appear in an explicit **Gaps**
   view, not hidden.
 - No match is auto-approved. Generation uses only matches with
