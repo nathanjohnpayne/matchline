@@ -658,7 +658,7 @@ Cheapest checks first — this is the order that would have resolved #422 fastes
 
 1. `curl -X OPTIONS <function-url> -H 'Origin: …' -H 'Access-Control-Request-Method: POST'` — a 403 means invoker config, and the function never ran.
 2. An unauthenticated `POST` returning your own `UNAUTHENTICATED` message means Cloud Run is fine and the function is executing.
-3. `gcloud logging read '… severity>=ERROR'` — since #426, an exhausted retry budget logs its per-attempt `kinds`. All `transport_error` points at credentials or connectivity; `schema_error` points at the prompt or the response contract.
+3. `gcloud logging read '… severity>=ERROR'` — since #426, an exhausted retry budget logs its per-attempt `kinds` for every LLM pipeline: extraction, JD parsing, generation, and the three validation checks (claim extraction, traceability, specificity). All `transport_error` points at credentials or connectivity, and a `status: 401` alongside it names the credential outright; `schema_error` points at the prompt or the response contract, and the logged Zod issue `code`s and `path`s say which field. The log deliberately carries no provider or validator message text — see the redaction note in `functions/src/llm/retryDiagnostics.ts` — so a failure that needs the raw message must be reproduced against the CLI harness rather than read out of Cloud Logging.
 4. Compare request latency against the function's `timeoutSeconds`. Failing in seconds is a rejected upstream call; failing at the ceiling is a real timeout.
 
 ## Auth Maintenance
