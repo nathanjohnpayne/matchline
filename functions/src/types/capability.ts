@@ -304,3 +304,43 @@ export interface ScoreComponents {
   readonly scope_alignment: number;
   readonly recency: number;
 }
+
+/**
+ * What a cluster of Experience Units is being assembled to
+ * produce. Drives which generation prompt the Application
+ * Assembly stage selects.
+ */
+export type NarrativePurpose =
+  | "resume_bullet"
+  | "resume_summary"
+  | "cover_letter_body"
+  | "cover_letter_hook"
+  | "outreach";
+
+/**
+ * A named grouping of Experience Units assembled for one
+ * Application, with the generated prose it produced.
+ *
+ * **A persisted document, not a view model.** It has an
+ * `owner_uid` and lives in the top-level `unitClusters`
+ * collection — `tests/firestore-rules.test.ts` covers it under
+ * the same per-collection owner invariant as every other
+ * contract here. #443 originally left it in the app package on
+ * the mistaken reading that it was app-only; Codex caught that
+ * on PR #445. It is declared here with the rest so that the
+ * first backend consumer (Application Assembly, #24) does not
+ * have to choose between importing against the functions
+ * package's `rootDir` direction and creating another
+ * hand-synced copy.
+ */
+export interface UnitCluster {
+  id: UUID;
+  /** See ExperienceUnit.owner_uid. */
+  owner_uid: UUID;
+  application_id: UUID;
+  label: string;
+  experience_unit_ids: UUID[];
+  narrative_purpose: NarrativePurpose;
+  generated_text?: string;
+}
+

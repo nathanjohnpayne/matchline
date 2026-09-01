@@ -21,11 +21,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP="$ROOT/src/types/capability.ts"
 FN="$ROOT/functions/src/types/capability.ts"
 
+# Every persisted Firestore document contract, plus the enums and
+# value objects they are built from. `UnitCluster` / `NarrativePurpose`
+# are here because `unitClusters` is a top-level collection covered by
+# tests/firestore-rules.test.ts — they were briefly misfiled as app-only
+# view models (Codex P2 on PR #445).
 CONTRACTS=(
   ExperienceUnit JobRequirementUnit UnitMatch ScoreComponents
   Metric DateRange EvidenceType MetricConfidence MetricDirection
   RequirementCategory RequirementPriority RequirementSource
   SeniorityLevel UnitSourceType UnitType
+  UnitCluster NarrativePurpose
 )
 
 fail=0
@@ -37,23 +43,56 @@ for f in "$APP" "$FN"; do
   fi
 done
 
+# Repo-wide scan, not just the two files that used to be the copies.
+#
+# Codex P2 on PR #445: restricting the duplicate check to $APP left the
+# guard unable to preserve the state it was introduced to protect —
+# TypeScript happily allows an unrelated `export interface
+# ExperienceUnit` in any other module, and the next hand-synced copy
+# would simply land somewhere else. So the invariant is stated as it
+# actually is: across every TypeScript source in the repo, each
+# contract has exactly one declaration, and it is in $FN.
+mapfile -t SOURCES < <(
+  find "$ROOT/src" "$ROOT/functions/src" "$ROOT/tests" \
+    -type f \( -name '*.ts' -o -name '*.tsx' \) \
+    -not -path '*/node_modules/*' \
+    -not -path '*/dist/*' \
+    -not -path '*/lib/*' \
+    2>/dev/null | sort
+)
+
+if [ "${#SOURCES[@]}" -eq 0 ]; then
+  echo "check_no_duplicate_document_contracts: found no TypeScript sources to scan" >&2
+  exit 1
+fi
+
 for t in "${CONTRACTS[@]}"; do
-  # Canonical site must declare it exactly once.
-  n_fn=$(grep -cE "^export (interface|type) $t\b" "$FN" || true)
-  if [ "$n_fn" -ne 1 ]; then
-    echo "FAIL: $t is declared $n_fn time(s) in functions/src/types/capability.ts (expected exactly 1)" >&2
-    fail=1
+  declarers=()
+  for f in "${SOURCES[@]}"; do
+    if grep -qE "^export (interface|type) $t\b" "$f"; then
+      declarers+=("${f#"$ROOT/"}")
+    fi
+  done
+
+  if [ "${#declarers[@]}" -eq 1 ] && \
+     [ "${declarers[0]}" = "functions/src/types/capability.ts" ]; then
+    continue
   fi
-  # App side must NOT redeclare it — re-export only.
-  n_app=$(grep -cE "^export (interface|type) $t\b" "$APP" || true)
-  if [ "$n_app" -ne 0 ]; then
-    echo "FAIL: $t is REDECLARED in src/types/capability.ts." >&2
-    echo "      The document contracts have one declaration site" >&2
-    echo "      (functions/src/types/capability.ts). Re-export it instead:" >&2
-    echo "        export type { $t } from \"../../functions/src/types/capability.ts\";" >&2
-    echo "      See issue #443 for why hand-synced copies were removed." >&2
-    fail=1
+
+  fail=1
+  if [ "${#declarers[@]}" -eq 0 ]; then
+    echo "FAIL: $t is not declared anywhere. The canonical site is" >&2
+    echo "      functions/src/types/capability.ts." >&2
+    continue
   fi
+  echo "FAIL: $t is declared in ${#declarers[@]} place(s):" >&2
+  for d in "${declarers[@]}"; do
+    echo "        $d" >&2
+  done
+  echo "      The document contracts have exactly one declaration site" >&2
+  echo "      (functions/src/types/capability.ts). Re-export instead:" >&2
+  echo "        export type { $t } from \"../../functions/src/types/capability.ts\";" >&2
+  echo "      See issue #443 for why hand-synced copies were removed." >&2
 done
 
 # The re-export itself must survive — deleting it and redeclaring
@@ -69,4 +108,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "check_no_duplicate_document_contracts: OK (${#CONTRACTS[@]} contracts, single declaration site)"
+echo "check_no_duplicate_document_contracts: OK (${#CONTRACTS[@]} contracts, ${#SOURCES[@]} sources scanned, single declaration site)"

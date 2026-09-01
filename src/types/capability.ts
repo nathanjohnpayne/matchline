@@ -17,8 +17,10 @@
  * side those belong to `./crm.ts`, and re-exporting them here would
  * collide in `src/types/index.ts`, which star-exports both modules.
  *
- * Types below the re-export are app-only view models. They never
- * describe a Firestore document, so they stay local.
+ * Everything here is a persisted document contract. `UnitCluster`
+ * was briefly treated as an app-only view model, which was wrong —
+ * it carries an `owner_uid` and lives in the `unitClusters`
+ * collection. Codex caught that on PR #445.
  */
 
 export type {
@@ -32,29 +34,11 @@ export type {
   RequirementCategory,
   RequirementPriority,
   RequirementSource,
+  NarrativePurpose,
   ScoreComponents,
   SeniorityLevel,
+  UnitCluster,
   UnitMatch,
   UnitSourceType,
   UnitType,
 } from "../../functions/src/types/capability.ts";
-
-import type { UUID } from "./crm.ts";
-
-export type NarrativePurpose =
-  | "resume_bullet"
-  | "resume_summary"
-  | "cover_letter_body"
-  | "cover_letter_hook"
-  | "outreach";
-
-export interface UnitCluster {
-  id: UUID;
-  /** See ExperienceUnit.owner_uid. */
-  owner_uid: UUID;
-  application_id: UUID;
-  label: string;
-  experience_unit_ids: UUID[];
-  narrative_purpose: NarrativePurpose;
-  generated_text?: string;
-}
