@@ -12,6 +12,20 @@ on:
 permissions:
   pull-requests: write
   contents: write
+  # Required for the immediate-squash fallback's scripts/review-feedback-
+  # accounting.sh call, which reads code-scanning/alerts to grade a
+  # github-advanced-security[bot] finding's severity (#1101). Without it,
+  # this job's GITHUB_TOKEN 403s on that read once a PR carries a real
+  # CodeQL comment. This job runs accounting under GITHUB_TOKEN specifically
+  # (not the step's default REVIEWER_ASSIGNMENT_TOKEN, an external PAT this
+  # workflow can't grant scopes to — CodeRabbit on PR #1106), so
+  # security-events: read here is what actually reaches that call.
+  security-events: read
+  # Same reasoning: accounting's issues/{pr}/comments read (PR-level
+  # findings) needs issues read under GITHUB_TOKEN. REVIEWER_ASSIGNMENT_TOKEN
+  # (a full-scope PAT) never needed this declared, so it was absent until
+  # accounting started running under GITHUB_TOKEN for the code-scanning call.
+  issues: read
 
 jobs:
   auto-merge:
@@ -163,7 +177,10 @@ jobs:
           # Repos can already override via REQUIRED_HEAD_CHECK_NAME.
           require_current_head_check_success() {
             local sha runs conclusion status wait_seconds poll_seconds deadline required_check_name ever_seen
-            required_check_name=${REQUIRED_HEAD_CHECK_NAME:-lint}
+            # Optional explicit name so the plural wrapper below can loop
+            # this unchanged; with no argument the previous env behaviour is
+            # exactly preserved.
+            required_check_name=${1:-${REQUIRED_HEAD_CHECK_NAME:-lint}}
             wait_seconds=${TEST_CHECK_WAIT_SECONDS:-1200}
             poll_seconds=${TEST_CHECK_POLL_SECONDS:-15}
             deadline=$((SECONDS + wait_seconds))
@@ -209,6 +226,76 @@ jobs:
             done
             echo "::error::Required check run '$required_check_name' wait loop ended unexpectedly; refusing auto-merge."
             exit 1
+          }
+
+          # Wait until EVERY configured required head check is green, with
+          # the whole set pinned to ONE head SHA.
+          #
+          # Pinning matters: an earlier per-name wait could otherwise succeed
+          # against SHA1 while a later one advanced CURRENT_HEAD_SHA to SHA2,
+          # and both merge commands bind to CURRENT_HEAD_SHA -- so a check
+          # that is NOT branch-protected (the entire reason this list exists)
+          # could be pending or failing on the merged head. Re-pin and
+          # re-verify on drift instead of accepting a mixed-SHA verdict.
+          #
+          # Resolution, name splitting and per-workflow grouping all live in
+          # scripts/required-head-checks.sh so the three call sites share one
+          # implementation rather than three drifting copies.
+          require_current_head_checks_success() {
+            local wait_seconds poll_seconds deadline pinned attempts max_attempts
+            wait_seconds=${TEST_CHECK_WAIT_SECONDS:-1200}
+            poll_seconds=${TEST_CHECK_POLL_SECONDS:-15}
+            max_attempts=${HEAD_DRIFT_MAX_RESTARTS:-3}
+            attempts=0
+            while :; do
+              attempts=$((attempts + 1))
+              pinned=$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)
+              if [ -z "$pinned" ]; then
+                echo "::error::Could not resolve the PR head SHA; refusing auto-merge."
+                exit 1
+              fi
+              deadline=$((SECONDS + wait_seconds))
+              while :; do
+                # Capture the verifier's OWN status. `rc=$?` after a failed
+                # `if` reads the compound statement's status (0), not the
+                # command's -- which would take the fail-closed branch on the
+                # first not-ready poll and never wait at all.
+                rc=0
+                if [ ! -f scripts/required-head-checks.sh ]; then
+                  # First-rollout guard (#1070); see agent-review.yml for why
+                  # this falls back rather than failing closed.
+                  echo "::notice::scripts/required-head-checks.sh absent (pre-#1070 checkout); falling back to the singular waiter."
+                  require_current_head_check_success
+                  CURRENT_HEAD_SHA="$pinned"
+                  return 0
+                fi
+                bash scripts/required-head-checks.sh --repo "$GITHUB_REPOSITORY" --verify --sha "$pinned" || rc=$?
+                if [ "$rc" -eq 0 ]; then
+                  break
+                fi
+                if [ "$rc" -ne 1 ]; then
+                  echo "::error::required-head-checks failed closed (rc=$rc); refusing auto-merge."
+                  exit 1
+                fi
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "::error::Timed out waiting for the configured required head checks on $pinned."
+                  exit 1
+                fi
+                sleep "$poll_seconds"
+              done
+              # Every configured check is green on $pinned. Accept only if the
+              # head has not moved underneath the verdict.
+              if [ "$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)" = "$pinned" ]; then
+                CURRENT_HEAD_SHA="$pinned"
+                echo "::notice::All configured required head checks are successful on $CURRENT_HEAD_SHA."
+                return 0
+              fi
+              if [ "$attempts" -ge "$max_attempts" ]; then
+                echo "::error::PR head kept moving during check verification; refusing auto-merge."
+                exit 1
+              fi
+              echo "::notice::PR head moved during verification; re-pinning and re-verifying."
+            done
           }
 
           has_human_hold() {
@@ -348,7 +435,7 @@ jobs:
             exit 0
           fi
 
-          require_current_head_check_success
+          require_current_head_checks_success
 
           # Try GitHub-side auto-merge first (fires when required
           # checks pass). Fall back to an immediate squash ONLY when
@@ -382,7 +469,7 @@ jobs:
               echo "::notice::PR carries human-hold immediately before fallback squash; skipping Dependabot auto-merge until the human removes the label."
               exit 0
             fi
-            require_current_head_check_success
+            require_current_head_checks_success
             if has_human_hold; then
               echo "::notice::PR carries human-hold after test wait; skipping Dependabot auto-merge until the human removes the label."
               exit 0
@@ -424,8 +511,15 @@ jobs:
                 echo "::error::$FEEDBACK_ACCOUNTING_GATE is missing or not executable in the base checkout; refusing the fallback squash because feedback accounting cannot be verified. Propagate the scripts/ kit, then rerun."
                 exit 1
               fi
+              # Run under GITHUB_TOKEN, not this step's default GH_TOKEN
+              # (REVIEWER_ASSIGNMENT_TOKEN). Accounting is read-only and
+              # needs no reviewer attribution, and REVIEWER_ASSIGNMENT_TOKEN
+              # is an external PAT this workflow's `permissions:` block
+              # cannot grant code-scanning-alerts access to (#1101, CodeRabbit
+              # Major on PR #1106) -- GITHUB_TOKEN is the one token whose
+              # scope this workflow actually controls.
               set +e
-              ACCOUNTING_JSON=$("$FEEDBACK_ACCOUNTING_GATE" "$PR_NUMBER" "$GITHUB_REPOSITORY")
+              ACCOUNTING_JSON=$(GH_TOKEN="$ACCOUNTING_GH_TOKEN" "$FEEDBACK_ACCOUNTING_GATE" "$PR_NUMBER" "$GITHUB_REPOSITORY")
               ACCOUNTING_RC=$?
               set -e
               if [ "$ACCOUNTING_RC" -ne 0 ]; then
@@ -475,3 +569,12 @@ jobs:
           # audit trail was correct for the approval and wrong for
           # the merge.
           AUTHOR_MERGE_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+          # GITHUB_TOKEN, scoped by this workflow's own `permissions:`
+          # block (including security-events: read and issues: read added
+          # for #1101) — used ONLY for the immediate-squash fallback's
+          # review-feedback-accounting.sh call above, never for the
+          # reviewer --approve or author-merge calls, which stay on their
+          # own PATs. REVIEWER_ASSIGNMENT_TOKEN is an external secret this
+          # workflow cannot grant Code Scanning alerts access to (CodeRabbit
+          # Major on PR #1106).
+          ACCOUNTING_GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
