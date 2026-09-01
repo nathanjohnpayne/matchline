@@ -86,6 +86,40 @@ describe("formatReport latency caveats", () => {
     expect(out).toContain("2 stage(s) served from");
   });
 
+  it("marks CLI modeled costs as estimated, and API ones not", () => {
+    // Codex P2: a CLI-measured modeled cost is `estimateTokens`'
+    // ~4-chars-per-token approximation. `formatSweepReport` marks those
+    // with `~`; this formatter labeled only the latency, so the plain
+    // report's uncached figures read as exact.
+    const withModeled = (tokenSource: string) =>
+      formatReport(
+        report({
+          tokenSource,
+          fixtureResults: [
+            {
+              id: "nathan-2026 × google-compute-spm-2026",
+              extractionAccuracy: 0.5,
+              matchAccuracy: 0.2,
+              latencyMs: 1000,
+              costUsd: 0.1,
+              modeledCostUsd: 0.4,
+            },
+          ],
+          aggregate: { ...report().aggregate, totalCostUsd: 0.1, totalModeledCostUsd: 0.4 },
+        }),
+      );
+
+    const cli = withModeled("claude-cli");
+    expect(cli).toContain("(uncached ~$");
+    expect(cli).toContain("total uncached cost:        ~$");
+    expect(cli).toContain("~ = estimated");
+
+    const api = withModeled("api");
+    expect(api).toContain("(uncached $");
+    expect(api).not.toContain("~$");
+    expect(api).not.toContain("~ = estimated");
+  });
+
   it("stays bare when the token source is unknown", () => {
     // Pre-#389 report constructors omit tokenSource. Absence is not
     // evidence of a CLI run, so do not invent a caveat for it.

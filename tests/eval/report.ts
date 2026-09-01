@@ -105,6 +105,13 @@ export function formatReport(report: EvalReport): string {
   } else {
     lines.push("");
     lines.push("## Per-fixture");
+    // Codex P2: a CLI-measured modeled cost comes from
+    // `estimateTokens`' ~4-chars-per-token approximation, not metered
+    // token counts. `formatSweepReport` marks those with `~`; this
+    // formatter labeled only the latency, so the plain report's
+    // uncached figures read as exact. Same `~` convention here, so the
+    // two reports agree about what is measured and what is estimated.
+    const est = report.tokenSource !== undefined && report.tokenSource !== "api" ? "~" : "";
     for (const r of report.fixtureResults) {
       // Show the modeled cost alongside real spend only when the two
       // differ — on a cold run they're equal and the extra column is
@@ -113,7 +120,7 @@ export function formatReport(report: EvalReport): string {
         r.modeledCostUsd !== undefined &&
         r.modeledCostUsd !== null &&
         r.modeledCostUsd !== r.costUsd
-          ? ` (uncached ${fmtUsd(r.modeledCostUsd)})`
+          ? ` (uncached ${est}${fmtUsd(r.modeledCostUsd)})`
           : "";
       lines.push(
         `- ${r.id.padEnd(30)} extraction=${fmtPct(r.extractionAccuracy)} ` +
@@ -178,9 +185,12 @@ export function formatReport(report: EvalReport): string {
       report.aggregate.totalModeledCostUsd !== null &&
       report.aggregate.totalModeledCostUsd !== report.aggregate.totalCostUsd
     ) {
+      const aggEst =
+        report.tokenSource !== undefined && report.tokenSource !== "api" ? "~" : "";
       lines.push(
-        `total uncached cost:        ${fmtUsd(report.aggregate.totalModeledCostUsd)}  ` +
-          `(what this config costs with a cold cache)`,
+        `total uncached cost:        ${aggEst}${fmtUsd(report.aggregate.totalModeledCostUsd)}  ` +
+          `(what this config costs with a cold cache` +
+          `${aggEst ? "; ~ = estimated from a ~4-chars-per-token approximation" : ""})`,
       );
     }
     if (report.cache) {
