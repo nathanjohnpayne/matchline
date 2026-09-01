@@ -95,6 +95,41 @@ describe("buildChildEnv", () => {
     expect(env.HOME).toBeUndefined();
   });
 
+  it("preserves proxy and custom-CA settings", () => {
+    // CodeRabbit (Major): Claude Code is a Node app that routes through
+    // the standard proxy variables and trusts a custom CA via
+    // NODE_EXTRA_CA_CERTS. Dropping them meant that on a
+    // corporate-proxied or TLS-inspecting host the CLI could not reach
+    // the service at all, while the parent shell worked fine.
+    const env = buildChildEnv({}, {
+      HTTPS_PROXY: "http://proxy:8080",
+      HTTP_PROXY: "http://proxy:8080",
+      NO_PROXY: "localhost,.internal",
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/corp.pem",
+      GH_TOKEN: "leak",
+    } as NodeJS.ProcessEnv);
+    expect(env.HTTPS_PROXY).toBe("http://proxy:8080");
+    expect(env.HTTP_PROXY).toBe("http://proxy:8080");
+    expect(env.NO_PROXY).toBe("localhost,.internal");
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp.pem");
+    // Widening for proxy settings must not widen for credentials.
+    expect(env.GH_TOKEN).toBeUndefined();
+  });
+
+  it("preserves the lowercase proxy spellings too", () => {
+    // Claude Code checks lowercase first (https_proxy, then
+    // HTTPS_PROXY), and lowercase-only is the common Unix convention —
+    // a host that sets only those would otherwise still be broken.
+    const env = buildChildEnv({}, {
+      https_proxy: "http://lower:8080",
+      http_proxy: "http://lower:8080",
+      no_proxy: "localhost",
+    } as NodeJS.ProcessEnv);
+    expect(env.https_proxy).toBe("http://lower:8080");
+    expect(env.http_proxy).toBe("http://lower:8080");
+    expect(env.no_proxy).toBe("localhost");
+  });
+
   it("applies the shell adapters' fallbacks for a sparse parent env", () => {
     const env = buildChildEnv({}, {} as NodeJS.ProcessEnv);
     expect(env.PATH).toBe("/usr/bin:/bin");
@@ -627,6 +662,11 @@ describe("claudeCliClient subscription preflight", () => {
     // direction: refusing a valid subscription-backed run.
     const envs: NodeJS.ProcessEnv[] = [];
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "headless-token");
+    // CodeRabbit asked for both-subprocess coverage of the proxy / CA
+    // settings specifically: a preflight that cannot reach the network
+    // fails the run just as surely as one missing the credential.
+    vi.stubEnv("HTTPS_PROXY", "http://proxy:8080");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "/etc/ssl/corp.pem");
     const client = claudeCliClient({
       workdirRoot: root,
       spawnFn: async (_cmd, args, opts) => {
@@ -646,7 +686,13 @@ describe("claudeCliClient subscription preflight", () => {
     await client.messages.create(params() as never);
     expect(envs).toHaveLength(2);
     const [preflightEnv, billableEnv] = envs as [NodeJS.ProcessEnv, NodeJS.ProcessEnv];
-    expect(preflightEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("headless-token");
+    for (const env of [preflightEnv, billableEnv]) {
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("headless-token");
+      expect(env.HTTPS_PROXY).toBe("http://proxy:8080");
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/corp.pem");
+    }
+    // Equality is the real invariant: it catches any future variable
+    // added to one spawn and not the other, not just these three.
     expect(preflightEnv).toEqual(billableEnv);
   });
 

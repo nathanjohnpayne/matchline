@@ -284,6 +284,27 @@ const ENV_ALLOWLIST = [
   "TMPDIR",
   "LANG",
   "TERM",
+  // CodeRabbit (Major): Claude Code is a Node app and routes through the
+  // standard proxy variables, trusting a custom CA via
+  // NODE_EXTRA_CA_CERTS. Withholding them meant that on a
+  // corporate-proxied or TLS-inspecting host the CLI could not reach the
+  // service at all — the subprocess failed where the parent shell works,
+  // and both the auth preflight and the billable call were affected.
+  //
+  // Added as explicit, audited names rather than by widening to
+  // `process.env`: these carry a hostname and a certificate path, not a
+  // credential, which is a different class from the `GH_TOKEN` /
+  // `OP_PREFLIGHT_*` values the allowlist exists to withhold. Both
+  // cases are listed because Claude Code checks lowercase first
+  // (`https_proxy`, then `HTTPS_PROXY`), and a machine that sets only
+  // the lowercase form is the common Unix convention.
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
 ] as const;
 
 /** Fallbacks matching the shell adapters, for a sparse parent env. */

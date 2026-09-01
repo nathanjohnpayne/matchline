@@ -30,6 +30,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
+import { modelFor } from "../../functions/src/llm/config.ts";
+import { priceFor } from "../../functions/src/llm/cost.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
@@ -386,10 +388,29 @@ describe("runForFixture", () => {
     // Both runs modeled identical usage, so modeledCostUsd must match
     // regardless of which billing source actually paid for it.
     expect(unmetered.modeledCostUsd).toBeCloseTo(metered.modeledCostUsd, 12);
-    // costUsd must drop by exactly the Anthropic-priced portion —
-    // only the OpenAI embeddings remain real spend.
-    expect(unmetered.costUsd).toBeLessThan(metered.costUsd);
-    expect(unmetered.costUsd).toBeGreaterThan(0); // OpenAI embeddings are still metered
+    // costUsd must drop by exactly the Anthropic-priced portion — only
+    // the OpenAI embeddings remain real spend.
+    //
+    // CodeRabbit: `toBeLessThan` alone did not enforce the invariant
+    // the comment claims. A partial-exclusion regression — dropping
+    // extraction's usage but still pricing the JD parse — decreases the
+    // cost and keeps it positive, so it satisfied both old assertions.
+    // Pin the delta instead.
+    //
+    // The two Anthropic stages run on DIFFERENT default models
+    // (extraction on Sonnet, requirement_parsing on Haiku), so the
+    // expected delta is their sum, not one price doubled. Both are
+    // resolved through `modelFor` rather than hardcoded, so a config.ts
+    // model change updates the expectation instead of reddening this
+    // test for the wrong reason.
+    const anthropicTokens = { inputTokens: 100, outputTokens: 50 };
+    const expectedAnthropicCost =
+      priceFor(modelFor("extraction").model, anthropicTokens) +
+      priceFor(modelFor("requirement_parsing").model, anthropicTokens);
+    expect(metered.costUsd - unmetered.costUsd).toBeCloseTo(expectedAnthropicCost, 12);
+    // The embeddings are still metered, so what remains is exactly them.
+    expect(unmetered.costUsd).toBeGreaterThan(0);
+    expect(unmetered.costUsd).toBeCloseTo(metered.costUsd - expectedAnthropicCost, 12);
   });
 
   it("FAILURE CAPTURE: extraction throws → result.ok=false, result.error populated, accuracies=0", async () => {
