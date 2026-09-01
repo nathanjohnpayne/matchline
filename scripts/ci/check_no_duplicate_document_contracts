@@ -15,6 +15,33 @@
 # This is the drift guard the old headers said they wanted. Same shape
 # as check_no_other_skill_normalization: a structural invariant enforced
 # rather than remembered.
+#
+# ## Why a text scan and not an AST walk
+#
+# An AST-aware check would be strictly better, and it is not reachable
+# here: .github/workflows/repo_lint_local.yml runs no `npm ci`, so the
+# TypeScript compiler API is not installed when this executes. Wiring a
+# full install into the structural-lint annex to parse fifteen names is
+# the wrong trade.
+#
+# So the matcher is form-aware instead of exact-prefix. It recognizes a
+# declaration in any position — exported or not, `declare`d or not,
+# indented or not, interface / type / class / enum — because Codex P2 on
+# PR #445 demonstrated all three evasions of the original
+# `^export (interface|type)` form, including the indirect
+# `interface X` + `export type { X }`. Catching the bare declaration
+# keyword catches that last one too.
+#
+# The residual gap is a declaration whose keyword and name are split
+# across lines. Nothing in this repo is formatted that way and Prettier
+# would not produce it, but the limit is real and stated rather than
+# papered over.
+#
+# ## Portability
+#
+# Runs on stock macOS Bash 3.2, like every other locally runnable check
+# here: no `mapfile` (see scripts/ci/check_workflow_parsers for the same
+# constraint), and no `\b`, which BSD grep does not reliably honour.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -52,13 +79,33 @@ done
 # would simply land somewhere else. So the invariant is stated as it
 # actually is: across every TypeScript source in the repo, each
 # contract has exactly one declaration, and it is in $FN.
-mapfile -t SOURCES < <(
-  find "$ROOT/src" "$ROOT/functions/src" "$ROOT/tests" \
+SCAN_ROOTS=("$ROOT/src" "$ROOT/functions/src" "$ROOT/tests")
+
+# Assert every root before scanning. `find`'s exit status is swallowed
+# by the pipe to `sort`, so a renamed or moved directory would silently
+# shrink the scan while the script still printed OK — the guard would
+# stop guarding exactly when the tree changed under it. CodeRabbit on
+# PR #445.
+for d in "${SCAN_ROOTS[@]}"; do
+  if [ ! -d "$d" ]; then
+    echo "check_no_duplicate_document_contracts: scan root missing: ${d#"$ROOT/"}" >&2
+    echo "      Update SCAN_ROOTS if the tree moved; do not narrow the scan." >&2
+    exit 1
+  fi
+done
+
+# Bash 3.2 has no `mapfile`, and this check is documented as locally
+# runnable, so a `while read` loop it is.
+SOURCES=()
+while IFS= read -r f; do
+  SOURCES+=("$f")
+done < <(
+  find "${SCAN_ROOTS[@]}" \
     -type f \( -name '*.ts' -o -name '*.tsx' \) \
     -not -path '*/node_modules/*' \
     -not -path '*/dist/*' \
     -not -path '*/lib/*' \
-    2>/dev/null | sort
+    | sort
 )
 
 if [ "${#SOURCES[@]}" -eq 0 ]; then
@@ -66,10 +113,25 @@ if [ "${#SOURCES[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# A declaration in ANY form. Leading whitespace, optional `export` /
+# `declare` / `abstract` / `const` modifiers in either order, then the
+# declaring keyword, then the exact name followed by a terminator that
+# cannot be part of a longer identifier.
+#
+# Anchoring at the start of the line (after whitespace and modifiers)
+# is what keeps `import type { UnitMatch }`, `export type { UnitMatch }
+# from ...` and `Record<string, UnitMatch>` out — in each of those the
+# name does not directly follow the keyword — and keeps prose in `//`
+# and ` *` comment lines out too.
+decl_pattern() {
+  printf '%s' "^[[:space:]]*((export|declare|abstract|const)[[:space:]]+)*(interface|type|class|enum)[[:space:]]+$1[[:space:]]*([<={]|$)"
+}
+
 for t in "${CONTRACTS[@]}"; do
+  pattern="$(decl_pattern "$t")"
   declarers=()
   for f in "${SOURCES[@]}"; do
-    if grep -qE "^export (interface|type) $t\b" "$f"; then
+    if grep -qE "$pattern" "$f"; then
       declarers+=("${f#"$ROOT/"}")
     fi
   done

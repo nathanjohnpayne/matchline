@@ -3,9 +3,12 @@
  * shared by the frontend and the Cloud Functions.
  *
  * **This is the single declaration site.** `src/types/capability.ts`
- * type-only re-exports from here rather than redeclaring; the app's
- * own view-model types (`UnitCluster`, `NarrativePurpose`) stay there
- * because they never touch a Firestore document.
+ * type-only re-exports from here rather than redeclaring. That
+ * includes `UnitCluster` and `NarrativePurpose`: `unitClusters` is a
+ * persisted top-level collection, so its contract belongs here with
+ * the rest. #443 first filed them as app-only view models, which was
+ * wrong, and left this header asserting it — the exact drift the PR
+ * removes elsewhere. Caught on PR #445.
  *
  * The previous arrangement kept two hand-synced copies, and the header
  * that lived here explained why: "a cross-package import triggers

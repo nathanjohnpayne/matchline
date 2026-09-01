@@ -75,7 +75,18 @@ the runbook an agent follows before moving an L/XL ticket to
 
 ## CI Enforcement
 
-The following checks run from `scripts/ci/` locally and via `.github/workflows/repo_lint.yml` in CI.
+The following checks run from `scripts/ci/` locally and, in CI, from one of two
+workflows. `.github/workflows/repo_lint.yml` is manifest-canonical — propagated
+byte-for-byte from mergepath, so it cannot carry matchline-specific wiring.
+Checks with no mergepath counterpart are wired in the never-propagated annex
+`.github/workflows/repo_lint_local.yml`, which `check_ci_scripts_wired` scans as
+a union with the canonical file. Currently in the annex:
+`check_prompt_schema_pairs`, `check_no_other_skill_normalization`,
+`check_fixture_match_ids`, `check_no_duplicate_document_contracts`.
+
+The annex runs no `npm ci`, so a check wired there must depend on nothing
+beyond a stock shell and the checked-out tree.
+
 All checks must pass before merge.
 
 - check_required_root_files
