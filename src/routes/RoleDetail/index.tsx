@@ -169,6 +169,20 @@ export default function RoleDetail(): ReactElement {
   const matchesFirstSnapshotReceived =
     roleId !== undefined && matchesSnapshotRoleId === roleId;
   const triggeredRef = useRef(false);
+  // True between issuing a `runMatching` call and observing the
+  // matches snapshot it produces.
+  //
+  // `invokeRunMatching` resolves as soon as the SERVER
+  // transaction commits; the Firestore listener delivers the
+  // replacement shortly after (see `subscribeMatchesByRole`).
+  // Clearing `computingMatches` on resolve therefore re-enabled
+  // the match cards while they still rendered the pre-replacement
+  // ids — `replaceMatchesForRole()` deletes every doc and
+  // rewrites under new ones — so an approval in that gap targeted
+  // a deleted id and was silently dropped. The disabled state has
+  // to outlive the promise, not the transaction. Codex P2 on
+  // #435.
+  const awaitingReplacementRef = useRef(false);
   // Set when a legacy-backfill rerun (the one that populates
   // `structural_evidence` on pre-#435 matches) fails. While true,
   // `computeGaps` stops extending the transitional benefit of the
@@ -383,16 +397,18 @@ export default function RoleDetail(): ReactElement {
           // computing.
           if (isStale()) return;
           triggeredRef.current = true;
+          // Same ordering as the auto-trigger path: hold the
+          // disabled state until the replacement snapshot
+          // arrives, since this run also goes through
+          // `replaceMatchesForRole()` and rewrites every id.
+          awaitingReplacementRef.current = true;
           setComputingMatches(true);
-          void invokeRunMatching(roleId)
-            .catch((err: unknown) => {
-
-              console.warn("invokeRunMatching after re-parse failed", err);
-            })
-            .finally(() => {
-              if (isStale()) return;
-              setComputingMatches(false);
-            });
+          void invokeRunMatching(roleId).catch((err: unknown) => {
+            console.warn("invokeRunMatching after re-parse failed", err);
+            if (isStale()) return;
+            awaitingReplacementRef.current = false;
+            setComputingMatches(false);
+          });
         } catch (err) {
           if (isStale()) return;
           // Map before display: a callable that dies structurally
@@ -463,6 +479,7 @@ export default function RoleDetail(): ReactElement {
     // reset (the latter so we re-await the new Role's
     // first snapshot before evaluating).
     triggeredRef.current = false;
+    awaitingReplacementRef.current = false;
     setComputingMatches(false);
     setMatchesSnapshotRoleId(null);
     setLegacyBackfillFailedFor(null);
@@ -545,6 +562,13 @@ export default function RoleDetail(): ReactElement {
         // for Role B's during the one render where B's state
         // hasn't landed yet.
         setMatchesSnapshotRoleId(roleId);
+        // The replacement we were waiting on has landed: the
+        // rendered ids are current again, so approvals can
+        // safely re-enable.
+        if (awaitingReplacementRef.current) {
+          awaitingReplacementRef.current = false;
+          setComputingMatches(false);
+        }
       },
       (err) => {
         if (!active) return;
@@ -685,11 +709,20 @@ export default function RoleDetail(): ReactElement {
     // `triggeredRef` is still latched from the failed attempt,
     // leaving the Role permanently claiming it couldn't be
     // re-scored. Codex P2 round 5 asked for exactly this half.
+    //
+    // Gated on the snapshot having ARRIVED for this Role, not on
+    // it being non-empty. A successful replacement can
+    // legitimately deliver zero matches — every approved Unit
+    // removed, say — and the legacy rows are just as gone in
+    // that case. The earlier `matches.length > 0` guard was
+    // reaching for "has a snapshot landed yet"; the roleId-keyed
+    // gate answers that question directly and without excluding
+    // the empty case. Codex P2 on #435.
     if (
       legacyBackfillFailedFor !== null &&
       legacyBackfillFailedFor === roleId &&
-      !hasEvidenceUnscoredMatches &&
-      matches.length > 0
+      matchesFirstSnapshotReceived &&
+      !hasEvidenceUnscoredMatches
     ) {
       setLegacyBackfillFailedFor(null);
     }
@@ -734,27 +767,30 @@ export default function RoleDetail(): ReactElement {
     const isStaleAuto = (): boolean =>
       currentRoleIdRef.current !== issuedAgainstAuto ||
       visitTokenRef.current !== issuedTokenAuto;
+    awaitingReplacementRef.current = true;
     setComputingMatches(true);
-    void invokeRunMatching(roleId)
-      .catch((err: unknown) => {
-        // Subscription delivers the new matches on success;
-        // failures log + un-set the loading state. Phase 2
-        // surfaces a toast; deferred per #21 spec.
-
-        console.warn("invokeRunMatching failed", err);
-        // A failed backfill is different from a failed ordinary
-        // rerun: it leaves `structural_evidence` absent on rows
-        // the Gaps view is currently trusting. Withdraw that
-        // trust rather than keep asserting coverage we can no
-        // longer substantiate.
-        if (isLegacyBackfill && !isStaleAuto()) {
-          setLegacyBackfillFailedFor(issuedAgainstAuto);
-        }
-      })
-      .finally(() => {
-        if (isStaleAuto()) return;
-        setComputingMatches(false);
-      });
+    void invokeRunMatching(roleId).catch((err: unknown) => {
+      // On SUCCESS the subscription clears `computingMatches`
+      // when the replacement snapshot lands — the promise
+      // resolving only means the server transaction committed,
+      // and the cards still hold pre-replacement ids until the
+      // listener fires.
+      //
+      // On FAILURE no snapshot is coming, so this is the only
+      // place that can release the state.
+      console.warn("invokeRunMatching failed", err);
+      if (isStaleAuto()) return;
+      awaitingReplacementRef.current = false;
+      setComputingMatches(false);
+      // A failed backfill is different from a failed ordinary
+      // rerun: it leaves `structural_evidence` absent on rows
+      // the Gaps view is currently trusting. Withdraw that
+      // trust rather than keep asserting coverage we can no
+      // longer substantiate.
+      if (isLegacyBackfill) {
+        setLegacyBackfillFailedFor(issuedAgainstAuto);
+      }
+    });
   }, [
     status,
     roleId,
