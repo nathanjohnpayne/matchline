@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 
 import type { ExperienceUnit } from "../../types/capability.ts";
 
-import GapsView from "./GapsView.tsx";
+import GapsView, { StrandedNotice } from "./GapsView.tsx";
 import type { EvidenceStatus } from "./GapsView.tsx";
 import type { Gap } from "./computeGaps.ts";
 import MatchCard from "./MatchCard.tsx";
@@ -67,14 +67,27 @@ export default function MatchesTab({
     // exist but no matches." This rendering pin avoids
     // confusing an unparsed Role with a Role nobody can
     // qualify for.
+    //
+    // Stranded matches have to appear here as well. This branch
+    // is reached when a re-parse removed every Requirement, which
+    // is exactly the case where every surviving match is stranded
+    // — the one state in which the notice matters most was the
+    // one state that could not render it. Codex P2 on PR #446.
+    //
+    // The copy changes with it: "parse the JD first" is wrong
+    // advice for a Role whose JD was parsed, since that parse is
+    // what stranded the matches.
     return (
-      <p
-        className="text-sm text-zinc-500"
-        data-testid="matches-tab-no-requirements"
-      >
-        No Requirements parsed for this Role yet. Parse the JD on the
-        Requirements tab first.
-      </p>
+      <div className="space-y-2" data-testid="matches-tab-no-requirements">
+        <p className="text-sm text-zinc-500">
+          {strandedMatches !== undefined && strandedMatches > 0
+            ? "This Role has no requirements right now, but it still has " +
+              "matches from a previous version of the job description."
+            : "No Requirements parsed for this Role yet. Parse the JD on " +
+              "the Requirements tab first."}
+        </p>
+        <StrandedNotice count={strandedMatches ?? 0} />
+      </div>
     );
   }
 

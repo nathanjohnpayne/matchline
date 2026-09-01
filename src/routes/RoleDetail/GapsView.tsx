@@ -150,7 +150,15 @@ function EvidenceNotice({
   );
 }
 
-function StrandedNotice({
+/**
+ * Exported because `MatchesTab` renders it outside `GapsView` too:
+ * when a re-parse removes every Requirement, that tab returns
+ * early and `GapsView` never mounts — which is precisely when
+ * every surviving match is stranded and the notice matters most.
+ * Codex P2 on PR #446. One component so the two sites cannot say
+ * different things.
+ */
+export function StrandedNotice({
   count,
 }: {
   readonly count: number;
