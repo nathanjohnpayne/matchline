@@ -1,0 +1,209 @@
+/**
+ * Tests for the re-derivation trigger (#441, hardened after
+ * Codex P2 on PR #446).
+ *
+ * Two directions, and both matter. Missing an input the
+ * derivation reads leaves a stale verdict driving `computeGaps`
+ * until the route remounts. Including one it ignores fires a
+ * callable on every unrelated edit in the user's graph.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import type {
+  ExperienceUnit,
+  JobRequirementUnit,
+  UnitMatch,
+} from "../../types/capability.ts";
+
+import { legacyEvidenceKey } from "./evidenceKey.ts";
+
+function unit(overrides: Partial<ExperienceUnit> = {}): ExperienceUnit {
+  return {
+    id: "unit-1",
+    owner_uid: "u",
+    source_type: "resume",
+    source_ref: "ref",
+    raw_text: "raw",
+    normalized_summary: "summary",
+    unit_type: "project",
+    skills: ["Product Strategy"],
+    tools: [],
+    domains: [],
+    seniority_signals: [],
+    scope_signals: [],
+    business_outcomes: [],
+    metrics: [],
+    evidence_type: "verified",
+    confidence_score: 1,
+    user_approved: true,
+    embedding: [1, 0],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function requirement(
+  overrides: Partial<JobRequirementUnit> = {},
+): JobRequirementUnit {
+  return {
+    id: "req-1",
+    owner_uid: "u",
+    role_id: "role-1",
+    raw_text: "raw",
+    normalized_requirement: "norm",
+    category: "skill",
+    keywords: ["product strategy"],
+    tools: [],
+    domains: [],
+    priority: "high",
+    must_have: true,
+    extracted_from: "qualifications",
+    embedding: [1, 0],
+    ...overrides,
+  };
+}
+
+function match(overrides: Partial<UnitMatch> = {}): UnitMatch {
+  return {
+    id: "match-1",
+    owner_uid: "u",
+    experience_unit_id: "unit-1",
+    job_requirement_unit_id: "req-1",
+    role_id: "role-1",
+    semantic_score: 0.5,
+    rule_score: 0.5,
+    final_score: 0.5,
+    rationale: "r",
+    surface_evidence: "e",
+    approved_for_use: false,
+    user_rejected: false,
+    created_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const KEY = (
+  m: readonly UnitMatch[],
+  u: readonly ExperienceUnit[] = [unit()],
+  r: readonly JobRequirementUnit[] = [requirement()],
+): string => legacyEvidenceKey(m, u, r);
+
+describe("legacyEvidenceKey: when no call should be made", () => {
+  it("is empty with no matches", () => {
+    expect(KEY([])).toBe("");
+  });
+
+  it("is empty when every match already carries structural_evidence", () => {
+    // A Role matched under #435 or later must cost zero
+    // round-trips.
+    expect(
+      KEY([
+        match({ id: "m1", structural_evidence: true }),
+        match({ id: "m2", structural_evidence: false }),
+      ]),
+    ).toBe("");
+  });
+
+  it("is non-empty as soon as one legacy row is present", () => {
+    expect(
+      KEY([match({ id: "m1", structural_evidence: true }), match({ id: "m2" })]),
+    ).not.toBe("");
+  });
+});
+
+describe("legacyEvidenceKey: changes that MUST re-derive", () => {
+  const base = KEY([match()]);
+
+  it("changes when the Unit's reembed_pending is cleared", () => {
+    // The case Codex named: the reembed callable clears the flag
+    // asynchronously, flipping the verdict from `unverifiable` to
+    // a real answer, with no change to any match.
+    const pending = KEY([match()], [unit({ reembed_pending: true })]);
+    expect(pending).not.toBe(base);
+  });
+
+  it("changes when the Unit is edited", () => {
+    expect(
+      KEY([match()], [unit({ updated_at: "2026-06-01T00:00:00.000Z" })]),
+    ).not.toBe(base);
+  });
+
+  it("changes when the Unit's approval is withdrawn", () => {
+    expect(KEY([match()], [unit({ user_approved: false })])).not.toBe(base);
+  });
+
+  it("changes when the Unit's embedding disappears", () => {
+    expect(KEY([match()], [unit({ embedding: [] })])).not.toBe(base);
+    expect(KEY([match()], [unit({ embedding: undefined })])).not.toBe(base);
+  });
+
+  it("changes when the Unit is deleted outright", () => {
+    expect(KEY([match()], [])).not.toBe(base);
+  });
+
+  it("changes when a Requirement is re-parsed under the same id", () => {
+    // Same id, different constraints: the id set is identical and
+    // the verdict is not.
+    expect(
+      KEY([match()], [unit()], [requirement({ keywords: ["machine learning"] })]),
+    ).not.toBe(base);
+  });
+
+  it("changes for every Requirement field the axes read", () => {
+    const variants = [
+      requirement({ category: "scope" }),
+      requirement({ seniority_level: "senior" }),
+      requirement({ tools: ["figma"] }),
+      requirement({ domains: ["fintech"] }),
+      requirement({ embedding: [] }),
+    ];
+    for (const r of variants) {
+      expect(KEY([match()], [unit()], [r])).not.toBe(base);
+    }
+  });
+
+  it("changes when the Requirement is gone", () => {
+    expect(KEY([match()], [unit()], [])).not.toBe(base);
+  });
+
+  it("changes when a new legacy match appears", () => {
+    expect(KEY([match(), match({ id: "match-2" })])).not.toBe(base);
+  });
+});
+
+describe("legacyEvidenceKey: changes that must NOT re-derive", () => {
+  const base = KEY([match()]);
+
+  it("is unchanged by approving or rejecting a match", () => {
+    // The reason this is not keyed on `matches`: every click
+    // rewrites the array, and a callable per click is the cost.
+    expect(KEY([match({ approved_for_use: true })])).toBe(base);
+    expect(KEY([match({ user_rejected: true })])).toBe(base);
+  });
+
+  it("is unchanged by an unrelated Unit elsewhere in the graph", () => {
+    expect(
+      KEY([match()], [unit(), unit({ id: "unit-99", skills: ["Baking"] })]),
+    ).toBe(base);
+  });
+
+  it("is unchanged by an unrelated Requirement on the Role", () => {
+    expect(
+      KEY([match()], [unit()], [requirement(), requirement({ id: "req-99" })]),
+    ).toBe(base);
+  });
+
+  it("is unchanged by Unit fields the derivation never reads", () => {
+    expect(
+      KEY([match()], [unit({ confidence_score: 0.1, raw_text: "different" })]),
+    ).toBe(base);
+  });
+
+  it("is stable under input reordering", () => {
+    const a = KEY([match({ id: "m-a" }), match({ id: "m-b" })]);
+    const b = KEY([match({ id: "m-b" }), match({ id: "m-a" })]);
+    expect(a).toBe(b);
+  });
+});

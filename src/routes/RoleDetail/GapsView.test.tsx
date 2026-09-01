@@ -79,6 +79,33 @@ describe("GapsView: the two kinds of gap", () => {
   });
 });
 
+describe("GapsView: the accessible name must not over-claim", () => {
+  // Codex P2 on PR #446: the visible heading tracked the
+  // statuses but a fixed aria-label did not, so a panel holding
+  // only unverified entries announced "Unmet must-have
+  // requirements" — the stronger claim, audible only to
+  // assistive technology. The exact conflation this change
+  // exists to undo, reintroduced through the accessibility layer.
+  it("announces unverified-only content as unverified", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[unverifiable]} />);
+    expect(html).toContain('aria-label="Unverified must-have requirements"');
+  });
+
+  it("announces unmet-only content as unmet", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[unmet]} />);
+    expect(html).toContain('aria-label="Unmet must-have requirements"');
+  });
+
+  it("names both when both are present", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[unmet, unverifiable]} />,
+    );
+    expect(html).toContain(
+      'aria-label="Unmet and unverified must-have requirements"',
+    );
+  });
+});
+
 describe("GapsView: disclosing that the evidence check did not run", () => {
   it("says nothing extra when the derivation is current", () => {
     const html = renderToStaticMarkup(

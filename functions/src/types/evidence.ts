@@ -37,7 +37,9 @@ export type UnverifiableReason =
   | "unit_missing"
   | "requirement_missing"
   | "unit_unapproved"
-  | "unit_reembed_pending";
+  | "unit_reembed_pending"
+  | "unit_embedding_missing"
+  | "requirement_embedding_missing";
 
 export interface MatchEvidence {
   readonly verdict: EvidenceVerdict;

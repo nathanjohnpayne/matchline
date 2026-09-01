@@ -124,11 +124,25 @@ export default function GapsView({
     );
   }
 
+  // The accessible name has to track what the panel actually
+  // contains. A fixed "Unmet must-have requirements" announced the
+  // STRONGER claim — that no qualifying evidence exists — over a
+  // panel that might hold only unverified entries, which is the
+  // exact conflation this change exists to undo. Codex P2 on PR
+  // #446: the visible heading was right and the label was not, so
+  // the over-claim was audible only to assistive technology.
+  const label =
+    unmet.length > 0 && unverifiable.length > 0
+      ? "Unmet and unverified must-have requirements"
+      : unmet.length > 0
+        ? "Unmet must-have requirements"
+        : "Unverified must-have requirements";
+
   return (
     <section
       className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 p-4 space-y-3"
       data-testid="gaps-view"
-      aria-label="Unmet must-have requirements"
+      aria-label={label}
     >
       {unmet.length > 0 && (
         <>

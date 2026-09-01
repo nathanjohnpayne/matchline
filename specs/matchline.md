@@ -240,9 +240,13 @@ Acceptance criteria:
   by it; an explicit rematch remains the only path that changes what
   is stored.
 - The derivation has **three outcomes, not two**. Beyond evidenced and
-  unevidenced, a pair whose Unit or Requirement is missing, or whose
-  Unit the matching pipeline currently declines to score, is
-  **unverifiable**. A Requirement carrying only an unverifiable match
+  unevidenced, a pair the matching pipeline would currently decline to
+  produce is **unverifiable** — a missing Unit or Requirement, a Unit
+  that is unapproved or awaiting re-embedding, or either side lacking
+  a usable embedding. The test is whether a rematch would yield the
+  pair, not whether the structural axes can be computed: they can be
+  in every one of those cases, and answering anyway would outlive the
+  match the answer describes. A Requirement carrying only an unverifiable match
   is reported distinctly from one carrying no match at all: they call
   for different actions, and collapsing them either invents a gap the
   user cannot act on or hides one they need to see.

@@ -337,6 +337,35 @@ describe("readAndDeriveEvidence: verdicts", () => {
     expect(out.get("match-1")?.reason).toBe("unit_unapproved");
   });
 
+  it("reports a Unit with no usable embedding as unverifiable", async () => {
+    // `runMatchingPipeline` skips a pair when either side has no
+    // vector, so claiming `evidenced` here would let a must-have
+    // read as covered by a match an explicit rematch removes.
+    await seed({
+      units: [unit({ embedding: [] })],
+      requirements: [requirement()],
+      matches: [match()],
+    });
+    const out = await readAndDeriveEvidence({
+      ownerUid: ALICE,
+      roleId: ROLE,
+    });
+    expect(out.get("match-1")?.reason).toBe("unit_embedding_missing");
+  });
+
+  it("reports a Requirement with no usable embedding as unverifiable", async () => {
+    await seed({
+      units: [unit()],
+      requirements: [requirement({ embedding: [] })],
+      matches: [match()],
+    });
+    const out = await readAndDeriveEvidence({
+      ownerUid: ALICE,
+      roleId: ROLE,
+    });
+    expect(out.get("match-1")?.reason).toBe("requirement_embedding_missing");
+  });
+
   it("returns a stored verdict without re-deriving it", async () => {
     await seed({
       units: [unit({ skills: ["Woodworking"] })],

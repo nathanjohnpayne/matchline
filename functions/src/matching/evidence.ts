@@ -137,15 +137,26 @@ export function deriveStructuralEvidence(
  * judgement was sound when it was made and the field is the
  * matcher's own record of it.
  *
- * ### Why `reembed_pending` is unverifiable rather than derived
+ * ### The unverifiable cases share one rule
  *
- * Not because the derivation needs the embedding — it does not.
- * Because `defaultListUnits` in the matching pipeline **excludes**
- * `reembed_pending` Units, so the next re-match will not produce
- * this pair at all. Reporting "evidenced" would let a must-have
- * read as covered by a match that the pipeline itself currently
- * declines to score. `user_approved: false` is excluded by the
- * same query and gets the same treatment.
+ * **If the matching pipeline would currently decline to produce
+ * this pair, we cannot claim it is evidenced.** Saying otherwise
+ * would let a must-have read as covered by a match that an
+ * explicit rematch is about to delete.
+ *
+ * That rule, not any property of the derivation itself, is what
+ * decides each case:
+ *
+ *   - `reembed_pending` and `user_approved: false` are filtered
+ *     out by `defaultListUnits`. Note this is **not** because the
+ *     derivation needs the embedding — it does not read one.
+ *   - A missing or empty embedding on **either** side is skipped
+ *     by `runMatchingPipeline` itself (the guards around
+ *     `semanticSimilarityScore`, which throws on an absent
+ *     vector). Codex P2 on PR #446 caught this one: the original
+ *     version fell through to derivation and could return
+ *     `evidenced` for a pair the pipeline will not score, which
+ *     contradicted the rule the docblock above it stated.
  */
 export function resolveMatchEvidence(
   match: Pick<
@@ -182,6 +193,28 @@ export function resolveMatchEvidence(
     return {
       verdict: "unverifiable",
       reason: "unit_reembed_pending",
+      stored: false,
+    };
+  }
+  // Mirrors the two guards in `runMatchingPipeline` that skip a
+  // pair when either side has no usable vector. The structural
+  // axes never read an embedding, so the derivation COULD answer
+  // here — but the pipeline would not produce the pair, so an
+  // answer would outlive the match it describes.
+  if (unit.embedding === undefined || unit.embedding.length === 0) {
+    return {
+      verdict: "unverifiable",
+      reason: "unit_embedding_missing",
+      stored: false,
+    };
+  }
+  if (
+    requirement.embedding === undefined ||
+    requirement.embedding.length === 0
+  ) {
+    return {
+      verdict: "unverifiable",
+      reason: "requirement_embedding_missing",
       stored: false,
     };
   }

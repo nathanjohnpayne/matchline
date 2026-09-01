@@ -256,6 +256,39 @@ describe("resolveMatchEvidence: the three states", () => {
     });
   });
 
+  it("reports a Unit with no usable embedding as unverifiable", () => {
+    // Codex P2 on PR #446. The structural axes never read a
+    // vector, so the derivation COULD answer here — but
+    // `runMatchingPipeline` skips the pair outright, so an answer
+    // would outlive the match it describes. The rule is "would
+    // the pipeline produce this pair", not "can we compute it".
+    for (const embedding of [undefined, []]) {
+      expect(
+        resolveMatchEvidence(
+          makeLegacyMatch(),
+          makeUnit({ skills: ["Product Strategy"], embedding }),
+          makeRequirement({ keywords: ["product strategy"] }),
+        ),
+      ).toEqual({
+        verdict: "unverifiable",
+        reason: "unit_embedding_missing",
+        stored: false,
+      });
+    }
+  });
+
+  it("reports a Requirement with no usable embedding as unverifiable", () => {
+    for (const embedding of [undefined, []]) {
+      expect(
+        resolveMatchEvidence(
+          makeLegacyMatch(),
+          makeUnit({ skills: ["Product Strategy"] }),
+          makeRequirement({ keywords: ["product strategy"], embedding }),
+        ).reason,
+      ).toBe("requirement_embedding_missing");
+    }
+  });
+
   it("reports an unapproved Unit as unverifiable for the same reason", () => {
     expect(
       resolveMatchEvidence(

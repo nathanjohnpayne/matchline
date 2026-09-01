@@ -86,6 +86,7 @@ import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
 import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
 import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
+import { legacyEvidenceKey } from "./evidenceKey.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
 import type { EvidenceVerdict } from "../../../functions/src/types/evidence.ts";
 
@@ -711,25 +712,24 @@ export default function RoleDetail(): ReactElement {
     requirements.length,
   ]);
 
-  // Which matches predate `structural_evidence`, as a stable
-  // string.
-  //
-  // The derivation effect below keys on THIS rather than on
-  // `matches`, and the distinction is load-bearing. Approving or
-  // rejecting a match rewrites the array identity on every
-  // click; keying on the array would fire a fresh callable per
-  // toggle. The set of legacy ids changes only when matches are
-  // actually created or destroyed, which is exactly when a new
-  // verdict is needed.
-  const legacyMatchKey = useMemo(
-    () =>
-      matches
-        .filter((m) => m.structural_evidence === undefined)
-        .map((m) => m.id)
-        .sort()
-        .join(","),
-    [matches],
+  // Re-derivation trigger. See `evidenceKey.ts` for why it is a
+  // signature over the derivation's actual inputs rather than
+  // over `matches` (fires per approval click) or over the legacy
+  // id set alone (misses Unit and Requirement edits — Codex P2 on
+  // PR #446).
+  const evidenceKey = useMemo(
+    () => legacyEvidenceKey(matches, units, requirements),
+    [matches, units, requirements],
   );
+
+  // Monotonic request counter for the derivation.
+  //
+  // The visit token guards navigation between Roles. This guards
+  // the other direction: two derivations for the SAME Role, fired
+  // as the inputs changed, can resolve out of order and let the
+  // older answer overwrite the newer one. Codex P2 on PR #446
+  // asked for both.
+  const evidenceSeqRef = useRef(0);
 
   // Read-only evidence derivation for legacy matches (#441).
   //
@@ -752,19 +752,24 @@ export default function RoleDetail(): ReactElement {
   useEffect(() => {
     if (roleId === undefined || roleId === "") return;
     if (status !== "ready" || !matchesFirstSnapshotReceived) return;
-    if (legacyMatchKey === "") {
+    if (evidenceKey === "") {
       setMatchEvidence(undefined);
       setEvidenceStatus("current");
       return;
     }
 
-    // Same visit-token guard as the auto-trigger above: a slow
-    // derivation for Role A must not land in Role B's state.
+    // Two guards, for two different races. The visit token is the
+    // same one the auto-trigger uses: a slow derivation for Role A
+    // must not land in Role B's state. The sequence number covers
+    // same-Role reordering, which the visit token cannot see
+    // because it only moves on navigation.
     const issuedAgainst = roleId;
     const issuedToken = visitTokenRef.current;
+    const issuedSeq = ++evidenceSeqRef.current;
     const superseded = (): boolean =>
       currentRoleIdRef.current !== issuedAgainst ||
-      visitTokenRef.current !== issuedToken;
+      visitTokenRef.current !== issuedToken ||
+      evidenceSeqRef.current !== issuedSeq;
 
     setEvidenceStatus("pending");
     void invokeDeriveMatchEvidence(roleId)
@@ -783,7 +788,7 @@ export default function RoleDetail(): ReactElement {
         setMatchEvidence(undefined);
         setEvidenceStatus("unavailable");
       });
-  }, [status, roleId, matchesFirstSnapshotReceived, legacyMatchKey]);
+  }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
 
   // Build the unit lookup once per units array. The matching
   // pipeline reads units owner-scoped and the Role's matches
