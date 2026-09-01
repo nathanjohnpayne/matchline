@@ -101,7 +101,7 @@ have no CLI equivalent. `ANTHROPIC_API_KEY` is required only by `api`.
   with `tool_choice`; Claude CLI validates its final JSON response
   against the same schema but does not replicate an API tool call.
 - **No output-token budget.** Production sets `max_tokens: 16_384`
-  (raised in #145 after real truncation). Neither CLI exposes an
+  (raised in #145 after real truncation). The CLI does not expose an
   equivalent, so a model whose default ceiling is lower could truncate
   here and not in production.
 - **Latency is not comparable.** Wall-clock includes agent startup —

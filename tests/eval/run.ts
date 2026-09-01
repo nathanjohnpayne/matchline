@@ -78,14 +78,6 @@ function parseMode(argv: readonly string[]): Mode {
  * doesn't silently project 1× spend.
  */
 /**
- * Parse `--token-source <kind>` / `--token-source=<kind>`. Default
- * `api`, so an unflagged run behaves exactly as before.
- *
- * Rejects an unknown kind or token-source option loudly: a typo that
- * silently falls back to `api` would spend real money on a run the
- * operator believed was subscription-billed.
- */
-/**
  * Cache-key discriminators for a token source.
  *
  * Codex P1: unconditionally adding `{ tokenSource }` changed all four
@@ -195,6 +187,14 @@ export function assertKnownFlags(argv: readonly string[]): void {
   }
 }
 
+/**
+ * Parse `--token-source <kind>` / `--token-source=<kind>`. Default
+ * `api`, so an unflagged run behaves exactly as before.
+ *
+ * Rejects an unknown kind or token-source option loudly: a typo that
+ * silently falls back to `api` would spend real money on a run the
+ * operator believed was subscription-billed.
+ */
 export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
   const read = (raw: string | undefined): TokenSourceKind => {
     if (raw === undefined || raw.startsWith("--")) {

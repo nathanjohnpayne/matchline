@@ -429,11 +429,14 @@ export function buildCliSystemPrompt(
   parts: PromptParts,
 ): string {
   const rewritten = parts.system
-    .replace(
-      new RegExp(
-        `Return your response via the \`${parts.toolName}\` tool\\.`,
-        "g",
-      ),
+    // CodeRabbit: a literal `replaceAll`, not a `new RegExp` built by
+    // interpolating `parts.toolName`. An unescaped tool name containing
+    // a regex metacharacter compiled to a pattern that never matched,
+    // so the tool-use instruction survived into the CLI prompt and the
+    // cell degraded to `no_tool_use` — a silent per-cell quality loss
+    // attributed to the model rather than to the adapter.
+    .replaceAll(
+      `Return your response via the \`${parts.toolName}\` tool.`,
       "Return your response as one JSON object.",
     )
     // Codex P2: the pipelines APPEND a retry reminder to the system
@@ -813,32 +816,6 @@ export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
 }
 
 /**
- * Fail loudly when the CLI served a different model than the sweep
- * asked for.
- *
- * A silent substitution (alias resolution drift, a subscription tier
- * that downgrades, a fallback on overload) would attribute one model's
- * quality to another and quietly corrupt the entire ranking — the one
- * failure mode that would make the sweep worse than useless.
- *
- * Matching is containment-based in both directions because Claude Code
- * resolves an undated alias (`haiku`) to a dated id
- * (`claude-haiku-4-5-20251001`) — the alias is a substring of the id,
- * not a prefix of it.
- *
- * The looseness is bounded and one-directional: the SERVED id must
- * contain the REQUESTED one, never the reverse. `claude-sonnet-4-6` vs
- * `claude-sonnet-4-5` normalizes to `claudesonnet46` vs
- * `claudesonnet45`, so a point-version substitution still throws — and
- * a served family id like `claude-sonnet` no longer satisfies a
- * requested `claude-sonnet-4-6`, which the earlier two-way check
- * accepted without ever verifying the point version.
- *
- * The residual gap is inherent to aliases — asking for `sonnet` means
- * "whatever the current Sonnet is". Sweep entries should use full
- * dated ids when the exact point version matters for the ranking.
- */
-/**
  * Split a model identifier into comparable components:
  * `claude-haiku-4-5-20251001` → `["claude","haiku","4","5","20251001"]`.
  *
@@ -861,6 +838,35 @@ function containsComponentRun(
   return false;
 }
 
+/**
+ * Fail loudly when the CLI served a different model than the sweep
+ * asked for.
+ *
+ * A silent substitution (alias resolution drift, a subscription tier
+ * that downgrades, a fallback on overload) would attribute one model's
+ * quality to another and quietly corrupt the entire ranking — the one
+ * failure mode that would make the sweep worse than useless.
+ *
+ * Matching compares identifier COMPONENTS, and in ONE direction only:
+ * the requested components must appear as a contiguous run inside the
+ * served ones. Claude Code resolves an undated alias (`haiku`) to a
+ * dated id (`claude-haiku-4-5-20251001`), so the alias has to be
+ * allowed to match a longer id — but only that way round.
+ *
+ * Two failures the earlier forms allowed, both closed here:
+ *
+ *   - Two-way containment let a served family id satisfy a requested
+ *     point version — `claude-sonnet` for `claude-sonnet-4-6` — with
+ *     the point version never verified.
+ *   - Separator-stripped comparison made `claude-sonnet-4-6`
+ *     (`claudesonnet46`) a prefix of `claude-sonnet-4-60`
+ *     (`claudesonnet460`), so a distinct longer version passed.
+ *     Components keep `6` and `60` apart.
+ *
+ * The residual gap is inherent to aliases — asking for `sonnet` means
+ * "whatever the current Sonnet is". Sweep entries should use full
+ * dated ids when the exact point version matters for the ranking.
+ */
 export function assertModelMatches(
   requested: string,
   served: readonly string[],

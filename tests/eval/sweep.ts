@@ -230,7 +230,6 @@ export function assertPromptSchemasCompatible(
 }
 
 /**
- * Validate that every model a sweep will touch has a `rates.ts` entry,/**
  * Validate that every model a sweep will touch has a `rates.ts` entry,
  * BEFORE any tokens are spent.
  *

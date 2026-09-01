@@ -617,12 +617,23 @@ describe("parseVariantFlag", () => {
 
   it.each([
     ["no label separator", "model.extraction=x"],
-    ["blank label", " :model.extraction=x"],
     ["no clause equals", "label:model.extraction"],
     ["empty value", "label:model.extraction="],
     ["unknown key prefix", "label:temperature=0.5"],
   ] as const)("rejects %s", (_why, spec) => {
     expect(() => parseVariantFlag(spec, "api")).toThrow();
+  });
+
+  it("rejects a blank label for being blank, not for its model value", () => {
+    // CodeRabbit: this used to ride in the `it.each` above asserting a
+    // bare `toThrow()`. Its spec (` :model.extraction=x`) also fails
+    // the `^claude-` model allowlist added later, so the row would
+    // still pass if the empty-label guard regressed — a regression test
+    // that had stopped testing its own regression. Pin the reason, and
+    // use a valid model so only the label can be at fault.
+    expect(() =>
+      parseVariantFlag(" :model.extraction=claude-haiku-4-5-20251001", "api"),
+    ).toThrow(/label must not be empty/);
   });
 
   // -- Codex round 1 regressions ------------------------------------

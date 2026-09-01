@@ -41,6 +41,18 @@ function report(overrides: Partial<EvalReport> = {}): EvalReport {
 const CAVEAT = "NOT a production latency reading";
 
 describe("formatReport latency caveats", () => {
+  it("prints the token source in the header", () => {
+    // CodeRabbit: no test covered the header segment. The CLI assertions
+    // below match "claude-cli" anywhere in the output, and the latency
+    // caveat already contains that string — so the header could stop
+    // printing the token source entirely without reddening anything.
+    expect(formatReport(report({ tokenSource: "claude-cli" }))).toContain(
+      "# Matchline eval — mode: smoke  token-source: claude-cli",
+    );
+    // Absent when the harness does not know it (pre-#389 constructors).
+    expect(formatReport(report())).not.toContain("token-source:");
+  });
+
   it("prints latency bare for a cold metered-API run", () => {
     // The one case where the number IS production-comparable.
     const out = formatReport(report({ tokenSource: "api" }));
