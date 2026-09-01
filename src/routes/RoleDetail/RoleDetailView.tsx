@@ -156,7 +156,7 @@ export default function RoleDetailView({
     () => groupMatchesByRequirement(requirements, matches),
     [requirements, matches],
   );
-  const gaps = useMemo(
+  const gapReport = useMemo(
     () => computeGaps(requirements, matches, matchEvidence),
     [requirements, matches, matchEvidence],
   );
@@ -262,8 +262,9 @@ export default function RoleDetailView({
         {activeTab === "matches" && (
           <MatchesTab
             groups={groups}
-            gaps={gaps}
+            gaps={gapReport.gaps}
             evidenceStatus={evidenceStatus}
+            strandedMatches={gapReport.strandedMatches}
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}

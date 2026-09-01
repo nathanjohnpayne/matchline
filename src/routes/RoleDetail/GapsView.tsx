@@ -49,6 +49,12 @@ export type EvidenceStatus = "current" | "pending" | "unavailable";
 export interface GapsViewProps {
   readonly gaps: readonly Gap[];
   readonly evidenceStatus?: EvidenceStatus;
+  /**
+   * Non-rejected matches that would have cleared the threshold but
+   * point at a Requirement that no longer exists. A Role-level
+   * number: see `GapReport.strandedMatches`.
+   */
+  readonly strandedMatches?: number;
 }
 
 /**
@@ -138,9 +144,29 @@ function EvidenceNotice({
   );
 }
 
+function StrandedNotice({
+  count,
+}: {
+  readonly count: number;
+}): ReactElement | null {
+  if (count === 0) return null;
+  return (
+    <p
+      className="text-xs text-zinc-600 dark:text-zinc-400"
+      data-testid="gaps-stranded"
+    >
+      {count} match{count === 1 ? "" : "es"} point
+      {count === 1 ? "s" : ""} at a requirement that no longer exists, so
+      {count === 1 ? " it is" : " they are"} not counted here. Re-running
+      matching will rebuild them against the current requirements.
+    </p>
+  );
+}
+
 export default function GapsView({
   gaps,
   evidenceStatus = "current",
+  strandedMatches = 0,
 }: GapsViewProps): ReactElement {
   const unmet = gaps.filter((g) => g.status === "unmet");
   const unverifiable = gaps.filter((g) => g.status === "unverifiable");
@@ -153,9 +179,13 @@ export default function GapsView({
         aria-label="Gaps summary"
       >
         <p className="text-sm text-emerald-800 dark:text-emerald-300">
-          ✓ Every must-have requirement has a qualifying match.
+          {evidenceStatus === "current"
+            ? "✓ Every must-have requirement has a qualifying match."
+            : "No gaps to show yet — the evidence behind older matches has " +
+              "not been established, so this is not yet a clean bill of health."}
         </p>
         <EvidenceNotice status={evidenceStatus} />
+        <StrandedNotice count={strandedMatches} />
       </section>
     );
   }
@@ -225,6 +255,7 @@ export default function GapsView({
       )}
 
       <EvidenceNotice status={evidenceStatus} />
+      <StrandedNotice count={strandedMatches} />
     </section>
   );
 }

@@ -250,8 +250,18 @@ Acceptance criteria:
   is reported distinctly from one carrying no match at all: they call
   for different actions, and collapsing them either invents a gap the
   user cannot act on or hides one they need to see.
+- Stored `structural_evidence` is **authoritative over any derived
+  verdict**. A derivation is a snapshot; the document is live, and a
+  snapshot that folded a value in at build time does not track it
+  afterwards.
+- A match whose Requirement no longer exists is reported at the Role
+  level rather than attributed to a surviving Requirement. The
+  stranding is a consequence of the Requirement set being replaced
+  wholesale, so tying it to whichever Requirement remains would assert
+  a relationship that does not exist.
 - A derivation that cannot run degrades to the permissive reading and
-  says so. Silence would let "every must-have has a qualifying match"
+  says so, and the affirmative "every must-have is covered" statement
+  is withheld entirely until the check has actually run. Silence would let "every must-have has a qualifying match"
   stand on a check that never happened.
 - Matching is nearly-free after embeddings exist; no per-match LLM call
   is required. Rationale strings may be LLM-generated but must be

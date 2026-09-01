@@ -203,3 +203,55 @@ describe("GapsView: the cause must name the right side of the pair (#446)", () =
     expect(html).not.toContain("Could not verify");
   });
 });
+
+describe("GapsView: the empty state must not assert a clean bill of health (#446)", () => {
+  it("claims every must-have is covered only when evidence is current", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[]} evidenceStatus="current" />,
+    );
+    expect(html).toContain("Every must-have requirement has a qualifying match");
+  });
+
+  for (const status of ["pending", "unavailable"] as const) {
+    it(`withholds that claim while evidence is ${status}`, () => {
+      // The empty list can be the permissive fallback rather than
+      // a real result. A tick and "every must-have has a
+      // qualifying match" is the single most load-bearing
+      // sentence in the view, and it must not stand on a check
+      // that has not happened. CodeRabbit on PR #446, out of
+      // diff — the disclosure underneath was not enough while the
+      // headline still asserted.
+      const html = renderToStaticMarkup(
+        <GapsView gaps={[]} evidenceStatus={status} />,
+      );
+      expect(html).not.toContain(
+        "Every must-have requirement has a qualifying match",
+      );
+      expect(html).toContain("not yet a clean bill of health");
+    });
+  }
+});
+
+describe("GapsView: stranded matches (#446)", () => {
+  it("reports matches pointing at a requirement that no longer exists", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[]} strandedMatches={2} />,
+    );
+    expect(html).toContain("gaps-stranded");
+    expect(html).toContain("2 matches point");
+    expect(html).toContain("no longer exists");
+  });
+
+  it("says nothing when none are stranded", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[]} />);
+    expect(html).not.toContain("gaps-stranded");
+  });
+
+  it("reports them alongside real gaps too", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[unmet]} strandedMatches={1} />,
+    );
+    expect(html).toContain("gaps-stranded");
+    expect(html).toContain("1 match point");
+  });
+});

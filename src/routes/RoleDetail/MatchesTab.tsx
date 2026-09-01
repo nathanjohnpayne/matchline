@@ -29,6 +29,7 @@ export interface MatchesTabProps {
   /** Pre-computed unmet must-haves (#130). */
   readonly gaps: readonly Gap[];
   readonly evidenceStatus?: EvidenceStatus;
+  readonly strandedMatches?: number;
   /**
    * Lookup map for pre-resolving each Match's source Unit
    * by id. The container builds this from a single Units
@@ -56,6 +57,7 @@ export default function MatchesTab({
   groups,
   gaps,
   evidenceStatus,
+  strandedMatches,
   unitsById,
   onApprovalStateChange,
   computingMatches,
@@ -88,7 +90,11 @@ export default function MatchesTab({
           Computing matches…
         </p>
       )}
-      <GapsView gaps={gaps} evidenceStatus={evidenceStatus} />
+      <GapsView
+        gaps={gaps}
+        evidenceStatus={evidenceStatus}
+        strandedMatches={strandedMatches}
+      />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (
         <li

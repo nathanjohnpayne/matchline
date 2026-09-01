@@ -143,20 +143,65 @@ export interface Gap {
 /**
  * Resolve one match to the verdict this function should act on.
  *
- * The derived map wins when it has an entry, because it already
- * folds in the stored field. Otherwise fall back to the persisted
- * boolean, and finally to the #435 permissive reading for a
+ * **The persisted field wins.** The map is a snapshot taken at
+ * derivation time and can only ever go stale; the document is
+ * live. Two ways that bites, both found on PR #446:
+ *
+ *   - An explicit rematch persists `structural_evidence: false`
+ *     on a row the snapshot recorded as `evidenced`, and the
+ *     stale snapshot keeps a must-have looking covered.
+ *   - `legacyEvidenceKey` tracks only rows that LACK the field,
+ *     so a current row whose stored value changes in place —
+ *     via the `upsertMatch` escape hatch or a migration — never
+ *     re-triggers the derivation at all. The map would win
+ *     indefinitely, until the route remounted.
+ *
+ * The map originally came first on the reasoning that it already
+ * folds in stored values, so there would be one source rather
+ * than two. True at the instant it is built, and irrelevant
+ * afterwards: folding a value in is not the same as tracking it.
+ *
+ * Order, therefore: the live field, then the derived snapshot for
+ * a row that has no field, then the #435 permissive reading for a
  * legacy row we have no verdict for.
  */
 function verdictFor(
   match: UnitMatch,
   evidence: ReadonlyMap<string, MatchEvidence> | undefined,
 ): EvidenceVerdict {
-  const derived = evidence?.get(match.id)?.verdict;
-  if (derived !== undefined) return derived;
+  if (match.structural_evidence === true) return "evidenced";
   if (match.structural_evidence === false) return "unevidenced";
-  // `true` is evidence; `undefined` is the legacy permissive pass.
-  return "evidenced";
+  // `undefined` is the legacy tier: derive if we can, otherwise
+  // the permissive pass.
+  return evidence?.get(match.id)?.verdict ?? "evidenced";
+}
+
+/**
+ * Everything the Gaps panel needs, which is more than a list of
+ * Requirements.
+ *
+ * `strandedMatches` counts non-rejected matches that would have
+ * cleared the threshold but point at a Requirement id that no
+ * longer exists. Those cannot appear in `gaps`: this function
+ * iterates the CURRENT Requirements, and a stranded match's
+ * Requirement is by definition not among them, so its
+ * `requirement_missing` verdict had nowhere to go and was
+ * silently dropped — making the reason string unreachable in
+ * exactly the scenario it was written for. Codex P2 on PR #446.
+ *
+ * It is deliberately a Role-level number rather than an entry in
+ * `gaps`. The stranding is not a property of any surviving
+ * Requirement — a JD re-parse replaced the old set wholesale
+ * (#442) — so attributing it to one would be inventing a
+ * relationship that does not exist.
+ *
+ * Thresholded like `doubted`, and for the same reason: a match
+ * that was never going to cover anything changes nothing the user
+ * must act on before generating.
+ */
+export interface GapReport {
+  readonly gaps: readonly Gap[];
+  readonly strandedMatches: number;
 }
 
 export function computeGaps(
@@ -164,7 +209,7 @@ export function computeGaps(
   matches: readonly UnitMatch[],
   evidence?: ReadonlyMap<string, MatchEvidence>,
   threshold: number = GAP_THRESHOLD,
-): readonly Gap[] {
+): GapReport {
   // Best final_score among non-rejected matches that can cover
   // the Requirement, and separately whether any non-rejected
   // match clears the threshold but could not be verified.
@@ -172,6 +217,7 @@ export function computeGaps(
   // matching pipeline's filter at #82.
   const bestCovering = new Map<string, number>();
   const doubted = new Map<string, UnverifiableReason[]>();
+  let strandedMatches = 0;
   for (const m of matches) {
     if (m.user_rejected) continue;
     const verdict = verdictFor(m, evidence);
@@ -182,10 +228,14 @@ export function computeGaps(
       // to satisfy it, so being unable to verify it changes
       // nothing the user needs to know.
       if (m.final_score >= threshold) {
+        const reason = evidence?.get(m.id)?.reason;
+        if (reason === "requirement_missing") {
+          strandedMatches += 1;
+          continue;
+        }
         const reasons =
           doubted.get(m.job_requirement_unit_id) ??
           doubted.set(m.job_requirement_unit_id, []).get(m.job_requirement_unit_id)!;
-        const reason = evidence?.get(m.id)?.reason;
         if (reason !== undefined && !reasons.includes(reason)) {
           reasons.push(reason);
         }
@@ -210,5 +260,5 @@ export function computeGaps(
       reasons: reasons ?? [],
     });
   }
-  return gaps;
+  return { gaps, strandedMatches };
 }
