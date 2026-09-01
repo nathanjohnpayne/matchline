@@ -405,10 +405,15 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
       "overhead a production call never carries).",
   );
   lines.push("");
+  // Codex P2: `flows` is a column rather than a detail tucked into the
+  // failure suffix. Without it a one-fixture smoke run and a
+  // full-corpus run serialize identically, so a reader of the saved
+  // report cannot judge how much corpus a recommendation rests on, nor
+  // reconstruct total modeled cost from `$ / flow`.
   lines.push(
-    "| variant | source | models | prompts | extraction | match | $/flow | pareto |",
+    "| variant | source | models | prompts | extraction | match | flows | $/flow | pareto |",
   );
-  lines.push("|---|---|---|---|---|---|---|---|");
+  lines.push("|---|---|---|---|---|---|---|---|---|");
 
   const sorted = [...results].sort(
     (a, b) =>
@@ -427,6 +432,7 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
     lines.push(
       `| ${r.label} | ${r.tokenSource} | ${models} | ${prompts} | ` +
         `${fmtPct(r.extractionAccuracy)} | ${fmtPct(r.matchAccuracy)} | ` +
+        `${r.flows} | ` +
         `${fmtUsd(r.modeledCostPerFlowUsd)} | ${frontier.has(r.label) ? "✅" : ""}${fail} |`,
     );
   }
@@ -481,6 +487,10 @@ function fmtUsd(v: number | null): string {
  *   --variant 'v2-prompt:prompt.extraction/resume=v2'
  *   --variant 'both:model.extraction=claude-haiku-4-5-20251001,prompt.extraction/resume=v2'
  *
+ * `<label>` is restricted to `[A-Za-z0-9._-]+`, because it is rendered
+ * straight into the Markdown results table and the recommendation
+ * line — see the guard below.
+ *
  * Provider is inferred from the model id prefix, matching the two
  * providers `ModelConfig` allows.
  */
@@ -495,6 +505,25 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
   if (label.length === 0) {
     throw new Error(
       `--variant label must not be empty (got ${JSON.stringify(spec)})`,
+    );
+  }
+  // Codex P2: the label is interpolated into the Markdown results
+  // table, into a backticked recommendation line, and into the
+  // duplicate-label check. A label carrying `|`, a newline, or a
+  // backtick therefore splits a row into extra cells, breaks the table
+  // apart, or escapes the code span — and the report is written to be
+  // saved and pasted as experiment evidence, so a corrupted table
+  // silently credits metrics to the wrong variant. Restricting the
+  // grammar at parse time closes every render site at once, which
+  // escaping at one of them would not; it also matches how the prompt
+  // version below is handled, and rejects loudly rather than quietly
+  // rewriting what the operator asked for.
+  if (!/^[A-Za-z0-9._-]+$/.test(label)) {
+    throw new Error(
+      `--variant label must be alphanumeric + '.'/'_'/'-' only ` +
+        `(got ${JSON.stringify(label)}). The label is rendered into the ` +
+        `Markdown results table, where '|', newlines and backticks would ` +
+        `corrupt the row.`,
     );
   }
   const body = spec.slice(sep + 1);

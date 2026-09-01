@@ -452,6 +452,28 @@ describe("recommend", () => {
 });
 
 describe("parseVariantFlag", () => {
+  // Codex P2: the label reaches the Markdown results table, a
+  // backticked recommendation line, and the duplicate-label check.
+  // Restricting the grammar at parse time closes all three at once.
+  it.each([
+    ["a|b", "a pipe splits the table row into extra cells"],
+    ["a\nb", "a newline breaks the table apart"],
+    ["a`b", "a backtick escapes the recommendation code span"],
+    ["a b", "a space is outside the documented grammar"],
+  ])("rejects a label containing %j — %s", (label) => {
+    expect(() =>
+      parseVariantFlag(`${label}:model.extraction=claude-haiku-4-5-20251001`, "api"),
+    ).toThrow(/label must be alphanumeric/);
+  });
+
+  it("accepts the label shapes the docs use", () => {
+    for (const label of ["v2-prompt", "both", "haiku_extract", "haiku-4.5"]) {
+      expect(() =>
+        parseVariantFlag(`${label}:model.extraction=claude-haiku-4-5-20251001`, "api"),
+      ).not.toThrow();
+    }
+  });
+
   it("parses a model override", () => {
     const v = parseVariantFlag(
       "haiku-extract:model.extraction=claude-haiku-4-5-20251001",
@@ -707,5 +729,23 @@ describe("formatSweepReport", () => {
   it("flags variants with failed flows", () => {
     const out = formatSweepReport([variantResult({ label: "flaky", failures: 2, flows: 4 })]);
     expect(out).toContain("2/4 failed");
+  });
+
+  it("renders the flow count for successful variants too", () => {
+    // Codex P2: `flows` used to appear only in the failure suffix, so a
+    // one-fixture smoke run and a full-corpus run serialized
+    // identically. The report is meant to be pasted as experiment
+    // evidence, and a recommendation's sample size is part of that
+    // evidence.
+    const smoke = formatSweepReport([variantResult({ label: "smoke", failures: 0, flows: 1 })]);
+    const full = formatSweepReport([variantResult({ label: "full", failures: 0, flows: 100 })]);
+
+    const row = (out: string, label: string): string =>
+      out.split("\n").find((l) => l.startsWith(`| ${label} |`)) ?? "";
+
+    expect(row(smoke, "smoke")).toContain("| 1 |");
+    expect(row(full, "full")).toContain("| 100 |");
+    // The whole point: the two rows must be distinguishable.
+    expect(row(smoke, "smoke")).not.toBe(row(full, "full"));
   });
 });
