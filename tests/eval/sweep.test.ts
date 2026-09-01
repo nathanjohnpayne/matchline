@@ -11,7 +11,11 @@
  *      clearing the bar returns null rather than the least-bad option.
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearModelOverrides,
@@ -26,6 +30,7 @@ import {
 import type { RunForFixtureResult } from "./runForFixture.ts";
 import {
   assertModelsPriced,
+  assertPromptSchemasCompatible,
   assertPromptsExist,
   formatSweepReport,
   paretoFrontier,
@@ -128,6 +133,82 @@ describe("assertModelsPriced", () => {
         { label: "prompt-only", promptVersions: { "extraction/resume": "v1" } },
       ]),
     ).not.toThrow();
+  });
+});
+
+describe("assertPromptSchemasCompatible", () => {
+  // Codex P2: prompts version their Zod schema alongside the Markdown,
+  // but extraction and JD parsing import the v1 schema statically. A v2
+  // prompt with a different schema would RUN as v2 while being
+  // constrained and validated against v1 — the table would credit a
+  // version that never really shaped the output.
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "matchline-schema-test-"));
+    mkdirSync(join(root, "extraction"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const wired = () =>
+    writeFileSync(join(root, "extraction", "resume.v1.schema.ts"), "export const A = 1;\n");
+
+  it("allows the wired version itself", () => {
+    wired();
+    expect(() =>
+      assertPromptSchemasCompatible(
+        [{ label: "a", promptVersions: { "extraction/resume": "v1" } }],
+        {},
+        root,
+      ),
+    ).not.toThrow();
+  });
+
+  it("allows a version that ships no schema of its own", () => {
+    // It reuses the wired schema, so nothing diverges.
+    wired();
+    expect(() =>
+      assertPromptSchemasCompatible(
+        [{ label: "a", promptVersions: { "extraction/resume": "v2" } }],
+        {},
+        root,
+      ),
+    ).not.toThrow();
+  });
+
+  it("allows a byte-identical schema", () => {
+    wired();
+    writeFileSync(join(root, "extraction", "resume.v2.schema.ts"), "export const A = 1;\n");
+    expect(() =>
+      assertPromptSchemasCompatible(
+        [{ label: "a", promptVersions: { "extraction/resume": "v2" } }],
+        {},
+        root,
+      ),
+    ).not.toThrow();
+  });
+
+  it("refuses a version whose schema differs from the wired one", () => {
+    wired();
+    writeFileSync(join(root, "extraction", "resume.v2.schema.ts"), "export const A = 2;\n");
+    expect(() =>
+      assertPromptSchemasCompatible(
+        [{ label: "a", promptVersions: { "extraction/resume": "v2" } }],
+        {},
+        root,
+      ),
+    ).toThrow(/schema the pipeline does not enforce/);
+  });
+
+  it("checks command-wide --prompt overrides too", () => {
+    wired();
+    writeFileSync(join(root, "extraction", "resume.v2.schema.ts"), "export const A = 2;\n");
+    expect(() =>
+      assertPromptSchemasCompatible([], { "extraction/resume": "v2" }, root),
+    ).toThrow(/schema the pipeline does not enforce/);
   });
 });
 

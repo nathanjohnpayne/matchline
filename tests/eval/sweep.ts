@@ -54,7 +54,7 @@ import {
   setPromptVersionOverrides,
 } from "../../functions/src/prompts/loader.ts";
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -160,6 +160,77 @@ export function assertPromptsExist(
 }
 
 /**
+ * The prompt version whose co-located Zod schema each pipeline stage is
+ * STATICALLY wired to.
+ *
+ * `functions/src/extraction/resume.ts` imports
+ * `ExtractionResponseV1Schema` and builds its tool schema from it;
+ * `functions/src/parsing/jd.ts` does the same with
+ * `JdParsingResponseV1Schema`. Neither consults the resolved prompt
+ * version, even though the loader can return a version's own schema.
+ */
+const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = {
+  "extraction/resume": "v1",
+  "parsing/jd": "v1",
+};
+
+/**
+ * Refuse a prompt-version override whose co-located schema differs from
+ * the one the pipeline actually enforces.
+ *
+ * Codex P2: prompts version their schema alongside the Markdown
+ * (`<stage>/<name>.v<N>.schema.ts`), but extraction and JD parsing
+ * import the v1 schema statically. Overriding to a v2 whose schema
+ * differs would run the v2 prompt while constraining and validating its
+ * output against v1 — the sweep would report that v2 ran, and either
+ * corrupt the comparison or burn retries on responses that are correct
+ * for v2 and invalid for v1. That is precisely the mislabeled-table
+ * failure the other pre-flights exist to prevent, and prompt tuning
+ * (#177 workstream B) is what will first author such a v2.
+ *
+ * Compares file contents rather than importing: a byte-identical schema
+ * is safe to sweep, an absent one means the version reuses the wired
+ * schema, and anything else refuses before a token is spent.
+ */
+export function assertPromptSchemasCompatible(
+  variants: readonly SweepVariant[],
+  base: Readonly<Record<string, string>> = {},
+  promptsRoot: string = PROMPTS_ROOT,
+): void {
+  const conflicts: string[] = [];
+  const check = (key: string, version: string): void => {
+    const wired = WIRED_SCHEMA_VERSION[key];
+    if (wired === undefined || wired === version) return;
+    const [stage, name] = key.split("/") as [string, string];
+    const overrideSchema = join(promptsRoot, stage, `${name}.${version}.schema.ts`);
+    // No schema of its own — the version reuses the wired one.
+    if (!existsSync(overrideSchema)) return;
+    const wiredSchema = join(promptsRoot, stage, `${name}.${wired}.schema.ts`);
+    if (!existsSync(wiredSchema)) return;
+    if (readFileSync(overrideSchema, "utf8") === readFileSync(wiredSchema, "utf8")) return;
+    conflicts.push(
+      `${key}=${version} ships ${name}.${version}.schema.ts, which differs from the ` +
+        `statically-wired ${name}.${wired}.schema.ts`,
+    );
+  };
+  for (const [k, v] of Object.entries(base)) check(k, v);
+  for (const variant of variants) {
+    for (const [k, v] of Object.entries(variant.promptVersions ?? {})) check(k, v);
+  }
+  if (conflicts.length > 0) {
+    throw new Error(
+      `sweep: prompt version(s) whose schema the pipeline does not enforce:\n  ` +
+        `${conflicts.join("\n  ")}\n` +
+        `The pipeline imports the wired schema statically, so this variant would ` +
+        `run its prompt while validating against a different schema — the results ` +
+        `table would credit a version that never really constrained the output. ` +
+        `Wire the new schema into the stage before sweeping its prompt.`,
+    );
+  }
+}
+
+/**
+ * Validate that every model a sweep will touch has a `rates.ts` entry,/**
  * Validate that every model a sweep will touch has a `rates.ts` entry,
  * BEFORE any tokens are spent.
  *
@@ -724,6 +795,7 @@ export async function runSweep(
 ): Promise<{ results: readonly VariantResult[]; report: string }> {
   assertModelsPriced(variants);
   assertPromptsExist(variants, options.basePromptVersions ?? {});
+  assertPromptSchemasCompatible(variants, options.basePromptVersions ?? {});
   const results: VariantResult[] = [];
   for (const variant of variants) {
     results.push(await runVariant(variant, deps, options));
