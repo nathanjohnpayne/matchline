@@ -91,10 +91,21 @@ export interface BreakdownRow {
    * Codex P2 on #435.
    *
    * Legacy rows (no persisted `component_applicability`) default
-   * to `true` — they predate the field, and their components
-   * were computed under a rule that hard-zeroed unevaluated
-   * axes rather than paying a neutral, so presenting them as
-   * measured is accurate for that data.
+   * to `false`. My first pass defaulted them to `true` on the
+   * claim that pre-#430 components "hard-zeroed unevaluated
+   * axes rather than paying a neutral" — that is wrong, and it
+   * is the second time I have made it. The old scorer stored
+   * `0.5` for both-empty Jaccard axes and `1.0` for
+   * unconstrained seniority and scope, so legacy rows contain
+   * exactly the neutrals this flag exists to suppress. During
+   * the backfill window — or permanently, if the backfill
+   * fails — a `true` default would put ignorance back on screen
+   * as measured overlap. Codex P2 on #435.
+   *
+   * The cost of the conservative default is that a legacy row
+   * shows no per-axis numbers until matching reruns, which is
+   * the honest state: we cannot tell which of its components
+   * were measured.
    */
   readonly evaluated: boolean;
 }
@@ -119,7 +130,7 @@ export function buildBreakdownRows(
       value,
       weight,
       contribution: value * weight,
-      evaluated: applicability?.[key] ?? true,
+      evaluated: applicability?.[key] ?? false,
     };
   });
 }

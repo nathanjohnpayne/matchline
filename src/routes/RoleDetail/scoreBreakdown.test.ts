@@ -157,11 +157,15 @@ describe("buildBreakdownRows: axis applicability (Codex P2 on #435)", () => {
     expect(skill.contribution).toBeCloseTo(0.1, 10);
   });
 
-  it("defaults legacy rows (no applicability persisted) to evaluated", () => {
-    // Pre-#435 rows were scored under a rule that hard-zeroed an
-    // unevaluated axis rather than paying a neutral, so
-    // presenting them as measured is accurate for that data.
+  it("treats legacy rows (no applicability persisted) as UNEVALUATED", () => {
+    // Deliberately conservative. Pre-#430 rows contain the very
+    // neutrals this flag suppresses — both-empty Jaccard stored
+    // 0.5, unconstrained seniority and scope stored 1.0 — so a
+    // permissive default would put ignorance back on screen as
+    // measured overlap during the backfill window, or forever if
+    // the backfill fails. Showing no per-axis numbers until
+    // matching reruns is the honest state.
     const rows = buildBreakdownRows(components)!;
-    expect(rows.every((r) => r.evaluated)).toBe(true);
+    expect(rows.every((r) => r.evaluated)).toBe(false);
   });
 });

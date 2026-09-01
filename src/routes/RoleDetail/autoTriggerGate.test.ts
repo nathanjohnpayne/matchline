@@ -169,3 +169,39 @@ describe("shouldAutoTriggerMatching — legacy structural_evidence backfill", ()
     expect(shouldAutoTriggerMatching({ ...legacy, requirementCount: 0 })).toBe(false);
   });
 });
+
+describe("shouldAutoTriggerMatching — deferred while Units await re-embedding", () => {
+  // Codex P1 on #435, the only data-loss finding in the review.
+  //
+  // `defaultListUnits` excludes `reembed_pending` Units, but the
+  // pipeline's persist step is a wholesale replace: it deletes
+  // every match for the Role and writes only what this run
+  // produced. Backfilling in that window deletes the pending
+  // Unit's matches with no replacements, and the carry-forward
+  // that preserves `approved_for_use` / `user_rejected` has
+  // nothing to carry them onto. Re-embedding later cannot
+  // restore the user's decisions.
+  //
+  // The container expresses the deferral by passing
+  // `hasEvidenceUnscoredMatches: false`, so the gate itself
+  // stays a pure function of its inputs.
+  it("does not fire for a legacy set while the deferral is in effect", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("fires once the deferral lifts", () => {
+    expect(
+      shouldAutoTriggerMatching({
+        ...HAPPY,
+        matchCount: 12,
+        hasEvidenceUnscoredMatches: true,
+      }),
+    ).toBe(true);
+  });
+});

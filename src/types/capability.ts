@@ -231,9 +231,11 @@ export interface UnitMatch {
    * happened.
    *
    * Optional for the same reason as `components` — legacy rows
-   * predate it. A reader without it should fall back to
-   * presenting no per-axis claim rather than assuming every
-   * component was measured.
+   * predate it. A reader without it MUST fall back to
+   * presenting no per-axis claim: pre-#430 components contain
+   * the very neutrals this flag suppresses (both-empty Jaccard
+   * stored 0.5; unconstrained seniority and scope stored 1.0),
+   * so assuming "measured" for legacy data reintroduces the bug.
    */
   component_applicability?: Readonly<Record<keyof ScoreComponents, boolean>>;
 

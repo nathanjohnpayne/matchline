@@ -130,10 +130,18 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
 - `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
-  - `components` and `structural_evidence` are **optional**: records
-    written before those fields existed carry neither, and the coverage
-    gate depends on being able to recognize such a record during the
-    backfill window. A rerun of matching populates both.
+  - `components`, `structural_evidence` and `component_applicability`
+    are **optional**: records written before those fields existed carry
+    none of them, and the coverage gate depends on being able to
+    recognize such a record during the backfill window. A rerun of
+    matching populates all three.
+  - `component_applicability` records, per axis, whether the engine
+    actually evaluated it for this pair. A `false` axis means the
+    corresponding value in `components` is a no-constraint neutral, and
+    **no consumer may present it as a measurement** — the breakdown
+    renders it as unavailable rather than as a score. When the field is
+    absent, readers must assume nothing was measured: pre-existing
+    records store the same neutrals without marking them.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
 
 ### Invariants
