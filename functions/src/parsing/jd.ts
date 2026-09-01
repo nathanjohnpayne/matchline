@@ -25,6 +25,7 @@ import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 import {
   JdParsingResponseV1Schema,
   type JdParsingResponseV1,
@@ -219,6 +220,8 @@ export async function parseJobRequirements(
     return stampServerFields(parsed.data, ctx, generateId);
   }
 
+  // See extraction/resume.ts — same silent-failure gap (#426).
+  logRetryExhaustion("parsing.jd", model, failures);
   throw new JdParsingError(
     `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

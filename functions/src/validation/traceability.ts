@@ -40,6 +40,7 @@ import {
 } from "../prompts/validation/traceability.v1.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import type { ExperienceUnit } from "../types/capability.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 
 import {
   TraceabilityCheckError,
@@ -199,6 +200,8 @@ export async function checkTraceability(
     return finalizeResult(parsed.data, candidateUnits);
   }
 
+  // Retry budget exhausted — record why, server-side (#426).
+  logRetryExhaustion("validation.traceability", model, failures);
   throw new TraceabilityCheckError(
     `Traceability check failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

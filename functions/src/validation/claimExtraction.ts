@@ -38,6 +38,7 @@ import {
   type ClaimItemV1,
 } from "../prompts/validation/claimExtraction.v1.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 
 import {
   ClaimExtractionError,
@@ -235,6 +236,8 @@ export async function extractClaims(
     return stampServerFields(parsed.data, ctx, generateId);
   }
 
+  // Retry budget exhausted — record why, server-side (#426).
+  logRetryExhaustion("validation.claimExtraction", model, failures);
   throw new ClaimExtractionError(
     `Claim extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
