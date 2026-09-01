@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasMappedSenioritySignal,
   hasStructuralEvidence,
   recency,
   requirementAxes,
@@ -987,9 +988,98 @@ describe("hasStructuralEvidence (Codex P1 rounds 1 + 3 on #435)", () => {
     expect(axes.skill_overlap).toBe(true);
     expect(axes.tool_overlap).toBe(false);
     const components = score(recentUnit(), req, { asOf }).components;
-    expect(hasStructuralEvidence(components, axes)).toBe(true);
     expect(
-      hasStructuralEvidence({ ...components, skill_overlap: 0 }, axes),
+      hasStructuralEvidence({ components, axes, seniorityMapped: true }),
+    ).toBe(true);
+    expect(
+      hasStructuralEvidence({
+        components: { ...components, skill_overlap: 0 },
+        axes,
+        seniorityMapped: true,
+      }),
     ).toBe(false);
+  });
+});
+
+describe("hasStructuralEvidence: unmapped seniority (Codex P1 round 4 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("does not count seniorityAlignment's unmapped-signal neutral as evidence", () => {
+    // `seniorityAlignment` returns 0.5 for two different
+    // situations that `components` alone cannot tell apart:
+    //   1. a real one-level gap between LADDER-MAPPED levels, and
+    //   2. the "we don't know" fallback when every signal is
+    //      unmapped.
+    // Only (1) is evidence. Counting (2) let a seniority
+    // must-have clear on a Unit with no mapped signal at all —
+    // the same invented-credit shape as jaccard's neutral, on a
+    // different axis.
+    const unit = makeUnit({
+      // `mentored` is not on the ladder and not in the verb map.
+      seniority_signals: ["mentored"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(hasMappedSenioritySignal(unit)).toBe(false);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("DOES count a mapped one-level gap, which scores the same 0.5", () => {
+    // The discriminator is the mapping, not the value. `led`
+    // maps to `senior`; against a `staff` ask that is a
+    // one-level gap → 0.5, and it is real evidence.
+    const unit = makeUnit({
+      seniority_signals: ["led"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(hasMappedSenioritySignal(unit)).toBe(true);
+    expect(result.structural_evidence).toBe(true);
+  });
+
+  it("does not count a mapped signal that scored 0 (multi-level gap)", () => {
+    // Mapped but failed is evidence of absence, not of fit.
+    const unit = makeUnit({
+      seniority_signals: ["led"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "director" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("hasMappedSenioritySignal tracks seniorityAlignment's own mapping", () => {
+    // Paired pin: if the ladder or the verb map changes, both
+    // sides have to move together.
+    expect(hasMappedSenioritySignal({ seniority_signals: [] })).toBe(false);
+    expect(hasMappedSenioritySignal({ seniority_signals: ["mentored"] })).toBe(
+      false,
+    );
+    expect(hasMappedSenioritySignal({ seniority_signals: ["staff"] })).toBe(
+      true,
+    );
+    expect(hasMappedSenioritySignal({ seniority_signals: ["architected"] })).toBe(
+      true,
+    );
+    expect(
+      hasMappedSenioritySignal({ seniority_signals: ["mentored", "led"] }),
+    ).toBe(true);
   });
 });

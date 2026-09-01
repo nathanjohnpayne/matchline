@@ -154,6 +154,13 @@ export default function RoleDetail(): ReactElement {
   const [matchesFirstSnapshotReceived, setMatchesFirstSnapshotReceived] =
     useState(false);
   const triggeredRef = useRef(false);
+  // Set when a legacy-backfill rerun (the one that populates
+  // `structural_evidence` on pre-#435 matches) fails. While true,
+  // `computeGaps` stops extending the transitional benefit of the
+  // doubt to matches missing the field — the window the allowance
+  // depends on didn't close, so the allowance is withdrawn rather
+  // than left open indefinitely. Codex P2 round 4 on #435.
+  const [legacyBackfillFailed, setLegacyBackfillFailed] = useState(false);
 
   // Requirements tab parse state (#201). Held at the
   // container so a tab switch + return doesn't drop the
@@ -675,6 +682,13 @@ export default function RoleDetail(): ReactElement {
     const issuedAgainstAuto = roleId;
     const issuedTokenAuto = visitTokenRef.current;
     triggeredRef.current = true;
+    // Whether THIS run is the legacy backfill. Captured before
+    // the call so the catch below doesn't re-read state that the
+    // subscription may have changed underneath it.
+    const isLegacyBackfill = hasEvidenceUnscoredMatches;
+    const isStaleAuto = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainstAuto ||
+      visitTokenRef.current !== issuedTokenAuto;
     setComputingMatches(true);
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
@@ -683,14 +697,17 @@ export default function RoleDetail(): ReactElement {
         // surfaces a toast; deferred per #21 spec.
 
         console.warn("invokeRunMatching failed", err);
+        // A failed backfill is different from a failed ordinary
+        // rerun: it leaves `structural_evidence` absent on rows
+        // the Gaps view is currently trusting. Withdraw that
+        // trust rather than keep asserting coverage we can no
+        // longer substantiate.
+        if (isLegacyBackfill && !isStaleAuto()) {
+          setLegacyBackfillFailed(true);
+        }
       })
       .finally(() => {
-        if (
-          currentRoleIdRef.current !== issuedAgainstAuto ||
-          visitTokenRef.current !== issuedTokenAuto
-        ) {
-          return;
-        }
+        if (isStaleAuto()) return;
         setComputingMatches(false);
       });
   }, [
@@ -835,6 +852,7 @@ export default function RoleDetail(): ReactElement {
       onTabChange={onTabChange}
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
+      legacyBackfillFailed={legacyBackfillFailed}
       parsingStatus={parsingStatus}
       parseError={parseError}
       savingJd={savingJd}

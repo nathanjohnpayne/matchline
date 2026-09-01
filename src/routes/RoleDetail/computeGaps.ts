@@ -50,6 +50,18 @@
  * one render before that rerun lands — a corpus-wide false
  * alarm to buy a few hundred milliseconds of strictness.
  *
+ * **When the backfill FAILS, the window doesn't close, so the
+ * allowance is withdrawn.** Pass
+ * `options.trustLegacyMatches: false` and `undefined` stops
+ * counting. Codex P2 round 4 on PR #435: the callable can
+ * reject (matching temporarily unavailable), `triggeredRef`
+ * stays latched so nothing retries, and the container's catch
+ * only logged a warning — leaving every evidence-unscored
+ * legacy row satisfying must-haves for the rest of the mounted
+ * view, with no retry and nothing visible to the user. A
+ * promised transitional window that never closes is just the
+ * permissive default wearing a deadline.
+ *
  * **Rejected matches do NOT count as satisfying.**
  * cursor CHANGES_REQUESTED round 1 on PR #133 caught the
  * gap: a user-rejected high-score match was still
@@ -86,11 +98,24 @@ import type {
 
 export const GAP_THRESHOLD = 0.4;
 
+export interface ComputeGapsOptions {
+  /**
+   * Whether a match with no `structural_evidence` field (written
+   * before #435) may still cover a must-have. Defaults to
+   * `true`: the auto-trigger backfills the field on Role open,
+   * so the gap is transitional. Pass `false` once that backfill
+   * has failed — see the docstring.
+   */
+  readonly trustLegacyMatches?: boolean;
+}
+
 export function computeGaps(
   requirements: readonly JobRequirementUnit[],
   matches: readonly UnitMatch[],
   threshold: number = GAP_THRESHOLD,
+  options: ComputeGapsOptions = {},
 ): readonly JobRequirementUnit[] {
+  const trustLegacy = options.trustLegacyMatches ?? true;
   // Index matches by requirement id with their max
   // final_score AMONG NON-REJECTED matches. Rejected
   // matches don't count toward satisfying the Requirement
@@ -101,8 +126,11 @@ export function computeGaps(
     if (m.user_rejected) continue;
     // A match with no structural evidence can't cover a
     // must-have no matter how it scored — see the docstring.
-    // `undefined` is legacy data and passes.
     if (m.structural_evidence === false) continue;
+    // `undefined` is legacy data. It passes while the backfill
+    // rerun is still expected to land, and stops passing once
+    // that rerun has failed.
+    if (m.structural_evidence === undefined && !trustLegacy) continue;
     const prev = bestScoreByReq.get(m.job_requirement_unit_id);
     if (prev === undefined || m.final_score > prev) {
       bestScoreByReq.set(m.job_requirement_unit_id, m.final_score);

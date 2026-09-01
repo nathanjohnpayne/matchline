@@ -309,11 +309,47 @@ const STRUCTURAL_AXES: readonly (keyof ScoreComponents)[] = [
  * `axes[a]` is false there, so it can't contribute. The two
  * conditions have to be read together.
  */
-export function hasStructuralEvidence(
-  components: ScoreComponents,
-  axes: RequirementAxes,
+export interface EvidenceInputs {
+  readonly components: ScoreComponents;
+  readonly axes: RequirementAxes;
+  /**
+   * Did the Unit attest to at least one seniority signal the
+   * ladder recognizes?
+   *
+   * Needed because `seniorityAlignment` returns 0.5 for two
+   * different situations that `components` alone can't tell
+   * apart: a real one-level gap between mapped levels, and the
+   * "we don't know" fallback when every signal is unmapped
+   * (`mentored`, say). The first is evidence. The second is the
+   * same kind of invented credit as `jaccard()`'s neutral, and
+   * counting it let a seniority must-have clear on a Unit with
+   * no mapped signal at all. Codex P1 round 4 on PR #435.
+   */
+  readonly seniorityMapped: boolean;
+}
+
+export function hasStructuralEvidence(input: EvidenceInputs): boolean {
+  const { components, axes, seniorityMapped } = input;
+  return STRUCTURAL_AXES.some((axis) => {
+    if (!axes[axis] || components[axis] <= 0) return false;
+    // Seniority is the one axis whose score can be a neutral
+    // rather than a measurement; everything else in
+    // STRUCTURAL_AXES scores 0 when it can't be evaluated.
+    if (axis === "seniority_alignment") return seniorityMapped;
+    return true;
+  });
+}
+
+/**
+ * Does this Unit attest to any seniority signal the ladder can
+ * map? Mirrors the filter inside `seniorityAlignment` — if that
+ * mapping changes, this has to change with it, which the paired
+ * test in score.test.ts pins.
+ */
+export function hasMappedSenioritySignal(
+  unit: Pick<ExperienceUnit, "seniority_signals">,
 ): boolean {
-  return STRUCTURAL_AXES.some((axis) => axes[axis] && components[axis] > 0);
+  return unit.seniority_signals.some((s) => seniorityIndex(s) !== null);
 }
 
 function canonicalize(
@@ -667,10 +703,11 @@ export function score(
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
-    structural_evidence: hasStructuralEvidence(
+    structural_evidence: hasStructuralEvidence({
       components,
-      requirementAxes(requirement),
-    ),
+      axes: requirementAxes(requirement),
+      seniorityMapped: hasMappedSenioritySignal(unit),
+    }),
     rule_score,
     semantic_score: components.semantic_similarity,
     final_score,

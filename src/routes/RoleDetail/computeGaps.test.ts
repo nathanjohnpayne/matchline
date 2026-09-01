@@ -290,3 +290,63 @@ describe("computeGaps — structural-evidence gate (Codex P1 r1 on #435)", () =>
     expect(gaps.map((g) => g.id)).toEqual(["r-credential"]);
   });
 });
+
+describe("computeGaps — legacy allowance is withdrawable (Codex P2 r4 on #435)", () => {
+  const mustHave: JobRequirementUnit = {
+    id: "r-credential",
+    owner_uid: ALICE,
+    role_id: "role-1",
+    raw_text: "BS in Computer Science required",
+    normalized_requirement: "BS in Computer Science",
+    category: "credential",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "low",
+    must_have: true,
+    extracted_from: "qualifications",
+  };
+
+  it("stops trusting legacy matches once the backfill has failed", () => {
+    // The allowance for `structural_evidence === undefined` is a
+    // transitional one: the auto-trigger reruns matching on Role
+    // open and backfills the field. When that callable rejects,
+    // the window never closes — `triggeredRef` stays latched, no
+    // retry fires, and every unscored legacy row would keep
+    // covering must-haves for the rest of the mounted view.
+    const legacy = [makeMatch("m1", "r-credential", 0.52)];
+    expect(computeGaps([mustHave], legacy, undefined, {
+      trustLegacyMatches: false,
+    })).toHaveLength(1);
+  });
+
+  it("still trusts them while the backfill is expected to land", () => {
+    const legacy = [makeMatch("m1", "r-credential", 0.52)];
+    expect(computeGaps([mustHave], legacy)).toEqual([]);
+    expect(
+      computeGaps([mustHave], legacy, undefined, { trustLegacyMatches: true }),
+    ).toEqual([]);
+  });
+
+  it("withdrawal does not disturb matches that DO carry evidence", () => {
+    // Only the `undefined` case is affected — a real evidenced
+    // match still covers, and a real evidence-free one still
+    // doesn't.
+    const evidenced = [
+      makeMatch("m1", "r-credential", 0.52, { structural_evidence: true }),
+    ];
+    expect(
+      computeGaps([mustHave], evidenced, undefined, {
+        trustLegacyMatches: false,
+      }),
+    ).toEqual([]);
+    const unevidenced = [
+      makeMatch("m2", "r-credential", 0.52, { structural_evidence: false }),
+    ];
+    expect(
+      computeGaps([mustHave], unevidenced, undefined, {
+        trustLegacyMatches: false,
+      }),
+    ).toHaveLength(1);
+  });
+});
