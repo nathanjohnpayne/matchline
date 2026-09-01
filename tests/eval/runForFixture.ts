@@ -101,11 +101,16 @@ export interface RunForFixtureDeps {
    */
   readonly cache?: StageCache;
   /**
-   * Discriminators folded into every cache key for this run — e.g.
-   * `{ tokenSource: "claude-cli" }` so subscription-CLI-produced
-   * entries never collide with metered-API entries for the same
-   * model. Comparing the two is the point of the sweep, so they must
-   * occupy separate keyspaces.
+   * Discriminators folded into the cache keys of the LLM stages this
+   * run serves — e.g. `{ tokenSource: "claude-cli" }` so
+   * subscription-CLI-produced entries never collide with metered-API
+   * entries for the same model. Comparing the two is the point of the
+   * sweep, so they must occupy separate keyspaces.
+   *
+   * Applied to extraction and requirement parsing only. The two
+   * embedding stages always call OpenAI and take their token-source
+   * dependence through their `input`, so discriminating them would
+   * only re-pay for identical vectors — see the call sites.
    */
   readonly cacheDiscriminators?: Readonly<Record<string, string | number>>;
 }
@@ -467,7 +472,17 @@ async function runForFixtureInner(
   const unitEmbeddings = await runStage(
     tally,
     cache,
-    cacheDiscriminators,
+    // CodeRabbit P1: deliberately NOT `cacheDiscriminators`. Embeddings
+    // always go to OpenAI, so the token source cannot change their
+    // output except through the upstream Units — and those arrive as
+    // `input` below, which is already part of the cache key. The
+    // discriminator therefore can never prevent a wrong hit here; it
+    // can only force a miss, re-embedding the whole corpus and paying
+    // OpenAI a second time for identical vectors every time
+    // `--token-source` flips. `cache.ts` scopes discriminators to
+    // things "that change the output but aren't captured above",
+    // which for embeddings this is not.
+    undefined,
     {
       stage: "embedding",
       provider: "openai",
@@ -522,7 +537,9 @@ async function runForFixtureInner(
   const reqEmbeddings = await runStage(
     tally,
     cache,
-    cacheDiscriminators,
+    // Same reasoning as the Unit embeddings above: the parsed
+    // Requirements this depends on are already in `input`.
+    undefined,
     {
       stage: "embedding",
       provider: "openai",

@@ -696,6 +696,49 @@ describe("runForFixture", () => {
       expect(warm.modeledCostUsd).toBeGreaterThan(0);
     });
 
+    it("switching token source re-runs the LLM stages but reuses embeddings", async () => {
+      // CodeRabbit P1: the token-source discriminator used to be folded
+      // into all four stage keys, embeddings included. Embeddings always
+      // call OpenAI, and their token-source dependence already arrives
+      // via `input` (the upstream Units / Requirements), so
+      // discriminating them could never prevent a wrong hit — it could
+      // only force a miss and re-pay OpenAI for identical vectors on
+      // every `--token-source` flip. This repo runs under a hard
+      // monthly OpenAI ceiling, so that is real money.
+      const { extraction, parsing } = fixtureResponses();
+      const input = {
+        resumeFixtureId: "nathan-2026",
+        jdFixtureId: "google-compute-spm-2026",
+      };
+
+      const cli = await runForFixture(input, {
+        anthropicClient: makeMockAnthropic([extraction, parsing]),
+        openaiClient: makeMockOpenAi(),
+        cache: new StageCache({ dir: cacheDir }),
+        cacheDiscriminators: { tokenSource: "claude-cli" },
+      });
+      expect(cli.ok).toBe(true);
+      expect(cli.cacheMisses).toBe(4);
+
+      // Same corpus, same upstream mock output, metered-API keyspace.
+      const apiAnthropic = makeMockAnthropic([extraction, parsing]);
+      const apiOpenai = makeMockOpenAi();
+      const api = await runForFixture(input, {
+        anthropicClient: apiAnthropic,
+        openaiClient: apiOpenai,
+        cache: new StageCache({ dir: cacheDir }),
+      });
+
+      expect(api.ok).toBe(true);
+      // The two Anthropic stages are genuinely a different keyspace and
+      // must re-run — separating them is the point of the sweep.
+      expect(apiAnthropic.messages.create).toHaveBeenCalledTimes(2);
+      // The two embedding stages must NOT.
+      expect(apiOpenai.embeddings.create).not.toHaveBeenCalled();
+      expect(api.cacheMisses).toBe(2);
+      expect(api.cacheHits).toBe(2);
+    });
+
     /**
      * The mechanism behind the 10× saving on #137's 10×10 corpus:
      * extraction is keyed on the resume ALONE and JD parsing on the
