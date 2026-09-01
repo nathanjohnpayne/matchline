@@ -168,6 +168,30 @@ describe("legacyEvidenceKey: changes that MUST re-derive", () => {
     expect(KEY([match()], [unit()], [])).not.toBe(base);
   });
 
+  it("changes when a match is repointed at a different pair that signs the same", () => {
+    // `upsertMatch` can change both linked ids while keeping
+    // `match.id`. Two Units identical in every field the
+    // signature covers would otherwise leave the key unchanged,
+    // and the container would keep the old pair's verdict for the
+    // new pair. CodeRabbit on PR #446.
+    const twin = unit({ id: "unit-2" });
+    const repointed = match({ experience_unit_id: "unit-2" });
+    expect(KEY([repointed], [unit(), twin])).not.toBe(
+      KEY([match()], [unit(), twin]),
+    );
+  });
+
+  it("changes when a match is repointed at an identical-signing Requirement", () => {
+    const twinReq = requirement({ id: "req-2" });
+    expect(
+      KEY(
+        [match({ job_requirement_unit_id: "req-2" })],
+        [unit()],
+        [requirement(), twinReq],
+      ),
+    ).not.toBe(KEY([match()], [unit()], [requirement(), twinReq]));
+  });
+
   it("changes when a new legacy match appears", () => {
     expect(KEY([match(), match({ id: "match-2" })])).not.toBe(base);
   });

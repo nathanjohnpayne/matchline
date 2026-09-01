@@ -242,8 +242,8 @@ Acceptance criteria:
 - The derivation has **three outcomes, not two**. Beyond evidenced and
   unevidenced, a pair the matching pipeline would currently decline to
   produce is **unverifiable** — a missing Unit or Requirement, a Unit
-  that is unapproved or awaiting re-embedding, or either side lacking
-  a usable embedding. The test is whether a rematch would yield the
+  that is unapproved or awaiting re-embedding, either side lacking a
+  usable embedding, or two embeddings of incompatible dimensions. The test is whether a rematch would yield the
   pair, not whether the structural axes can be computed: they can be
   in every one of those cases, and answering anyway would outlive the
   match the answer describes. A Requirement carrying only an unverifiable match

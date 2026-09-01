@@ -151,12 +151,20 @@ export function deriveStructuralEvidence(
  *     out by `defaultListUnits`. Note this is **not** because the
  *     derivation needs the embedding — it does not read one.
  *   - A missing or empty embedding on **either** side is skipped
- *     by `runMatchingPipeline` itself (the guards around
- *     `semanticSimilarityScore`, which throws on an absent
- *     vector). Codex P2 on PR #446 caught this one: the original
- *     version fell through to derivation and could return
- *     `evidenced` for a pair the pipeline will not score, which
- *     contradicted the rule the docblock above it stated.
+ *     by `runMatchingPipeline`'s own pre-filter.
+ *   - Two embeddings of DIFFERENT dimensions are skipped a step
+ *     later: `cosine()` throws `MismatchedDimensionsError` and the
+ *     pipeline's try/catch drops the pair.
+ *
+ * Both embedding cases came from Codex on PR #446, in successive
+ * rounds, and both were the same mistake: the original version
+ * fell through to derivation and could return `evidenced` for a
+ * pair the pipeline will not score — contradicting the rule stated
+ * directly above it. Worth noting that the derivation *could*
+ * answer in every one of these cases, since the structural axes
+ * never read a vector. That is precisely why "we can compute it"
+ * kept reading as permission to answer, and why the test is the
+ * pipeline's behaviour instead.
  */
 export function resolveMatchEvidence(
   match: Pick<
@@ -215,6 +223,20 @@ export function resolveMatchEvidence(
     return {
       verdict: "unverifiable",
       reason: "requirement_embedding_missing",
+      stored: false,
+    };
+  }
+  // Present on both sides but incompatible — a stale vector from a
+  // previous embedding model is the realistic cause. `cosine()`
+  // throws `MismatchedDimensionsError`, `score()` propagates it,
+  // and `runMatchingPipeline`'s try/catch skips the pair. Same
+  // rule as every case above: the pipeline declines it, so we
+  // cannot claim it. Codex P2 on PR #446, found after the
+  // missing/empty case was closed.
+  if (unit.embedding.length !== requirement.embedding.length) {
+    return {
+      verdict: "unverifiable",
+      reason: "embedding_dimension_mismatch",
       stored: false,
     };
   }

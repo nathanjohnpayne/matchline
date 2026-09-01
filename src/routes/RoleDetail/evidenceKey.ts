@@ -88,7 +88,15 @@ export function legacyEvidenceKey(
   return legacy
     .map(
       (m) =>
-        `${m.id}~${unitSignature(unitById.get(m.experience_unit_id))}` +
+        // The two linked ids are part of the signature, not just
+        // the documents they resolve to. `upsertMatch` can
+        // repoint a match at a different Unit or Requirement
+        // while keeping `match.id`, and if the replacement pair
+        // happened to sign identically the container would skip
+        // re-derivation and keep the old pair's verdict.
+        // CodeRabbit on PR #446.
+        `${m.id}>${m.experience_unit_id}>${m.job_requirement_unit_id}` +
+        `~${unitSignature(unitById.get(m.experience_unit_id))}` +
         `~${requirementSignature(reqById.get(m.job_requirement_unit_id))}`,
     )
     .sort()

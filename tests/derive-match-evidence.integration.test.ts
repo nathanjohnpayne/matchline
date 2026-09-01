@@ -366,6 +366,19 @@ describe("readAndDeriveEvidence: verdicts", () => {
     expect(out.get("match-1")?.reason).toBe("requirement_embedding_missing");
   });
 
+  it("reports mismatched embedding dimensions as unverifiable", async () => {
+    await seed({
+      units: [unit({ embedding: [1, 0, 0] })],
+      requirements: [requirement({ embedding: [1, 0] })],
+      matches: [match()],
+    });
+    const out = await readAndDeriveEvidence({
+      ownerUid: ALICE,
+      roleId: ROLE,
+    });
+    expect(out.get("match-1")?.reason).toBe("embedding_dimension_mismatch");
+  });
+
   it("returns a stored verdict without re-deriving it", async () => {
     await seed({
       units: [unit({ skills: ["Woodworking"] })],

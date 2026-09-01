@@ -289,6 +289,40 @@ describe("resolveMatchEvidence: the three states", () => {
     }
   });
 
+  it("reports mismatched embedding dimensions as unverifiable", () => {
+    // Both vectors present and non-empty, so the earlier guards
+    // pass — but `cosine()` throws `MismatchedDimensionsError`
+    // and the pipeline drops the pair. A stale vector from a
+    // previous embedding model is the realistic cause.
+    expect(
+      resolveMatchEvidence(
+        makeLegacyMatch(),
+        makeUnit({ skills: ["Product Strategy"], embedding: [1, 0, 0] }),
+        makeRequirement({
+          keywords: ["product strategy"],
+          embedding: [1, 0],
+        }),
+      ),
+    ).toEqual({
+      verdict: "unverifiable",
+      reason: "embedding_dimension_mismatch",
+      stored: false,
+    });
+  });
+
+  it("derives normally when the dimensions agree", () => {
+    expect(
+      resolveMatchEvidence(
+        makeLegacyMatch(),
+        makeUnit({ skills: ["Product Strategy"], embedding: [1, 0] }),
+        makeRequirement({
+          keywords: ["product strategy"],
+          embedding: [0, 1],
+        }),
+      ).verdict,
+    ).toBe("evidenced");
+  });
+
   it("reports an unapproved Unit as unverifiable for the same reason", () => {
     expect(
       resolveMatchEvidence(

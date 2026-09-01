@@ -753,6 +753,15 @@ export default function RoleDetail(): ReactElement {
     if (roleId === undefined || roleId === "") return;
     if (status !== "ready" || !matchesFirstSnapshotReceived) return;
     if (evidenceKey === "") {
+      // Advancing the counter is what makes this branch safe. An
+      // explicit rematch replaces every legacy row with a current
+      // one WHILE a derivation is in flight; without the bump the
+      // obsolete request still passes `superseded()`, and on
+      // failure it would overwrite this clean state with
+      // `unavailable` — warning about older matches that no
+      // longer exist. Codex P2 on PR #446, found after the
+      // sequence guard itself landed.
+      evidenceSeqRef.current += 1;
       setMatchEvidence(undefined);
       setEvidenceStatus("current");
       return;
