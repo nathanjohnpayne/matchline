@@ -33,6 +33,7 @@ import {
   type SpecificityResponseV1,
 } from "../prompts/validation/specificity.v1.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 
 import type { Claim } from "./claimExtraction.js";
 import {
@@ -232,6 +233,8 @@ async function runLlmFallback(
     return finalizeResult(parsed.data, denyHit);
   }
 
+  // Retry budget exhausted — record why, server-side (#426).
+  logRetryExhaustion("validation.specificity", model, failures);
   throw new SpecificityCheckError(
     `Specificity check failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

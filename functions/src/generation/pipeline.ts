@@ -47,6 +47,7 @@ import type {
   UnitMatch,
 } from "../types/capability.js";
 import type { Role } from "../types/crm.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 import type {
   GeneratedAssetContent,
   GeneratedItem,
@@ -315,6 +316,8 @@ export async function runGenerationPipeline(
     };
   }
 
+  // Retry budget exhausted — record why, server-side (#426).
+  logRetryExhaustion("generation.resume", model, failures);
   throw new GenerationError(
     `Resume generation failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
