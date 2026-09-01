@@ -1,6 +1,7 @@
 import { signOut } from "firebase/auth";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import UpdatePrompt from "./components/UpdatePrompt.tsx";
 import Wordmark from "./components/Wordmark.tsx";
 import { getAuthClient } from "./firebase.ts";
 import { useCurrentUser } from "./lib/auth.tsx";
@@ -48,6 +49,10 @@ export default function App() {
   // Authenticated: the app shell.
   return (
     <div className="flex h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      {/* Deploy-detection banner (#429). Inside the authenticated
+          shell: an unauthenticated visitor is on /sign-in and about to
+          navigate anyway, so a reload offer there is noise. */}
+      <UpdatePrompt />
       <header className="border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between">
           <Wordmark className="text-lg" />

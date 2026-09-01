@@ -72,6 +72,7 @@ import {
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
+import { setAppBusy } from "../../lib/appBusy.ts";
 import { friendlyCallableError } from "../../lib/callable-errors.ts";
 import type {
   ExperienceUnit,
@@ -294,6 +295,8 @@ export default function RoleDetail(): ReactElement {
       setParseError(null);
       const trimmed = text.trim();
       const next: Role = { ...role, jd_raw: text };
+      // Suppress the update-reload banner while the parse runs (#429).
+      setAppBusy("roleDetail.parseJd", true);
       void (async () => {
         try {
           // Persist the JD first so a parse failure doesn't
@@ -380,6 +383,12 @@ export default function RoleDetail(): ReactElement {
             ),
           );
           setParsingStatus("error");
+        } finally {
+          // Cleared in finally, not per-branch: several paths above
+          // return early on a stale visit, and an un-cleared key would
+          // suppress the update banner for the rest of the session
+          // (#429).
+          setAppBusy("roleDetail.parseJd", false);
         }
       })();
     },
