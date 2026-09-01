@@ -65,6 +65,54 @@ describe("friendlyCallableError", () => {
     });
   });
 
+  describe("the >= 0.14.0 HTTP-status suffix", () => {
+    // @firebase/functions 0.14.0 appends ` [${httpStatus}]` to EVERY
+    // message (`_errorForResponse`'s final line). This repo installs
+    // 0.13.6, which does not, so these fixtures build the 0.14.0
+    // message shape on the installed error class rather than
+    // upgrading — the object is real, the message is what 0.14.0
+    // would produce. Codex P2 on PR #423.
+    it("treats a suffixed bare code as bare, not as a server message", () => {
+      const err = serverError("internal", "internal [0]");
+      expect(friendlyCallableError(err)).not.toBe("internal [0]");
+      expect(friendlyCallableError(err)).toContain("stopped responding");
+    });
+
+    it("handles the suffixed namespaced form too", () => {
+      const err = serverError("deadline-exceeded", "functions/deadline-exceeded [504]");
+      expect(friendlyCallableError(err)).toContain("timed out");
+    });
+
+    it("strips the suffix from a genuine server message", () => {
+      // Otherwise the banner reads "...needs manual review. [400]".
+      const err = serverError(
+        "failed-precondition",
+        "Extraction failed after retries; needs manual review. [400]",
+      );
+      expect(friendlyCallableError(err)).toBe(
+        "Extraction failed after retries; needs manual review.",
+      );
+    });
+
+    it("treats the SDK's backend-status stand-in as bare", () => {
+      // 0.14.0 uses this when the body has error.status but no
+      // error.message. Machine text, not user copy.
+      const err = serverError("internal", "Backend error status: INTERNAL [500]");
+      expect(friendlyCallableError(err)).toContain("stopped responding");
+      const unknown = serverError(
+        "internal",
+        "Unknown backend error status: WEIRD [500]",
+      );
+      expect(friendlyCallableError(unknown)).toContain("stopped responding");
+    });
+
+    it("does not strip a bracketed number that is not a trailing status", () => {
+      // Guard the regex: only an anchored 1-3 digit suffix goes.
+      const err = serverError("invalid-argument", "Row [1024] failed validation");
+      expect(friendlyCallableError(err)).toBe("Row [1024] failed validation");
+    });
+  });
+
   describe("bare status codes (no server error body)", () => {
     it("maps the #422 'internal' case to actionable copy", () => {
       const msg = friendlyCallableError(bareError("internal"));

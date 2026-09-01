@@ -40,12 +40,40 @@
  * its tests hid it by fabricating unnamespaced codes instead of the
  * SDK's real error shape. The tests now build real `FunctionsError`
  * instances so the shape cannot drift from reality again.
+ *
+ * **The status-suffix trap.** `@firebase/functions` 0.14.0 changed the
+ * final line of `_errorForResponse` to
+ * `new FunctionsError(code, \`${description} [${httpStatus}]\`, ...)`,
+ * appending the HTTP status to *every* message. A bare code becomes
+ * `internal [0]`, and our own `HttpsError` text becomes
+ * `Extraction failed after retries; needs manual review. [400]`.
+ * Both a `message === code` check and the raw pass-through break on
+ * that. This repo installs 0.13.6, which has no suffix — verified in
+ * `node_modules` and corroborated by the #422 screenshots, whose
+ * banner read exactly `internal`. So it is latent, not live; but
+ * Dependabot bumps `firebase` here, so it activates on upgrade
+ * rather than in theory. Codex caught it on PR #423. Both the
+ * bare-code comparison and the pass-through strip the suffix.
  */
 
 import { FunctionsError } from "firebase/functions";
 
 /** `FUNCTIONS_TYPE` in `@firebase/functions`; every code carries it. */
 const CODE_PREFIX = "functions/";
+
+/**
+ * Trailing ` [<http status>]` that `@firebase/functions` >= 0.14.0
+ * appends to every callable error message. Anchored and bounded to
+ * 1-3 digits so it cannot eat a legitimate trailing bracket.
+ */
+const STATUS_SUFFIX = / \[\d{1,3}\]$/;
+
+/**
+ * SDK-generated stand-in used by >= 0.14.0 when the response body
+ * carries an `error.status` but no `error.message`. It is machine
+ * text, not copy written for a user, so it counts as bare.
+ */
+const BACKEND_STATUS_PREFIX = /^(Unknown b|B)ackend error status: /;
 
 /**
  * Callable status codes this module maps explicitly, in their bare
@@ -123,9 +151,16 @@ function callableCode(err: unknown): string | undefined {
  * the synthesized message still reads as bare rather than as
  * server-authored.
  */
-function isBareCode(err: unknown, bareCode: string): boolean {
+function normalizedMessage(err: unknown): string | undefined {
   const message = (err as FunctionsError | undefined)?.message;
-  if (typeof message !== "string" || message.trim() === "") return true;
+  if (typeof message !== "string") return undefined;
+  return message.replace(STATUS_SUFFIX, "").trim();
+}
+
+function isBareCode(err: unknown, bareCode: string): boolean {
+  const message = normalizedMessage(err);
+  if (message === undefined || message === "") return true;
+  if (BACKEND_STATUS_PREFIX.test(message)) return true;
   return message === bareCode || message === `${CODE_PREFIX}${bareCode}`;
 }
 
@@ -142,9 +177,10 @@ export function friendlyCallableError(
   const code = callableCode(err);
   if (code === undefined) return GENERIC;
 
-  // The server wrote this message for a human. Prefer it.
+  // The server wrote this message for a human. Prefer it — minus the
+  // SDK's status suffix, which is diagnostic noise in a banner.
   if (!isBareCode(err, code)) {
-    return (err as FunctionsError).message;
+    return normalizedMessage(err) ?? GENERIC;
   }
 
   const operation = options.operation ?? DEFAULT_OPERATION;
