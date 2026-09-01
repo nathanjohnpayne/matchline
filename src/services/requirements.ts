@@ -25,6 +25,7 @@
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 import type { JobRequirementUnit } from "../types/capability.ts";
 
 export interface ParseJobRequirementsResponse {
@@ -59,7 +60,11 @@ export async function invokeParseJobRequirements(
   const fn = httpsCallable<
     { roleId: string; text: string },
     ParseJobRequirementsResponse
-  >(getFunctionsClient(), "parseJobRequirements");
+  >(
+    getFunctionsClient(),
+    "parseJobRequirements",
+    callableOptions("parseJobRequirements"),
+  );
   const result = await fn({ roleId, text });
   return result.data;
 }

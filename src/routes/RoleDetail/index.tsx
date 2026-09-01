@@ -72,6 +72,7 @@ import {
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
+import { friendlyCallableError } from "../../lib/callable-errors.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -363,7 +364,13 @@ export default function RoleDetail(): ReactElement {
             });
         } catch (err) {
           if (isStale()) return;
-          setParseError(err instanceof Error ? err : new Error(String(err)));
+          // Map before display: a callable that dies structurally
+          // (Cloud Run timeout kill, uncaught server error) arrives
+          // with `message` set to the bare status code, and this
+          // banner rendered it verbatim — #422 showed "internal"
+          // here. `friendlyCallableError` passes through any real
+          // server message untouched.
+          setParseError(new Error(friendlyCallableError(err)));
           setParsingStatus("error");
         }
       })();
@@ -779,9 +786,8 @@ export default function RoleDetail(): ReactElement {
         navigate(`/applications/${newAppId}`);
       } catch (err) {
         if (isStale()) return;
-        setGenerationError(
-          err instanceof Error ? err : new Error(String(err)),
-        );
+        // Same bare-status-code mapping as the parse path above.
+        setGenerationError(new Error(friendlyCallableError(err)));
         setGenerationStatus("error");
       }
     })();

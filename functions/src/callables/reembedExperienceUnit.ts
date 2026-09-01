@@ -24,6 +24,7 @@ import {
   ReembedNotPending,
   reembedExperienceUnit,
 } from "../reembedding/reembed.js";
+import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 
 /**
  * Request payload shape. Canonical key is `unitId` (matches the
@@ -43,6 +44,9 @@ export const reembedExperienceUnitCallable = onCall(
     // The re-embed pipeline calls the OpenAI embeddings client;
     // the Anthropic secret isn't needed.
     secrets: [openaiKey],
+    // Not the 60s default: headroom for a slow embeddings response.
+    // See ./timeouts.ts (#422).
+    timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.reembedExperienceUnit,
   },
   async (request) => {
     if (!request.auth?.uid) {

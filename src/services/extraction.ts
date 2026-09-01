@@ -24,38 +24,12 @@
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 export interface ExtractFromResumeResponse {
   readonly units: readonly ExperienceUnit[];
 }
-
-/**
- * Client-side deadline for the `extractFromResume` call, in ms.
- *
- * **Why this is not the default.** `httpsCallable` defaults to a
- * 70,000 ms client timeout (`@firebase/functions`
- * `callAtURL`: `options.timeout || 70000`). Extraction on a real
- * resume runs for minutes — see `EXTRACT_TIMEOUT_SECONDS` in
- * `functions/src/callables/extractFromResume.ts` — so leaving the
- * default here would just move #422's failure from the server to
- * the client and re-surface it as `deadline-exceeded`.
- *
- * **Why it must exceed the server budget.** Whichever side gives up
- * first decides what the user sees. If the client aborts, the SDK
- * synthesizes its own error and the server's structured
- * `HttpsError` — including the `failed-precondition` retry
- * diagnostics this module documents below — is thrown away. Holding
- * the client strictly above the server budget means a real server
- * verdict always wins the race, and the client deadline is only a
- * backstop for a connection that hangs past the point where Cloud
- * Run should have returned something.
- *
- * The 30s margin covers Cloud Run's own teardown-and-respond tail.
- * `tests/extract-timeout-budget.test.ts` pins the ordering so the
- * two values cannot drift back into conflict.
- */
-export const EXTRACT_CALL_TIMEOUT_MS = 570_000;
 
 /**
  * Invoke the server-side extraction pipeline. Resolves to the
@@ -79,7 +53,7 @@ export async function invokeExtractFromResume(
   const fn = httpsCallable<{ text: string }, ExtractFromResumeResponse>(
     getFunctionsClient(),
     "extractFromResume",
-    { timeout: EXTRACT_CALL_TIMEOUT_MS },
+    callableOptions("extractFromResume"),
   );
   const result = await fn({ text });
   return result.data;

@@ -18,6 +18,7 @@ import { JdParsingError } from "../parsing/errors.js";
 import { runJdParsingPipeline } from "../parsing/pipeline.js";
 import { anthropicKey } from "../llm/anthropic.js";
 import { openaiKey } from "../llm/openai.js";
+import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 
 interface ParseJobRequirementsData {
   readonly roleId?: string;
@@ -27,6 +28,9 @@ interface ParseJobRequirementsData {
 export const parseJobRequirementsCallable = onCall(
   {
     secrets: [anthropicKey, openaiKey],
+    // Not the 60s default: see ./timeouts.ts. A JD parse runs the
+    // same 3-attempt / 16,384-token loop extraction does.
+    timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.parseJobRequirements,
   },
   async (request) => {
     if (!request.auth?.uid) {
