@@ -101,13 +101,13 @@ function makeReq(id: string): JobRequirementUnit {
   };
 }
 
-function makeMatch(unitId: string): UnitMatch {
+function makeMatch(unitId: string, requirementId = "req-1"): UnitMatch {
   return {
     id: `match-${unitId}`,
     owner_uid: "user-alice",
     role_id: "role-1",
     experience_unit_id: unitId,
-    job_requirement_unit_id: "req-1",
+    job_requirement_unit_id: requirementId,
     semantic_score: 0.8,
     rule_score: 0.7,
     final_score: 0.75,
@@ -128,13 +128,22 @@ function makeMatch(unitId: string): UnitMatch {
 function makeInputs(
   unitIds: string[],
   approvedMatchUnitIds?: string[],
+  /**
+   * Requirement the approved matches point at. Defaults to the
+   * one `requirements` contains; pass a different id to model a
+   * JD re-parse that replaced the Requirement set and stranded
+   * the matches (#442).
+   */
+  matchRequirementId = "req-1",
 ): GenerationInputs {
   const matchedIds = approvedMatchUnitIds ?? unitIds;
   return {
     units: unitIds.map((id) => makeUnit(id)),
     role: makeRole(),
     requirements: [makeReq("req-1")],
-    approvedMatches: matchedIds.map((id) => makeMatch(id)),
+    approvedMatches: matchedIds.map((id) =>
+      makeMatch(id, matchRequirementId),
+    ),
   };
 }
 
@@ -292,6 +301,104 @@ describe("runGenerationPipeline", () => {
     }
     expect(create).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it("STRANDED-MATCH GATE (#442): an approved match whose Requirement was deleted cannot ground generation", async () => {
+    // A JD re-parse replaces the Role's Requirements under new
+    // ids before matching runs. If the follow-up `runMatching`
+    // fails, the old approved matches survive pointing at ids
+    // that are gone — and this gate previously read only
+    // `experience_unit_id`, so such a match still made its Unit
+    // eligible to ground a resume against a Requirement the JD no
+    // longer contains. A zero-fabrication violation reached
+    // through stale data rather than a bad model output, which is
+    // why every other guard missed it.
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([]);
+
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client,
+        record,
+        // 1 approved Unit with an approved match, but the match
+        // points at a Requirement the re-parse removed.
+        loadInputs: async () => makeInputs(["u1"], ["u1"], "req-deleted"),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    expect(create).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("STRANDED-MATCH GATE (#442): names re-running matching, not approving a match", async () => {
+    // The remedy differs from the other two causes and the
+    // message has to say so. "Approve at least one match" is
+    // wrong advice for a user who already did — there is nothing
+    // left to approve, and the fix is to re-run matching against
+    // the current Requirements.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => makeInputs(["u1"], ["u1"], "req-deleted"),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no longer exists");
+      expect(thrown.message).toContain("re-run matching");
+      expect(thrown.message).not.toContain("Approve at least one match");
+    }
+  });
+
+  it("STRANDED-MATCH GATE (#442): a live match still grounds generation when a sibling is stranded", async () => {
+    // The gate drops only the stranded matches. A Role part-way
+    // through a re-parse must not lose the matches that are still
+    // valid.
+    const groundsOnStranded = {
+      summary: { text: "Summary", source_unit_ids: ["u2"] },
+      bullets: [],
+      skills: [],
+    };
+    const validResponse = {
+      summary: { text: "Summary", source_unit_ids: ["u1"] },
+      bullets: [],
+      skills: [],
+    };
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([
+      mockMessage(groundsOnStranded),
+      mockMessage(validResponse),
+    ]);
+
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record,
+      loadInputs: async () => ({
+        units: [makeUnit("u1"), makeUnit("u2")],
+        role: makeRole(),
+        requirements: [makeReq("req-1")],
+        approvedMatches: [
+          makeMatch("u1", "req-1"),
+          makeMatch("u2", "req-deleted"),
+        ],
+      }),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+
+    // u2's only approved match is stranded, so u2 is not an
+    // eligible Unit: cross-validation rejects the first attempt
+    // for grounding on it, exactly as it does for a Unit with no
+    // approved match at all.
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.content.summary.source_unit_ids).toEqual(["u1"]);
   });
 
   it("APPROVED-MATCHES GATE: only Units WITH approved matches reach the prompt + cross-validation", async () => {

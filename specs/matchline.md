@@ -165,7 +165,14 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit.user_approved == true` is required for the Unit to
   enter any match or generation pipeline.
 - `UnitMatch.approved_for_use == true` is required for the match to
-  contribute to generation.
+  contribute to generation, and is **not sufficient**: the match's
+  `job_requirement_unit_id` must still resolve to a Requirement the
+  Role currently has. A JD re-parse replaces the Requirement set under
+  new ids, so an approved match can outlive the requirement it
+  answered; grounding a generated claim on one would assert relevance
+  to something the job description no longer asks for. Such matches are
+  refused at generation rather than deleted — the approval is the
+  user's decision to keep, and a rematch may well reinstate the pair.
 - `Application.approved_unit_ids` is a snapshot of the Units used to
   generate a specific artifact. Changing a Unit later must not mutate
   a historical Application's grounding set.

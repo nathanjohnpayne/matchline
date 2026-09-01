@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run --passWithNoTests --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
     "test:watch": "vitest --exclude=tests/firestore-rules.test.ts --exclude=tests/**/*.integration.test.ts --exclude=.claude/**",
-    "test:rules": "scripts/firebase/with-java.sh firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts tests/matching-replace.integration.test.ts tests/validation-fabrication.integration.test.ts tests/generation-persistence.integration.test.ts tests/derive-match-evidence.integration.test.ts --exclude=.claude/**'",
+    "test:rules": "scripts/firebase/with-java.sh firebase emulators:exec --only firestore 'vitest run tests/firestore-rules.test.ts tests/rejected-exclusion.integration.test.ts tests/matching-replace.integration.test.ts tests/validation-fabrication.integration.test.ts tests/generation-persistence.integration.test.ts tests/derive-match-evidence.integration.test.ts tests/orphaned-match-generation.integration.test.ts --exclude=.claude/**'",
     "eval": "tsx tests/eval/run.ts",
     "ontology:collect": "tsx scripts/ontology/collect-vocab.ts",
     "ontology:harvest-jd": "tsx scripts/ontology/harvest-jd-vocab.ts",

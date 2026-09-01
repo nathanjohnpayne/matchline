@@ -126,8 +126,35 @@ export async function runGenerationPipeline(
   // cursor CHANGES_REQUESTED round 1 on PR #123 caught the gap:
   // the prior version loaded approvedMatches but didn't use
   // them to gate the prompt input.
+  // Drop approved matches whose Requirement no longer exists
+  // (#442).
+  //
+  // A JD re-parse replaces the Role's Requirements under NEW ids
+  // (`parsing/pipeline.ts` clear-and-replace) before matching
+  // runs. `RoleDetail` fires `runMatching` straight afterwards to
+  // close that window, but if that call fails — a timeout, a
+  // transient callable error, the user closing the tab — the old
+  // matches survive pointing at ids that are gone.
+  //
+  // Those matches are not inert. They keep `approved_for_use`,
+  // and this gate reads only `experience_unit_id`, so a stranded
+  // match made its Unit eligible to ground a resume on the
+  // strength of a Requirement the employer's JD no longer
+  // contains. That is a zero-fabrication violation reached
+  // through stale data rather than through a bad model output,
+  // which is why it survived every other guard in the pipeline.
+  //
+  // `requirements` is already loaded here, role- and
+  // owner-scoped, so the check costs nothing.
+  const currentRequirementIds = new Set(inputs.requirements.map((r) => r.id));
+  const liveApprovedMatches = inputs.approvedMatches.filter((m) =>
+    currentRequirementIds.has(m.job_requirement_unit_id),
+  );
+  const strandedApprovedCount =
+    inputs.approvedMatches.length - liveApprovedMatches.length;
+
   const approvedMatchedUnitIds = new Set(
-    inputs.approvedMatches.map((m) => m.experience_unit_id),
+    liveApprovedMatches.map((m) => m.experience_unit_id),
   );
   const eligibleUnits = inputs.units.filter((u) =>
     approvedMatchedUnitIds.has(u.id),
@@ -139,6 +166,21 @@ export async function runGenerationPipeline(
     // approved Units but no approved matches connecting any of
     // them to this Role's Requirements. The error message
     // distinguishes for the editor surface (#24)'s UX.
+    // Three causes now, and the third needs a DIFFERENT remedy.
+    // "Approve at least one match" is wrong advice for a user who
+    // already approved matches that a re-parse then stranded —
+    // there is nothing left to approve, and the fix is to re-run
+    // matching against the current Requirements.
+    if (liveApprovedMatches.length === 0 && strandedApprovedCount > 0) {
+      throw new GenerationNoApprovedUnitsError(
+        `Approved Units present (${inputs.units.length}) and ` +
+          `${strandedApprovedCount} approved UnitMatch(es) for this Role, but ` +
+          `every one points at a Requirement that no longer exists — the job ` +
+          `description was re-parsed and matching has not been re-run since. ` +
+          `Nothing to generate from for application ${ctx.applicationId}; ` +
+          `re-run matching on the Matches tab before generating.`,
+      );
+    }
     const detail =
       inputs.units.length === 0
         ? "No approved ExperienceUnits"
@@ -540,11 +582,27 @@ async function defaultLoadInputs(
     );
   }
 
+  // `id` from the document id, not from the stored fields.
+  //
+  // The admin SDK uses no converter, while `services/firestore.ts`
+  // strips `id` on every client-side write (the document id is
+  // canonical). Requirements happen to be server-written today, so
+  // their `id` is present — but the stranded-match gate above now
+  // DEPENDS on these ids resolving, and if they were ever absent
+  // the set would be `{undefined}` and every approved match would
+  // read as stranded. That failure mode blocks all generation, so
+  // the gate should not rest on a property of the current write
+  // path. Same fix as `matching/evidence-read.ts` (#441); the
+  // remaining admin readers are tracked in #447.
   return {
     units,
     role,
-    requirements: reqsSnap.docs.map((d) => d.data()) as JobRequirementUnit[],
-    approvedMatches: matchesSnap.docs.map((d) => d.data()) as UnitMatch[],
+    requirements: reqsSnap.docs.map(
+      (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+    ),
+    approvedMatches: matchesSnap.docs.map(
+      (d) => ({ ...(d.data() as UnitMatch), id: d.id }),
+    ),
   };
 }
 
