@@ -28,6 +28,7 @@ import {
   ValidateAssetNotFound,
   ValidateAssetStale,
 } from "../validation/validate.js";
+import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 
 interface ValidateAssetData {
   readonly applicationId?: string;
@@ -37,6 +38,9 @@ interface ValidateAssetData {
 export const validateAssetCallable = onCall(
   {
     secrets: [anthropicKey],
+    // Not the 60s default: several Sonnet passes per invocation,
+    // each with its own retry budget. See ./timeouts.ts (#422).
+    timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.validateAsset,
   },
   async (request) => {
     if (!request.auth?.uid) {

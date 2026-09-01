@@ -30,6 +30,7 @@ import { useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
 import ResumeEditor from "../components/ResumeEditor.tsx";
+import { friendlyCallableError } from "../lib/callable-errors.ts";
 import { invokeExtractFromResume } from "../services/extraction.ts";
 
 export type OnboardingStatus = "editing" | "extracting" | "error";
@@ -38,7 +39,12 @@ export default function Onboarding(): ReactElement {
   const navigate = useNavigate();
   const [text, setText] = useState("");
   const [status, setStatus] = useState<OnboardingStatus>("editing");
-  const [error, setError] = useState<Error | null>(null);
+  // Holds display copy, not the raw failure. Callable errors reach
+  // this route with a message that is sometimes just the status code
+  // (#422 rendered a banner reading "internal"), so the mapping to
+  // user-facing text happens on the way in, at the one place that
+  // knows the call failed.
+  const [error, setError] = useState<string | null>(null);
 
   const onEditorChange = (markdown: string): void => {
     setText(markdown);
@@ -50,7 +56,7 @@ export default function Onboarding(): ReactElement {
     if (status === "extracting") return;
     if (text.trim().length === 0) {
       setStatus("error");
-      setError(new Error("Paste resume text first."));
+      setError("Paste resume text first.");
       return;
     }
     setStatus("extracting");
@@ -62,7 +68,13 @@ export default function Onboarding(): ReactElement {
       navigate("/units");
     } catch (err) {
       setStatus("error");
-      setError(err instanceof Error ? err : new Error(String(err)));
+      setError(
+        friendlyCallableError(err, {
+          operation: "extracting your resume",
+          timeoutHint:
+            "Trimming it to the roles most relevant to your target market usually helps.",
+        }),
+      );
     }
   };
 
@@ -112,7 +124,7 @@ export default function Onboarding(): ReactElement {
           data-testid="onboarding-error"
           className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
         >
-          {error.message}
+          {error}
         </p>
       )}
 

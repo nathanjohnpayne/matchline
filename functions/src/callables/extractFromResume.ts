@@ -19,6 +19,7 @@ import { runExtractionPipeline } from "../extraction/pipeline.js";
 import { ExtractionError } from "../extraction/errors.js";
 import { anthropicKey } from "../llm/anthropic.js";
 import { openaiKey } from "../llm/openai.js";
+import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 
 interface ExtractFromResumeData {
   readonly text?: string;
@@ -31,6 +32,9 @@ export const extractFromResumeCallable = onCall(
     // via Firebase secret params at call time. Listing both here
     // materializes the secrets into the function's runtime env.
     secrets: [anthropicKey, openaiKey],
+    // Not the 60s default: see ./timeouts.ts for why, and for
+    // the client-side deadline that has to stay above it.
+    timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.extractFromResume,
   },
   async (request) => {
     if (!request.auth?.uid) {

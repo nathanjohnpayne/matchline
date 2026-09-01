@@ -11,6 +11,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 import type { UnitMatch } from "../types/capability.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
@@ -241,6 +242,10 @@ export async function invokeRunMatching(roleId: string): Promise<void> {
   const fn = httpsCallable<
     { roleId: string },
     { matches: UnitMatch[] }
-  >(getFunctionsClient(), "runMatching");
+  >(
+    getFunctionsClient(),
+    "runMatching",
+    callableOptions("runMatching"),
+  );
   await fn({ roleId });
 }
