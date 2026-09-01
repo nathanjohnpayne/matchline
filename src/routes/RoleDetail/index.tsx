@@ -678,6 +678,22 @@ export default function RoleDetail(): ReactElement {
       (m) => m.structural_evidence === undefined,
     );
 
+    // A healed snapshot retires the failure state. Without this
+    // the amber warning and the withdrawn trust would outlive
+    // the problem: another path (a manual re-parse, which
+    // re-runs matching) can succeed and backfill every row while
+    // `triggeredRef` is still latched from the failed attempt,
+    // leaving the Role permanently claiming it couldn't be
+    // re-scored. Codex P2 round 5 asked for exactly this half.
+    if (
+      legacyBackfillFailedFor !== null &&
+      legacyBackfillFailedFor === roleId &&
+      !hasEvidenceUnscoredMatches &&
+      matches.length > 0
+    ) {
+      setLegacyBackfillFailedFor(null);
+    }
+
     if (
       status === "ready" &&
       matchesFirstSnapshotReceived &&
@@ -748,6 +764,7 @@ export default function RoleDetail(): ReactElement {
     // predicate can flip without the length changing.
     matches,
     requirements.length,
+    legacyBackfillFailedFor,
   ]);
 
   // Build the unit lookup once per units array. The matching
