@@ -68,7 +68,13 @@ export default function Onboarding(): ReactElement {
       navigate("/units");
     } catch (err) {
       setStatus("error");
-      setError(friendlyCallableError(err));
+      setError(
+        friendlyCallableError(err, {
+          operation: "extracting your resume",
+          timeoutHint:
+            "Trimming it to the roles most relevant to your target market usually helps.",
+        }),
+      );
     }
   };
 

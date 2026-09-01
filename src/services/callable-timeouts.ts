@@ -56,7 +56,25 @@ export type CallableName = keyof typeof CALLABLE_TIMEOUT_MS;
  * keeps the callable's name and its deadline adjacent and makes a
  * missing deadline visible at the call site rather than silently
  * falling back to the SDK default.
+ *
+ * **Throws on an unknown name rather than returning `undefined`.**
+ * The SDK reads `options.timeout || 70000`, so a `{ timeout:
+ * undefined }` bag is indistinguishable from passing nothing — it
+ * silently reinstates the 70s default that #422 is about. TypeScript
+ * makes the bad call unrepresentable at compile time, but this
+ * module is the last line before that default, and a name arriving
+ * from untyped ground (a JS caller, a widened string, a bad cast)
+ * must fail loudly instead of quietly regressing.
  */
 export function callableOptions(name: CallableName): { timeout: number } {
-  return { timeout: CALLABLE_TIMEOUT_MS[name] };
+  const timeout = CALLABLE_TIMEOUT_MS[name];
+  if (typeof timeout !== "number") {
+    throw new Error(
+      `callableOptions: no client deadline registered for "${String(name)}". ` +
+        `Add an entry to CALLABLE_TIMEOUT_MS (and its server budget to ` +
+        `functions/src/callables/timeouts.ts) — falling back to the SDK's ` +
+        `70s default is what #422 fixed.`,
+    );
+  }
+  return { timeout };
 }

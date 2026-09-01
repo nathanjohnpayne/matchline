@@ -370,7 +370,15 @@ export default function RoleDetail(): ReactElement {
           // banner rendered it verbatim — #422 showed "internal"
           // here. `friendlyCallableError` passes through any real
           // server message untouched.
-          setParseError(new Error(friendlyCallableError(err)));
+          setParseError(
+            new Error(
+              friendlyCallableError(err, {
+                operation: "parsing the job description",
+                timeoutHint:
+                  "Trimming the posting down to the actual requirements usually helps.",
+              }),
+            ),
+          );
           setParsingStatus("error");
         }
       })();
@@ -787,7 +795,13 @@ export default function RoleDetail(): ReactElement {
       } catch (err) {
         if (isStale()) return;
         // Same bare-status-code mapping as the parse path above.
-        setGenerationError(new Error(friendlyCallableError(err)));
+        // No timeoutHint: generation reads from already-stored Units
+        // and matches, so there is no input for the user to trim.
+        setGenerationError(
+          new Error(
+            friendlyCallableError(err, { operation: "generating your resume" }),
+          ),
+        );
         setGenerationStatus("error");
       }
     })();
