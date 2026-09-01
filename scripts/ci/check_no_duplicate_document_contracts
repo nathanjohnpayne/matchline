@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# check_no_duplicate_document_contracts (#443)
+#
+# The Firestore document contracts have exactly ONE declaration site:
+# `functions/src/types/capability.ts`. `src/types/capability.ts`
+# type-only re-exports them.
+#
+# They used to be two hand-synced copies, and hand-syncing failed
+# silently: by the time this was unified the copies had drifted, each
+# documenting invariants the other could not see — the frontend had the
+# tri-state approval encoding and the `flagsForApprovalState()` rule,
+# the backend had the matching pipeline's carry-forward behaviour. No
+# test could fail on that, because both files compiled fine.
+#
+# This is the drift guard the old headers said they wanted. Same shape
+# as check_no_other_skill_normalization: a structural invariant enforced
+# rather than remembered.
+#
+# ## Why a text scan and not an AST walk
+#
+# An AST-aware check would be strictly better, and it is not reachable
+# here: .github/workflows/repo_lint_local.yml runs no `npm ci`, so the
+# TypeScript compiler API is not installed when this executes. Wiring a
+# full install into the structural-lint annex to parse fifteen names is
+# the wrong trade.
+#
+# So the matcher is form-aware instead of exact-prefix. It recognizes a
+# declaration in any position — exported or not, `declare`d or not,
+# indented or not, interface / type / class / enum — because Codex P2 on
+# PR #445 demonstrated all three evasions of the original
+# `^export (interface|type)` form, including the indirect
+# `interface X` + `export type { X }`. Catching the bare declaration
+# keyword catches that last one too.
+#
+# The residual gap is a declaration whose keyword and name are split
+# across lines. Nothing in this repo is formatted that way and Prettier
+# would not produce it, but the limit is real and stated rather than
+# papered over.
+#
+# ## Portability
+#
+# Runs on stock macOS Bash 3.2, like every other locally runnable check
+# here: no `mapfile` (see scripts/ci/check_workflow_parsers for the same
+# constraint), and no `\b`, which BSD grep does not reliably honour.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+APP="$ROOT/src/types/capability.ts"
+FN="$ROOT/functions/src/types/capability.ts"
+
+# Every persisted Firestore document contract, plus the enums and
+# value objects they are built from. `UnitCluster` / `NarrativePurpose`
+# are here because `unitClusters` is a top-level collection covered by
+# tests/firestore-rules.test.ts — they were briefly misfiled as app-only
+# view models (Codex P2 on PR #445).
+CONTRACTS=(
+  ExperienceUnit JobRequirementUnit UnitMatch ScoreComponents
+  Metric DateRange EvidenceType MetricConfidence MetricDirection
+  RequirementCategory RequirementPriority RequirementSource
+  SeniorityLevel UnitSourceType UnitType
+  UnitCluster NarrativePurpose
+)
+
+fail=0
+
+for f in "$APP" "$FN"; do
+  if [ ! -r "$f" ]; then
+    echo "check_no_duplicate_document_contracts: missing $f" >&2
+    exit 1
+  fi
+done
+
+# Repo-wide scan, not just the two files that used to be the copies.
+#
+# Codex P2 on PR #445: restricting the duplicate check to $APP left the
+# guard unable to preserve the state it was introduced to protect —
+# TypeScript happily allows an unrelated `export interface
+# ExperienceUnit` in any other module, and the next hand-synced copy
+# would simply land somewhere else. So the invariant is stated as it
+# actually is: across every TypeScript source in the repo, each
+# contract has exactly one declaration, and it is in $FN.
+SCAN_ROOTS=("$ROOT/src" "$ROOT/functions/src" "$ROOT/tests")
+
+# Assert every root before scanning. `find`'s exit status is swallowed
+# by the pipe to `sort`, so a renamed or moved directory would silently
+# shrink the scan while the script still printed OK — the guard would
+# stop guarding exactly when the tree changed under it. CodeRabbit on
+# PR #445.
+for d in "${SCAN_ROOTS[@]}"; do
+  if [ ! -d "$d" ]; then
+    echo "check_no_duplicate_document_contracts: scan root missing: ${d#"$ROOT/"}" >&2
+    echo "      Update SCAN_ROOTS if the tree moved; do not narrow the scan." >&2
+    exit 1
+  fi
+done
+
+# Bash 3.2 has no `mapfile`, and this check is documented as locally
+# runnable, so a `while read` loop it is.
+SOURCES=()
+while IFS= read -r f; do
+  SOURCES+=("$f")
+done < <(
+  # Exclusions are ANCHORED, not `*/lib/*`-style globs. The loose
+  # form was aimed at `functions/lib/` — the compiled output named
+  # by `main: lib/index.js` — but it also swallowed `src/lib/`,
+  # which holds real application code (`auth.tsx`,
+  # `callable-errors.ts`, and more). A duplicate declared there was
+  # invisible to a guard whose whole premise is that it scans every
+  # source. Codex P2 on PR #445.
+  find "${SCAN_ROOTS[@]}" \
+    -type f \( -name '*.ts' -o -name '*.tsx' \) \
+    -not -path "$ROOT/node_modules/*" \
+    -not -path "$ROOT/functions/node_modules/*" \
+    -not -path "$ROOT/dist/*" \
+    -not -path "$ROOT/functions/lib/*" \
+    | sort
+)
+
+if [ "${#SOURCES[@]}" -eq 0 ]; then
+  echo "check_no_duplicate_document_contracts: found no TypeScript sources to scan" >&2
+  exit 1
+fi
+
+# A declaration in ANY form, distinguished from a reference to one.
+#
+# Two alternatives, because the two halves have different hazards.
+#
+# `interface` / `class` / `enum` at the start of a line is always a
+# declaration — TypeScript has no import or export specifier using
+# those keywords — so a plain word boundary suffices. It is written
+# out as an explicit character class rather than `\b`, which BSD grep
+# does not reliably honour.
+#
+# `type` is the awkward one: `type X` also appears as an import or
+# export specifier inside braces, and a multi-line
+# `import { type ScoreComponents, ... }` is indistinguishable from a
+# declaration by word boundary alone. A real type alias is always
+# followed by `=` or a type parameter list, so that is required. The
+# first attempt at this used a fixed terminator list for BOTH halves
+# and missed heritage clauses (`interface X extends Y`); widening it
+# to a bare word boundary then matched the import specifier above, in
+# `functions/src/matching/rationale.ts`. Splitting the two is what
+# satisfies both.
+#
+# Modifiers may appear in any order and any number, `default`
+# included — `export default interface X {}` is valid and was the
+# form Codex P2 used on PR #445 to walk through the previous version.
+#
+# Anchoring after leading whitespace keeps `Record<string, UnitMatch>`
+# out, along with prose in `//` and ` *` comment lines.
+MODS='((export|default|declare|abstract|const)[[:space:]]+)*'
+BOUNDARY='([^A-Za-z0-9_$]|$)'
+
+decl_pattern() {
+  printf '%s' "^[[:space:]]*$MODS((interface|class|enum)[[:space:]]+$1$BOUNDARY|type[[:space:]]+$1[[:space:]]*[<=])"
+}
+
+for t in "${CONTRACTS[@]}"; do
+  # One grep across every source, not one per file: the per-file
+  # loop spawned ~3,300 processes per run (17 contracts x 196
+  # sources) and took ~10s. `grep -l` prints each matching path
+  # once and exits 1 when nothing matches, which `|| true` absorbs.
+  # `grep -c`, not `grep -l`: the count is per DECLARATION, not per
+  # file. Interfaces support declaration merging, so a second
+  # `export interface Metric` appended to the canonical file is
+  # valid TypeScript and silently reopens the drift this guard
+  # exists to close — and a path-based check cannot see it, because
+  # the one path it reports is the right one. Codex P2 on PR #445.
+  declarers=()
+  total=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    f="${line%:*}"
+    n="${line##*:}"
+    [ "$n" -gt 0 ] || continue
+    total=$((total + n))
+    declarers+=("${f#"$ROOT/"}:$n")
+  done < <(grep -cE "$(decl_pattern "$t")" "${SOURCES[@]}" || true)
+
+  if [ "$total" -eq 1 ] && \
+     [ "${declarers[0]}" = "functions/src/types/capability.ts:1" ]; then
+    continue
+  fi
+
+  fail=1
+  if [ "$total" -eq 0 ]; then
+    echo "FAIL: $t is not declared anywhere. The canonical site is" >&2
+    echo "      functions/src/types/capability.ts." >&2
+    continue
+  fi
+  echo "FAIL: $t has $total declaration(s); expected exactly 1:" >&2
+  for d in "${declarers[@]}"; do
+    echo "        ${d%:*} (${d##*:})" >&2
+  done
+  echo "      The document contracts have exactly one declaration site" >&2
+  echo "      (functions/src/types/capability.ts). Re-export instead:" >&2
+  echo "        export type { $t } from \"../../functions/src/types/capability.ts\";" >&2
+  echo "      See issue #443 for why hand-synced copies were removed." >&2
+done
+
+# The app must re-export every contract BY NAME.
+#
+# The path-only form this replaced asked whether any export from the
+# canonical module survived, which stayed true after a contract was
+# dropped from the list — `UnitCluster`, having no app consumer today,
+# could be removed and the guard still reported OK. The frontend would
+# then quietly stop exposing part of the persisted contract surface
+# this check promises to preserve, and the first consumer to need it
+# would reach for a local declaration. Codex P2 on PR #445.
+#
+# Read the export block once rather than grepping the file 17 times:
+# from the first `export type {` at column zero to its closing brace,
+# which must be the canonical re-export.
+app_reexport_block="$(
+  awk '
+    /^export type \{/ { inblock = 1 }
+    inblock { print }
+    inblock && /^\} from ".*functions\/src\/types\/capability\.ts";/ { exit }
+  ' "$APP"
+)"
+
+if ! printf '%s' "$app_reexport_block" | grep -q 'from "../../functions/src/types/capability.ts"'; then
+  echo "FAIL: src/types/capability.ts no longer re-exports from the canonical" >&2
+  echo "      declaration site. The contracts must not be re-duplicated." >&2
+  fail=1
+else
+  for t in "${CONTRACTS[@]}"; do
+    if ! printf '%s' "$app_reexport_block" | grep -qE "^[[:space:]]*$t,?[[:space:]]*$"; then
+      echo "FAIL: $t is declared canonically but not re-exported by" >&2
+      echo "      src/types/capability.ts. Add it to the export block —" >&2
+      echo "      dropping a contract from the app surface is how the next" >&2
+      echo "      local redeclaration starts." >&2
+      fail=1
+    fi
+  done
+fi
+
+if [ "$fail" -ne 0 ]; then
+  exit 1
+fi
+
+echo "check_no_duplicate_document_contracts: OK (${#CONTRACTS[@]} contracts, ${#SOURCES[@]} sources scanned, single declaration site)"

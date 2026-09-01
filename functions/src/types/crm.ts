@@ -2,11 +2,16 @@
  * Server-side mirror of the CRM types from `src/types/crm.ts`
  * (the frontend types).
  *
- * Same convention as `capability.ts`: the two files declare the
- * same Firestore contract for Application + AssetRef +
- * ValidationFlag. Kept in sync manually until a `shared/`
- * module lands. If you change one, change the other and verify
- * `scripts/ci/check_spec_test_alignment` stays green.
+ * Still hand-synced with `src/types/crm.ts`: the two files declare
+ * the same Firestore contract for Application + AssetRef +
+ * ValidationFlag. If you change one, change the other.
+ *
+ * NOTE: `capability.ts` no longer works this way. Its contracts were
+ * unified onto a single declaration site in #443 after the two copies
+ * drifted, and `scripts/ci/check_no_duplicate_document_contracts`
+ * now enforces that. These CRM contracts are the remaining duplicate
+ * pair and should follow — they were left out of #443 only to keep
+ * that change reviewable, not because the argument differs.
  */
 
 import type { ISOTimestamp, UUID } from "./capability.js";
