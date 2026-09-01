@@ -115,49 +115,81 @@ export function cacheDiscriminatorsFor(
     : { tokenSource, cliAdapter: String(CLI_ADAPTER_VERSION) };
 }
 
-/**
- * Every flag `main` understands. Anything else is an operator typo.
- */
-const KNOWN_FLAGS: readonly string[] = [
-  "--full",
-  "--smoke",
+/** Flags that consume the following token as their value. */
+const FLAGS_WITH_VALUES: readonly string[] = [
   "--samples",
   "--prompt",
   "--variant",
   "--token-source",
+];
+
+/** Flags that stand alone; an `=value` on these is a mistake. */
+const BOOLEAN_FLAGS: readonly string[] = [
+  "--full",
+  "--smoke",
   "--no-cache",
   "--refresh-cache",
 ];
 
+/** Every flag `main` understands. Anything else is an operator typo. */
+const KNOWN_FLAGS: readonly string[] = [...FLAGS_WITH_VALUES, ...BOOLEAN_FLAGS];
+
 /**
- * Reject unknown argv before any dispatch decision is made.
+ * Reject unrecognized argv before any dispatch decision is made.
  *
- * Codex P1: the per-parser guards each catch only their own
+ * Codex P1: the per-parser guards each cover only their own
  * neighbourhood — `parseTokenSource` rejects `--token-*`,
- * `parseVariants` rejects `--variant*`. A typo that misses those
- * prefixes entirely (`--tokn-source claude-cli`, `--token_source
- * claude-cli`) matched no guard, was silently ignored, and left
- * `parseTokenSource` returning its `api` default. With both keys
- * present `main` then dispatched a full run of METERED Anthropic calls
- * for an operator who had asked for the subscription — the exact
- * silent-spend failure the token-source flag exists to prevent, one
- * keystroke away.
+ * `parseVariants` rejects `--variant*`. A typo missing those prefixes
+ * entirely (`--tokn-source claude-cli`, `--token_source claude-cli`)
+ * matched nothing, was silently ignored, and left `parseTokenSource`
+ * returning its `api` default. With both keys present `main` then
+ * dispatched a full corpus of METERED Anthropic calls for an operator
+ * who had asked to bill the run to a subscription.
  *
- * A closed allowlist is the only shape that closes the whole class:
- * per-parser prefix checks can only ever cover the typos near their
- * own flag. Unknown argv is now a hard error rather than a no-op.
+ * CodeRabbit P1: checking only `--`-prefixed tokens left the same hole
+ * open one keystroke further — `--full token-source claude-cli` (a
+ * dropped leading `--`) parsed as a stray positional, was ignored, and
+ * produced exactly the same silent metered run. Nothing else in the
+ * harness consumes positionals, so an unconsumed one is always a
+ * mistake. `--full=1` is rejected for the same reason: a value on a
+ * boolean flag means the operator believed it did something.
+ *
+ * A closed allowlist over BOTH shapes is the only form that closes the
+ * class; per-parser prefix checks can only catch typos near their own
+ * flag.
  */
 export function assertKnownFlags(argv: readonly string[]): void {
-  const unknown = argv.filter((arg) => {
-    if (!arg.startsWith("--")) return false;
+  const unknown: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (!arg.startsWith("--")) {
+      // Not consumed as a value below, so it is a stray positional.
+      unknown.push(arg);
+      continue;
+    }
     const eq = arg.indexOf("=");
-    return !KNOWN_FLAGS.includes(eq === -1 ? arg : arg.slice(0, eq));
-  });
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    if (!KNOWN_FLAGS.includes(name)) {
+      unknown.push(arg);
+      continue;
+    }
+    if (eq !== -1 && BOOLEAN_FLAGS.includes(name)) {
+      unknown.push(arg);
+      continue;
+    }
+    // Consume this flag's value so it is not read as a positional.
+    // Mirrors the parsers' own rule that a value never starts with
+    // `--`, so `--samples --full` still reaches parseSamples' error.
+    if (eq === -1 && FLAGS_WITH_VALUES.includes(name)) {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) i += 1;
+    }
+  }
   if (unknown.length > 0) {
     throw new Error(
-      `Unknown option(s): ${unknown.map((u) => JSON.stringify(u)).join(", ")}. ` +
+      `Unrecognized argument(s): ${unknown.map((u) => JSON.stringify(u)).join(", ")}. ` +
         `Known flags: ${KNOWN_FLAGS.join(", ")}. Refusing to run — an ignored ` +
-        `flag silently falls back to the metered API default, spending real ` +
+        `argument silently falls back to the metered API default, spending real ` +
         `money on a run you may have meant to bill to a subscription.`,
     );
   }

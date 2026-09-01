@@ -225,7 +225,7 @@ describe("assertKnownFlags", () => {
     // default selected. With both keys present that is a full corpus of
     // real Anthropic spend on a run the operator asked to bill to a
     // subscription.
-    expect(() => assertKnownFlags([flag, "claude-cli"])).toThrow(/Unknown option/);
+    expect(() => assertKnownFlags([flag, "claude-cli"])).toThrow(/Unrecognized argument/);
   });
 
   it("does not mistake a flag's value for a flag", () => {
@@ -233,6 +233,34 @@ describe("assertKnownFlags", () => {
     expect(() =>
       assertKnownFlags(["--variant", "a:prompt.extraction/resume=v1"]),
     ).not.toThrow();
+  });
+
+  it.each([
+    [["--full", "token-source", "claude-cli"], "a dropped leading --"],
+    [["--full", "stray"], "a lone positional"],
+    [["--samples", "5", "extra"], "a positional after a consumed value"],
+  ])("rejects %j — %s", (argv) => {
+    // CodeRabbit P1: checking only `--`-prefixed tokens left the same
+    // silent-metered-spend hole open one keystroke further along.
+    // Nothing in the harness consumes positionals, so an unconsumed one
+    // is always a mistake.
+    expect(() => assertKnownFlags(argv)).toThrow(/Unrecognized argument/);
+  });
+
+  it.each(["--full=1", "--smoke=true", "--no-cache=1", "--refresh-cache=yes"])(
+    "rejects a value on the boolean flag %s",
+    (arg) => {
+      // A value here means the operator believed it did something.
+      expect(() => assertKnownFlags([arg])).toThrow(/Unrecognized argument/);
+    },
+  );
+
+  it("leaves a missing value to the flag's own parser", () => {
+    // `--samples --full`: the value slot holds a flag, so it is not
+    // consumed, `--full` is checked normally, and parseSamples still
+    // raises its own "requires a value" error.
+    expect(() => assertKnownFlags(["--samples", "--full"])).not.toThrow();
+    expect(() => parseSamples(["--samples", "--full"])).toThrow(/requires/);
   });
 
   it("reports every unknown flag at once", () => {
