@@ -6,7 +6,11 @@ import type {
   UnitMatch,
 } from "../types/capability.ts";
 
-import { runMatchingPipeline, type RunMatchingContext } from "./pipeline.ts";
+import {
+  PendingReembedError,
+  runMatchingPipeline,
+  type RunMatchingContext,
+} from "./pipeline.ts";
 import type { ScoreResult } from "./score.ts";
 
 /**
@@ -500,5 +504,104 @@ describe("runMatchingPipeline", () => {
     expect(order.indexOf("reqs-start")).toBeLessThan(
       order.indexOf("units-end"),
     );
+  });
+});
+
+describe("runMatchingPipeline: pending re-embed refusal (Codex P1 on #438)", () => {
+  // The correctness boundary for the review-state data loss.
+  //
+  // `defaultListUnits` used to drop `reembed_pending` Units
+  // silently, which let the run proceed and REPLACE the Role's
+  // match set without them — deleting their matches, and the
+  // user's approve/reject decisions on those pairs, with nothing
+  // to carry the flags onto.
+  //
+  // The Role Detail container also defers, but a client-side
+  // check is a time-of-check/time-of-use race: another tab can
+  // set the flag between the check and this read. That guard is
+  // a UX fast path; this one is the boundary.
+  const ctx = { ownerUid: "u", roleId: "role-1" };
+
+  function unit(overrides: Partial<ExperienceUnit> = {}): ExperienceUnit {
+    return {
+      id: "unit-1",
+      owner_uid: "u",
+      source_type: "resume",
+      source_ref: "ref",
+      raw_text: "raw",
+      normalized_summary: "summary",
+      unit_type: "project",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 0.9,
+      user_approved: true,
+      embedding: [1, 0, 0],
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("refuses, and does NOT persist, when an approved Unit awaits re-embedding", async () => {
+    const persistBatch = vi.fn(async () => {});
+    await expect(
+      runMatchingPipeline(ctx, {
+        listUnits: async () => [unit({ reembed_pending: true })],
+        listRequirements: async () => [],
+        persistBatch,
+      }),
+    ).rejects.toThrow(PendingReembedError);
+    // The load-bearing half: refusing without persisting is what
+    // leaves the existing matches — and their flags — intact.
+    expect(persistBatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses even when other Units are perfectly scorable", async () => {
+    // Partial progress is the dangerous case: scoring the healthy
+    // Units and persisting would replace the whole set, which is
+    // exactly how the pending Unit's rows get dropped.
+    const persistBatch = vi.fn(async () => {});
+    await expect(
+      runMatchingPipeline(ctx, {
+        listUnits: async () => [
+          unit({ id: "ok" }),
+          unit({ id: "pending", reembed_pending: true }),
+        ],
+        listRequirements: async () => [],
+        persistBatch,
+      }),
+    ).rejects.toThrow(PendingReembedError);
+    expect(persistBatch).not.toHaveBeenCalled();
+  });
+
+  it("runs normally once nothing is pending", async () => {
+    const persistBatch = vi.fn(async () => {});
+    await expect(
+      runMatchingPipeline(ctx, {
+        listUnits: async () => [unit(), unit({ id: "u2" })],
+        listRequirements: async () => [],
+        persistBatch,
+      }),
+    ).resolves.toEqual([]);
+    expect(persistBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the count, so the surfaced error is actionable", async () => {
+    await expect(
+      runMatchingPipeline(ctx, {
+        listUnits: async () => [
+          unit({ id: "a", reembed_pending: true }),
+          unit({ id: "b", reembed_pending: true }),
+        ],
+        listRequirements: async () => [],
+        persistBatch: async () => {},
+      }),
+    ).rejects.toThrow(/2 approved Unit\(s\) are awaiting re-embedding/);
   });
 });

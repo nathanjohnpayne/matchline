@@ -85,6 +85,13 @@ import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
 import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 
+/**
+ * Sentinel for "this run persisted zero rows, so it has no
+ * `run_id` to correlate on" — distinct from `null`, which means
+ * "we don't know our run id yet."
+ */
+const EMPTY_RUN = "__empty_run__";
+
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
   const navigate = useNavigate();
@@ -128,11 +135,37 @@ export default function RoleDetail(): ReactElement {
   // every async continuation checks the token; mismatch =>
   // bail out before any state writes.
   const currentRoleIdRef = useRef<string | undefined>(roleId);
+  /**
+   * Has this client's replacement landed?
+   *
+   * Called from BOTH directions — the listener (a snapshot
+   * arrived) and the callable's resolve (we now know what to
+   * look for) — because the two race and either can be second.
+   * Returns true exactly once per run, clearing the guard.
+   */
+  const releaseIfReplacementLanded = useCallback((): boolean => {
+    if (!awaitingReplacementRef.current) return false;
+    const expected = expectedRunIdRef.current;
+    // Until the callable resolves we don't know our run id.
+    if (expected === null) return false;
+    const landed =
+      expected === EMPTY_RUN
+        ? // A run that persisted zero rows carries no id; the
+          // empty delivery is its only evidence.
+          sawEmptySnapshotRef.current
+        : seenRunIdsRef.current.has(expected);
+    if (!landed) return false;
+    awaitingReplacementRef.current = false;
+    expectedRunIdRef.current = null;
+    seenRunIdsRef.current = new Set();
+    sawEmptySnapshotRef.current = false;
+    return true;
+  }, []);
   const visitTokenRef = useRef(0);
   useEffect(() => {
     currentRoleIdRef.current = roleId;
     visitTokenRef.current += 1;
-  }, [roleId]);
+  }, [roleId, releaseIfReplacementLanded]);
   // Auto-trigger state (#131). Distinguishes the
   // pre-first-snapshot wait, the in-flight matching call,
   // and the post-completion subscription delivery.
@@ -210,6 +243,18 @@ export default function RoleDetail(): ReactElement {
   // tab's snapshot release the other tab's guard while its own
   // replacement is still pending. Codex P2 on #438.
   const expectedRunIdRef = useRef<string | null>(null);
+  // Run ids delivered while we were still waiting to learn our
+  // own. The listener and the callable response travel
+  // independently, so our replacement's snapshot can arrive
+  // BEFORE the promise resolves; without remembering what
+  // landed, the correlation check would miss it and no further
+  // snapshot is guaranteed. Codex P2 on #438.
+  const seenRunIdsRef = useRef<Set<string>>(new Set());
+  // True once a snapshot has delivered an EMPTY match set while
+  // we were awaiting. A run that persists zero rows returns no
+  // run id to correlate on, so the empty delivery is the only
+  // evidence its replace landed.
+  const sawEmptySnapshotRef = useRef(false);
   // Set when a legacy-backfill rerun (the one that populates
   // `structural_evidence` on pre-#435 matches) fails. While true,
   // `computeGaps` stops extending the transitional benefit of the
@@ -430,20 +475,22 @@ export default function RoleDetail(): ReactElement {
           // `replaceMatchesForRole()` and rewrites every id.
           awaitingReplacementRef.current = true;
           expectedRunIdRef.current = null;
+          seenRunIdsRef.current = new Set();
+          sawEmptySnapshotRef.current = false;
           const reparseMatchCount = matchCountRef.current;
           setComputingMatches(true);
           void invokeRunMatching(roleId)
             .then(({ count, runId }) => {
               if (isStale()) return;
-              // Same no-op release as the auto-trigger path: a
-              // write-free run produces no snapshot to wait for.
+              // Same shape as the auto-trigger path above.
               if (count === 0 && reparseMatchCount === 0) {
                 awaitingReplacementRef.current = false;
                 expectedRunIdRef.current = null;
                 setComputingMatches(false);
                 return;
               }
-              expectedRunIdRef.current = runId;
+              expectedRunIdRef.current = count === 0 ? EMPTY_RUN : runId;
+              if (releaseIfReplacementLanded()) setComputingMatches(false);
             })
             .catch((err: unknown) => {
               console.warn("invokeRunMatching after re-parse failed", err);
@@ -472,7 +519,7 @@ export default function RoleDetail(): ReactElement {
         }
       })();
     },
-    [role, roleId],
+    [role, roleId, releaseIfReplacementLanded],
   );
 
   useEffect(() => {
@@ -524,6 +571,8 @@ export default function RoleDetail(): ReactElement {
     awaitingReplacementRef.current = false;
     matchCountRef.current = 0;
     expectedRunIdRef.current = null;
+    seenRunIdsRef.current = new Set();
+    sawEmptySnapshotRef.current = false;
     setComputingMatches(false);
     setMatchesSnapshotRoleId(null);
     setUnitsSnapshotRoleId(null);
@@ -623,16 +672,13 @@ export default function RoleDetail(): ReactElement {
         // seen when the run was issued is the replacement.
         // Codex P2 on #435.
         if (awaitingReplacementRef.current) {
-          const expected = expectedRunIdRef.current;
-          // Only OUR run releases the guard. Until the callable
-          // resolves we don't know the id yet, so we keep
-          // waiting — a snapshot arriving before then is by
-          // definition not ours.
-          if (expected !== null && next.some((m) => m.run_id === expected)) {
-            awaitingReplacementRef.current = false;
-            expectedRunIdRef.current = null;
-            setComputingMatches(false);
+          // Record what arrived, so a snapshot that beats the
+          // callable response isn't lost.
+          for (const m of next) {
+            if (m.run_id !== undefined) seenRunIdsRef.current.add(m.run_id);
           }
+          if (next.length === 0) sawEmptySnapshotRef.current = true;
+          if (releaseIfReplacementLanded()) setComputingMatches(false);
         }
       },
       (err) => {
@@ -736,7 +782,10 @@ export default function RoleDetail(): ReactElement {
       unsubUnits();
       unsubApplications();
     };
-  }, [roleId]);
+    // `releaseIfReplacementLanded` is a `useCallback` with no
+    // deps, so it is referentially stable and listing it cannot
+    // re-open the subscriptions.
+  }, [roleId, releaseIfReplacementLanded]);
 
   // Auto-trigger matching when the user lands on a Role
   // that has Requirements but no matches yet (#131).
@@ -865,6 +914,8 @@ export default function RoleDetail(): ReactElement {
       visitTokenRef.current !== issuedTokenAuto;
     awaitingReplacementRef.current = true;
     expectedRunIdRef.current = null;
+    seenRunIdsRef.current = new Set();
+    sawEmptySnapshotRef.current = false;
     // Match count at issue time. Together with the resolved
     // count it identifies the no-op case below without reading
     // state that may have moved.
@@ -875,21 +926,26 @@ export default function RoleDetail(): ReactElement {
         if (isStaleAuto()) return;
         // `replaceMatchesForRole()` skips its transaction
         // entirely when there is nothing to delete AND nothing
-        // to write — a Role with Requirements but no
-        // embedding-bearing approved Units, say. No write means
-        // no snapshot, so the listener that normally releases
-        // `computingMatches` never fires and the Role would sit
-        // on "Computing matches…" forever with the JD controls
-        // disabled. Release it here for exactly that shape.
+        // to write. No write means no snapshot ever arrives, so
+        // nothing else could release the guard and the Role
+        // would sit on "Computing matches…" with the JD controls
+        // disabled.
         if (count === 0 && matchCountAtIssue === 0) {
           awaitingReplacementRef.current = false;
           expectedRunIdRef.current = null;
           setComputingMatches(false);
           return;
         }
-        // Otherwise arm the correlation: the guard releases when
-        // a snapshot carrying THIS run's id arrives.
-        expectedRunIdRef.current = runId;
+        // Arm the correlation. A run that persisted zero rows
+        // over a non-empty prior set DID write (it deleted), so
+        // a snapshot is coming — but it carries no row and
+        // therefore no run id, so the empty delivery is its
+        // only evidence.
+        expectedRunIdRef.current = count === 0 ? EMPTY_RUN : runId;
+        // The snapshot may already have arrived while we were
+        // waiting to learn our id; re-check rather than assume
+        // a further one is coming.
+        if (releaseIfReplacementLanded()) setComputingMatches(false);
       })
       .catch((err: unknown) => {
       // On SUCCESS the subscription clears `computingMatches`
@@ -925,6 +981,7 @@ export default function RoleDetail(): ReactElement {
     legacyBackfillFailedFor,
     units,
     unitsFirstSnapshotReceived,
+    releaseIfReplacementLanded,
   ]);
 
   // Build the unit lookup once per units array. The matching
