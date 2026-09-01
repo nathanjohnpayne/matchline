@@ -1,6 +1,8 @@
 import { defineSecret } from "firebase-functions/params";
 import OpenAI from "openai";
 
+import { normalizeApiKey } from "./apiKey.js";
+
 const openaiKey = defineSecret("OPENAI_API_KEY");
 
 let client: OpenAI | undefined;
@@ -20,7 +22,10 @@ let client: OpenAI | undefined;
  */
 export function openai(): OpenAI {
   if (!client) {
-    client = new OpenAI({ apiKey: openaiKey.value() });
+    // See anthropic.ts — same trailing-newline hazard (#426).
+    client = new OpenAI({
+      apiKey: normalizeApiKey(openaiKey.value()),
+    });
   }
   return client;
 }
@@ -46,7 +51,7 @@ export function openaiForCli(): OpenAI {
         "`export OPENAI_API_KEY=$(op read 'op://...')` or similar.",
     );
   }
-  return new OpenAI({ apiKey });
+  return new OpenAI({ apiKey: normalizeApiKey(apiKey) });
 }
 
 export { openaiKey };

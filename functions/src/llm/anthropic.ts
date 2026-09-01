@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { defineSecret } from "firebase-functions/params";
 
+import { normalizeApiKey } from "./apiKey.js";
+
 const anthropicKey = defineSecret("ANTHROPIC_API_KEY");
 
 let client: Anthropic | undefined;
@@ -20,7 +22,12 @@ let client: Anthropic | undefined;
  */
 export function anthropic(): Anthropic {
   if (!client) {
-    client = new Anthropic({ apiKey: anthropicKey.value() });
+    // normalizeApiKey, not the raw value: a secret written with
+    // `echo` carries a trailing newline that Secret Manager mounts
+    // verbatim, producing a malformed x-api-key header (#426).
+    client = new Anthropic({
+      apiKey: normalizeApiKey(anthropicKey.value()),
+    });
   }
   return client;
 }
@@ -50,7 +57,12 @@ export function anthropicForCli(): Anthropic {
         "`export ANTHROPIC_API_KEY=$(op read 'op://...')` or similar.",
     );
   }
-  return new Anthropic({ apiKey });
+  // Normalized on this path too, so a CLI reproduction behaves the
+  // same way the deployed function does. Shell command substitution
+  // already strips a trailing newline, which is precisely why #426
+  // reproduced clean locally while production failed — the CLI path
+  // must not be quietly more forgiving than the runtime one.
+  return new Anthropic({ apiKey: normalizeApiKey(apiKey) });
 }
 
 export { anthropicKey };

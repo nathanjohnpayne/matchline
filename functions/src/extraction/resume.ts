@@ -28,6 +28,7 @@ import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
 import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
+import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 import {
   ExtractionResponseV1Schema,
   type ExtractionResponseV1,
@@ -225,6 +226,10 @@ export async function extractFromResume(
     return stampServerFields(parsed.data, text, ctx, generateId, now);
   }
 
+  // Log before throwing: `failures` reaches the browser via
+  // HttpsError.details but nothing wrote it to Cloud Logging, so a
+  // production failure left no server-side trace of WHY (#426).
+  logRetryExhaustion("extraction.resume", model, failures);
   throw new ExtractionError(
     `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

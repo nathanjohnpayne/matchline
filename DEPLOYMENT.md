@@ -594,6 +594,73 @@ Each project's SA key is stored in the 1Password **Firebase** vault with the nam
 - Runtime secrets can still use `op://Private/<item>/<field>` references in committed template files and `op inject` into gitignored runtime files when a repo actually needs 1Password-managed application secrets.
 - Never commit resolved secret output, service-account JSON, or ADC credentials.
 
+### Writing a secret value: never use `echo`
+
+`echo` appends a trailing newline, and Secret Manager stores the bytes verbatim and mounts them verbatim into the function's environment. A key written that way is sent as `x-api-key: sk-ant-…\n` — a malformed HTTP header. Every provider call then fails in under a second, the retry budget burns instantly, and the user sees "Extraction failed after retries; needs manual review."
+
+```bash
+# WRONG — stores a trailing newline
+echo "$KEY" | gcloud secrets versions add ANTHROPIC_API_KEY --data-file=-
+
+# RIGHT — stores exactly the bytes of the key
+printf '%s' "$KEY" | gcloud secrets versions add ANTHROPIC_API_KEY --data-file=-
+```
+
+This bit `matchline-dev` in #426 and cost hours, because it is invisible to the obvious way of checking. Reading the secret back with `$(gcloud secrets versions access …)` strips the trailing newline in command substitution, so a local reproduction using "the same key" succeeds while production keeps failing. Compare raw bytes instead:
+
+```bash
+gcloud secrets versions access latest --secret=ANTHROPIC_API_KEY --project=<proj> > /tmp/k
+echo "raw=$(wc -c < /tmp/k) stripped=$(printf '%s' "$(cat /tmp/k)" | wc -c)"   # must match
+rm -f /tmp/k
+```
+
+`functions/src/llm/apiKey.ts` now trims defensively at client construction, so a contaminated secret can no longer cause this. The guidance still matters: the trim is a backstop, not a licence to store dirty values.
+
+## Cloud Run IAM prerequisites (Functions)
+
+Firebase callables are **not** protected by Cloud Run IAM. Auth is enforced *inside* each function against the Firebase ID token in the callable envelope (`request.auth?.uid`). Cloud Run must therefore let the request through, or the browser's CORS preflight is rejected with a 403 carrying no `Access-Control-*` headers, `fetch` rejects, and the SDK reports a bare `internal` with no diagnostic.
+
+Two things are required, and **neither is created by `firebase deploy`**:
+
+**1. The invoker must be permitted.** Normally `allUsers` → `roles/run.invoker`:
+
+```bash
+gcloud run services add-iam-policy-binding <service> --region=us-central1   --project=<proj> --member=allUsers --role=roles/run.invoker
+```
+
+Under a **domain restricted sharing** org policy (`constraints/iam.allowedPolicyMemberDomains`) that fails with `FAILED_PRECONDITION: One or more users named in the policy do not belong to a permitted customer`. The legacy constraint cannot be given an `allUsers` exception — that requires migrating to a custom CEL constraint. Per [Cloud Run's docs](https://docs.cloud.google.com/run/docs/authenticating/public), disable the invoker IAM check instead:
+
+```bash
+gcloud run services update <service> --region=us-central1   --project=<proj> --no-invoker-iam-check
+```
+
+This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422). Service names are the lowercased function names: `extractfromresume`, `parsejobrequirements`, `generateresume`, `validateasset`, `reembedexperienceunit`, `runmatching`, `health`.
+
+**2. The runtime service account needs Firestore.** Functions run as the compute default SA (`<project-number>-compute@developer.gserviceaccount.com`). Where the org disables automatic grants for default service accounts, that account holds only build-time roles and every admin-SDK call fails with `7 PERMISSION_DENIED: Missing or insufficient permissions` — note the admin SDK bypasses `firestore.rules` but still needs IAM:
+
+```bash
+gcloud projects add-iam-policy-binding <proj> \
+  --member=serviceAccount:<project-number>-compute@developer.gserviceaccount.com \
+  --role=roles/datastore.user --condition=None
+```
+
+`roles/datastore.user` is the least-privilege fit: document read/write, no database or index administration.
+
+**3. Composite indexes deploy separately.** `firestore.indexes.json` ships only with `firebase deploy --only firestore:indexes` (or a full deploy). A missing index surfaces at runtime as "no matching composite index found", not at deploy time. Verify with:
+
+```bash
+gcloud firestore indexes composite list --project=<proj>
+```
+
+### Triage order when a callable fails
+
+Cheapest checks first — this is the order that would have resolved #422 fastest:
+
+1. `curl -X OPTIONS <function-url> -H 'Origin: …' -H 'Access-Control-Request-Method: POST'` — a 403 means invoker config, and the function never ran.
+2. An unauthenticated `POST` returning your own `UNAUTHENTICATED` message means Cloud Run is fine and the function is executing.
+3. `gcloud logging read '… severity>=ERROR'` — since #426, an exhausted retry budget logs its per-attempt `kinds`. All `transport_error` points at credentials or connectivity; `schema_error` points at the prompt or the response contract.
+4. Compare request latency against the function's `timeoutSeconds`. Failing in seconds is a rejected upstream call; failing at the ceiling is a real timeout.
+
 ## Auth Maintenance
 
 **Interactive machines (biometric available):** If day-to-day auth stops working, first make sure the 1Password CLI is signed in and either the project SA key in `op://Firebase/{project-id} — Firebase Deployer SA Key` or the shared ADC at `op://Private/c2v6emkwppjzjjaq2bdqk3wnlm/credential` is readable.
