@@ -113,28 +113,49 @@ if [ "${#SOURCES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# A declaration in ANY form. Leading whitespace, optional `export` /
-# `declare` / `abstract` / `const` modifiers in either order, then the
-# declaring keyword, then the exact name followed by a terminator that
-# cannot be part of a longer identifier.
+# A declaration in ANY form, distinguished from a reference to one.
 #
-# Anchoring at the start of the line (after whitespace and modifiers)
-# is what keeps `import type { UnitMatch }`, `export type { UnitMatch }
-# from ...` and `Record<string, UnitMatch>` out — in each of those the
-# name does not directly follow the keyword — and keeps prose in `//`
-# and ` *` comment lines out too.
+# Two alternatives, because the two halves have different hazards.
+#
+# `interface` / `class` / `enum` at the start of a line is always a
+# declaration — TypeScript has no import or export specifier using
+# those keywords — so a plain word boundary suffices. It is written
+# out as an explicit character class rather than `\b`, which BSD grep
+# does not reliably honour.
+#
+# `type` is the awkward one: `type X` also appears as an import or
+# export specifier inside braces, and a multi-line
+# `import { type ScoreComponents, ... }` is indistinguishable from a
+# declaration by word boundary alone. A real type alias is always
+# followed by `=` or a type parameter list, so that is required. The
+# first attempt at this used a fixed terminator list for BOTH halves
+# and missed heritage clauses (`interface X extends Y`); widening it
+# to a bare word boundary then matched the import specifier above, in
+# `functions/src/matching/rationale.ts`. Splitting the two is what
+# satisfies both.
+#
+# Modifiers may appear in any order and any number, `default`
+# included — `export default interface X {}` is valid and was the
+# form Codex P2 used on PR #445 to walk through the previous version.
+#
+# Anchoring after leading whitespace keeps `Record<string, UnitMatch>`
+# out, along with prose in `//` and ` *` comment lines.
+MODS='((export|default|declare|abstract|const)[[:space:]]+)*'
+BOUNDARY='([^A-Za-z0-9_$]|$)'
+
 decl_pattern() {
-  printf '%s' "^[[:space:]]*((export|declare|abstract|const)[[:space:]]+)*(interface|type|class|enum)[[:space:]]+$1[[:space:]]*([<={]|$)"
+  printf '%s' "^[[:space:]]*$MODS((interface|class|enum)[[:space:]]+$1$BOUNDARY|type[[:space:]]+$1[[:space:]]*[<=])"
 }
 
 for t in "${CONTRACTS[@]}"; do
-  pattern="$(decl_pattern "$t")"
+  # One grep across every source, not one per file: the per-file
+  # loop spawned ~3,300 processes per run (17 contracts x 196
+  # sources) and took ~10s. `grep -l` prints each matching path
+  # once and exits 1 when nothing matches, which `|| true` absorbs.
   declarers=()
-  for f in "${SOURCES[@]}"; do
-    if grep -qE "$pattern" "$f"; then
-      declarers+=("${f#"$ROOT/"}")
-    fi
-  done
+  while IFS= read -r f; do
+    [ -n "$f" ] && declarers+=("${f#"$ROOT/"}")
+  done < <(grep -lE "$(decl_pattern "$t")" "${SOURCES[@]}" || true)
 
   if [ "${#declarers[@]}" -eq 1 ] && \
      [ "${declarers[0]}" = "functions/src/types/capability.ts" ]; then
