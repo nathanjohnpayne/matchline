@@ -24,6 +24,7 @@
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 export interface ExtractFromResumeResponse {
@@ -52,6 +53,7 @@ export async function invokeExtractFromResume(
   const fn = httpsCallable<{ text: string }, ExtractFromResumeResponse>(
     getFunctionsClient(),
     "extractFromResume",
+    callableOptions("extractFromResume"),
   );
   const result = await fn({ text });
   return result.data;

@@ -27,6 +27,7 @@
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 
 export interface GenerateResumeResponse {
   readonly assetId: string;
@@ -67,6 +68,7 @@ export async function invokeGenerateResume(
   const fn = httpsCallable<{ applicationId: string }, GenerateResumeResponse>(
     getFunctionsClient(),
     "generateResume",
+    callableOptions("generateResume"),
   );
   const result = await fn({ applicationId });
   return result.data;

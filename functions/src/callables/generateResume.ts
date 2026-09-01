@@ -30,6 +30,7 @@ import {
   GenerateResumePersistNotFound,
   type RunGenerateResumeDeps,
 } from "../generation/runGenerateResume.js";
+import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 
 export interface GenerateResumeData {
   readonly applicationId?: string;
@@ -116,9 +117,11 @@ export const generateResumeCallable = onCall(
   {
     secrets: [anthropicKey],
     // The orchestrator runs Anthropic + Firestore reads + a
-    // transactional write. p95 target is 20s (PRD); 90s timeout
-    // gives headroom for a 3-attempt LLM retry budget.
-    timeoutSeconds: 90,
+    // transactional write with a 3-attempt LLM retry budget. Was a
+    // bespoke 90s, which sat ABOVE the client SDK's 70s default and
+    // so was never actually reachable — the client aborted first and
+    // discarded the server's error. See ./timeouts.ts (#422).
+    timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.generateResume,
   },
   (request) => generateResumeHandler(request),
 );

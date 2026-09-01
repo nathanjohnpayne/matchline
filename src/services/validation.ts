@@ -23,6 +23,7 @@
 import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
+import { callableOptions } from "./callable-timeouts.ts";
 import type { ValidationFlag, ValidationStatus } from "../types/crm.ts";
 
 export interface ValidateAssetResponse {
@@ -55,7 +56,11 @@ export async function invokeValidateAsset(
   const fn = httpsCallable<
     { applicationId: string; assetId: string },
     ValidateAssetResponse
-  >(getFunctionsClient(), "validateAsset");
+  >(
+    getFunctionsClient(),
+    "validateAsset",
+    callableOptions("validateAsset"),
+  );
   const result = await fn({ applicationId, assetId });
   return result.data;
 }
