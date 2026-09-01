@@ -300,6 +300,26 @@ describe("assertModelMatches", () => {
     ).toThrow(/Refusing to attribute/);
   });
 
+  it("rejects a distinct longer point version", () => {
+    // CodeRabbit: separator-stripped comparison made
+    // `claude-sonnet-4-6` a prefix of `claude-sonnet-4-60`, so a
+    // different model satisfied the request. Components keep `6` and
+    // `60` distinct.
+    expect(() =>
+      assertModelMatches("claude-sonnet-4-6", ["claude-sonnet-4-60"]),
+    ).toThrow(/Refusing to attribute/);
+    expect(() =>
+      assertModelMatches("claude-haiku-4-5", ["claude-haiku-4-50"]),
+    ).toThrow(/Refusing to attribute/);
+  });
+
+  it("accepts a dated id for an undated point version", () => {
+    // The components of the request appear as a contiguous run.
+    expect(() =>
+      assertModelMatches("claude-haiku-4-5", ["claude-haiku-4-5-20251001"]),
+    ).not.toThrow();
+  });
+
   it("still accepts a full dated id for an undated alias", () => {
     // The legitimate direction, unchanged: the SERVED id contains the
     // REQUESTED alias.

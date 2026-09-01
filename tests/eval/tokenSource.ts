@@ -838,6 +838,29 @@ export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
  * "whatever the current Sonnet is". Sweep entries should use full
  * dated ids when the exact point version matters for the ranking.
  */
+/**
+ * Split a model identifier into comparable components:
+ * `claude-haiku-4-5-20251001` → `["claude","haiku","4","5","20251001"]`.
+ *
+ * Comparing components rather than a separator-stripped string is what
+ * keeps `4`,`6` distinct from `4`,`60` — see `assertModelMatches`.
+ */
+function modelIdComponents(s: string): readonly string[] {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter((p) => p.length > 0);
+}
+
+/** True when `needle` appears as a contiguous run inside `haystack`. */
+function containsComponentRun(
+  haystack: readonly string[],
+  needle: readonly string[],
+): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    if (needle.every((part, j) => haystack[i + j] === part)) return true;
+  }
+  return false;
+}
+
 export function assertModelMatches(
   requested: string,
   served: readonly string[],
@@ -848,18 +871,21 @@ export function assertModelMatches(
         "Refusing to attribute unverified results to the requested model.",
     );
   }
-  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const req = norm(requested);
-  // Codex P2: ONE direction only. `got.includes(req)` is the
-  // legitimate case — an undated alias (`haiku`) satisfied by the full
-  // dated id the CLI reports. The reverse, `req.includes(got)`,
-  // accepted a served id SHORTER than the requested one: asking for
-  // `claude-sonnet-4-6` and being served `claude-sonnet` passed,
-  // attributing an unverified point version's quality and cost to the
-  // requested model — exactly what this fail-closed guard exists to
-  // refuse. An exact match still passes, since a string contains
-  // itself.
-  const ok = served.some((s) => norm(s).includes(req));
+  // Codex P2: ONE direction only. The SERVED id must contain the
+  // REQUESTED one — an undated alias (`haiku`) satisfied by the full
+  // dated id the CLI reports. The reverse accepted a served id SHORTER
+  // than the requested one: asking for `claude-sonnet-4-6` and being
+  // served `claude-sonnet` passed, attributing an unverified point
+  // version's quality and cost to the requested model.
+  //
+  // CodeRabbit: compare identifier COMPONENTS, not a concatenated
+  // substring. Stripping separators turned `claude-sonnet-4-6` into
+  // `claudesonnet46`, which is a prefix of `claude-sonnet-4-60`'s
+  // `claudesonnet460` — so a distinct longer point version satisfied
+  // the request. Splitting on the separators keeps `4`,`6` and `4`,`60`
+  // distinct while still letting a bare alias match one component.
+  const req = modelIdComponents(requested);
+  const ok = served.some((s) => containsComponentRun(modelIdComponents(s), req));
   if (!ok) {
     throw new Error(
       `tokenSource: requested model "${requested}" but the CLI served ` +
