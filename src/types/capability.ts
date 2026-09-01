@@ -187,27 +187,33 @@ export interface UnitMatch {
   components?: ScoreComponents;
 
   /**
-   * True when the Requirement constrained at least one
-   * structural axis that the engine could actually evaluate —
-   * skill / tool / domain vocabulary that survives
-   * canonicalization, a ladder-mapped `seniority_level`, or a
-   * scope-category Requirement with canonicalizable keywords.
+   * True when THIS PAIR scored above zero on at least one axis
+   * the Requirement actually constrains — canonicalizable
+   * skill / tool / domain vocabulary, a ladder-mapped
+   * `seniority_level` the Unit also carries a mapped signal
+   * for, or a scope-category Requirement with canonicalizable
+   * keywords.
    *
-   * False means every structural axis fell back to a
-   * no-constraint default, so `final_score` rests on semantics
-   * plus ~0.425 of unearned neutral credit. `computeGaps`
-   * refuses to treat such a match as covering a must-have; the
-   * match still renders and still ranks, per the spec non-goal
-   * "does not hide low-quality matches."
+   * **It is a property of the pair, not of the Requirement.**
+   * `false` therefore covers two distinct situations, and
+   * consumers must not read it as only the first:
+   *   1. the Requirement constrains nothing evaluable, so every
+   *      structural axis fell back to a no-constraint default; or
+   *   2. it constrains something and this Unit scored 0.0 on all
+   *      of them — an evaluated mismatch.
+   * Either way `final_score` rests on semantics plus unearned
+   * neutral credit, which is why `computeGaps` refuses to let
+   * such a match cover a must-have. The match still ranks and
+   * still renders.
    *
-   * Optional for the same reason as `components`: rows written
-   * before this field existed won't have it. Readers treat
-   * `undefined` as "legacy, don't block", but note that legacy
-   * rows are NOT inherently safe — the pre-#430 rule paid the
-   * same neutral when both sides canonicalized to empty. The
-   * allowance holds because `shouldAutoTriggerMatching` reruns
-   * matching whenever a loaded match lacks the field, so
-   * opening the Role backfills it (no LLM call needed).
+   * Optional because rows written before this field existed
+   * won't have it. Readers treat `undefined` as "legacy, don't
+   * block", but legacy rows are NOT inherently safe — the
+   * pre-#430 rule paid the same neutral when both sides
+   * canonicalized to empty. The allowance holds because the
+   * Role Detail auto-trigger reruns matching whenever a loaded
+   * match lacks the field (no LLM call needed), and is
+   * withdrawn if that backfill fails.
    */
   structural_evidence?: boolean;
 

@@ -341,6 +341,37 @@ export function hasStructuralEvidence(input: EvidenceInputs): boolean {
 }
 
 /**
+ * Does this Unit carry a date the recency curve can actually
+ * measure? Mirrors `recency()`'s own validity checks — an
+ * absent `date_range`, a missing/blank `start` on an ongoing
+ * role, or an unparseable date all make it return the neutral
+ * 0.5, which is a statement of ignorance and not a measurement.
+ *
+ * `recency` is otherwise always applicable (it's Unit-side, so
+ * there is nothing for a Requirement to leave unspecified),
+ * which is why this predicate is needed to stop the neutral
+ * being read as a reason for a match. Codex P2 on PR #435.
+ */
+export function hasMeasurableRecency(
+  unit: Pick<ExperienceUnit, "date_range">,
+): boolean {
+  const range = unit.date_range;
+  if (range === undefined) return false;
+  if (range.end === undefined) {
+    return (
+      typeof range.start === "string" &&
+      range.start.length > 0 &&
+      !Number.isNaN(new Date(range.start).getTime())
+    );
+  }
+  return (
+    typeof range.end === "string" &&
+    range.end.length > 0 &&
+    !Number.isNaN(new Date(range.end).getTime())
+  );
+}
+
+/**
  * Does this Unit attest to any seniority signal the ladder can
  * map? Mirrors the filter inside `seniorityAlignment` — if that
  * mapping changes, this has to change with it, which the paired

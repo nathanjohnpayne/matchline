@@ -35,7 +35,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { score } from "../functions/src/matching/score.js";
+import {
+  hasMappedSenioritySignal,
+  requirementAxes,
+  score,
+} from "../functions/src/matching/score.js";
 import { computeGaps } from "../src/routes/RoleDetail/computeGaps.ts";
 import type {
   ExperienceUnit,
@@ -295,16 +299,33 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
 
     // And the discrimination is the right one: every evidenced
     // pair scored above zero on some axis its Requirement
-    // actually constrains.
+    // actually CONSTRAINS.
+    //
+    // The applicability filter is load-bearing, not decoration.
+    // An unconstrained axis carries the 0.5 neutral, which is
+    // `> 0` — so checking the raw components alone would accept
+    // neutral credit as proof and the assertion would pass even
+    // if `structural_evidence` were computed wrongly. Deriving
+    // the applicable axes through `requirementAxes()` — the
+    // authoritative predicate — is what makes this able to catch
+    // a false positive. CodeRabbit on #435.
+    const reqById = new Map(requirements.map((r) => [r.id, r]));
     for (const m of evidenced) {
       const c = m.components!;
-      const scoredSomething =
-        c.skill_overlap > 0 ||
-        c.domain_overlap > 0 ||
-        c.tool_overlap > 0 ||
-        c.seniority_alignment > 0 ||
-        c.scope_alignment > 0;
-      expect(scoredSomething).toBe(true);
+      const req = reqById.get(m.job_requirement_unit_id)!;
+      const axes = requirementAxes(req);
+      const unit = units.find((u) => u.id === m.experience_unit_id)!;
+      const scoredOnConstrainedAxis =
+        (axes.skill_overlap && c.skill_overlap > 0) ||
+        (axes.domain_overlap && c.domain_overlap > 0) ||
+        (axes.tool_overlap && c.tool_overlap > 0) ||
+        // Mirrors the mapped-seniority rule: the 0.5 a Unit gets
+        // for unmapped signals is not a measurement.
+        (axes.seniority_alignment &&
+          c.seniority_alignment > 0 &&
+          hasMappedSenioritySignal(unit)) ||
+        (axes.scope_alignment && c.scope_alignment > 0);
+      expect(scoredOnConstrainedAxis).toBe(true);
     }
   });
 

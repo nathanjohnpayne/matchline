@@ -29,6 +29,7 @@ import {
 } from "./normalize.js";
 import {
   hasMappedSenioritySignal,
+  hasMeasurableRecency,
   requirementAxes,
   WEIGHTS,
   type RequirementAxes,
@@ -109,10 +110,20 @@ export function generateRationale(input: RationaleInput): RationaleResult {
   // The pair-level fact lives in `hasMappedSenioritySignal`,
   // which the coverage gate already consumes — Codex P2 round 5
   // caught that the rationale wasn't consuming it too.
+  //
+  // `recency` gets the same treatment for the same reason: it
+  // returns 0.5 when the Unit has no `date_range`, or an
+  // unparseable one, and `requirementAxes` always marks it
+  // applicable because it's a Unit-side axis. With a weak
+  // semantic score that neutral can win and emit "Matched on
+  // recency axis (no date range on Unit)" — an explicit lack of
+  // information offered as the reason for the match. Codex P2
+  // on #435.
   const drivingComponent = pickDrivingComponent(input.components, {
     ...axes,
     seniority_alignment:
       axes.seniority_alignment && hasMappedSenioritySignal(input.unit),
+    recency: axes.recency && hasMeasurableRecency(input.unit),
   });
   switch (drivingComponent) {
     case "semantic_similarity":

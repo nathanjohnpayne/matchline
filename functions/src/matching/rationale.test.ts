@@ -608,9 +608,39 @@ describe("generateRationale: empty-data fallback honesty (round 1)", () => {
       },
     });
     const result = generateRationale(input);
-    expect(result.driving_component).toBe("recency");
-    expect(result.surface_evidence).toBe("");
-    expect(result.rationale).toContain("no date range");
+    // Narrowed on #435 (Codex P2), same shape as the seniority
+    // case above. A Unit with no `date_range` has nothing the
+    // recency curve can measure, so `recency` no longer drives
+    // the rationale and this falls through to semantic
+    // similarity. The `recency: 1` fixture was another
+    // impossible pairing: the real `recency()` returns the 0.5
+    // neutral, not 1, for a Unit with no dates.
+    //
+    // The contract this test was written for is unchanged and
+    // still asserted: no fabricated placeholder reaches
+    // `surface_evidence`.
+    expect(result.driving_component).toBe("semantic_similarity");
+    expect(result.surface_evidence).toBe("x");
+    expect(result.rationale).not.toMatch(/no date recorded/);
+
+    // The recency template's own contract, on the reachable
+    // path: a Unit with a real date can still drive it.
+    const dated = generateRationale(
+      makeInput({
+        components: makeComponents({ recency: 1 }),
+        unit: {
+          normalized_summary: "x",
+          skills: [],
+          tools: [],
+          domains: [],
+          seniority_signals: [],
+          scope_signals: [],
+          date_range: { start: "2021-01-01", end: "2026-01-01" },
+        },
+      }),
+    );
+    expect(dated.driving_component).toBe("recency");
+    expect(dated.rationale).not.toMatch(/no date recorded/);
   });
 
   it("skill template with no canonical overlap: rationale does NOT claim 'shared <skills>'", () => {
@@ -948,5 +978,75 @@ describe("generateRationale: unmapped seniority (Codex P2 round 5 on #435)", () 
     );
     expect(result.driving_component).toBe("seniority_alignment");
     expect(result.surface_evidence).toBe("led");
+  });
+});
+
+describe("generateRationale: unknown recency (Codex P2 on #435)", () => {
+  // Fifth instance of the pattern, and the one that made the
+  // spec's invariant worth writing down: `recency()` returns 0.5
+  // when a Unit has no usable date, and `requirementAxes` always
+  // marks recency applicable because it's a Unit-side axis with
+  // nothing for a Requirement to constrain. With a weak semantic
+  // score the neutral wins and the match is explained by the
+  // absence of information.
+  const unit = {
+    normalized_summary: "Ran the living-room launch programme",
+    skills: [],
+    tools: [],
+    domains: [],
+    seniority_signals: [],
+    scope_signals: [],
+  };
+  const requirement = {
+    normalized_requirement: "Ship consumer products",
+    category: "skill" as const,
+    keywords: [],
+    tools: [],
+    domains: [],
+  };
+
+  it("does not let a missing date_range narrate the match", () => {
+    const result = generateRationale(
+      makeInput({
+        // 0.05 x 0.5 = 0.025 beats 0.30 x 0.05 = 0.015.
+        components: makeComponents({
+          semantic_similarity: 0.05,
+          recency: 0.5,
+        }),
+        unit,
+        requirement,
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+    expect(result.rationale).not.toMatch(/recency/i);
+  });
+
+  it("does not let an unparseable date narrate it either", () => {
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.05,
+          recency: 0.5,
+        }),
+        unit: { ...unit, date_range: { start: "not-a-date" } },
+        requirement,
+      }),
+    );
+    expect(result.driving_component).toBe("semantic_similarity");
+  });
+
+  it("still lets a measurable date narrate it at the same 0.5", () => {
+    // Again the value is identical; only measurability differs.
+    const result = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.05,
+          recency: 0.5,
+        }),
+        unit: { ...unit, date_range: { start: "2016-01-01", end: "2021-01-01" } },
+        requirement,
+      }),
+    );
+    expect(result.driving_component).toBe("recency");
   });
 });

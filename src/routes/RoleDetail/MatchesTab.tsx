@@ -141,6 +141,7 @@ export default function MatchesTab({
               {matches.map((match) => (
                 <li key={match.id}>
                   <MatchCard
+                    actionsDisabled={computingMatches}
                     match={match}
                     unit={unitsById.get(match.experience_unit_id) ?? null}
                     onApprovalStateChange={onApprovalStateChange}
