@@ -537,6 +537,32 @@ export function assertClaudeSubscriptionAuth(raw: string): void {
 }
 
 /**
+ * The child environment for every `claude` invocation — the auth
+ * preflight and the billable call alike.
+ *
+ * Codex P2: these two MUST agree. A preflight that sees fewer
+ * credentials than the call it guards answers a different question
+ * than the one being asked, and the failure is silent in the
+ * unhelpful direction: it refuses a valid subscription run rather
+ * than admitting an invalid one. Building the env once removes the
+ * chance of the two drifting apart again.
+ *
+ * `HOME` stays the operator's real home (the OAuth credentials live
+ * there) and `CLAUDE_CODE_OAUTH_TOKEN` carries the headless
+ * subscription credential when there is no interactive login. The
+ * security property is the allowlist in `buildChildEnv`, not the
+ * isolation of these two.
+ */
+function cliAuthEnv(): NodeJS.ProcessEnv {
+  return buildChildEnv({
+    HOME: process.env.HOME,
+    ...(process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined && {
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    }),
+  });
+}
+
+/**
  * Anthropic-shaped client backed by `claude -p` on the Claude Code
  * subscription.
  *
@@ -573,7 +599,15 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
         ["auth", "status", "--json"],
         {
           cwd: workdirRoot,
-          env: buildChildEnv({ HOME: process.env.HOME }),
+          // Codex P2: the preflight must see the SAME credentials the
+          // billable call will use, or it answers a different question.
+          // `CLAUDE_CODE_OAUTH_TOKEN` is the headless subscription
+          // credential (`scripts/phase-4b/adapters/review-via-claude.sh`
+          // documents it as exactly that); withholding it here made the
+          // preflight report logged-out and refuse a genuinely
+          // subscription-backed run on any machine without an
+          // interactive login.
+          env: cliAuthEnv(),
           stdin: "",
           timeoutMs,
         },
@@ -643,13 +677,10 @@ export function claudeCliClient(options: CliClientOptions = {}): Anthropic {
               // `--bare` failure ("Not logged in"). This matches
               // review-via-claude.sh, which also keeps the real HOME
               // while withholding everything else. The security win is
-              // the allowlist, not HOME isolation.
-              env: buildChildEnv({
-                HOME: process.env.HOME,
-                ...(process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined && {
-                  CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-                }),
-              }),
+              // the allowlist, not HOME isolation. Shared with the auth
+              // preflight so the check and the call it guards can never
+              // see different credentials.
+              env: cliAuthEnv(),
               stdin: parts.userContent,
               timeoutMs,
             },

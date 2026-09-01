@@ -618,6 +618,38 @@ describe("claudeCliClient subscription preflight", () => {
     expect(calls).toEqual([["auth", "status", "--json"]]);
   });
 
+  it("gives the preflight the same credentials as the billable call", async () => {
+    // Codex P2: the preflight originally received only HOME and the
+    // base allowlist while the billable call also forwarded
+    // CLAUDE_CODE_OAUTH_TOKEN — the headless subscription credential.
+    // A preflight that sees fewer credentials than the call it guards
+    // answers a different question, and fails in the unhelpful
+    // direction: refusing a valid subscription-backed run.
+    const envs: NodeJS.ProcessEnv[] = [];
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "headless-token");
+    const client = claudeCliClient({
+      workdirRoot: root,
+      spawnFn: async (_cmd, args, opts) => {
+        envs.push(opts.env);
+        return args[0] === "auth"
+          ? authResult(
+              JSON.stringify({
+                loggedIn: true,
+                authMethod: "oauth_token",
+                apiProvider: "firstParty",
+              }),
+            )
+          : authResult(claudeEnvelope({ result: JSON.stringify({ units: [] }) }));
+      },
+    });
+
+    await client.messages.create(params() as never);
+    expect(envs).toHaveLength(2);
+    const [preflightEnv, billableEnv] = envs as [NodeJS.ProcessEnv, NodeJS.ProcessEnv];
+    expect(preflightEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("headless-token");
+    expect(preflightEnv).toEqual(billableEnv);
+  });
+
   it("checks once per client, not once per flow", async () => {
     // A sweep runs this client across the whole matrix; re-checking per
     // call would add a subprocess to every cell for an answer that

@@ -498,6 +498,11 @@ async function main(): Promise<number> {
   );
 
   const fixtureResults: FixtureResult[] = [];
+  // Flow tallies for the all-failure exit check below. Counted from the
+  // raw per-sample results, because `FixtureResult` maps a failure to
+  // 0-accuracy rather than carrying an ok flag.
+  let attemptedFlows = 0;
+  let successfulFlows = 0;
   // Emit a "skipped" entry per unlabeled pair so the operator
   // sees the gap explicitly. `extractionAccuracy: null` and
   // `matchAccuracy: null` keep skipped cells out of the mean
@@ -658,6 +663,15 @@ async function main(): Promise<number> {
           ),
         );
       }
+      // Codex P2: the sweep branch already refuses to report success
+      // when nothing measured, but the ordinary branch returned 0
+      // unconditionally. `runForFixture` turns every adapter exception
+      // into an `ok: false` row, so a `--token-source claude-cli` run
+      // against a missing, logged-out, or preflight-rejected Claude
+      // printed a table of failures and still exited 0 — CI and shell
+      // callers read that as a passing eval.
+      attemptedFlows += samplesForThisPair.length;
+      successfulFlows += samplesForThisPair.filter((r) => r.ok).length;
       fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
     }
   } else if (variants.length > 0) {
@@ -765,6 +779,18 @@ async function main(): Promise<number> {
   console.log(
     `\n(fixtures available: ${resumeFixtures.length} resumes × ${jdFixtures.length} JDs)`,
   );
+
+  // Codex P2: mirror the sweep branch's all-failure guard. Gated on
+  // `attemptedFlows > 0` so the no-key and no-fixture listings — which
+  // legitimately measure nothing and legitimately exit 0 — are
+  // untouched.
+  if (attemptedFlows > 0 && successfulFlows === 0) {
+    console.error(
+      `\nRun produced no usable measurements: all ${attemptedFlows} flow(s) failed. ` +
+        "Check credentials, model availability, and the token source.\n",
+    );
+    return 1;
+  }
 
   return 0;
 }
