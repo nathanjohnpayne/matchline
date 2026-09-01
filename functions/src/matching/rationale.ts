@@ -372,18 +372,36 @@ function recencyTemplate(
   driving: keyof ScoreComponents,
 ): RationaleResult {
   const range = input.unit.date_range;
-  if (!range || typeof range.start !== "string" || range.start.length === 0) {
-    // No date_range to point at. surface_evidence stays empty
-    // rather than fabricating "no date recorded" (CodeRabbit
-    // Minor on PR #105). The rationale prose acknowledges the
-    // absence without claiming a date.
+  // Surface only the endpoints that PARSE. `hasMeasurableRecency`
+  // gates this template on `end` when `end` is present, so a
+  // range like `{ start: "not-a-date", end: "2021-01-01" }`
+  // reaches here with a measurable end and an unusable start —
+  // and an end-only range reaches here with no start at all. The
+  // prior guard keyed on `start` alone, so the first case
+  // surfaced "not-a-date" as evidence and the second claimed
+  // "no date range on Unit" despite having a real end date.
+  // CodeRabbit on #435.
+  const usable = (v: unknown): v is string =>
+    typeof v === "string" &&
+    v.length > 0 &&
+    !Number.isNaN(new Date(v).getTime());
+  const start = range !== undefined && usable(range.start) ? range.start : null;
+  const end = range !== undefined && usable(range.end) ? range.end : null;
+  if (start === null && end === null) {
+    // Nothing parseable to point at. surface_evidence stays
+    // empty rather than fabricating "no date recorded"
+    // (CodeRabbit Minor on PR #105). The rationale prose
+    // acknowledges the absence without claiming a date.
     return {
-      rationale: "Matched on recency axis (no date range on Unit).",
+      rationale: "Matched on recency axis (no usable date on Unit).",
       surface_evidence: "",
       driving_component: driving,
     };
   }
-  const evidence = `${range.start}${range.end ? ` to ${range.end}` : " (ongoing)"}`;
+  const evidence =
+    start === null
+      ? `through ${end!}`
+      : `${start}${end !== null ? ` to ${end}` : " (ongoing)"}`;
   return {
     rationale: `Recent: Unit dates within the relevant window (${evidence}).`,
     surface_evidence: evidence,

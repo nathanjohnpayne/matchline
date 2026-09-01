@@ -238,7 +238,7 @@ export async function setMatchApprovalState(
  * Client surfaces these via the rejection path; the caller
  * decides whether to log + retry or surface to the user.
  */
-export async function invokeRunMatching(roleId: string): Promise<void> {
+export async function invokeRunMatching(roleId: string): Promise<number> {
   const fn = httpsCallable<
     { roleId: string },
     { matches: UnitMatch[] }
@@ -247,5 +247,13 @@ export async function invokeRunMatching(roleId: string): Promise<void> {
     "runMatching",
     callableOptions("runMatching"),
   );
-  await fn({ roleId });
+  const res = await fn({ roleId });
+  // Returns the PERSISTED match count rather than void, because
+  // callers need to distinguish a run that wrote from one that
+  // was a no-op. `replaceMatchesForRole()` short-circuits its
+  // transaction when there is nothing to delete and nothing to
+  // write, so that case produces NO Firestore write and
+  // therefore no snapshot — a caller waiting on the listener to
+  // learn the run finished would wait forever. Codex P2 on #435.
+  return res.data?.matches?.length ?? 0;
 }

@@ -1050,3 +1050,79 @@ describe("generateRationale: unknown recency (Codex P2 on #435)", () => {
     expect(result.driving_component).toBe("recency");
   });
 });
+
+describe("recencyTemplate: partial date ranges (CodeRabbit on #435)", () => {
+  // `hasMeasurableRecency` gates on `end` when `end` is present,
+  // so the template can be reached with a measurable end and an
+  // unusable start. The prior guard keyed on `start` alone,
+  // which made those two cases wrong in opposite directions.
+  const base = {
+    normalized_summary: "x",
+    skills: [],
+    tools: [],
+    domains: [],
+    seniority_signals: [],
+    scope_signals: [],
+  };
+  const requirement = {
+    normalized_requirement: "y",
+    category: "skill" as const,
+    keywords: [],
+    tools: [],
+    domains: [],
+  };
+
+  it("renders an end-only range as end-date evidence, not 'no date'", () => {
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({ recency: 1 }),
+        unit: { ...base, date_range: { start: "", end: "2021-01-01" } },
+        requirement,
+      }),
+    );
+    expect(r.driving_component).toBe("recency");
+    expect(r.surface_evidence).toBe("through 2021-01-01");
+    expect(r.rationale).not.toMatch(/no usable date/);
+  });
+
+  it("does not surface an unparseable start alongside a valid end", () => {
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({ recency: 1 }),
+        unit: {
+          ...base,
+          date_range: { start: "not-a-date", end: "2021-01-01" },
+        },
+        requirement,
+      }),
+    );
+    expect(r.driving_component).toBe("recency");
+    expect(r.surface_evidence).not.toContain("not-a-date");
+    expect(r.surface_evidence).toBe("through 2021-01-01");
+  });
+
+  it("still renders a full range as start-to-end", () => {
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({ recency: 1 }),
+        unit: {
+          ...base,
+          date_range: { start: "2016-01-01", end: "2021-01-01" },
+        },
+        requirement,
+      }),
+    );
+    expect(r.surface_evidence).toBe("2016-01-01 to 2021-01-01");
+  });
+
+  it("still marks a start-only range as ongoing", () => {
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({ recency: 1 }),
+        unit: { ...base, date_range: { start: "2021-01-01" } },
+        requirement,
+      }),
+    );
+    expect(r.surface_evidence).toBe("2021-01-01 (ongoing)");
+  });
+});

@@ -402,13 +402,23 @@ export default function RoleDetail(): ReactElement {
           // arrives, since this run also goes through
           // `replaceMatchesForRole()` and rewrites every id.
           awaitingReplacementRef.current = true;
+          const reparseMatchCount = matches.length;
           setComputingMatches(true);
-          void invokeRunMatching(roleId).catch((err: unknown) => {
-            console.warn("invokeRunMatching after re-parse failed", err);
-            if (isStale()) return;
-            awaitingReplacementRef.current = false;
-            setComputingMatches(false);
-          });
+          void invokeRunMatching(roleId)
+            .then((persistedCount) => {
+              // Same no-op release as the auto-trigger path.
+              if (persistedCount === 0 && reparseMatchCount === 0) {
+                if (isStale()) return;
+                awaitingReplacementRef.current = false;
+                setComputingMatches(false);
+              }
+            })
+            .catch((err: unknown) => {
+              console.warn("invokeRunMatching after re-parse failed", err);
+              if (isStale()) return;
+              awaitingReplacementRef.current = false;
+              setComputingMatches(false);
+            });
         } catch (err) {
           if (isStale()) return;
           // Map before display: a callable that dies structurally
@@ -768,8 +778,29 @@ export default function RoleDetail(): ReactElement {
       currentRoleIdRef.current !== issuedAgainstAuto ||
       visitTokenRef.current !== issuedTokenAuto;
     awaitingReplacementRef.current = true;
+    // Match count at issue time. Together with the resolved
+    // count it identifies the no-op case below without reading
+    // state that may have moved.
+    const matchCountAtIssue = matches.length;
     setComputingMatches(true);
-    void invokeRunMatching(roleId).catch((err: unknown) => {
+    void invokeRunMatching(roleId)
+      .then((persistedCount) => {
+        // `replaceMatchesForRole()` skips its transaction
+        // entirely when there is nothing to delete AND nothing
+        // to write — a Role with Requirements but no
+        // embedding-bearing approved Units, say. No write means
+        // no snapshot, so the listener that normally releases
+        // `computingMatches` never fires and the Role would sit
+        // on "Computing matches…" forever with the JD controls
+        // disabled. Release it here for exactly that shape.
+        // Codex P2 on #435.
+        if (persistedCount === 0 && matchCountAtIssue === 0) {
+          if (isStaleAuto()) return;
+          awaitingReplacementRef.current = false;
+          setComputingMatches(false);
+        }
+      })
+      .catch((err: unknown) => {
       // On SUCCESS the subscription clears `computingMatches`
       // when the replacement snapshot lands — the promise
       // resolving only means the server transaction committed,
