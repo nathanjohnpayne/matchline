@@ -121,16 +121,6 @@ export interface VariantResult {
 }
 
 /**
- * Validate that every model a sweep will touch has a `rates.ts` entry,
- * BEFORE any tokens are spent.
- *
- * Without this the sweep would run to completion and then report $0.00
- * for the unpriced variant — which reads as "free" and would win the
- * Pareto comparison outright. `priceFor` swallows unknown models to 0
- * by design (telemetry must never break a pipeline), so the guard has
- * to live here, up front, where it can still refuse to start.
- */
-/**
  * Verify every prompt version a sweep names exists on disk, BEFORE any
  * tokens are spent.
  *
@@ -167,6 +157,16 @@ export function assertPromptsExist(
   }
 }
 
+/**
+ * Validate that every model a sweep will touch has a `rates.ts` entry,
+ * BEFORE any tokens are spent.
+ *
+ * Without this the sweep would run to completion and then report $0.00
+ * for the unpriced variant — which reads as "free" and would win the
+ * Pareto comparison outright. `priceFor` swallows unknown models to 0
+ * by design (telemetry must never break a pipeline), so the guard has
+ * to live here, up front, where it can still refuse to start.
+ */
 export function assertModelsPriced(variants: readonly SweepVariant[]): void {
   const missing = new Set<string>();
   for (const variant of variants) {

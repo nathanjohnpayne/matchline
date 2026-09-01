@@ -402,7 +402,28 @@ export function buildCliSystemPrompt(
     // (The finding described the reminder as naming
     // `record_job_requirements`; it actually says "the tool schema".
     // Same substance.)
-    .replace(/\bthe tool schema\b/g, "the required schema");
+    .replace(/\bthe tool schema\b/g, "the required schema")
+    // Codex P2 round 2: `NO_TOOL_USE_REMINDER` in
+    // `functions/src/parsing/jd.ts` is the one retry reminder the
+    // "tool schema" rule above does not reach. It tells the model its
+    // response "did not call the tool" and that it "must respond by
+    // calling the tool with the parsed requirements". Under `--tools
+    // ""` there is no tool to call, so a retrying CLI run was handed
+    // an impossible instruction that flatly contradicts the JSON-only
+    // OUTPUT CONTRACT appended below — the retry most likely to fail
+    // exactly the way it already failed. The CLI path reaches this
+    // reminder through its own `noToolUseResponse` degrade, so it is
+    // on the live retry path, not a theoretical one.
+    .replace(/\bdid not call the tool\b/g, "did not return a JSON object")
+    .replace(
+      /\brespond by calling the tool with\b/g,
+      "respond with one JSON object containing",
+    )
+    // Backstop for tool-calling phrasing a future reminder introduces:
+    // whatever the wording, the CLI arm must never be told to reach
+    // for a tool it was deliberately not given.
+    .replace(/\bcalling the tool\b/g, "returning one JSON object")
+    .replace(/\bcall the tool\b/g, "return one JSON object");
   return (
     `${rewritten}\n\n` +
     "OUTPUT CONTRACT: Return ONE JSON object — nothing else, no prose, no " +

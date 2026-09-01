@@ -170,6 +170,54 @@ describe("buildCliSystemPrompt", () => {
     expect(prompt).toContain("CLI validates it against the supplied JSON Schema");
     expect(prompt).not.toContain(JSON.stringify(SCHEMA));
   });
+
+  // The pipelines append a retry reminder to the system prompt on
+  // attempts 2 and 3. Those reminders are written for the tool-use API
+  // shape, so each one has to be rewritten too — a CLI retry told to
+  // call a tool it was never given contradicts the JSON-only OUTPUT
+  // CONTRACT and re-fails the same way. The literals below are copied
+  // verbatim from the production consts; if a reminder's wording drifts
+  // away from them, that is the signal to re-check the rewrite rules.
+  describe("retry reminders", () => {
+    // functions/src/parsing/jd.ts § SCHEMA_ERROR_REMINDER (the same
+    // sentence appears in extraction/resume.ts, validation/*.ts and
+    // generation/pipeline.ts).
+    const SCHEMA_ERROR_REMINDER =
+      "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields.";
+    // functions/src/parsing/jd.ts § NO_TOOL_USE_REMINDER.
+    const NO_TOOL_USE_REMINDER =
+      "\n\nYour previous response did not call the tool. You must respond by calling the tool with the parsed requirements; do not respond with plain text.";
+
+    it("rewrites the schema-error reminder's tool-schema wording", () => {
+      const prompt = buildCliSystemPrompt(
+        extractPromptParts(params({ system: `Base.${SCHEMA_ERROR_REMINDER}` })),
+      );
+      expect(prompt).not.toContain("the tool schema");
+      expect(prompt).toContain("exactly matches the required schema");
+    });
+
+    it("rewrites the no-tool-use reminder into a JSON-object instruction", () => {
+      const prompt = buildCliSystemPrompt(
+        extractPromptParts(params({ system: `Base.${NO_TOOL_USE_REMINDER}` })),
+      );
+      expect(prompt).toContain("did not return a JSON object");
+      expect(prompt).toContain(
+        "respond with one JSON object containing the parsed requirements",
+      );
+      // The substance of the reminder — "you returned prose, stop" —
+      // has to survive the rewrite, or the retry loses its point.
+      expect(prompt).toContain("do not respond with plain text");
+    });
+
+    it("never leaves a tool-calling instruction in the CLI prompt", () => {
+      for (const reminder of [SCHEMA_ERROR_REMINDER, NO_TOOL_USE_REMINDER]) {
+        const prompt = buildCliSystemPrompt(
+          extractPromptParts(params({ system: `Base.${reminder}` })),
+        );
+        expect(prompt).not.toMatch(/\bcall(ing)? the tool\b/);
+      }
+    });
+  });
 });
 
 describe("assertModelMatches", () => {

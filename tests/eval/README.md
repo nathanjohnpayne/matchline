@@ -90,7 +90,7 @@ npm run eval -- --token-source claude-cli
 | source | billing | status |
 |---|---|---|
 | `api` (default) | metered Anthropic + OpenAI | the fidelity reference, and the only source that yields meaningful latency |
-| `claude-cli` | Claude Code subscription | verified end-to-end: 27 schema-valid Units on `nathan-2026` |
+| `claude-cli` | Claude Code subscription | verified end-to-end on `nathan-2026` — see `claudeCliClient`'s docstring in `tokenSource.ts` for the spike record |
 
 `OPENAI_API_KEY` is required by **every** source, because embeddings
 have no CLI equivalent. `ANTHROPIC_API_KEY` is required only by `api`.
