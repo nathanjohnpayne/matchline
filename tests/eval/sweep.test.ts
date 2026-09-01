@@ -873,6 +873,31 @@ describe("formatSweepReport", () => {
     expect(out).toContain("2/4 failed");
   });
 
+  it("marks CLI-measured costs as estimated, and API ones not", () => {
+    // Codex P2: `estimateTokens` documents that CLI-derived costs are
+    // labeled `estimated` in the sweep output — they are a
+    // ~4-chars-per-token approximation, not metered token counts. The
+    // report promised it and never delivered, so a near-tie between a
+    // CLI row and an API row read as more precise than it was.
+    const out = formatSweepReport([
+      variantResult({ label: "cli", tokenSource: "claude-cli", modeledCostPerFlowUsd: 0.25 }),
+      variantResult({ label: "api", tokenSource: "api", modeledCostPerFlowUsd: 0.5 }),
+    ]);
+    const row = (l: string): string =>
+      out.split("\n").find((x) => x.startsWith(`| ${l} |`)) ?? "";
+
+    expect(row("cli")).toContain("~$");
+    expect(row("api")).not.toContain("~$");
+    // And the legend only appears when something is actually estimated.
+    expect(out).toContain("marks an **estimated** cost");
+  });
+
+  it("omits the estimated legend for an all-API sweep", () => {
+    const out = formatSweepReport([variantResult({ label: "a", tokenSource: "api" })]);
+    expect(out).not.toContain("marks an **estimated** cost");
+    expect(out).not.toContain("~$");
+  });
+
   it("renders the flow count for successful variants too", () => {
     // Codex P2: `flows` used to appear only in the failure suffix, so a
     // one-fixture smoke run and a full-corpus run serialized

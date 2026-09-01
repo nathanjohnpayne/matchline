@@ -535,6 +535,21 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
   // full-corpus run serialize identically, so a reader of the saved
   // report cannot judge how much corpus a recommendation rests on, nor
   // reconstruct total modeled cost from `$ / flow`.
+  // Codex P2: `estimateTokens` documents that CLI-derived costs are
+  // labeled `estimated` in the sweep output — they come from a
+  // ~4-chars-per-token approximation, not real token accounting. The
+  // report promised that and never delivered it, so a near-tie between
+  // a CLI row and an API row read as more precise than it is.
+  if (results.some((r) => r.tokenSource !== "api")) {
+    lines.push("");
+    lines.push(
+      "`~` marks an **estimated** cost: rows measured through a subscription CLI " +
+        "price a ~4-chars-per-token approximation of the payload, not metered token " +
+        "counts. Treat a near-tie against an `api` row as unresolved until the " +
+        "confirmation run on `--token-source api`.",
+    );
+  }
+  lines.push("");
   lines.push(
     "| variant | source | models | prompts | extraction | match | flows | $/flow | pareto |",
   );
@@ -558,7 +573,8 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
       `| ${r.label} | ${r.tokenSource} | ${models} | ${prompts} | ` +
         `${fmtPct(r.extractionAccuracy)} | ${fmtPct(r.matchAccuracy)} | ` +
         `${r.flows} | ` +
-        `${fmtUsd(r.modeledCostPerFlowUsd)} | ${frontier.has(r.label) ? "✅" : ""}${fail} |`,
+        `${r.tokenSource === "api" ? "" : "~"}${fmtUsd(r.modeledCostPerFlowUsd)} | ` +
+        `${frontier.has(r.label) ? "✅" : ""}${fail} |`,
     );
   }
 
@@ -571,9 +587,15 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
         "(#177 baseline: extraction 48.4% / match 19.1%).",
     );
   } else {
+    // Codex P2: a recommendation resting on an estimated cost has to
+    // say so — it is the single line a reader is most likely to lift
+    // out of a saved report and act on.
+    const estimated = pick.tokenSource !== "api";
     lines.push(
       `**Recommendation: \`${pick.label}\`** — cheapest variant clearing both ` +
-        `${(QUALITY_BAR * 100).toFixed(0)}% gates at ${fmtUsd(pick.modeledCostPerFlowUsd)}/flow.`,
+        `${(QUALITY_BAR * 100).toFixed(0)}% gates at ` +
+        `${estimated ? "~" : ""}${fmtUsd(pick.modeledCostPerFlowUsd)}/flow` +
+        `${estimated ? " (estimated — measured through a subscription CLI; confirm on --token-source api)" : ""}.`,
     );
   }
   lines.push("");

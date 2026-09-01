@@ -287,6 +287,27 @@ describe("assertModelMatches", () => {
     ).toThrow(/Refusing to attribute/);
   });
 
+  it("rejects a served family id for a requested point version", () => {
+    // Codex P2: the check used to be two-way, so `req.includes(got)`
+    // accepted a served id SHORTER than the requested one — the point
+    // version was never verified, and another version's quality and
+    // cost would be attributed to the requested model.
+    expect(() => assertModelMatches("claude-sonnet-4-6", ["claude-sonnet"])).toThrow(
+      /Refusing to attribute/,
+    );
+    expect(() =>
+      assertModelMatches("claude-haiku-4-5-20251001", ["claude-haiku"]),
+    ).toThrow(/Refusing to attribute/);
+  });
+
+  it("still accepts a full dated id for an undated alias", () => {
+    // The legitimate direction, unchanged: the SERVED id contains the
+    // REQUESTED alias.
+    expect(() =>
+      assertModelMatches("sonnet", ["claude-sonnet-4-6"]),
+    ).not.toThrow();
+  });
+
   it("fails closed when the CLI reported no model", () => {
     expect(() => assertModelMatches("haiku", [])).toThrow(
       /did not report the served model/,

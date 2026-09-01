@@ -826,9 +826,14 @@ export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
  * (`claude-haiku-4-5-20251001`) — the alias is a substring of the id,
  * not a prefix of it.
  *
- * The looseness is bounded: `claude-sonnet-4-6` vs `claude-sonnet-4-5`
- * normalizes to `claudesonnet46` vs `claudesonnet45`, and neither
- * contains the other, so a point-version substitution still throws.
+ * The looseness is bounded and one-directional: the SERVED id must
+ * contain the REQUESTED one, never the reverse. `claude-sonnet-4-6` vs
+ * `claude-sonnet-4-5` normalizes to `claudesonnet46` vs
+ * `claudesonnet45`, so a point-version substitution still throws — and
+ * a served family id like `claude-sonnet` no longer satisfies a
+ * requested `claude-sonnet-4-6`, which the earlier two-way check
+ * accepted without ever verifying the point version.
+ *
  * The residual gap is inherent to aliases — asking for `sonnet` means
  * "whatever the current Sonnet is". Sweep entries should use full
  * dated ids when the exact point version matters for the ranking.
@@ -845,10 +850,16 @@ export function assertModelMatches(
   }
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const req = norm(requested);
-  const ok = served.some((s) => {
-    const got = norm(s);
-    return got.includes(req) || req.includes(got);
-  });
+  // Codex P2: ONE direction only. `got.includes(req)` is the
+  // legitimate case — an undated alias (`haiku`) satisfied by the full
+  // dated id the CLI reports. The reverse, `req.includes(got)`,
+  // accepted a served id SHORTER than the requested one: asking for
+  // `claude-sonnet-4-6` and being served `claude-sonnet` passed,
+  // attributing an unverified point version's quality and cost to the
+  // requested model — exactly what this fail-closed guard exists to
+  // refuse. An exact match still passes, since a string contains
+  // itself.
+  const ok = served.some((s) => norm(s).includes(req));
   if (!ok) {
     throw new Error(
       `tokenSource: requested model "${requested}" but the CLI served ` +
