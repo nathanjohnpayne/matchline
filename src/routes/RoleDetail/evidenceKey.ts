@@ -29,16 +29,33 @@
  * ## The rule for changing this
  *
  * A field belongs here if and only if `resolveMatchEvidence`
- * reads it. Adding one it ignores makes the panel re-derive for
- * changes that cannot alter a verdict; omitting one it reads
- * reintroduces the staleness above. `evidenceKey.test.ts` pins
- * both directions.
+ * reads it **to decide a verdict**. Adding one it ignores makes
+ * the panel re-derive for changes that cannot alter the answer;
+ * omitting one it reads reintroduces the staleness above.
+ * `evidenceKey.test.ts` pins both directions.
  *
- * `updated_at` stands in for the Unit's own scoring fields —
- * skills, tools, domains, seniority signals, date range — because
- * `services/experienceUnits.ts` bumps it on every write and the
- * caller is never allowed to set it. Requirements carry no such
- * field, so their constraining fields are listed explicitly.
+ * ## Why the fields and not `updated_at`
+ *
+ * The first version signed the Unit's `updated_at`, on the
+ * premise that `services/experienceUnits.ts` bumps it on every
+ * write and never lets a caller set it. That is true of
+ * `updateFields`, `setApproval` and `markReembedPending` — and
+ * false of the exported `upsertExperienceUnit`, which `setDoc`s
+ * the caller's object verbatim, timestamp included. Changed
+ * skills could therefore arrive under an unchanged timestamp and
+ * the effect would skip. Codex P2 on PR #446.
+ *
+ * Signing the vocabularies directly removes the dependence on
+ * that contract rather than relying on it holding everywhere.
+ *
+ * ## Why JSON, not delimiters
+ *
+ * `["a", "b"].join("|")` and `["a|b"].join("|")` are the same
+ * string, and those two Requirements are not the same: the
+ * normalizer can recognize the first as a constrained skill axis
+ * and reject the second as unrecognized vocabulary. Any separator
+ * has some collision, so the encoding is lossless instead of
+ * merely unlikely. Codex P2 on PR #446.
  */
 
 import type {
@@ -47,32 +64,37 @@ import type {
   UnitMatch,
 } from "../../types/capability.ts";
 
-function unitSignature(unit: ExperienceUnit | undefined): string {
-  if (unit === undefined) return "-";
+function unitSignature(unit: ExperienceUnit | undefined): unknown {
+  if (unit === undefined) return null;
   return [
-    unit.updated_at,
-    unit.user_approved ? "a" : "",
-    unit.reembed_pending === true ? "p" : "",
-    // The LENGTH, not just presence: an in-place embedding
-    // replacement at a different dimension makes the pair
-    // unverifiable (`cosine()` throws), and collapsing every
-    // non-empty vector to one token hid that. Codex P2 on PR #446.
-    `e${unit.embedding?.length ?? 0}`,
-  ].join("/");
+    // The five vocabularies the structural axes actually compare.
+    // `date_range` is deliberately absent: it feeds only the recency
+    // axis, and recency is not in STRUCTURAL_AXES, so editing it
+    // cannot change a verdict.
+    unit.skills,
+    unit.tools,
+    unit.domains,
+    unit.seniority_signals,
+    unit.scope_signals,
+    // The three states that make a pair unverifiable.
+    unit.user_approved,
+    unit.reembed_pending === true,
+    unit.embedding?.length ?? 0,
+  ];
 }
 
 function requirementSignature(
   requirement: JobRequirementUnit | undefined,
-): string {
-  if (requirement === undefined) return "-";
+): unknown {
+  if (requirement === undefined) return null;
   return [
     requirement.category,
-    requirement.seniority_level ?? "",
-    requirement.keywords.join("|"),
-    requirement.tools.join("|"),
-    requirement.domains.join("|"),
-    `e${requirement.embedding?.length ?? 0}`,
-  ].join("/");
+    requirement.keywords,
+    requirement.tools,
+    requirement.domains,
+    requirement.seniority_level ?? null,
+    requirement.embedding?.length ?? 0,
+  ];
 }
 
 /**
@@ -89,9 +111,9 @@ export function legacyEvidenceKey(
   if (legacy.length === 0) return "";
   const unitById = new Map(units.map((u) => [u.id, u]));
   const reqById = new Map(requirements.map((r) => [r.id, r]));
-  return legacy
-    .map(
-      (m) =>
+  return JSON.stringify(
+    legacy
+      .map((m) => [
         // The two linked ids are part of the signature, not just
         // the documents they resolve to. `upsertMatch` can
         // repoint a match at a different Unit or Requirement
@@ -99,10 +121,13 @@ export function legacyEvidenceKey(
         // happened to sign identically the container would skip
         // re-derivation and keep the old pair's verdict.
         // CodeRabbit on PR #446.
-        `${m.id}>${m.experience_unit_id}>${m.job_requirement_unit_id}` +
-        `~${unitSignature(unitById.get(m.experience_unit_id))}` +
-        `~${requirementSignature(reqById.get(m.job_requirement_unit_id))}`,
-    )
-    .sort()
-    .join(";");
+        m.id,
+        m.experience_unit_id,
+        m.job_requirement_unit_id,
+        unitSignature(unitById.get(m.experience_unit_id)),
+        requirementSignature(reqById.get(m.job_requirement_unit_id)),
+      ])
+      // Sorted by match id so snapshot ordering cannot churn the key.
+      .sort((a, b) => (a[0] as string).localeCompare(b[0] as string)),
+  );
 }

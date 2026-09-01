@@ -124,9 +124,30 @@ describe("legacyEvidenceKey: changes that MUST re-derive", () => {
     expect(pending).not.toBe(base);
   });
 
-  it("changes when the Unit is edited", () => {
+  it("changes for every Unit vocabulary the structural axes read", () => {
+    // Signed directly rather than via `updated_at`. The timestamp
+    // was a proxy for these, on the premise that every write path
+    // bumps it — true of `updateFields`, `setApproval` and
+    // `markReembedPending`, and false of the exported
+    // `upsertExperienceUnit`, which `setDoc`s the caller's object
+    // verbatim. Codex P2 on PR #446.
+    const variants = [
+      unit({ skills: ["Machine Learning"] }),
+      unit({ tools: ["Figma"] }),
+      unit({ domains: ["Fintech"] }),
+      unit({ seniority_signals: ["Staff"] }),
+      unit({ scope_signals: ["org-wide"] }),
+    ];
+    for (const u of variants) {
+      expect(KEY([match()], [u])).not.toBe(base);
+    }
+  });
+
+  it("changes when a Unit is edited through a path that keeps updated_at", () => {
+    // The concrete hole the timestamp proxy left: changed skills
+    // under an unchanged timestamp.
     expect(
-      KEY([match()], [unit({ updated_at: "2026-06-01T00:00:00.000Z" })]),
+      KEY([match()], [unit({ skills: ["Machine Learning"] })]),
     ).not.toBe(base);
   });
 
@@ -225,9 +246,69 @@ describe("legacyEvidenceKey: changes that must NOT re-derive", () => {
     ).toBe(base);
   });
 
+  it("is unchanged by updated_at on its own", () => {
+    // Now that the vocabularies are signed directly, a bare
+    // timestamp bump cannot alter a verdict and must not cost a
+    // round trip.
+    expect(
+      KEY([match()], [unit({ updated_at: "2026-06-01T00:00:00.000Z" })]),
+    ).toBe(base);
+  });
+
+  it("is unchanged by date_range, which only feeds the recency axis", () => {
+    // `recency` is not in STRUCTURAL_AXES, so it cannot decide a
+    // verdict — including it here would re-derive for nothing.
+    expect(
+      KEY([match()], [unit({ date_range: { start: "2020-01-01" } })]),
+    ).toBe(base);
+  });
+
   it("is stable under input reordering", () => {
     const a = KEY([match({ id: "m-a" }), match({ id: "m-b" })]);
     const b = KEY([match({ id: "m-b" }), match({ id: "m-a" })]);
     expect(a).toBe(b);
+  });
+});
+
+describe("legacyEvidenceKey: the encoding is lossless (#446)", () => {
+  it("distinguishes arrays that a delimiter join would collapse", () => {
+    // `["product strategy", "x"].join("|")` and
+    // `["product strategy|x"].join("|")` are the same string, and
+    // the two Requirements are not the same: the normalizer can
+    // recognize the first as a constrained skill axis and reject
+    // the second as unrecognized vocabulary. Codex P2 on PR #446.
+    const split = KEY(
+      [match()],
+      [unit()],
+      [requirement({ keywords: ["product strategy", "x"] })],
+    );
+    const joined = KEY(
+      [match()],
+      [unit()],
+      [requirement({ keywords: ["product strategy|x"] })],
+    );
+    expect(split).not.toBe(joined);
+  });
+
+  it("distinguishes the same collision on the Unit side", () => {
+    expect(KEY([match()], [unit({ skills: ["a", "b"] })])).not.toBe(
+      KEY([match()], [unit({ skills: ["a|b"] })]),
+    );
+  });
+
+  it("distinguishes a value moving between adjacent fields", () => {
+    // A separator between FIELDS collides too: `tools: ["x"]` with
+    // empty domains versus empty tools with `domains: ["x"]`.
+    expect(
+      KEY([match()], [unit()], [requirement({ tools: ["x"], domains: [] })]),
+    ).not.toBe(
+      KEY([match()], [unit()], [requirement({ tools: [], domains: ["x"] })]),
+    );
+  });
+
+  it("distinguishes ids that a delimiter would let bleed together", () => {
+    expect(
+      KEY([match({ id: "a", experience_unit_id: "b~c" })], [], []),
+    ).not.toBe(KEY([match({ id: "a~b", experience_unit_id: "c" })], [], []));
   });
 });
