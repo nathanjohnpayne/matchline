@@ -15,12 +15,17 @@ import { describe, expect, it } from "vitest";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import MatchesTab from "./MatchesTab.tsx";
+import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
 
 const EMPTY_UNITS = new Map<string, ExperienceUnit>();
 
 function render(props: {
   readonly strandedMatches?: number;
   readonly evidenceStatus?: "current" | "pending" | "unavailable";
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
+  readonly computingMatches?: boolean;
+  readonly groups?: RequirementWithMatches[];
 }): string {
   return renderToStaticMarkup(
     <MatchesTab
@@ -88,5 +93,126 @@ describe("MatchesTab: evidence disclosure in the no-Requirements branch", () => 
     const html = render({});
     expect(html).not.toContain("gaps-evidence-unavailable");
     expect(html).not.toContain("gaps-evidence-pending");
+  });
+});
+
+describe("MatchesTab: the re-run matching control (#442)", () => {
+  // The generation gate refuses when every approved match is
+  // stranded and tells the user to re-run matching. That
+  // instruction was unreachable: the auto-trigger will not fire
+  // while matches exist, and this tab had no control. A refusal
+  // naming an impossible action is worse than no refusal. Codex
+  // P2 on PR #449.
+  const group: RequirementWithMatches = {
+    requirement: {
+      id: "req-1",
+      owner_uid: "u",
+      role_id: "role-1",
+      raw_text: "raw",
+      normalized_requirement: "norm",
+      category: "skill",
+      keywords: [],
+      tools: [],
+      domains: [],
+      priority: "high",
+      must_have: true,
+      extracted_from: "qualifications",
+    },
+    matches: [],
+  };
+
+  it("renders the control when a handler is supplied", () => {
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("rerun-matching");
+    expect(html).toContain("Re-run matching");
+  });
+
+  it("says decisions carry forward, so the control does not read as destructive", () => {
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("carry forward");
+  });
+
+  it("disables the control while matching is already running", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      computingMatches: true,
+    });
+    expect(html).toContain("disabled");
+    expect(html).toContain("Re-running matching…");
+  });
+
+  it("surfaces a failure rather than failing silently", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingError: new Error("Matching timed out."),
+    });
+    expect(html).toContain("rerun-matching-error");
+    expect(html).toContain("Matching timed out.");
+  });
+
+  it("announces the failure to assistive technology", () => {
+    // It arrives asynchronously, with focus most likely still on
+    // the button that triggered it. Without alert semantics a
+    // screen-reader user is told nothing — on the recovery path,
+    // which strands exactly the user who most needs to know.
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingError: new Error("Matching timed out."),
+    });
+    expect(html).toContain('role="alert"');
+  });
+
+  it("renders nothing extra when no handler is supplied", () => {
+    const html = render({ groups: [group] });
+    expect(html).not.toContain("rerun-matching");
+  });
+
+  it("is NOT offered when the Role has no Requirements", () => {
+    // `groups` maps 1:1 from Requirements, so this branch means
+    // there are none — and matching against zero Requirements can
+    // only delete the surviving matches, never produce grounding.
+    // The control was briefly rendered here after the previous
+    // round asked for a reachable recovery action; it is the
+    // wrong action for this state, and its only effect would be
+    // destroying the user's remaining approvals. Codex P2 on PR
+    // #449.
+    const html = render({ groups: [], onRerunMatching: () => {} });
+    expect(html).not.toContain("rerun-matching");
+  });
+
+  it("points at re-parsing instead, when matches are stranded there", () => {
+    const html = render({
+      groups: [],
+      onRerunMatching: () => {},
+      strandedMatches: 2,
+    });
+    expect(html).toContain("Parse the job description again");
+    expect(html).toContain("would only discard them");
+  });
+
+  it("keeps the ordinary stranded copy when Requirements exist", () => {
+    const html = render({ groups: [group], strandedMatches: 2 });
+    expect(html).toContain("Re-running matching will rebuild them");
+  });
+
+  it("gives the control a visible focus ring", () => {
+    // docs/design/ui-guidance.md: every interactive element has a
+    // visible focus ring. Codex P1 on PR #449.
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("focus-visible:ring-2");
+  });
+
+  it("does not overpromise the carry-forward in the re-parse flow", () => {
+    // `replaceMatchesForRole` keys carry-forward on the exact
+    // (experience_unit_id, job_requirement_unit_id) pair. A
+    // re-parse gives every Requirement a new id, so NO decisions
+    // survive — and this button exists primarily for that flow.
+    // The first copy said decisions "are carried forward" flatly.
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("have not changed");
+    expect(html).toContain("need reviewing again");
   });
 });

@@ -84,6 +84,14 @@ export interface RoleDetailViewProps {
    */
   readonly computingMatches: boolean;
   /**
+   * Manual re-run of the matching pipeline (#442 / Codex P2 on
+   * PR #449). Needed because the auto-trigger will not fire while
+   * matches exist, so a Role holding matches stranded by a
+   * re-parse has no other way forward.
+   */
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
+  /**
    * Requirements tab parse state (#201). The container holds
    * `parseJobRequirements`-call state + the in-flight save
    * for the JD textarea so re-renders don't drop them on
@@ -127,6 +135,8 @@ export default function RoleDetailView({
   onTabChange,
   onApprovalStateChange,
   computingMatches,
+  onRerunMatching,
+  matchingError,
   parsingStatus,
   parseError,
   savingJd,
@@ -261,6 +271,8 @@ export default function RoleDetailView({
         )}
         {activeTab === "matches" && (
           <MatchesTab
+            onRerunMatching={onRerunMatching}
+            matchingError={matchingError}
             groups={groups}
             gaps={gapReport.gaps}
             evidenceStatus={evidenceStatus}

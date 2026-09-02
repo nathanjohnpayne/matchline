@@ -73,6 +73,12 @@ export interface GenerationInputs {
 
 export interface RunGenerationResult {
   readonly content: GeneratedAssetContent;
+  /**
+   * The Requirement set the prompt was built from, as a token.
+   * The persist transaction rejects the write if it no longer
+   * matches — see `requirementSetToken`.
+   */
+  readonly requirement_set_token: string;
   readonly cost_usd: number;
   readonly input_tokens: number;
   readonly output_tokens: number;
@@ -126,8 +132,35 @@ export async function runGenerationPipeline(
   // cursor CHANGES_REQUESTED round 1 on PR #123 caught the gap:
   // the prior version loaded approvedMatches but didn't use
   // them to gate the prompt input.
+  // Drop approved matches whose Requirement no longer exists
+  // (#442).
+  //
+  // A JD re-parse replaces the Role's Requirements under NEW ids
+  // (`parsing/pipeline.ts` clear-and-replace) before matching
+  // runs. `RoleDetail` fires `runMatching` straight afterwards to
+  // close that window, but if that call fails — a timeout, a
+  // transient callable error, the user closing the tab — the old
+  // matches survive pointing at ids that are gone.
+  //
+  // Those matches are not inert. They keep `approved_for_use`,
+  // and this gate reads only `experience_unit_id`, so a stranded
+  // match made its Unit eligible to ground a resume on the
+  // strength of a Requirement the employer's JD no longer
+  // contains. That is a zero-fabrication violation reached
+  // through stale data rather than through a bad model output,
+  // which is why it survived every other guard in the pipeline.
+  //
+  // `requirements` is already loaded here, role- and
+  // owner-scoped, so the check costs nothing.
+  const liveApprovedMatches = liveApprovedMatchesOf(
+    inputs.approvedMatches,
+    inputs.requirements,
+  );
+  const strandedApprovedCount =
+    inputs.approvedMatches.length - liveApprovedMatches.length;
+
   const approvedMatchedUnitIds = new Set(
-    inputs.approvedMatches.map((m) => m.experience_unit_id),
+    liveApprovedMatches.map((m) => m.experience_unit_id),
   );
   const eligibleUnits = inputs.units.filter((u) =>
     approvedMatchedUnitIds.has(u.id),
@@ -139,6 +172,66 @@ export async function runGenerationPipeline(
     // approved Units but no approved matches connecting any of
     // them to this Role's Requirements. The error message
     // distinguishes for the editor surface (#24)'s UX.
+    // Three causes now, and the third needs a DIFFERENT remedy.
+    // "Approve at least one match" is wrong advice for a user who
+    // already approved matches that a re-parse then stranded —
+    // there is nothing left to approve, and the fix is to re-run
+    // matching against the current Requirements.
+    //
+    // **Order matters, and the first version got it wrong.**
+    // Matches are loaded Role-wide while Units come from the
+    // Application's `approved_unit_ids` snapshot, so an
+    // Application with no loaded Units can coexist with orphaned
+    // Role matches — a legacy Application with an empty snapshot,
+    // or one whose Units were later deleted or unapproved.
+    // Reporting the stranded case there printed the
+    // self-contradicting "Approved Units present (0)" AND told
+    // the user to re-run matching, which cannot make such an
+    // Application generate. The no-Units diagnosis is the
+    // actionable one and has to win. Codex P2 on PR #449.
+    // An empty Requirement set needs its own remedy, and it is
+    // NOT a rematch. Matching against zero Requirements can only
+    // delete the stale rows; it cannot produce grounding, so
+    // sending the user there leaves them exactly where they
+    // started. The JD has to be parsed again first. Codex P2 on
+    // PR #449.
+    // No Requirements at all — regardless of whether any approved
+    // match survived. The stranded-count precondition was wrong:
+    // a Role that parses to an empty set, or one whose stale rows
+    // a later matching run already cleared, has zero Requirements
+    // AND zero approved matches, and fell through to the generic
+    // "approve a match in the Matches tab" — advice that cannot
+    // be followed when there is nothing to match against.
+    // CodeRabbit on PR #449.
+    if (inputs.units.length > 0 && inputs.requirements.length === 0) {
+      const stranded =
+        strandedApprovedCount > 0
+          ? ` ${strandedApprovedCount} approved UnitMatch(es) still point at ` +
+            `requirements from a previous version of the description.`
+          : "";
+      throw new GenerationNoApprovedUnitsError(
+        `Approved Units present (${inputs.units.length}), but this Role has ` +
+          `no Requirements at all — the job description has not been parsed, ` +
+          `or was parsed into an empty set, so there is nothing to ground ` +
+          `against.${stranded} Nothing to generate from for application ` +
+          `${ctx.applicationId}; parse the job description again on the ` +
+          `Requirements tab.`,
+      );
+    }
+    if (
+      inputs.units.length > 0 &&
+      liveApprovedMatches.length === 0 &&
+      strandedApprovedCount > 0
+    ) {
+      throw new GenerationNoApprovedUnitsError(
+        `Approved Units present (${inputs.units.length}) and ` +
+          `${strandedApprovedCount} approved UnitMatch(es) for this Role, but ` +
+          `every one points at a Requirement that no longer exists — the job ` +
+          `description was re-parsed and matching has not been re-run since. ` +
+          `Nothing to generate from for application ${ctx.applicationId}; ` +
+          `re-run matching on the Matches tab before generating.`,
+      );
+    }
     const detail =
       inputs.units.length === 0
         ? "No approved ExperienceUnits"
@@ -309,6 +402,10 @@ export async function runGenerationPipeline(
     // any preceding failed attempts that still burned tokens.
     return {
       content: stampIds(parsed.data, generateId),
+      // Captured from the SAME `inputs` the prompt was built
+      // from, so the persist transaction can prove the set has
+      // not moved underneath it.
+      requirement_set_token: requirementSetToken(inputs.requirements),
       cost_usd: cumulativeCostUsd,
       input_tokens: cumulativeInputTokens,
       output_tokens: cumulativeOutputTokens,
@@ -322,6 +419,122 @@ export async function runGenerationPipeline(
     `Resume generation failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
+}
+
+/**
+ * Approved matches whose Requirement still exists (#442).
+ *
+ * Exported because the persist transaction in
+ * `runGenerateResume.ts` re-applies the same rule against
+ * freshly-read documents, and the two must not drift — a
+ * revalidation that disagreed with the gate would either refuse
+ * sound work or admit the very rows the gate rejected.
+ */
+export function liveApprovedMatchesOf(
+  approvedMatches: readonly UnitMatch[],
+  requirements: readonly JobRequirementUnit[],
+): readonly UnitMatch[] {
+  const currentRequirementIds = new Set(requirements.map((r) => r.id));
+  return approvedMatches.filter((m) =>
+    currentRequirementIds.has(m.job_requirement_unit_id),
+  );
+}
+
+/**
+ * A stable token for the Requirement set a generation ran
+ * against (#442, Codex P1 on PR #449).
+ *
+ * `findStaleGroundingId` reduces both sides to Unit ids, so it
+ * cannot tell "the grounding still holds" from "a DIFFERENT
+ * requirement now grounds the same Unit". Concretely: a re-parse
+ * lands mid-generation, the user approves a freshly computed
+ * match for the same Unit, and the cited Unit looks grounded
+ * again — while the artifact in hand was written for requirements
+ * that no longer exist.
+ *
+ * Only an identity check on the set itself catches that, so the
+ * token is compared verbatim and ANY change is rejected.
+ *
+ * **Content, not just ids.** The first version hashed ids alone,
+ * which misses an edit in place: `services/roles.ts`'s
+ * `upsertRequirement` merges into an existing document id, and
+ * the rules permit owner-preserving updates, so a Requirement's
+ * text can change while every id stays put. An id-only token used
+ * as an equality proof would then certify a prompt built from
+ * wording that no longer exists. Codex P2 on PR #449.
+ *
+ * The fields covered are exactly the ones the prompt renders —
+ * `formatRequirement` emits `normalized_requirement` and the
+ * must-have tag — plus the id for identity. A field the prompt
+ * never shows cannot invalidate the artifact, and including it
+ * would discard sound generations for edits the model never saw.
+ *
+ * JSON rather than a delimiter join, for the reason the
+ * derivation key learned on #446: `["a","b"]` and `["a|b"]` must
+ * not collide.
+ */
+export function requirementSetToken(
+  requirements: readonly {
+    readonly id: string;
+    readonly normalized_requirement?: string;
+    readonly must_have?: boolean;
+  }[],
+): string {
+  return JSON.stringify(
+    requirements
+      .map(
+        (r) =>
+          [r.id, r.normalized_requirement ?? "", r.must_have === true] as const,
+      )
+      .sort((a, b) => a[0].localeCompare(b[0])),
+  );
+}
+
+/**
+ * The first cited `source_unit_ids` value no longer backed by an
+ * approved match against a Requirement the Role still has, or
+ * null if every citation still holds.
+ *
+ * Read at persist time. `loadInputs` reads Requirements and
+ * matches through plain parallel queries, so a JD re-parse
+ * committing between that read and the persist leaves the gate
+ * above having approved grounding that has since evaporated —
+ * and the window is the whole LLM call, which is minutes.
+ * Codex P1 on PR #449.
+ */
+export function findStaleGroundingId(
+  content: {
+    readonly summary: { readonly source_unit_ids: readonly string[] };
+    readonly bullets: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+    readonly skills: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+    readonly education?: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+  },
+  approvedMatches: readonly UnitMatch[],
+  requirements: readonly JobRequirementUnit[],
+): string | null {
+  const stillGrounded = new Set(
+    liveApprovedMatchesOf(approvedMatches, requirements).map(
+      (m) => m.experience_unit_id,
+    ),
+  );
+  const allItems = [
+    content.summary,
+    ...content.bullets,
+    ...content.skills,
+    ...(content.education ?? []),
+  ];
+  for (const item of allItems) {
+    for (const id of item.source_unit_ids) {
+      if (!stillGrounded.has(id)) return id;
+    }
+  }
+  return null;
 }
 
 /**
@@ -540,11 +753,27 @@ async function defaultLoadInputs(
     );
   }
 
+  // `id` from the document id, not from the stored fields.
+  //
+  // The admin SDK uses no converter, while `services/firestore.ts`
+  // strips `id` on every client-side write (the document id is
+  // canonical). Requirements happen to be server-written today, so
+  // their `id` is present — but the stranded-match gate above now
+  // DEPENDS on these ids resolving, and if they were ever absent
+  // the set would be `{undefined}` and every approved match would
+  // read as stranded. That failure mode blocks all generation, so
+  // the gate should not rest on a property of the current write
+  // path. Same fix as `matching/evidence-read.ts` (#441); the
+  // remaining admin readers are tracked in #447.
   return {
     units,
     role,
-    requirements: reqsSnap.docs.map((d) => d.data()) as JobRequirementUnit[],
-    approvedMatches: matchesSnap.docs.map((d) => d.data()) as UnitMatch[],
+    requirements: reqsSnap.docs.map(
+      (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+    ),
+    approvedMatches: matchesSnap.docs.map(
+      (d) => ({ ...(d.data() as UnitMatch), id: d.id }),
+    ),
   };
 }
 

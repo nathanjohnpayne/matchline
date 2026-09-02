@@ -167,8 +167,17 @@ export function EvidenceNotice({
  */
 export function StrandedNotice({
   count,
+  inRoleWithNoRequirements = false,
 }: {
   readonly count: number;
+  /**
+   * True when the Role currently has NO Requirements at all.
+   * The remedy differs: re-running matching against an empty
+   * Requirement set can only delete the surviving matches, so the
+   * user has to parse the job description again first. Codex P2
+   * on PR #449.
+   */
+  readonly inRoleWithNoRequirements?: boolean;
 }): ReactElement | null {
   if (count === 0) return null;
   return (
@@ -178,8 +187,10 @@ export function StrandedNotice({
     >
       {count} match{count === 1 ? "" : "es"} point
       {count === 1 ? "s" : ""} at a requirement that no longer exists, so
-      {count === 1 ? " it is" : " they are"} not counted here. Re-running
-      matching will rebuild them against the current requirements.
+      {count === 1 ? " it is" : " they are"} not counted here.{" "}
+      {inRoleWithNoRequirements
+        ? "Parse the job description again on the Requirements tab to rebuild them — re-running matching now would only discard them."
+        : "Re-running matching will rebuild them against the current requirements."}
     </p>
   );
 }

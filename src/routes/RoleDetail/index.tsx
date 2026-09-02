@@ -145,6 +145,7 @@ export default function RoleDetail(): ReactElement {
   // doesn't re-fire the trigger and so the latest value is
   // always read inside async closures.
   const [computingMatches, setComputingMatches] = useState(false);
+  const [matchingError, setMatchingError] = useState<Error | null>(null);
   // Two-state gate (cursor #134 r1):
   //   - `matchesFirstSnapshotReceived` flips on the first
   //     real Matches snapshot delivery for the current Role.
@@ -332,7 +333,10 @@ export default function RoleDetail(): ReactElement {
           // would still hit the LLM pipeline + write
           // Requirements that the user no longer cares about.
           if (isStale()) return;
-          await invokeParseJobRequirements(roleId, trimmed);
+          const parseResult = await invokeParseJobRequirements(
+            roleId,
+            trimmed,
+          );
           // Subscription delivers the parsed Requirements;
           // flip back to editing on success and clear any
           // prior error so a successful retry hides the
@@ -364,13 +368,31 @@ export default function RoleDetail(): ReactElement {
           // round 2 Phase 4b on PR #206.
           //
           // Fire-and-forget — the matches subscription
-          // delivers the result; failures log + the user can
-          // re-trigger from the Matches tab affordances. The
+          // delivers the result; on failure the user re-triggers
+          // with the Matches tab's "Re-run matching" control,
+          // which did not exist when this comment first claimed
+          // it did (added for #442 after Codex P2 on PR #449). The
           // computingMatches UX hint stays on for the
           // duration so the user knows new matches are
           // computing.
           if (isStale()) return;
+          // A parse that produced NO Requirements must not trigger
+          // matching. `replaceMatchesForRole` clears the Role's
+          // matches and writes whatever the run produced — which
+          // against an empty Requirement set is nothing — so the
+          // rematch would silently delete every surviving match,
+          // including the user's approvals. Those rows are what
+          // #442 preserves and classifies as stranded so the user
+          // can see what happened and re-parse. Deleting them
+          // destroys the evidence the recovery path depends on.
+          // CodeRabbit on PR #449.
+          if (parseResult.requirements.length === 0) return;
           triggeredRef.current = true;
+          // Clear any earlier manual-retry failure: this run
+          // supersedes it, and leaving the message up would show
+          // a stale error underneath a completed result. Codex P2
+          // on PR #449.
+          setMatchingError(null);
           setComputingMatches(true);
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
@@ -458,6 +480,7 @@ export default function RoleDetail(): ReactElement {
     // findings against #438.
     setMatchEvidence(undefined);
     setEvidenceStatus("current");
+    setMatchingError(null);
 
     // Stale-closure guard. If the user navigates to a new
     // roleId before the in-flight Role fetch resolves, we
@@ -686,6 +709,7 @@ export default function RoleDetail(): ReactElement {
     const issuedAgainstAuto = roleId;
     const issuedTokenAuto = visitTokenRef.current;
     triggeredRef.current = true;
+    setMatchingError(null);
     setComputingMatches(true);
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
@@ -806,6 +830,50 @@ export default function RoleDetail(): ReactElement {
       });
   }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
 
+  /**
+   * Manual "re-run matching" from the Matches tab.
+   *
+   * The post-parse `runMatching` is fire-and-forget, and the
+   * auto-trigger deliberately will not fire while
+   * `matches.length > 0` — so when that call fails the Role is
+   * left holding matches against Requirement ids the re-parse
+   * deleted, with no way back. The comment on that call already
+   * claimed "the user can re-trigger from the Matches tab
+   * affordances"; there were none. #442's generation gate then
+   * started refusing to generate and naming exactly this action,
+   * which turned a silent inconsistency into a dead end. Codex P2
+   * on PR #449.
+   *
+   * Sets `triggeredRef` for the same reason the post-parse call
+   * does: the auto-trigger must not also fire if this run clears
+   * the match set.
+   */
+  const onRerunMatching = useCallback((): void => {
+    if (roleId === undefined || roleId === "" || computingMatches) return;
+    const issuedAgainst = roleId;
+    const issuedToken = visitTokenRef.current;
+    const stale = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainst ||
+      visitTokenRef.current !== issuedToken;
+
+    triggeredRef.current = true;
+    setMatchingError(null);
+    setComputingMatches(true);
+    void invokeRunMatching(roleId)
+      .catch((err: unknown) => {
+        if (stale()) return;
+        setMatchingError(
+          new Error(
+            friendlyCallableError(err, { operation: "re-running matching" }),
+          ),
+        );
+      })
+      .finally(() => {
+        if (stale()) return;
+        setComputingMatches(false);
+      });
+  }, [roleId, computingMatches]);
+
   // Build the unit lookup once per units array. The matching
   // pipeline reads units owner-scoped and the Role's matches
   // can only reference the user's own units, so a single
@@ -828,9 +896,45 @@ export default function RoleDetail(): ReactElement {
   // so a rejected-then-re-approved row is counted (the click
   // sequence sets approved=true and clears user_rejected per
   // the single-setter approval handler).
-  const hasApprovedMatches = matches.some(
-    (m) => m.approved_for_use && !m.user_rejected,
-  );
+  /**
+   * Approved, non-rejected matches whose Requirement still
+   * exists — the same set the server's generation gate uses
+   * (#442).
+   *
+   * The client has to mirror the rule rather than count raw
+   * approvals. Building `approved_unit_ids` from every approved
+   * match snapshots Units generation will not use, so the
+   * Application Editor's right pane shows grounding that never
+   * reached the prompt; and when every approved match is
+   * orphaned, the Generate CTA stayed enabled and created a
+   * draft the server was guaranteed to reject. Codex P2 on PR
+   * #449.
+   *
+   * The server remains the authority — this is the UI declining
+   * to offer an action it knows will fail, not a second gate.
+   */
+  const liveApprovedMatches = useMemo(() => {
+    const currentRequirementIds = new Set(requirements.map((r) => r.id));
+    // The Unit side matters too. `defaultLoadInputs` loads only
+    // Units that still exist AND are `user_approved`, so a match
+    // pointing at a deleted or unapproved Unit enabled Generate
+    // and snapshotted a dangling id — producing an Application
+    // the server then refused. The Role already subscribes to the
+    // owner's Units, so checking it costs nothing. Codex P2 on
+    // PR #449.
+    const approvedUnitIdSet = new Set(
+      units.filter((u) => u.user_approved).map((u) => u.id),
+    );
+    return matches.filter(
+      (m) =>
+        m.approved_for_use &&
+        !m.user_rejected &&
+        currentRequirementIds.has(m.job_requirement_unit_id) &&
+        approvedUnitIdSet.has(m.experience_unit_id),
+    );
+  }, [matches, requirements, units]);
+
+  const hasApprovedMatches = liveApprovedMatches.length > 0;
 
   /**
    * Generate a new resume for this Role. Steps:
@@ -876,9 +980,11 @@ export default function RoleDetail(): ReactElement {
     // Requirements scoring against the same Unit).
     const approvedUnitIds = Array.from(
       new Set(
-        matches
-          .filter((m) => m.approved_for_use && !m.user_rejected)
-          .map((m) => m.experience_unit_id),
+        // Live matches only — see `liveApprovedMatches`. A Unit
+        // whose only approval is against a deleted Requirement
+        // must not enter the snapshot, or the Editor claims
+        // grounding the generator refused to use.
+        liveApprovedMatches.map((m) => m.experience_unit_id),
       ),
     );
 
@@ -923,7 +1029,7 @@ export default function RoleDetail(): ReactElement {
         setGenerationStatus("error");
       }
     })();
-  }, [generationStatus, hasApprovedMatches, matches, navigate, roleId]);
+  }, [generationStatus, hasApprovedMatches, liveApprovedMatches, navigate, roleId]);
 
   return (
     <RoleDetailView
@@ -932,6 +1038,8 @@ export default function RoleDetail(): ReactElement {
       requirements={requirements}
       matches={matches}
       matchEvidence={matchEvidence}
+      onRerunMatching={onRerunMatching}
+      matchingError={matchingError}
       evidenceStatus={evidenceStatus}
       unitsById={unitsById}
       error={error}

@@ -51,6 +51,73 @@ export interface MatchesTabProps {
    * above the requirements grid.
    */
   readonly computingMatches: boolean;
+  /**
+   * Manual re-run of matching. Optional so the existing view
+   * tests and any other caller keep working without it; the
+   * control simply does not render when absent.
+   */
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
+}
+
+/**
+ * Manual re-run of the matching pipeline.
+ *
+ * Rendered in BOTH branches of this tab, which is the whole
+ * point. A clear-and-replace parse that removes every Requirement
+ * empties `groups` AND strands every prior match — so the
+ * zero-Requirements early return is exactly the state that most
+ * needs a recovery action, and confining the control to the
+ * populated branch put it out of reach there. Codex and
+ * CodeRabbit on PR #449; the identical mistake was made with the
+ * stranded-match notice on PR #446, which is why both now live in
+ * shared components instead of inline JSX.
+ */
+function RerunMatchingControl({
+  onRerunMatching,
+  computingMatches,
+  matchingError,
+}: {
+  readonly onRerunMatching?: () => void;
+  readonly computingMatches: boolean;
+  readonly matchingError?: Error | null;
+}): ReactElement | null {
+  if (onRerunMatching === undefined) return null;
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={onRerunMatching}
+        disabled={computingMatches}
+        data-testid="rerun-matching"
+        className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+      >
+        {computingMatches ? "Re-running matching…" : "Re-run matching"}
+      </button>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        Rebuilds this Role&rsquo;s matches against its current requirements.
+        Approve and reject decisions carry forward only for requirements that
+        have not changed &mdash; if the job description was re-parsed, its
+        requirements are new and will need reviewing again.
+      </p>
+      {matchingError !== undefined && matchingError !== null && (
+        <p
+          className="text-xs text-red-700 dark:text-red-400"
+          data-testid="rerun-matching-error"
+          // The failure arrives asynchronously, after focus has
+          // most likely stayed on the button that triggered it.
+          // Without alert semantics a screen-reader user is told
+          // nothing at all — and this is the recovery path, so
+          // silence here strands exactly the user who most needs
+          // to know. Matches the other async error banners on
+          // Role Detail. Codex and CodeRabbit on PR #449.
+          role="alert"
+        >
+          {matchingError.message}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function MatchesTab({
@@ -61,6 +128,8 @@ export default function MatchesTab({
   unitsById,
   onApprovalStateChange,
   computingMatches,
+  onRerunMatching,
+  matchingError,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -77,6 +146,15 @@ export default function MatchesTab({
     // The copy changes with it: "parse the JD first" is wrong
     // advice for a Role whose JD was parsed, since that parse is
     // what stranded the matches.
+    //
+    // The re-run control is deliberately ABSENT here, having been
+    // briefly added in the round before. `groups` maps 1:1 from
+    // Requirements, so this branch means the Role has none — and
+    // matching against zero Requirements can only delete the
+    // surviving matches, never produce grounding. Offering it
+    // would be a button whose only effect is to destroy the
+    // user's remaining approvals while the copy beside it tells
+    // them to parse the JD. Codex P2 on PR #449.
     return (
       <div className="space-y-2" data-testid="matches-tab-no-requirements">
         <p className="text-sm text-zinc-500">
@@ -86,7 +164,7 @@ export default function MatchesTab({
             : "No Requirements parsed for this Role yet. Parse the JD on " +
               "the Requirements tab first."}
         </p>
-        <StrandedNotice count={strandedMatches ?? 0} />
+        <StrandedNotice count={strandedMatches ?? 0} inRoleWithNoRequirements />
         {/*
           No Requirements means no coverage claim is being made
           here, and the stranded count is structural — it does not
@@ -116,6 +194,11 @@ export default function MatchesTab({
         gaps={gaps}
         evidenceStatus={evidenceStatus}
         strandedMatches={strandedMatches}
+      />
+      <RerunMatchingControl
+        onRerunMatching={onRerunMatching}
+        computingMatches={computingMatches}
+        matchingError={matchingError}
       />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (

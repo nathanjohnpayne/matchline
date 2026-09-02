@@ -13,6 +13,8 @@ import {
   GenerationApplicationNotFound,
   GenerationError,
   GenerationNoApprovedUnitsError,
+  findStaleGroundingId,
+  requirementSetToken,
   runGenerationPipeline,
   type GenerationInputs,
   type RunGenerationContext,
@@ -101,13 +103,13 @@ function makeReq(id: string): JobRequirementUnit {
   };
 }
 
-function makeMatch(unitId: string): UnitMatch {
+function makeMatch(unitId: string, requirementId = "req-1"): UnitMatch {
   return {
     id: `match-${unitId}`,
     owner_uid: "user-alice",
     role_id: "role-1",
     experience_unit_id: unitId,
-    job_requirement_unit_id: "req-1",
+    job_requirement_unit_id: requirementId,
     semantic_score: 0.8,
     rule_score: 0.7,
     final_score: 0.75,
@@ -128,13 +130,22 @@ function makeMatch(unitId: string): UnitMatch {
 function makeInputs(
   unitIds: string[],
   approvedMatchUnitIds?: string[],
+  /**
+   * Requirement the approved matches point at. Defaults to the
+   * one `requirements` contains; pass a different id to model a
+   * JD re-parse that replaced the Requirement set and stranded
+   * the matches (#442).
+   */
+  matchRequirementId = "req-1",
 ): GenerationInputs {
   const matchedIds = approvedMatchUnitIds ?? unitIds;
   return {
     units: unitIds.map((id) => makeUnit(id)),
     role: makeRole(),
     requirements: [makeReq("req-1")],
-    approvedMatches: matchedIds.map((id) => makeMatch(id)),
+    approvedMatches: matchedIds.map((id) =>
+      makeMatch(id, matchRequirementId),
+    ),
   };
 }
 
@@ -292,6 +303,199 @@ describe("runGenerationPipeline", () => {
     }
     expect(create).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+  });
+
+  it("STRANDED-MATCH GATE (#442): an approved match whose Requirement was deleted cannot ground generation", async () => {
+    // A JD re-parse replaces the Role's Requirements under new
+    // ids before matching runs. If the follow-up `runMatching`
+    // fails, the old approved matches survive pointing at ids
+    // that are gone — and this gate previously read only
+    // `experience_unit_id`, so such a match still made its Unit
+    // eligible to ground a resume against a Requirement the JD no
+    // longer contains. A zero-fabrication violation reached
+    // through stale data rather than a bad model output, which is
+    // why every other guard missed it.
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([]);
+
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client,
+        record,
+        // 1 approved Unit with an approved match, but the match
+        // points at a Requirement the re-parse removed.
+        loadInputs: async () => makeInputs(["u1"], ["u1"], "req-deleted"),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    expect(create).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("STRANDED-MATCH GATE (#442): names re-running matching, not approving a match", async () => {
+    // The remedy differs from the other two causes and the
+    // message has to say so. "Approve at least one match" is
+    // wrong advice for a user who already did — there is nothing
+    // left to approve, and the fix is to re-run matching against
+    // the current Requirements.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => makeInputs(["u1"], ["u1"], "req-deleted"),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no longer exists");
+      expect(thrown.message).toContain("re-run matching");
+      expect(thrown.message).not.toContain("Approve at least one match");
+    }
+  });
+
+  it("STRANDED-MATCH GATE (#442): a live match still grounds generation when a sibling is stranded", async () => {
+    // The gate drops only the stranded matches. A Role part-way
+    // through a re-parse must not lose the matches that are still
+    // valid.
+    const groundsOnStranded = {
+      summary: { text: "Summary", source_unit_ids: ["u2"] },
+      bullets: [],
+      skills: [],
+    };
+    const validResponse = {
+      summary: { text: "Summary", source_unit_ids: ["u1"] },
+      bullets: [],
+      skills: [],
+    };
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([
+      mockMessage(groundsOnStranded),
+      mockMessage(validResponse),
+    ]);
+
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record,
+      loadInputs: async () => ({
+        units: [makeUnit("u1"), makeUnit("u2")],
+        role: makeRole(),
+        requirements: [makeReq("req-1")],
+        approvedMatches: [
+          makeMatch("u1", "req-1"),
+          makeMatch("u2", "req-deleted"),
+        ],
+      }),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+
+    // u2's only approved match is stranded, so u2 is not an
+    // eligible Unit: cross-validation rejects the first attempt
+    // for grounding on it, exactly as it does for a Unit with no
+    // approved match at all.
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.content.summary.source_unit_ids).toEqual(["u1"]);
+  });
+
+  it("STRANDED-MATCH GATE (#442): the no-approved-Units diagnosis wins over the stranded one", async () => {
+    // Matches load Role-wide while Units come from the
+    // Application's `approved_unit_ids` snapshot, so zero loaded
+    // Units can coexist with orphaned Role matches — a legacy
+    // Application with an empty snapshot, or one whose Units were
+    // later deleted or unapproved.
+    //
+    // The first version reported the stranded case there, which
+    // printed the self-contradicting "Approved Units present (0)"
+    // and told the user to re-run matching — an action that
+    // cannot make such an Application generate. Codex P2 on PR
+    // #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [],
+          role: makeRole(),
+          requirements: [makeReq("req-1")],
+          approvedMatches: [makeMatch("u1", "req-deleted")],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("No approved ExperienceUnits");
+      expect(thrown.message).not.toContain("Approved Units present (0)");
+      expect(thrown.message).not.toContain("re-run matching");
+    }
+  });
+
+  it("STRANDED-MATCH GATE (#442): an empty Requirement set says re-parse, not rematch", async () => {
+    // Matching against zero Requirements can only delete the
+    // stale rows; it cannot produce grounding. Sending the user
+    // to re-run matching leaves them exactly where they started.
+    // Codex P2 on PR #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [makeUnit("u1")],
+          role: makeRole(),
+          requirements: [],
+          approvedMatches: [makeMatch("u1", "req-deleted")],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no Requirements at all");
+      expect(thrown.message).toContain("parse the job description again");
+      expect(thrown.message).not.toContain("re-run matching");
+    }
+  });
+
+  it("STRANDED-MATCH GATE (#442): zero Requirements and zero matches still says re-parse", async () => {
+    // The stranded-count precondition was wrong. A Role that
+    // parses to an empty set — or whose stale rows a later
+    // matching run already cleared — has zero Requirements AND
+    // zero approved matches, and fell through to the generic
+    // "approve a match in the Matches tab", advice that cannot be
+    // followed when there is nothing to match against.
+    // CodeRabbit on PR #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [makeUnit("u1")],
+          role: makeRole(),
+          requirements: [],
+          approvedMatches: [],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no Requirements at all");
+      expect(thrown.message).toContain("parse the job description again");
+      expect(thrown.message).not.toContain("Approve at least one match");
+    }
   });
 
   it("APPROVED-MATCHES GATE: only Units WITH approved matches reach the prompt + cross-validation", async () => {
@@ -712,5 +916,196 @@ describe("runGenerationPipeline", () => {
     if (thrown instanceof GenerationError) {
       expect(thrown.failures[0]!.message).toContain("u-edu-fake");
     }
+  });
+});
+
+describe("requirementSetToken (#442, Codex P1 on #449)", () => {
+  // A load-bearing pure serializer: the prompt-time token and the
+  // persist-time token must agree, and disagreement either
+  // discards sound generations or admits stale ones. The
+  // integration tests exercise changed and unchanged Firestore
+  // sets, but not the properties the implementation promises, so
+  // a refactor could break those while staying green.
+  it("is empty-set stable", () => {
+    expect(requirementSetToken([])).toBe(requirementSetToken([]));
+  });
+
+  it("distinguishes empty from non-empty", () => {
+    expect(requirementSetToken([])).not.toBe(
+      requirementSetToken([{ id: "r1" }]),
+    );
+  });
+
+  it("is independent of input ordering", () => {
+    // Firestore returns whatever document order it picks, and the
+    // two call sites read through different queries. If the token
+    // depended on order, a persist could reject an untouched set.
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).toBe(
+      requirementSetToken([{ id: "b" }, { id: "a" }]),
+    );
+  });
+
+  it("changes when an id changes", () => {
+    expect(requirementSetToken([{ id: "a" }])).not.toBe(
+      requirementSetToken([{ id: "b" }]),
+    );
+  });
+
+  it("changes when an id is added or removed", () => {
+    const one = requirementSetToken([{ id: "a" }]);
+    const two = requirementSetToken([{ id: "a" }, { id: "b" }]);
+    expect(one).not.toBe(two);
+  });
+
+  it("does not collide across a delimiter boundary", () => {
+    // The property the implementation explicitly promises, and
+    // the reason it is JSON rather than a join: `["a","b"]` and
+    // `["a,b"]` must not serialize alike. The derivation key on
+    // #446 shipped with exactly this collision.
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: "a,b" }]),
+    );
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: "a|b" }]),
+    );
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: 'a","b' }]),
+    );
+  });
+
+  it("does not mutate its input", () => {
+    // It sorts, and sorting in place would reorder the caller's
+    // `requirements` array — which the prompt is built from.
+    const input = [{ id: "b" }, { id: "a" }];
+    requirementSetToken(input);
+    expect(input.map((r) => r.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("findStaleGroundingId (#442, Codex P1 on #449)", () => {
+  // Persist-critical and pure, and the emulator cases only ever
+  // cite the summary through the full I/O path — so a regression
+  // that skipped bullets, skills or education would leave them
+  // green while stale grounding was written.
+  const REQS = [{ id: "req-1" }] as never;
+  const live = (unitId: string) =>
+    ({
+      experience_unit_id: unitId,
+      job_requirement_unit_id: "req-1",
+    }) as never;
+
+  function content(overrides: Record<string, unknown> = {}) {
+    return {
+      summary: { source_unit_ids: [] },
+      bullets: [],
+      skills: [],
+      ...overrides,
+    } as never;
+  }
+
+  it("returns null when nothing is cited at all", () => {
+    expect(findStaleGroundingId(content(), [live("u1")], REQS)).toBeNull();
+  });
+
+  it("returns null with no matches when nothing is cited", () => {
+    // Zero-input boundary on both sides: an empty citation set
+    // cannot be stale, even with no grounding available.
+    expect(findStaleGroundingId(content(), [], REQS)).toBeNull();
+  });
+
+  it("accepts a citation backed by a live match", () => {
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [live("u1")],
+        REQS,
+      ),
+    ).toBeNull();
+  });
+
+  for (const kind of ["summary", "bullets", "skills", "education"] as const) {
+    it(`catches a stale citation in ${kind}`, () => {
+      // Each item kind asserted separately: the walker builds one
+      // list from four sources and dropping any one of them is a
+      // silent hole.
+      const item = { source_unit_ids: ["u-gone"] };
+      const c = content(
+        kind === "summary" ? { summary: item } : { [kind]: [item] },
+      );
+      expect(findStaleGroundingId(c, [live("u1")], REQS)).toBe("u-gone");
+    });
+  }
+
+  it("treats absent education as empty rather than throwing", () => {
+    // `education` is optional on the response contract.
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [live("u1")],
+        REQS,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a citation whose match points at a deleted Requirement", () => {
+    // The match exists and cites the right Unit, but its
+    // Requirement is gone — so it cannot ground anything.
+    const stranded = {
+      experience_unit_id: "u1",
+      job_requirement_unit_id: "req-deleted",
+    } as never;
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [stranded],
+        REQS,
+      ),
+    ).toBe("u1");
+  });
+
+  it("returns the FIRST stale id, deterministically", () => {
+    const c = content({
+      summary: { source_unit_ids: ["u1"] },
+      bullets: [{ source_unit_ids: ["u-a"] }, { source_unit_ids: ["u-b"] }],
+    });
+    expect(findStaleGroundingId(c, [live("u1")], REQS)).toBe("u-a");
+  });
+});
+
+describe("requirementSetToken: content, not just ids (#449 round 2)", () => {
+  it("changes when a requirement's text is edited in place", () => {
+    // `upsertRequirement` merges into an existing document id, so
+    // wording can change while every id stays put. An id-only
+    // token would certify a prompt built from text that no longer
+    // exists.
+    expect(
+      requirementSetToken([{ id: "r1", normalized_requirement: "old" }]),
+    ).not.toBe(
+      requirementSetToken([{ id: "r1", normalized_requirement: "new" }]),
+    );
+  });
+
+  it("changes when must_have flips", () => {
+    // The prompt renders it as a MUST-HAVE / nice-to-have tag.
+    expect(
+      requirementSetToken([{ id: "r1", must_have: true }]),
+    ).not.toBe(requirementSetToken([{ id: "r1", must_have: false }]));
+  });
+
+  it("ignores fields the prompt never renders", () => {
+    // Including them would discard sound generations over edits
+    // the model never saw.
+    const a = requirementSetToken([
+      { id: "r1", normalized_requirement: "x", must_have: true },
+    ]);
+    const b = requirementSetToken([
+      {
+        id: "r1",
+        normalized_requirement: "x",
+        must_have: true,
+        priority: "low",
+      } as never,
+    ]);
+    expect(a).toBe(b);
   });
 });
