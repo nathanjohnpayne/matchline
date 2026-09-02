@@ -164,13 +164,30 @@ for (const collection of COLLECTIONS) {
     });
 
     it("owner can update their own doc", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
+      // `unitMatches` is deliberately narrower than the generic
+      // owner rule: a client may change only its own review
+      // decision, because every other field is the matching
+      // pipeline's output and `schema_version` attests that the
+      // pipeline produced it (#444 / Codex P1 on PR #451). So the
+      // per-collection update here uses the fields that
+      // collection actually permits; the restriction itself is
+      // pinned by the unitMatches describe block below.
+      const update =
+        collection === "unitMatches"
+          ? { approved_for_use: true, user_rejected: false }
+          : { owner_uid: OWNER_UID, data: 2 };
+      await seedDoc(collection, "doc-1", {
+        owner_uid: OWNER_UID,
+        data: 1,
+        ...(collection === "unitMatches"
+          ? { approved_for_use: false, user_rejected: false }
+          : {}),
+      });
       const ctx = testEnv.authenticatedContext(OWNER_UID);
       await assertSucceeds(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OWNER_UID,
-          data: 2,
-        }),
+        collection === "unitMatches"
+          ? updateDoc(doc(ctx.firestore(), collection, "doc-1"), update)
+          : setDoc(doc(ctx.firestore(), collection, "doc-1"), update),
       );
     });
 
@@ -367,6 +384,66 @@ describe("rules: unitMatches contradictory-flag guard", () => {
         { owner_uid: OWNER_UID, approved_for_use: true },
         { merge: true },
       ),
+    );
+  });
+
+  it("REJECTS rewriting the rationale while preserving schema_version", async () => {
+    // The gap an equality check on the marker alone left open,
+    // and the sharpest form of the whole problem: keeping the
+    // version while replacing the prose forges the claim just as
+    // effectively as forging the version. The attestation is that
+    // the PIPELINE produced this row and gated the rationale —
+    // guarding the label without guarding the fact protects
+    // nothing. Codex P1 on PR #451.
+    await seedDoc("unitMatches", "match-attested", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+      schema_version: 1,
+      rationale: "Matched on skill overlap.",
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      updateDoc(doc(ctx.firestore(), "unitMatches", "match-attested"), {
+        rationale: "Matched on product strategy, roadmap ownership and P&L.",
+      }),
+    );
+  });
+
+  it("REJECTS rewriting scores or applicability on an attested match", async () => {
+    await seedDoc("unitMatches", "match-scored", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+      schema_version: 1,
+      final_score: 0.2,
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      updateDoc(doc(ctx.firestore(), "unitMatches", "match-scored"), {
+        final_score: 0.99,
+      }),
+    );
+  });
+
+  it("REJECTS forging the #435-era bridge on a legacy match", async () => {
+    // Pre-existing hole, closed by the same rule: before
+    // `schema_version` existed, `component_applicability`
+    // presence WAS the trust signal, so a client could add it
+    // alongside invented prose and have MatchCard render the
+    // result as a grounded claim.
+    await seedDoc("unitMatches", "match-legacy-forge", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+      rationale: "Matched on skill overlap.",
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      updateDoc(doc(ctx.firestore(), "unitMatches", "match-legacy-forge"), {
+        rationale: "Matched on product strategy.",
+        component_applicability: { skill_overlap: true },
+      }),
     );
   });
 
