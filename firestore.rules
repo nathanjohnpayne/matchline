@@ -76,9 +76,8 @@ service cloud.firestore {
       // data). Defaulting to `false` for absent fields means
       // the contradictory pair is the ONLY shape rejected.
       return collection != 'unitMatches'
-        || (!(request.resource.data.get('approved_for_use', false) == true
-              && request.resource.data.get('user_rejected', false) == true)
-            && isServerOwnedProvenanceAbsent());
+        || !(request.resource.data.get('approved_for_use', false) == true
+             && request.resource.data.get('user_rejected', false) == true);
     }
 
     // `schema_version` is the matching pipeline's attestation that
@@ -94,19 +93,38 @@ service cloud.firestore {
     // arbitrary prose and have it rendered as a grounded claim.
     // CodeRabbit on PR #450.
     //
-    // Rejected rather than ignored: silently dropping the field
-    // would let a caller believe it had been recorded.
-    function isServerOwnedProvenanceAbsent() {
-      return !request.resource.data.keys().hasAny(['schema_version']);
+    // **Create and update need different predicates**, and
+    // conflating them shipped a P1: `request.resource.data` on an
+    // update is the COMPLETE post-write document, so it carries a
+    // `schema_version` the client never touched. A blanket
+    // "must be absent" rule therefore rejected every
+    // `setMatchApprovalState` call against a pipeline-written row
+    // — which is every real match — breaking approve and reject
+    // outright. Codex P1 on PR #450, after merge.
+    //
+    // So: absent on create, unchanged on update. The client may
+    // carry the server's value forward; it may not introduce or
+    // alter one.
+    function isProvenanceAbsentOnCreate(collection) {
+      return collection != 'unitMatches'
+        || !request.resource.data.keys().hasAny(['schema_version']);
+    }
+
+    function isProvenanceUnchangedOnUpdate(collection) {
+      return collection != 'unitMatches'
+        || request.resource.data.get('schema_version', null)
+           == resource.data.get('schema_version', null);
     }
 
     match /{collection}/{docId} {
       allow read: if isOwner();
       allow create: if isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection);
+        && isValidUnitMatchWrite(collection)
+        && isProvenanceAbsentOnCreate(collection);
       allow update: if isOwner()
         && isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection);
+        && isValidUnitMatchWrite(collection)
+        && isProvenanceUnchangedOnUpdate(collection);
       allow delete: if isOwner();
     }
   }
