@@ -264,6 +264,62 @@ describe("rules: unitMatches contradictory-flag guard", () => {
     );
   });
 
+  it("REJECTS a client write carrying schema_version (#444)", async () => {
+    // `schema_version` is the matching pipeline's attestation
+    // that it produced the row under the axis-gated rationale
+    // rule — which is what lets MatchCard present the prose to
+    // the user as a claim. A provenance marker a client can
+    // write attests nothing: an owner could pair
+    // `schema_version: 1` with arbitrary prose and have it
+    // rendered as grounded. The admin SDK bypasses rules, so the
+    // pipeline is unaffected. CodeRabbit on PR #450.
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      setDoc(doc(ctx.firestore(), "unitMatches", "match-forged"), {
+        owner_uid: OWNER_UID,
+        approved_for_use: false,
+        user_rejected: false,
+        schema_version: 1,
+        rationale: "Matched on product strategy.",
+      }),
+    );
+  });
+
+  it("REJECTS adding schema_version to an existing match", async () => {
+    await seedDoc("unitMatches", "match-1", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertFails(
+      setDoc(
+        doc(ctx.firestore(), "unitMatches", "match-1"),
+        { schema_version: 1 },
+        { merge: true },
+      ),
+    );
+  });
+
+  it("ALLOWS an ordinary client match write with no schema_version", async () => {
+    // The control: the guard must reject the forged field, not
+    // client writes in general — `setMatchApprovalState` is the
+    // approve/reject path and must keep working.
+    await seedDoc("unitMatches", "match-ok", {
+      owner_uid: OWNER_UID,
+      approved_for_use: false,
+      user_rejected: false,
+    });
+    const ctx = testEnv.authenticatedContext(OWNER_UID);
+    await assertSucceeds(
+      setDoc(
+        doc(ctx.firestore(), "unitMatches", "match-ok"),
+        { approved_for_use: true, user_rejected: false },
+        { merge: true },
+      ),
+    );
+  });
+
   it("ALLOWS create with each valid flag pair (false/false, true/false, false/true)", async () => {
     const ctx = testEnv.authenticatedContext(OWNER_UID);
     const validPairs: ReadonlyArray<{
