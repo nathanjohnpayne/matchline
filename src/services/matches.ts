@@ -124,6 +124,16 @@ export function subscribeMatchesByRole(
 export async function upsertMatch(
   match: Omit<UnitMatch, "owner_uid">,
 ): Promise<void> {
+  if (match.schema_version !== undefined) {
+    throw new Error(
+      "upsertMatch: refusing to write `schema_version`. It is the " +
+        "matching pipeline's attestation that it produced the row — " +
+        "notably that `rationale` was axis-gated, which is what lets the " +
+        "UI present the prose as a claim (#444). A provenance marker a " +
+        "client can set attests nothing. `firestore.rules` is the " +
+        "boundary; this is the clearer error at the call site.",
+    );
+  }
   if (match.approved_for_use && match.user_rejected) {
     throw new Error(
       "upsertMatch: refusing to write the contradictory " +

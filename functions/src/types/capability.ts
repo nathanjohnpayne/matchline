@@ -210,6 +210,42 @@ export interface UnitMatch {
   final_score: number;
 
   /**
+   * Version of the matching pipeline's write contract that
+   * produced this row (#444).
+   *
+   * **Why a declared field and not an inference.** Until this
+   * existed, `MatchCard` decided whether a stored `rationale`
+   * could be shown as a claim by asking whether
+   * `component_applicability` was present. That worked — the
+   * field and the rationale's axis-gating shipped together in
+   * #435, so presence was an exact proxy — but it was a
+   * coincidence being used as a contract. Nothing declared the
+   * relationship, no test could fail on it, and a partial write
+   * or a future field split would have silently started trusting
+   * prose that was never gated.
+   *
+   * **The bridge, and when it ends.** Introducing a version now
+   * creates a tier that predates it:
+   *
+   * | tier            | components | applicability | version |
+   * |-----------------|-----------|---------------|---------|
+   * | pre-#131        | absent    | absent        | absent  |
+   * | pre-#435        | present   | absent        | absent  |
+   * | #435-era        | present   | present       | absent  |
+   * | post-#444       | present   | present       | 1       |
+   *
+   * #435-era rows have a trustworthy rationale and no version, so
+   * `isRationaleTrustworthy` is a compound until they are gone.
+   * One rerun of matching heals a Role; the bridge can be dropped
+   * once no `component_applicability`-bearing row lacks a
+   * `schema_version` — see `src/routes/RoleDetail/matchProvenance.ts`.
+   *
+   * Written by `runMatchingPipeline`; never carried forward, so a
+   * rerun always stamps the current version.
+   */
+  schema_version?: number;
+
+  /**
    * The 7 weighted sub-components that produce `rule_score`.
    * Persisted alongside the score so the Matches tab's
    * sub-score breakdown tooltip (#21 / sub-issue #131) can

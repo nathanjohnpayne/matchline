@@ -151,6 +151,17 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
     behaviour when no verdict is available — never to a stricter
     reading, so neither deploying the gate nor a failed derivation can
     make an already-matched Role sprout gaps.
+  - `schema_version` declares what a reader may conclude from the
+    record. Version 1 means `components` and `component_applicability`
+    are present and the `rationale` was generated under the axis-gated
+    rule, so it may be presented to the user as a claim. **Provenance
+    must be read from this field, never inferred from another field's
+    presence** — an inference that happens to hold because two things
+    shipped together is a coincidence, not a contract, and cannot fail
+    loudly when it stops holding. Records written before the field
+    existed but carrying `component_applicability` are also
+    trustworthy; that bridge is explicit and ends once every Role has
+    been re-matched.
   - `component_applicability` records, per axis, whether the engine
     actually evaluated it for this pair. A `false` axis means the
     corresponding value in `components` is a no-constraint neutral, and
