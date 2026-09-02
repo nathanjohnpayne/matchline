@@ -94,7 +94,7 @@ function RerunMatchingControl({
       >
         {computingMatches ? "Re-running matching…" : "Re-run matching"}
       </button>
-      <p className="text-xs text-zinc-500">
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
         Rebuilds this Role&rsquo;s matches against its current requirements.
         Approve and reject decisions carry forward only for requirements that
         have not changed &mdash; if the job description was re-parsed, its

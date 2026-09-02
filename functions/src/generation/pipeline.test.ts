@@ -13,6 +13,7 @@ import {
   GenerationApplicationNotFound,
   GenerationError,
   GenerationNoApprovedUnitsError,
+  requirementSetToken,
   runGenerationPipeline,
   type GenerationInputs,
   type RunGenerationContext,
@@ -883,5 +884,68 @@ describe("runGenerationPipeline", () => {
     if (thrown instanceof GenerationError) {
       expect(thrown.failures[0]!.message).toContain("u-edu-fake");
     }
+  });
+});
+
+describe("requirementSetToken (#442, Codex P1 on #449)", () => {
+  // A load-bearing pure serializer: the prompt-time token and the
+  // persist-time token must agree, and disagreement either
+  // discards sound generations or admits stale ones. The
+  // integration tests exercise changed and unchanged Firestore
+  // sets, but not the properties the implementation promises, so
+  // a refactor could break those while staying green.
+  it("is empty-set stable", () => {
+    expect(requirementSetToken([])).toBe(requirementSetToken([]));
+  });
+
+  it("distinguishes empty from non-empty", () => {
+    expect(requirementSetToken([])).not.toBe(
+      requirementSetToken([{ id: "r1" }]),
+    );
+  });
+
+  it("is independent of input ordering", () => {
+    // Firestore returns whatever document order it picks, and the
+    // two call sites read through different queries. If the token
+    // depended on order, a persist could reject an untouched set.
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).toBe(
+      requirementSetToken([{ id: "b" }, { id: "a" }]),
+    );
+  });
+
+  it("changes when an id changes", () => {
+    expect(requirementSetToken([{ id: "a" }])).not.toBe(
+      requirementSetToken([{ id: "b" }]),
+    );
+  });
+
+  it("changes when an id is added or removed", () => {
+    const one = requirementSetToken([{ id: "a" }]);
+    const two = requirementSetToken([{ id: "a" }, { id: "b" }]);
+    expect(one).not.toBe(two);
+  });
+
+  it("does not collide across a delimiter boundary", () => {
+    // The property the implementation explicitly promises, and
+    // the reason it is JSON rather than a join: `["a","b"]` and
+    // `["a,b"]` must not serialize alike. The derivation key on
+    // #446 shipped with exactly this collision.
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: "a,b" }]),
+    );
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: "a|b" }]),
+    );
+    expect(requirementSetToken([{ id: "a" }, { id: "b" }])).not.toBe(
+      requirementSetToken([{ id: 'a","b' }]),
+    );
+  });
+
+  it("does not mutate its input", () => {
+    // It sorts, and sorting in place would reorder the caller's
+    // `requirements` array — which the prompt is built from.
+    const input = [{ id: "b" }, { id: "a" }];
+    requirementSetToken(input);
+    expect(input.map((r) => r.id)).toEqual(["b", "a"]);
   });
 });

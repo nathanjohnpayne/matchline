@@ -531,3 +531,84 @@ describe("a re-parse followed by a fresh approval mid-generation (#442, Codex P1
     expect(app.data()?.generated_assets ?? []).toHaveLength(1);
   });
 });
+
+describe("persist-time validation cannot be bypassed (#442, Codex P1 round 3)", () => {
+  it("rejects when role_id is cleared mid-generation rather than skipping checks", async () => {
+    // The guard was `if (roleId && content)`, so an absent
+    // role_id SKIPPED every check and appended the asset.
+    // `firestore.rules` permits owner-preserving Application
+    // updates, so an authenticated owner clearing the field
+    // mid-generation walked straight past the transaction's
+    // whole purpose. A validation step whose absent-input path
+    // is "allow" is not a validation step.
+    await seedRoleWithApprovedMatch();
+
+    let thrown: unknown;
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                await db()
+                  .collection("applications")
+                  .doc(APP)
+                  .update({ role_id: "" });
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerateResumeGroundingStale);
+    const app = await db().collection("applications").doc(APP).get();
+    expect(app.data()?.generated_assets ?? []).toEqual([]);
+  });
+
+  it("names re-parsing, not rematching, when the re-parse emptied the set", async () => {
+    // Matching against zero Requirements can only discard the
+    // surviving matches, and MatchesTab deliberately hides that
+    // control in this state — so the persist error must not name
+    // it either.
+    await seedRoleWithApprovedMatch();
+
+    let message = "";
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                // Re-parse to an EMPTY Requirement set.
+                await runJdParsingPipeline(
+                  "",
+                  { ownerUid: ALICE, roleId: ROLE },
+                  { parse: async () => [], embed: async () => [] },
+                );
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("no requirements at all");
+    expect(message).toContain("parse the job description again");
+    expect(message).not.toContain("Re-run matching");
+  });
+});

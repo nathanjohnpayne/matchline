@@ -901,13 +901,24 @@ export default function RoleDetail(): ReactElement {
    */
   const liveApprovedMatches = useMemo(() => {
     const currentRequirementIds = new Set(requirements.map((r) => r.id));
+    // The Unit side matters too. `defaultLoadInputs` loads only
+    // Units that still exist AND are `user_approved`, so a match
+    // pointing at a deleted or unapproved Unit enabled Generate
+    // and snapshotted a dangling id — producing an Application
+    // the server then refused. The Role already subscribes to the
+    // owner's Units, so checking it costs nothing. Codex P2 on
+    // PR #449.
+    const approvedUnitIdSet = new Set(
+      units.filter((u) => u.user_approved).map((u) => u.id),
+    );
     return matches.filter(
       (m) =>
         m.approved_for_use &&
         !m.user_rejected &&
-        currentRequirementIds.has(m.job_requirement_unit_id),
+        currentRequirementIds.has(m.job_requirement_unit_id) &&
+        approvedUnitIdSet.has(m.experience_unit_id),
     );
-  }, [matches, requirements]);
+  }, [matches, requirements, units]);
 
   const hasApprovedMatches = liveApprovedMatches.length > 0;
 

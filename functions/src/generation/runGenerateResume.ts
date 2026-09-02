@@ -185,16 +185,37 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
     // Reads must precede writes in a Firestore transaction, and
     // these are issued sequentially rather than through
     // `Promise.all` to keep that ordering unambiguous.
-    // `generated_content` is optional on AssetRef (a future
-    // binary export may carry none), so skip the check when there
-    // is nothing to ground. This resume path always sets it.
+    // **Absent inputs REJECT; they do not skip.**
+    //
+    // The first version guarded with `if (roleId && content)`,
+    // which made a missing `role_id` a reason to bypass every
+    // check and append the asset anyway. `firestore.rules` permits
+    // owner-preserving Application updates, so an authenticated
+    // owner clearing `role_id` mid-generation was enough to walk
+    // straight past the guard this transaction exists to enforce.
+    // A validation step whose absent-input path is "allow" is not
+    // a validation step. Codex P1 on PR #449.
+    //
+    // Neither field can legitimately be missing here: the resume
+    // path always sets `generated_content`, and `defaultLoadInputs`
+    // could not have produced a result without resolving the
+    // Role from `role_id`. So both are hard failures.
     const roleId = app.role_id;
     const content = asset.generated_content;
-    if (
-      typeof roleId === "string" &&
-      roleId.length > 0 &&
-      content !== undefined
-    ) {
+    if (typeof roleId !== "string" || roleId.length === 0) {
+      throw new GenerateResumeGroundingStale(
+        `Application ${applicationId} has no role_id at persist time, so ` +
+          `the generated content cannot be verified against the Role's ` +
+          `current requirements. Nothing was saved.`,
+      );
+    }
+    if (content === undefined) {
+      throw new GenerateResumeGroundingStale(
+        `Generated asset for application ${applicationId} carries no ` +
+          `content to verify. Nothing was saved.`,
+      );
+    }
+    {
       const reqSnap = await tx.get(
         db
           .collection(REQUIREMENTS_COLLECTION)
@@ -225,6 +246,18 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
       // Both checks stay: this one catches a changed Requirement
       // set, the other catches a citation losing its approved
       // match (an un-approval mid-flight) without the set moving.
+      // The remedy depends on what the re-parse produced. Against
+      // an EMPTY Requirement set, re-running matching can only
+      // discard the surviving matches — and `MatchesTab`
+      // deliberately hides that control in this state, so naming
+      // it would be both unavailable and ineffective. Same
+      // distinction the pre-generation gate already makes. Codex
+      // P2 on PR #449.
+      const remedy =
+        requirements.length === 0
+          ? `This Role now has no requirements at all; parse the job ` +
+            `description again on the Requirements tab.`
+          : `Re-run matching on the Matches tab and generate again.`;
       const expectedToken = params.requirementSetToken;
       if (
         expectedToken !== undefined &&
@@ -234,7 +267,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
           `This Role's requirements changed while the resume was being ` +
             `generated — the job description was re-parsed, so the content ` +
             `was written against requirements that no longer exist. Nothing ` +
-            `was saved; re-run matching on the Matches tab and generate again.`,
+            `was saved. ${remedy}`,
         );
       }
 
@@ -248,8 +281,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
           `Generated content cites Experience Unit ${staleId}, which no ` +
             `longer has an approved match against any current Requirement ` +
             `for this Role — the job description was re-parsed while this ` +
-            `resume was being generated. Nothing was saved; re-run matching ` +
-            `on the Matches tab and generate again.`,
+            `resume was being generated. Nothing was saved. ${remedy}`,
         );
       }
     }
