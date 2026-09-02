@@ -222,6 +222,26 @@ describe("MatchCard: legacy rationale is not presented as a claim (#440)", () =>
     expect(html).not.toMatch(/re-?run matching/i);
   });
 
+  it("renders both normally on a versioned row with NO applicability (#444)", () => {
+    // The row shape the pipeline writes today, minus the field
+    // the old inference depended on. If provenance were still
+    // read off `component_applicability`, this hides the prose.
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({
+          rationale: "Matched on skill overlap: shared product strategy.",
+          surface_evidence: "product strategy",
+          schema_version: 1,
+        })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Matched on skill overlap");
+    expect(html).toContain("Evidence:");
+    expect(html).not.toContain("Explanation unavailable");
+  });
+
   it("renders both normally once the match carries applicability", () => {
     const html = renderToStaticMarkup(
       <MatchCard
