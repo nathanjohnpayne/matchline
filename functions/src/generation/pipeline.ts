@@ -195,18 +195,27 @@ export async function runGenerationPipeline(
     // sending the user there leaves them exactly where they
     // started. The JD has to be parsed again first. Codex P2 on
     // PR #449.
-    if (
-      inputs.units.length > 0 &&
-      inputs.requirements.length === 0 &&
-      strandedApprovedCount > 0
-    ) {
+    // No Requirements at all — regardless of whether any approved
+    // match survived. The stranded-count precondition was wrong:
+    // a Role that parses to an empty set, or one whose stale rows
+    // a later matching run already cleared, has zero Requirements
+    // AND zero approved matches, and fell through to the generic
+    // "approve a match in the Matches tab" — advice that cannot
+    // be followed when there is nothing to match against.
+    // CodeRabbit on PR #449.
+    if (inputs.units.length > 0 && inputs.requirements.length === 0) {
+      const stranded =
+        strandedApprovedCount > 0
+          ? ` ${strandedApprovedCount} approved UnitMatch(es) still point at ` +
+            `requirements from a previous version of the description.`
+          : "";
       throw new GenerationNoApprovedUnitsError(
-        `Approved Units present (${inputs.units.length}) and ` +
-          `${strandedApprovedCount} approved UnitMatch(es), but this Role ` +
-          `has no Requirements at all — the job description was re-parsed ` +
-          `into an empty set, so there is nothing to ground against. ` +
-          `Nothing to generate from for application ${ctx.applicationId}; ` +
-          `parse the job description again on the Requirements tab.`,
+        `Approved Units present (${inputs.units.length}), but this Role has ` +
+          `no Requirements at all — the job description has not been parsed, ` +
+          `or was parsed into an empty set, so there is nothing to ground ` +
+          `against.${stranded} Nothing to generate from for application ` +
+          `${ctx.applicationId}; parse the job description again on the ` +
+          `Requirements tab.`,
       );
     }
     if (
@@ -444,20 +453,41 @@ export function liveApprovedMatchesOf(
  * that no longer exist.
  *
  * Only an identity check on the set itself catches that, so the
- * token is compared verbatim and ANY change is rejected. That is
- * deliberately strict: Requirements change only through
- * `writeRequirementsAsBatch`, which replaces the whole set, so
- * every real change is a re-parse and every re-parse invalidates
- * the prompt this artifact was built from.
+ * token is compared verbatim and ANY change is rejected.
+ *
+ * **Content, not just ids.** The first version hashed ids alone,
+ * which misses an edit in place: `services/roles.ts`'s
+ * `upsertRequirement` merges into an existing document id, and
+ * the rules permit owner-preserving updates, so a Requirement's
+ * text can change while every id stays put. An id-only token used
+ * as an equality proof would then certify a prompt built from
+ * wording that no longer exists. Codex P2 on PR #449.
+ *
+ * The fields covered are exactly the ones the prompt renders —
+ * `formatRequirement` emits `normalized_requirement` and the
+ * must-have tag — plus the id for identity. A field the prompt
+ * never shows cannot invalidate the artifact, and including it
+ * would discard sound generations for edits the model never saw.
  *
  * JSON rather than a delimiter join, for the reason the
  * derivation key learned on #446: `["a","b"]` and `["a|b"]` must
  * not collide.
  */
 export function requirementSetToken(
-  requirements: readonly { readonly id: string }[],
+  requirements: readonly {
+    readonly id: string;
+    readonly normalized_requirement?: string;
+    readonly must_have?: boolean;
+  }[],
 ): string {
-  return JSON.stringify([...requirements.map((r) => r.id)].sort());
+  return JSON.stringify(
+    requirements
+      .map(
+        (r) =>
+          [r.id, r.normalized_requirement ?? "", r.must_have === true] as const,
+      )
+      .sort((a, b) => a[0].localeCompare(b[0])),
+  );
 }
 
 /**

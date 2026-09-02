@@ -69,13 +69,19 @@ export interface RunGenerateResumeDeps extends GenerationDeps {
 export interface PersistAssetParams {
   /**
    * Token for the Requirement set the artifact was generated
-   * against. The default persist rejects the write if the Role's
-   * set has changed since — see `requirementSetToken`. Optional
-   * so existing callers and test doubles keep working; when
-   * absent the identity check is skipped and only the
-   * cited-grounding check runs.
+   * against. The persist rejects the write if the Role's set has
+   * changed since — see `requirementSetToken`.
+   *
+   * **Required.** It was briefly optional "so existing callers
+   * keep working", which contradicted the policy this same
+   * transaction states for `role_id` and `generated_content`: an
+   * absent input rejects, it does not skip. A future
+   * `persistAsset` caller omitting the token would have lost the
+   * identity check with no compile error — a silent fail-open of
+   * exactly the kind this PR keeps finding. Required makes that a
+   * type error instead. CodeRabbit on PR #449.
    */
-  readonly requirementSetToken?: string;
+  readonly requirementSetToken: string;
   readonly ownerUid: string;
   readonly applicationId: string;
   readonly asset: AssetRef;
@@ -258,11 +264,9 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
           ? `This Role now has no requirements at all; parse the job ` +
             `description again on the Requirements tab.`
           : `Re-run matching on the Matches tab and generate again.`;
-      const expectedToken = params.requirementSetToken;
-      if (
-        expectedToken !== undefined &&
-        requirementSetToken(requirements) !== expectedToken
-      ) {
+      const tokenChanged =
+        requirementSetToken(requirements) !== params.requirementSetToken;
+      if (tokenChanged) {
         throw new GenerateResumeGroundingStale(
           `This Role's requirements changed while the resume was being ` +
             `generated — the job description was re-parsed, so the content ` +
@@ -277,11 +281,20 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
         requirements,
       );
       if (staleId !== null) {
+        // Reached only when the Requirement set is UNCHANGED —
+        // the token check above already handled a re-parse. So
+        // the cause is on the match side: the user unapproved or
+        // deleted the cited match mid-generation. Saying "the job
+        // description was re-parsed" would misdiagnose it, and
+        // "re-run matching" is worse than useless — a rerun
+        // carries the unapproved decision forward for that pair,
+        // so generation stays blocked. Codex P2 on PR #449.
         throw new GenerateResumeGroundingStale(
           `Generated content cites Experience Unit ${staleId}, which no ` +
-            `longer has an approved match against any current Requirement ` +
-            `for this Role — the job description was re-parsed while this ` +
-            `resume was being generated. Nothing was saved. ${remedy}`,
+            `longer has an approved match for this Role — the match it was ` +
+            `grounded on was unapproved or removed while this resume was ` +
+            `being generated. Nothing was saved; approve a current match ` +
+            `for that Unit on the Matches tab, or generate again without it.`,
         );
       }
     }

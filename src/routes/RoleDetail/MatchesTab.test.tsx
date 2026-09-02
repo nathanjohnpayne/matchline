@@ -152,6 +152,19 @@ describe("MatchesTab: the re-run matching control (#442)", () => {
     expect(html).toContain("Matching timed out.");
   });
 
+  it("announces the failure to assistive technology", () => {
+    // It arrives asynchronously, with focus most likely still on
+    // the button that triggered it. Without alert semantics a
+    // screen-reader user is told nothing — on the recovery path,
+    // which strands exactly the user who most needs to know.
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingError: new Error("Matching timed out."),
+    });
+    expect(html).toContain('role="alert"');
+  });
+
   it("renders nothing extra when no handler is supplied", () => {
     const html = render({ groups: [group] });
     expect(html).not.toContain("rerun-matching");

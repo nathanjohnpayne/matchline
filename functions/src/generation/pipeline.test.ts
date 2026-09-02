@@ -13,6 +13,7 @@ import {
   GenerationApplicationNotFound,
   GenerationError,
   GenerationNoApprovedUnitsError,
+  findStaleGroundingId,
   requirementSetToken,
   runGenerationPipeline,
   type GenerationInputs,
@@ -463,6 +464,37 @@ describe("runGenerationPipeline", () => {
       expect(thrown.message).toContain("no Requirements at all");
       expect(thrown.message).toContain("parse the job description again");
       expect(thrown.message).not.toContain("re-run matching");
+    }
+  });
+
+  it("STRANDED-MATCH GATE (#442): zero Requirements and zero matches still says re-parse", async () => {
+    // The stranded-count precondition was wrong. A Role that
+    // parses to an empty set — or whose stale rows a later
+    // matching run already cleared — has zero Requirements AND
+    // zero approved matches, and fell through to the generic
+    // "approve a match in the Matches tab", advice that cannot be
+    // followed when there is nothing to match against.
+    // CodeRabbit on PR #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [makeUnit("u1")],
+          role: makeRole(),
+          requirements: [],
+          approvedMatches: [],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no Requirements at all");
+      expect(thrown.message).toContain("parse the job description again");
+      expect(thrown.message).not.toContain("Approve at least one match");
     }
   });
 
@@ -947,5 +979,133 @@ describe("requirementSetToken (#442, Codex P1 on #449)", () => {
     const input = [{ id: "b" }, { id: "a" }];
     requirementSetToken(input);
     expect(input.map((r) => r.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("findStaleGroundingId (#442, Codex P1 on #449)", () => {
+  // Persist-critical and pure, and the emulator cases only ever
+  // cite the summary through the full I/O path — so a regression
+  // that skipped bullets, skills or education would leave them
+  // green while stale grounding was written.
+  const REQS = [{ id: "req-1" }] as never;
+  const live = (unitId: string) =>
+    ({
+      experience_unit_id: unitId,
+      job_requirement_unit_id: "req-1",
+    }) as never;
+
+  function content(overrides: Record<string, unknown> = {}) {
+    return {
+      summary: { source_unit_ids: [] },
+      bullets: [],
+      skills: [],
+      ...overrides,
+    } as never;
+  }
+
+  it("returns null when nothing is cited at all", () => {
+    expect(findStaleGroundingId(content(), [live("u1")], REQS)).toBeNull();
+  });
+
+  it("returns null with no matches when nothing is cited", () => {
+    // Zero-input boundary on both sides: an empty citation set
+    // cannot be stale, even with no grounding available.
+    expect(findStaleGroundingId(content(), [], REQS)).toBeNull();
+  });
+
+  it("accepts a citation backed by a live match", () => {
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [live("u1")],
+        REQS,
+      ),
+    ).toBeNull();
+  });
+
+  for (const kind of ["summary", "bullets", "skills", "education"] as const) {
+    it(`catches a stale citation in ${kind}`, () => {
+      // Each item kind asserted separately: the walker builds one
+      // list from four sources and dropping any one of them is a
+      // silent hole.
+      const item = { source_unit_ids: ["u-gone"] };
+      const c = content(
+        kind === "summary" ? { summary: item } : { [kind]: [item] },
+      );
+      expect(findStaleGroundingId(c, [live("u1")], REQS)).toBe("u-gone");
+    });
+  }
+
+  it("treats absent education as empty rather than throwing", () => {
+    // `education` is optional on the response contract.
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [live("u1")],
+        REQS,
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a citation whose match points at a deleted Requirement", () => {
+    // The match exists and cites the right Unit, but its
+    // Requirement is gone — so it cannot ground anything.
+    const stranded = {
+      experience_unit_id: "u1",
+      job_requirement_unit_id: "req-deleted",
+    } as never;
+    expect(
+      findStaleGroundingId(
+        content({ summary: { source_unit_ids: ["u1"] } }),
+        [stranded],
+        REQS,
+      ),
+    ).toBe("u1");
+  });
+
+  it("returns the FIRST stale id, deterministically", () => {
+    const c = content({
+      summary: { source_unit_ids: ["u1"] },
+      bullets: [{ source_unit_ids: ["u-a"] }, { source_unit_ids: ["u-b"] }],
+    });
+    expect(findStaleGroundingId(c, [live("u1")], REQS)).toBe("u-a");
+  });
+});
+
+describe("requirementSetToken: content, not just ids (#449 round 2)", () => {
+  it("changes when a requirement's text is edited in place", () => {
+    // `upsertRequirement` merges into an existing document id, so
+    // wording can change while every id stays put. An id-only
+    // token would certify a prompt built from text that no longer
+    // exists.
+    expect(
+      requirementSetToken([{ id: "r1", normalized_requirement: "old" }]),
+    ).not.toBe(
+      requirementSetToken([{ id: "r1", normalized_requirement: "new" }]),
+    );
+  });
+
+  it("changes when must_have flips", () => {
+    // The prompt renders it as a MUST-HAVE / nice-to-have tag.
+    expect(
+      requirementSetToken([{ id: "r1", must_have: true }]),
+    ).not.toBe(requirementSetToken([{ id: "r1", must_have: false }]));
+  });
+
+  it("ignores fields the prompt never renders", () => {
+    // Including them would discard sound generations over edits
+    // the model never saw.
+    const a = requirementSetToken([
+      { id: "r1", normalized_requirement: "x", must_have: true },
+    ]);
+    const b = requirementSetToken([
+      {
+        id: "r1",
+        normalized_requirement: "x",
+        must_have: true,
+        priority: "low",
+      } as never,
+    ]);
+    expect(a).toBe(b);
   });
 });

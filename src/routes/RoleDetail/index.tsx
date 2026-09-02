@@ -333,7 +333,10 @@ export default function RoleDetail(): ReactElement {
           // would still hit the LLM pipeline + write
           // Requirements that the user no longer cares about.
           if (isStale()) return;
-          await invokeParseJobRequirements(roleId, trimmed);
+          const parseResult = await invokeParseJobRequirements(
+            roleId,
+            trimmed,
+          );
           // Subscription delivers the parsed Requirements;
           // flip back to editing on success and clear any
           // prior error so a successful retry hides the
@@ -373,6 +376,17 @@ export default function RoleDetail(): ReactElement {
           // duration so the user knows new matches are
           // computing.
           if (isStale()) return;
+          // A parse that produced NO Requirements must not trigger
+          // matching. `replaceMatchesForRole` clears the Role's
+          // matches and writes whatever the run produced — which
+          // against an empty Requirement set is nothing — so the
+          // rematch would silently delete every surviving match,
+          // including the user's approvals. Those rows are what
+          // #442 preserves and classifies as stranded so the user
+          // can see what happened and re-parse. Deleting them
+          // destroys the evidence the recovery path depends on.
+          // CodeRabbit on PR #449.
+          if (parseResult.requirements.length === 0) return;
           triggeredRef.current = true;
           // Clear any earlier manual-retry failure: this run
           // supersedes it, and leaving the message up would show

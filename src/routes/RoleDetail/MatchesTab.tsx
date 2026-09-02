@@ -104,6 +104,14 @@ function RerunMatchingControl({
         <p
           className="text-xs text-red-700 dark:text-red-400"
           data-testid="rerun-matching-error"
+          // The failure arrives asynchronously, after focus has
+          // most likely stayed on the button that triggered it.
+          // Without alert semantics a screen-reader user is told
+          // nothing at all — and this is the recovery path, so
+          // silence here strands exactly the user who most needs
+          // to know. Matches the other async error banners on
+          // Role Detail. Codex and CodeRabbit on PR #449.
+          role="alert"
         >
           {matchingError.message}
         </p>

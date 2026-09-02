@@ -612,3 +612,83 @@ describe("persist-time validation cannot be bypassed (#442, Codex P1 round 3)", 
     expect(message).not.toContain("Re-run matching");
   });
 });
+
+describe("a revoked match mid-generation (#442, Codex P2 on #449 round 3)", () => {
+  it("names approving a match, not re-parsing or rematching", async () => {
+    // The Requirement set is untouched, so the token check
+    // passes and the grounding check is what fires. Saying "the
+    // job description was re-parsed" misdiagnoses it, and
+    // "re-run matching" is worse than useless — a rerun carries
+    // the unapproved decision forward for that pair, so
+    // generation stays blocked.
+    await seedRoleWithApprovedMatch();
+
+    let message = "";
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                await db()
+                  .collection("unitMatches")
+                  .doc("match-1")
+                  .update({ approved_for_use: false });
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("unapproved or removed");
+    expect(message).toContain("approve a current match");
+    expect(message).not.toContain("re-parsed");
+    expect(message).not.toContain("Re-run matching");
+  });
+
+  it("rejects when a Requirement is edited in place mid-generation", async () => {
+    // `upsertRequirement` merges into an existing id, so wording
+    // can change while every id stays put. An id-only token
+    // certified a prompt built from text that no longer exists.
+    await seedRoleWithApprovedMatch();
+
+    let thrown: unknown;
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                await db()
+                  .collection("jobRequirementUnits")
+                  .doc("req-old")
+                  .update({
+                    normalized_requirement: "Something else entirely",
+                  });
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerateResumeGroundingStale);
+    const app = await db().collection("applications").doc(APP).get();
+    expect(app.data()?.generated_assets ?? []).toEqual([]);
+  });
+});
