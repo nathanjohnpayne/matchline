@@ -76,9 +76,8 @@ service cloud.firestore {
       // data). Defaulting to `false` for absent fields means
       // the contradictory pair is the ONLY shape rejected.
       return collection != 'unitMatches'
-        || (!(request.resource.data.get('approved_for_use', false) == true
-              && request.resource.data.get('user_rejected', false) == true)
-            && isServerOwnedProvenanceAbsent());
+        || !(request.resource.data.get('approved_for_use', false) == true
+             && request.resource.data.get('user_rejected', false) == true);
     }
 
     // `schema_version` is the matching pipeline's attestation that
@@ -94,19 +93,61 @@ service cloud.firestore {
     // arbitrary prose and have it rendered as a grounded claim.
     // CodeRabbit on PR #450.
     //
-    // Rejected rather than ignored: silently dropping the field
-    // would let a caller believe it had been recorded.
-    function isServerOwnedProvenanceAbsent() {
-      return !request.resource.data.keys().hasAny(['schema_version']);
+    // **Create and update need different predicates**, and
+    // conflating them shipped a P1: `request.resource.data` on an
+    // update is the COMPLETE post-write document, so it carries a
+    // `schema_version` the client never touched. A blanket
+    // "must be absent" rule therefore rejected every
+    // `setMatchApprovalState` call against a pipeline-written row
+    // — which is every real match — breaking approve and reject
+    // outright. Codex P1 on PR #450, after merge.
+    //
+    // So: absent on create, unchanged on update. The client may
+    // carry the server's value forward; it may not introduce or
+    // alter one.
+    function isProvenanceAbsentOnCreate(collection) {
+      return collection != 'unitMatches'
+        || !request.resource.data.keys().hasAny(['schema_version']);
+    }
+
+    // On update, a client may change ONLY its own review
+    // decision. Everything else on a match is the matching
+    // pipeline's output.
+    //
+    // An equality check on `schema_version` alone was not enough,
+    // and the gap is the interesting one: preserving the marker
+    // while rewriting `rationale` forges the claim just as
+    // effectively. The version attests that the PIPELINE produced
+    // the row and gated the prose; guarding the marker without
+    // guarding what it attests to protects a label rather than a
+    // fact. Codex P1 on PR #451.
+    //
+    // Restricting the affected keys is stronger than comparing
+    // each attested field, and cannot rot as fields are added —
+    // a new pipeline-written field is protected by default
+    // instead of needing to be remembered here.
+    //
+    // This also closes the pre-existing forge on LEGACY rows: a
+    // client could previously add `component_applicability` plus
+    // arbitrary prose and reach `isRationaleTrustworthy`'s
+    // #435-era bridge. `setMatchApprovalState` is the only
+    // production writer and touches exactly these two fields;
+    // `upsertMatch` has no production caller.
+    function isMatchUpdateApprovalOnly(collection) {
+      return collection != 'unitMatches'
+        || request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['approved_for_use', 'user_rejected']);
     }
 
     match /{collection}/{docId} {
       allow read: if isOwner();
       allow create: if isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection);
+        && isValidUnitMatchWrite(collection)
+        && isProvenanceAbsentOnCreate(collection);
       allow update: if isOwner()
         && isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection);
+        && isValidUnitMatchWrite(collection)
+        && isMatchUpdateApprovalOnly(collection);
       allow delete: if isOwner();
     }
   }
