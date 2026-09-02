@@ -183,6 +183,26 @@ export async function runGenerationPipeline(
     // the user to re-run matching, which cannot make such an
     // Application generate. The no-Units diagnosis is the
     // actionable one and has to win. Codex P2 on PR #449.
+    // An empty Requirement set needs its own remedy, and it is
+    // NOT a rematch. Matching against zero Requirements can only
+    // delete the stale rows; it cannot produce grounding, so
+    // sending the user there leaves them exactly where they
+    // started. The JD has to be parsed again first. Codex P2 on
+    // PR #449.
+    if (
+      inputs.units.length > 0 &&
+      inputs.requirements.length === 0 &&
+      strandedApprovedCount > 0
+    ) {
+      throw new GenerationNoApprovedUnitsError(
+        `Approved Units present (${inputs.units.length}) and ` +
+          `${strandedApprovedCount} approved UnitMatch(es), but this Role ` +
+          `has no Requirements at all — the job description was re-parsed ` +
+          `into an empty set, so there is nothing to ground against. ` +
+          `Nothing to generate from for application ${ctx.applicationId}; ` +
+          `parse the job description again on the Requirements tab.`,
+      );
+    }
     if (
       inputs.units.length > 0 &&
       liveApprovedMatches.length === 0 &&

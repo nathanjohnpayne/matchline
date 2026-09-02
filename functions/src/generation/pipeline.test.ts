@@ -437,6 +437,34 @@ describe("runGenerationPipeline", () => {
     }
   });
 
+  it("STRANDED-MATCH GATE (#442): an empty Requirement set says re-parse, not rematch", async () => {
+    // Matching against zero Requirements can only delete the
+    // stale rows; it cannot produce grounding. Sending the user
+    // to re-run matching leaves them exactly where they started.
+    // Codex P2 on PR #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [makeUnit("u1")],
+          role: makeRole(),
+          requirements: [],
+          approvedMatches: [makeMatch("u1", "req-deleted")],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("no Requirements at all");
+      expect(thrown.message).toContain("parse the job description again");
+      expect(thrown.message).not.toContain("re-run matching");
+    }
+  });
+
   it("APPROVED-MATCHES GATE: only Units WITH approved matches reach the prompt + cross-validation", async () => {
     // 3 Units approved, but only u1 + u2 have approved
     // matches. u3 is approved-but-unmatched. The pipeline

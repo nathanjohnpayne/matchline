@@ -60,6 +60,58 @@ export interface MatchesTabProps {
   readonly matchingError?: Error | null;
 }
 
+/**
+ * Manual re-run of the matching pipeline.
+ *
+ * Rendered in BOTH branches of this tab, which is the whole
+ * point. A clear-and-replace parse that removes every Requirement
+ * empties `groups` AND strands every prior match — so the
+ * zero-Requirements early return is exactly the state that most
+ * needs a recovery action, and confining the control to the
+ * populated branch put it out of reach there. Codex and
+ * CodeRabbit on PR #449; the identical mistake was made with the
+ * stranded-match notice on PR #446, which is why both now live in
+ * shared components instead of inline JSX.
+ */
+function RerunMatchingControl({
+  onRerunMatching,
+  computingMatches,
+  matchingError,
+}: {
+  readonly onRerunMatching?: () => void;
+  readonly computingMatches: boolean;
+  readonly matchingError?: Error | null;
+}): ReactElement | null {
+  if (onRerunMatching === undefined) return null;
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={onRerunMatching}
+        disabled={computingMatches}
+        data-testid="rerun-matching"
+        className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+      >
+        {computingMatches ? "Re-running matching…" : "Re-run matching"}
+      </button>
+      <p className="text-xs text-zinc-500">
+        Rebuilds this Role&rsquo;s matches against its current requirements.
+        Approve and reject decisions carry forward only for requirements that
+        have not changed &mdash; if the job description was re-parsed, its
+        requirements are new and will need reviewing again.
+      </p>
+      {matchingError !== undefined && matchingError !== null && (
+        <p
+          className="text-xs text-red-700 dark:text-red-400"
+          data-testid="rerun-matching-error"
+        >
+          {matchingError.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function MatchesTab({
   groups,
   gaps,
@@ -96,6 +148,11 @@ export default function MatchesTab({
               "the Requirements tab first."}
         </p>
         <StrandedNotice count={strandedMatches ?? 0} />
+        <RerunMatchingControl
+          onRerunMatching={onRerunMatching}
+          computingMatches={computingMatches}
+          matchingError={matchingError}
+        />
         {/*
           No Requirements means no coverage claim is being made
           here, and the stranded count is structural — it does not
@@ -126,32 +183,11 @@ export default function MatchesTab({
         evidenceStatus={evidenceStatus}
         strandedMatches={strandedMatches}
       />
-      {onRerunMatching !== undefined && (
-        <div className="space-y-1">
-          <button
-            type="button"
-            onClick={onRerunMatching}
-            disabled={computingMatches}
-            data-testid="rerun-matching"
-            className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
-          >
-            {computingMatches ? "Re-running matching…" : "Re-run matching"}
-          </button>
-          <p className="text-xs text-zinc-500">
-            Rebuilds this Role&rsquo;s matches against its current
-            requirements. Your approve and reject decisions are carried
-            forward.
-          </p>
-          {matchingError !== undefined && matchingError !== null && (
-            <p
-              className="text-xs text-red-700 dark:text-red-400"
-              data-testid="rerun-matching-error"
-            >
-              {matchingError.message}
-            </p>
-          )}
-        </div>
-      )}
+      <RerunMatchingControl
+        onRerunMatching={onRerunMatching}
+        computingMatches={computingMatches}
+        matchingError={matchingError}
+      />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (
         <li

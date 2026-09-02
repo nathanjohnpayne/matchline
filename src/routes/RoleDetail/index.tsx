@@ -374,6 +374,11 @@ export default function RoleDetail(): ReactElement {
           // computing.
           if (isStale()) return;
           triggeredRef.current = true;
+          // Clear any earlier manual-retry failure: this run
+          // supersedes it, and leaving the message up would show
+          // a stale error underneath a completed result. Codex P2
+          // on PR #449.
+          setMatchingError(null);
           setComputingMatches(true);
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
@@ -690,6 +695,7 @@ export default function RoleDetail(): ReactElement {
     const issuedAgainstAuto = roleId;
     const issuedTokenAuto = visitTokenRef.current;
     triggeredRef.current = true;
+    setMatchingError(null);
     setComputingMatches(true);
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
@@ -876,9 +882,34 @@ export default function RoleDetail(): ReactElement {
   // so a rejected-then-re-approved row is counted (the click
   // sequence sets approved=true and clears user_rejected per
   // the single-setter approval handler).
-  const hasApprovedMatches = matches.some(
-    (m) => m.approved_for_use && !m.user_rejected,
-  );
+  /**
+   * Approved, non-rejected matches whose Requirement still
+   * exists — the same set the server's generation gate uses
+   * (#442).
+   *
+   * The client has to mirror the rule rather than count raw
+   * approvals. Building `approved_unit_ids` from every approved
+   * match snapshots Units generation will not use, so the
+   * Application Editor's right pane shows grounding that never
+   * reached the prompt; and when every approved match is
+   * orphaned, the Generate CTA stayed enabled and created a
+   * draft the server was guaranteed to reject. Codex P2 on PR
+   * #449.
+   *
+   * The server remains the authority — this is the UI declining
+   * to offer an action it knows will fail, not a second gate.
+   */
+  const liveApprovedMatches = useMemo(() => {
+    const currentRequirementIds = new Set(requirements.map((r) => r.id));
+    return matches.filter(
+      (m) =>
+        m.approved_for_use &&
+        !m.user_rejected &&
+        currentRequirementIds.has(m.job_requirement_unit_id),
+    );
+  }, [matches, requirements]);
+
+  const hasApprovedMatches = liveApprovedMatches.length > 0;
 
   /**
    * Generate a new resume for this Role. Steps:
@@ -924,9 +955,11 @@ export default function RoleDetail(): ReactElement {
     // Requirements scoring against the same Unit).
     const approvedUnitIds = Array.from(
       new Set(
-        matches
-          .filter((m) => m.approved_for_use && !m.user_rejected)
-          .map((m) => m.experience_unit_id),
+        // Live matches only — see `liveApprovedMatches`. A Unit
+        // whose only approval is against a deleted Requirement
+        // must not enter the snapshot, or the Editor claims
+        // grounding the generator refused to use.
+        liveApprovedMatches.map((m) => m.experience_unit_id),
       ),
     );
 
@@ -971,7 +1004,7 @@ export default function RoleDetail(): ReactElement {
         setGenerationStatus("error");
       }
     })();
-  }, [generationStatus, hasApprovedMatches, matches, navigate, roleId]);
+  }, [generationStatus, hasApprovedMatches, liveApprovedMatches, navigate, roleId]);
 
   return (
     <RoleDetailView

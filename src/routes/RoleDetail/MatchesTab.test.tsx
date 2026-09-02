@@ -127,13 +127,9 @@ describe("MatchesTab: the re-run matching control (#442)", () => {
     expect(html).toContain("Re-run matching");
   });
 
-  it("says approvals are carried forward, because they are", () => {
-    // `replaceMatchesForRole` carries `approved_for_use` and
-    // `user_rejected` across a rerun. Without saying so the
-    // control reads as destructive, and a user who has approved
-    // matches will not press it.
+  it("says decisions carry forward, so the control does not read as destructive", () => {
     const html = render({ groups: [group], onRerunMatching: () => {} });
-    expect(html).toContain("carried");
+    expect(html).toContain("carry forward");
   });
 
   it("disables the control while matching is already running", () => {
@@ -159,5 +155,27 @@ describe("MatchesTab: the re-run matching control (#442)", () => {
   it("renders nothing extra when no handler is supplied", () => {
     const html = render({ groups: [group] });
     expect(html).not.toContain("rerun-matching");
+  });
+
+  it("renders in the zero-Requirements branch, where recovery matters most", () => {
+    // A clear-and-replace parse that removes every Requirement
+    // empties `groups` AND strands every prior match, so the
+    // early return is precisely the state that needs this
+    // control. Confining it to the populated branch put it out of
+    // reach there — the same mistake made with the stranded
+    // notice on PR #446. Codex and CodeRabbit on PR #449.
+    const html = render({ groups: [], onRerunMatching: () => {} });
+    expect(html).toContain("rerun-matching");
+  });
+
+  it("does not overpromise the carry-forward in the re-parse flow", () => {
+    // `replaceMatchesForRole` keys carry-forward on the exact
+    // (experience_unit_id, job_requirement_unit_id) pair. A
+    // re-parse gives every Requirement a new id, so NO decisions
+    // survive — and this button exists primarily for that flow.
+    // The first copy said decisions "are carried forward" flatly.
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("have not changed");
+    expect(html).toContain("need reviewing again");
   });
 });
