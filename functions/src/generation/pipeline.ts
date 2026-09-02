@@ -73,6 +73,12 @@ export interface GenerationInputs {
 
 export interface RunGenerationResult {
   readonly content: GeneratedAssetContent;
+  /**
+   * The Requirement set the prompt was built from, as a token.
+   * The persist transaction rejects the write if it no longer
+   * matches — see `requirementSetToken`.
+   */
+  readonly requirement_set_token: string;
   readonly cost_usd: number;
   readonly input_tokens: number;
   readonly output_tokens: number;
@@ -387,6 +393,10 @@ export async function runGenerationPipeline(
     // any preceding failed attempts that still burned tokens.
     return {
       content: stampIds(parsed.data, generateId),
+      // Captured from the SAME `inputs` the prompt was built
+      // from, so the persist transaction can prove the set has
+      // not moved underneath it.
+      requirement_set_token: requirementSetToken(inputs.requirements),
       cost_usd: cumulativeCostUsd,
       input_tokens: cumulativeInputTokens,
       output_tokens: cumulativeOutputTokens,
@@ -419,6 +429,35 @@ export function liveApprovedMatchesOf(
   return approvedMatches.filter((m) =>
     currentRequirementIds.has(m.job_requirement_unit_id),
   );
+}
+
+/**
+ * A stable token for the Requirement set a generation ran
+ * against (#442, Codex P1 on PR #449).
+ *
+ * `findStaleGroundingId` reduces both sides to Unit ids, so it
+ * cannot tell "the grounding still holds" from "a DIFFERENT
+ * requirement now grounds the same Unit". Concretely: a re-parse
+ * lands mid-generation, the user approves a freshly computed
+ * match for the same Unit, and the cited Unit looks grounded
+ * again — while the artifact in hand was written for requirements
+ * that no longer exist.
+ *
+ * Only an identity check on the set itself catches that, so the
+ * token is compared verbatim and ANY change is rejected. That is
+ * deliberately strict: Requirements change only through
+ * `writeRequirementsAsBatch`, which replaces the whole set, so
+ * every real change is a re-parse and every re-parse invalidates
+ * the prompt this artifact was built from.
+ *
+ * JSON rather than a delimiter join, for the reason the
+ * derivation key learned on #446: `["a","b"]` and `["a|b"]` must
+ * not collide.
+ */
+export function requirementSetToken(
+  requirements: readonly { readonly id: string }[],
+): string {
+  return JSON.stringify([...requirements.map((r) => r.id)].sort());
 }
 
 /**

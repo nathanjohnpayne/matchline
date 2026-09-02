@@ -454,3 +454,80 @@ describe("a re-parse that lands DURING generation (#442, Codex P1 on #449)", () 
     expect(assets[0].id).toBe("asset-1");
   });
 });
+
+describe("a re-parse followed by a fresh approval mid-generation (#442, Codex P1 round 2)", () => {
+  // The hole the cited-grounding check alone could not see.
+  //
+  // `findStaleGroundingId` reduces both sides to Unit ids, so if
+  // a re-parse lands mid-generation AND the user approves a
+  // newly-computed match for the same Unit, the citation looks
+  // live again — while the artifact in hand was written for
+  // requirements that no longer exist. Only an identity check on
+  // the Requirement SET catches that.
+  it("refuses even when the cited Unit is grounded again by a NEW requirement", async () => {
+    await seedRoleWithApprovedMatch();
+
+    let thrown: unknown;
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                // Re-parse, then approve a fresh match for the
+                // SAME Unit against the new Requirement.
+                await reparseWithoutRematch();
+                await db()
+                  .collection("unitMatches")
+                  .doc("match-2")
+                  .set({ ...match("req-new"), id: "match-2" });
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    // The cited Unit IS grounded — by a requirement the prompt
+    // never saw. The set token is what rejects it.
+    expect(thrown).toBeInstanceOf(GenerateResumeGroundingStale);
+    const app = await db().collection("applications").doc(APP).get();
+    expect(app.data()?.generated_assets ?? []).toEqual([]);
+  });
+
+  it("still persists when the Requirement set is untouched", async () => {
+    // Control: approving an ADDITIONAL match for the same Unit,
+    // without any re-parse, must not trip the identity check.
+    await seedRoleWithApprovedMatch();
+
+    await runGenerateResume(
+      { ownerUid: ALICE, applicationId: APP },
+      {
+        record: async () => 0,
+        generateId: () => "asset-1",
+        sleep: async () => {},
+        client: {
+          messages: {
+            create: async () => {
+              await db()
+                .collection("unitMatches")
+                .doc("match-2")
+                .set({ ...match("req-old"), id: "match-2" });
+              return mockResumeMessage();
+            },
+          },
+        } as never,
+      },
+    );
+
+    const app = await db().collection("applications").doc(APP).get();
+    expect(app.data()?.generated_assets ?? []).toHaveLength(1);
+  });
+});

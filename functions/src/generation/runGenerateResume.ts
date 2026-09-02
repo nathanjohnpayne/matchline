@@ -31,6 +31,7 @@ import type {
 
 import {
   findStaleGroundingId,
+  requirementSetToken,
   runGenerationPipeline,
   type GenerationDeps,
   type RunGenerationContext,
@@ -66,6 +67,15 @@ export interface RunGenerateResumeDeps extends GenerationDeps {
 }
 
 export interface PersistAssetParams {
+  /**
+   * Token for the Requirement set the artifact was generated
+   * against. The default persist rejects the write if the Role's
+   * set has changed since — see `requirementSetToken`. Optional
+   * so existing callers and test doubles keep working; when
+   * absent the identity check is skipped and only the
+   * cited-grounding check runs.
+   */
+  readonly requirementSetToken?: string;
   readonly ownerUid: string;
   readonly applicationId: string;
   readonly asset: AssetRef;
@@ -111,6 +121,7 @@ export async function runGenerateResume(
     ownerUid: ctx.ownerUid,
     applicationId: ctx.applicationId,
     asset,
+    requirementSetToken: result.requirement_set_token,
   });
 
   return {
@@ -197,12 +208,40 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
           .where("role_id", "==", roleId)
           .where("approved_for_use", "==", true),
       );
+      const requirements = reqSnap.docs.map(
+        (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+      );
+
+      // Identity of the SET, not just of the cited grounding.
+      //
+      // `findStaleGroundingId` reduces both sides to Unit ids, so
+      // it cannot distinguish "still grounded" from "a different
+      // requirement now grounds the same Unit" — a re-parse
+      // followed by the user approving a freshly computed match
+      // for that Unit makes the citation look live while the
+      // artifact was written for requirements that are gone.
+      // Codex P1 on PR #449, after the first revalidation landed.
+      //
+      // Both checks stay: this one catches a changed Requirement
+      // set, the other catches a citation losing its approved
+      // match (an un-approval mid-flight) without the set moving.
+      const expectedToken = params.requirementSetToken;
+      if (
+        expectedToken !== undefined &&
+        requirementSetToken(requirements) !== expectedToken
+      ) {
+        throw new GenerateResumeGroundingStale(
+          `This Role's requirements changed while the resume was being ` +
+            `generated — the job description was re-parsed, so the content ` +
+            `was written against requirements that no longer exist. Nothing ` +
+            `was saved; re-run matching on the Matches tab and generate again.`,
+        );
+      }
+
       const staleId = findStaleGroundingId(
         content,
         matchSnap.docs.map((d) => ({ ...(d.data() as UnitMatch), id: d.id })),
-        reqSnap.docs.map(
-          (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
-        ),
+        requirements,
       );
       if (staleId !== null) {
         throw new GenerateResumeGroundingStale(

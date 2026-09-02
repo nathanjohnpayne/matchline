@@ -157,15 +157,39 @@ describe("MatchesTab: the re-run matching control (#442)", () => {
     expect(html).not.toContain("rerun-matching");
   });
 
-  it("renders in the zero-Requirements branch, where recovery matters most", () => {
-    // A clear-and-replace parse that removes every Requirement
-    // empties `groups` AND strands every prior match, so the
-    // early return is precisely the state that needs this
-    // control. Confining it to the populated branch put it out of
-    // reach there — the same mistake made with the stranded
-    // notice on PR #446. Codex and CodeRabbit on PR #449.
+  it("is NOT offered when the Role has no Requirements", () => {
+    // `groups` maps 1:1 from Requirements, so this branch means
+    // there are none — and matching against zero Requirements can
+    // only delete the surviving matches, never produce grounding.
+    // The control was briefly rendered here after the previous
+    // round asked for a reachable recovery action; it is the
+    // wrong action for this state, and its only effect would be
+    // destroying the user's remaining approvals. Codex P2 on PR
+    // #449.
     const html = render({ groups: [], onRerunMatching: () => {} });
-    expect(html).toContain("rerun-matching");
+    expect(html).not.toContain("rerun-matching");
+  });
+
+  it("points at re-parsing instead, when matches are stranded there", () => {
+    const html = render({
+      groups: [],
+      onRerunMatching: () => {},
+      strandedMatches: 2,
+    });
+    expect(html).toContain("Parse the job description again");
+    expect(html).toContain("would only discard them");
+  });
+
+  it("keeps the ordinary stranded copy when Requirements exist", () => {
+    const html = render({ groups: [group], strandedMatches: 2 });
+    expect(html).toContain("Re-running matching will rebuild them");
+  });
+
+  it("gives the control a visible focus ring", () => {
+    // docs/design/ui-guidance.md: every interactive element has a
+    // visible focus ring. Codex P1 on PR #449.
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("focus-visible:ring-2");
   });
 
   it("does not overpromise the carry-forward in the re-parse flow", () => {

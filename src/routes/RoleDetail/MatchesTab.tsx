@@ -90,7 +90,7 @@ function RerunMatchingControl({
         onClick={onRerunMatching}
         disabled={computingMatches}
         data-testid="rerun-matching"
-        className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+        className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
       >
         {computingMatches ? "Re-running matching…" : "Re-run matching"}
       </button>
@@ -138,6 +138,15 @@ export default function MatchesTab({
     // The copy changes with it: "parse the JD first" is wrong
     // advice for a Role whose JD was parsed, since that parse is
     // what stranded the matches.
+    //
+    // The re-run control is deliberately ABSENT here, having been
+    // briefly added in the round before. `groups` maps 1:1 from
+    // Requirements, so this branch means the Role has none — and
+    // matching against zero Requirements can only delete the
+    // surviving matches, never produce grounding. Offering it
+    // would be a button whose only effect is to destroy the
+    // user's remaining approvals while the copy beside it tells
+    // them to parse the JD. Codex P2 on PR #449.
     return (
       <div className="space-y-2" data-testid="matches-tab-no-requirements">
         <p className="text-sm text-zinc-500">
@@ -147,12 +156,7 @@ export default function MatchesTab({
             : "No Requirements parsed for this Role yet. Parse the JD on " +
               "the Requirements tab first."}
         </p>
-        <StrandedNotice count={strandedMatches ?? 0} />
-        <RerunMatchingControl
-          onRerunMatching={onRerunMatching}
-          computingMatches={computingMatches}
-          matchingError={matchingError}
-        />
+        <StrandedNotice count={strandedMatches ?? 0} inRoleWithNoRequirements />
         {/*
           No Requirements means no coverage claim is being made
           here, and the stranded count is structural — it does not
