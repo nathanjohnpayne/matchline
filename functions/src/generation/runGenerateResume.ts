@@ -24,14 +24,21 @@ import { randomUUID } from "node:crypto";
 
 import { getAdminDb } from "../firestore/admin.js";
 import type { AssetRef, GeneratedAssetContent } from "../types/crm.js";
+import type {
+  JobRequirementUnit,
+  UnitMatch,
+} from "../types/capability.js";
 
 import {
+  findStaleGroundingId,
   runGenerationPipeline,
   type GenerationDeps,
   type RunGenerationContext,
 } from "./pipeline.js";
 
 const APPLICATIONS_COLLECTION = "applications";
+const REQUIREMENTS_COLLECTION = "jobRequirementUnits";
+const MATCHES_COLLECTION = "unitMatches";
 
 export interface RunGenerateResumeResult {
   readonly assetId: string;
@@ -132,6 +139,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
     }
     const app = snap.data() as {
       owner_uid?: string;
+      role_id?: string;
       generated_assets?: AssetRef[];
     };
     if (app.owner_uid !== ownerUid) {
@@ -144,6 +152,69 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
         `Application ${applicationId} not found during persist.`,
       );
     }
+    // Re-verify the grounding INSIDE the transaction (#442,
+    // Codex P1 on PR #449).
+    //
+    // Exactly the discipline the ownership re-check above already
+    // applies, pointed at a different invariant. `loadInputs`
+    // reads Requirements and matches through plain parallel
+    // queries, so a JD re-parse that commits between that read
+    // and this persist leaves the eligibility gate having
+    // approved grounding that has since evaporated — and the
+    // window is the entire LLM call, which runs for minutes. A
+    // second tab or a direct callable invocation is enough.
+    //
+    // Doing it as a transactional READ rather than a fresh
+    // `get()` is what makes it hold instead of merely narrowing
+    // the window: `writeRequirementsAsBatch` replaces
+    // Requirements in a transaction over this same query, so a
+    // re-parse racing this persist puts the two in contention and
+    // one of them retries against the other's committed state.
+    //
+    // Reads must precede writes in a Firestore transaction, and
+    // these are issued sequentially rather than through
+    // `Promise.all` to keep that ordering unambiguous.
+    // `generated_content` is optional on AssetRef (a future
+    // binary export may carry none), so skip the check when there
+    // is nothing to ground. This resume path always sets it.
+    const roleId = app.role_id;
+    const content = asset.generated_content;
+    if (
+      typeof roleId === "string" &&
+      roleId.length > 0 &&
+      content !== undefined
+    ) {
+      const reqSnap = await tx.get(
+        db
+          .collection(REQUIREMENTS_COLLECTION)
+          .where("owner_uid", "==", ownerUid)
+          .where("role_id", "==", roleId),
+      );
+      const matchSnap = await tx.get(
+        db
+          .collection(MATCHES_COLLECTION)
+          .where("owner_uid", "==", ownerUid)
+          .where("role_id", "==", roleId)
+          .where("approved_for_use", "==", true),
+      );
+      const staleId = findStaleGroundingId(
+        content,
+        matchSnap.docs.map((d) => ({ ...(d.data() as UnitMatch), id: d.id })),
+        reqSnap.docs.map(
+          (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+        ),
+      );
+      if (staleId !== null) {
+        throw new GenerateResumeGroundingStale(
+          `Generated content cites Experience Unit ${staleId}, which no ` +
+            `longer has an approved match against any current Requirement ` +
+            `for this Role — the job description was re-parsed while this ` +
+            `resume was being generated. Nothing was saved; re-run matching ` +
+            `on the Matches tab and generate again.`,
+        );
+      }
+    }
+
     const assets = app.generated_assets ?? [];
     tx.update(ref, {
       generated_assets: [...assets, asset],
@@ -164,5 +235,24 @@ export class GenerateResumePersistNotFound extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GenerateResumePersistNotFound";
+  }
+}
+
+/**
+ * Thrown when the grounding a generated asset cites stopped
+ * holding between the LLM call and the persist — in practice, a
+ * JD re-parse replaced the Role's Requirements mid-generation and
+ * stranded the approved matches the content was grounded on.
+ *
+ * Nothing is written: the transaction aborts, so the user loses
+ * the generation rather than gaining an artifact that cites
+ * requirements the job description no longer contains. The
+ * callable maps this to `failed-precondition`, alongside the
+ * other "your inputs are not ready" refusals.
+ */
+export class GenerateResumeGroundingStale extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GenerateResumeGroundingStale";
   }
 }

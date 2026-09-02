@@ -27,6 +27,7 @@ import {
 } from "../generation/pipeline.js";
 import {
   runGenerateResume,
+  GenerateResumeGroundingStale,
   GenerateResumePersistNotFound,
   type RunGenerateResumeDeps,
 } from "../generation/runGenerateResume.js";
@@ -95,6 +96,14 @@ export async function generateResumeHandler(
       // so the editor surface (#24) can show the right CTA
       // ("approve a match in the Matches tab" vs. "approve
       // some Units first").
+      throw new HttpsError("failed-precondition", err.message);
+    }
+    if (err instanceof GenerateResumeGroundingStale) {
+      // The persist transaction found the content's grounding no
+      // longer live — a JD re-parse landed mid-generation (#442).
+      // Nothing was written. `failed-precondition` alongside the
+      // other "your inputs are not ready" refusals, message
+      // verbatim so the editor surface can name the remedy.
       throw new HttpsError("failed-precondition", err.message);
     }
     if (err instanceof GenerationError) {

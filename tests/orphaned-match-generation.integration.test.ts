@@ -35,6 +35,10 @@ import {
   initializeAdminAppForTests,
 } from "../functions/src/firestore/admin.ts";
 import { runGenerationPipeline } from "../functions/src/generation/pipeline.ts";
+import {
+  runGenerateResume,
+  GenerateResumeGroundingStale,
+} from "../functions/src/generation/runGenerateResume.ts";
 import { GenerationNoApprovedUnitsError } from "../functions/src/generation/errors.ts";
 import { runJdParsingPipeline } from "../functions/src/parsing/pipeline.ts";
 import type {
@@ -197,6 +201,36 @@ async function reparseWithoutRematch(): Promise<void> {
   });
 }
 
+/**
+ * A minimal well-formed tool-use response grounding the summary
+ * on unit-1 — enough to clear schema validation and
+ * cross-validation so the run reaches the persist transaction,
+ * which is what these tests are about.
+ */
+function mockResumeMessage(): unknown {
+  return {
+    id: "msg_test",
+    type: "message",
+    role: "assistant",
+    model: "claude-haiku-4-5-20251001",
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    usage: { input_tokens: 100, output_tokens: 50 },
+    content: [
+      {
+        type: "tool_use",
+        id: "tool_1",
+        name: "emit_resume",
+        input: {
+          summary: { text: "Summary", source_unit_ids: ["unit-1"] },
+          bullets: [],
+          skills: [],
+        },
+      },
+    ],
+  };
+}
+
 /** A client that must never be called. */
 const explodingClient = {
   messages: {
@@ -326,5 +360,97 @@ describe("the same Role once matching has been re-run (#442)", () => {
     }
 
     expect(reachedModel).toBe(true);
+  });
+});
+
+describe("a re-parse that lands DURING generation (#442, Codex P1 on #449)", () => {
+  // `defaultLoadInputs` reads Requirements and matches through
+  // plain parallel queries, so the eligibility gate can approve
+  // grounding that evaporates before the artifact is written —
+  // and the window is the entire LLM call, minutes wide. A second
+  // tab or a direct callable invocation is enough to hit it.
+  //
+  // The persist transaction re-reads the same query set, so this
+  // is a real serialization against `writeRequirementsAsBatch`
+  // rather than a narrowed window.
+  it("refuses to persist an artifact whose grounding evaporated mid-flight", async () => {
+    await seedRoleWithApprovedMatch();
+
+    let thrown: unknown;
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          // Stand in for the LLM. The re-parse happens HERE —
+          // after `loadInputs` has read the old Requirements and
+          // passed the gate, before the persist transaction runs.
+          client: {
+            messages: {
+              create: async () => {
+                await reparseWithoutRematch();
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerateResumeGroundingStale);
+  });
+
+  it("writes no asset when it refuses", async () => {
+    await seedRoleWithApprovedMatch();
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                await reparseWithoutRematch();
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+    } catch {
+      // expected
+    }
+
+    const app = await db().collection("applications").doc(APP).get();
+    expect(app.data()?.generated_assets ?? []).toEqual([]);
+  });
+
+  it("persists normally when no re-parse intervenes", async () => {
+    // The control. A revalidation that rejected everything would
+    // satisfy both tests above.
+    await seedRoleWithApprovedMatch();
+
+    await runGenerateResume(
+      { ownerUid: ALICE, applicationId: APP },
+      {
+        record: async () => 0,
+        generateId: () => "asset-1",
+        sleep: async () => {},
+        client: {
+          messages: { create: async () => mockResumeMessage() },
+        } as never,
+      },
+    );
+
+    const app = await db().collection("applications").doc(APP).get();
+    const assets = app.data()?.generated_assets ?? [];
+    expect(assets).toHaveLength(1);
+    expect(assets[0].id).toBe("asset-1");
   });
 });

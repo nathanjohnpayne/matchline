@@ -146,9 +146,9 @@ export async function runGenerationPipeline(
   //
   // `requirements` is already loaded here, role- and
   // owner-scoped, so the check costs nothing.
-  const currentRequirementIds = new Set(inputs.requirements.map((r) => r.id));
-  const liveApprovedMatches = inputs.approvedMatches.filter((m) =>
-    currentRequirementIds.has(m.job_requirement_unit_id),
+  const liveApprovedMatches = liveApprovedMatchesOf(
+    inputs.approvedMatches,
+    inputs.requirements,
   );
   const strandedApprovedCount =
     inputs.approvedMatches.length - liveApprovedMatches.length;
@@ -171,7 +171,23 @@ export async function runGenerationPipeline(
     // already approved matches that a re-parse then stranded —
     // there is nothing left to approve, and the fix is to re-run
     // matching against the current Requirements.
-    if (liveApprovedMatches.length === 0 && strandedApprovedCount > 0) {
+    //
+    // **Order matters, and the first version got it wrong.**
+    // Matches are loaded Role-wide while Units come from the
+    // Application's `approved_unit_ids` snapshot, so an
+    // Application with no loaded Units can coexist with orphaned
+    // Role matches — a legacy Application with an empty snapshot,
+    // or one whose Units were later deleted or unapproved.
+    // Reporting the stranded case there printed the
+    // self-contradicting "Approved Units present (0)" AND told
+    // the user to re-run matching, which cannot make such an
+    // Application generate. The no-Units diagnosis is the
+    // actionable one and has to win. Codex P2 on PR #449.
+    if (
+      inputs.units.length > 0 &&
+      liveApprovedMatches.length === 0 &&
+      strandedApprovedCount > 0
+    ) {
       throw new GenerationNoApprovedUnitsError(
         `Approved Units present (${inputs.units.length}) and ` +
           `${strandedApprovedCount} approved UnitMatch(es) for this Role, but ` +
@@ -364,6 +380,72 @@ export async function runGenerationPipeline(
     `Resume generation failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
+}
+
+/**
+ * Approved matches whose Requirement still exists (#442).
+ *
+ * Exported because the persist transaction in
+ * `runGenerateResume.ts` re-applies the same rule against
+ * freshly-read documents, and the two must not drift — a
+ * revalidation that disagreed with the gate would either refuse
+ * sound work or admit the very rows the gate rejected.
+ */
+export function liveApprovedMatchesOf(
+  approvedMatches: readonly UnitMatch[],
+  requirements: readonly JobRequirementUnit[],
+): readonly UnitMatch[] {
+  const currentRequirementIds = new Set(requirements.map((r) => r.id));
+  return approvedMatches.filter((m) =>
+    currentRequirementIds.has(m.job_requirement_unit_id),
+  );
+}
+
+/**
+ * The first cited `source_unit_ids` value no longer backed by an
+ * approved match against a Requirement the Role still has, or
+ * null if every citation still holds.
+ *
+ * Read at persist time. `loadInputs` reads Requirements and
+ * matches through plain parallel queries, so a JD re-parse
+ * committing between that read and the persist leaves the gate
+ * above having approved grounding that has since evaporated —
+ * and the window is the whole LLM call, which is minutes.
+ * Codex P1 on PR #449.
+ */
+export function findStaleGroundingId(
+  content: {
+    readonly summary: { readonly source_unit_ids: readonly string[] };
+    readonly bullets: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+    readonly skills: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+    readonly education?: readonly {
+      readonly source_unit_ids: readonly string[];
+    }[];
+  },
+  approvedMatches: readonly UnitMatch[],
+  requirements: readonly JobRequirementUnit[],
+): string | null {
+  const stillGrounded = new Set(
+    liveApprovedMatchesOf(approvedMatches, requirements).map(
+      (m) => m.experience_unit_id,
+    ),
+  );
+  const allItems = [
+    content.summary,
+    ...content.bullets,
+    ...content.skills,
+    ...(content.education ?? []),
+  ];
+  for (const item of allItems) {
+    for (const id of item.source_unit_ids) {
+      if (!stillGrounded.has(id)) return id;
+    }
+  }
+  return null;
 }
 
 /**

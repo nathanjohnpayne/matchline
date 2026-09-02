@@ -15,12 +15,17 @@ import { describe, expect, it } from "vitest";
 import type { ExperienceUnit } from "../../types/capability.ts";
 
 import MatchesTab from "./MatchesTab.tsx";
+import type { RequirementWithMatches } from "./groupMatchesByRequirement.ts";
 
 const EMPTY_UNITS = new Map<string, ExperienceUnit>();
 
 function render(props: {
   readonly strandedMatches?: number;
   readonly evidenceStatus?: "current" | "pending" | "unavailable";
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
+  readonly computingMatches?: boolean;
+  readonly groups?: RequirementWithMatches[];
 }): string {
   return renderToStaticMarkup(
     <MatchesTab
@@ -88,5 +93,71 @@ describe("MatchesTab: evidence disclosure in the no-Requirements branch", () => 
     const html = render({});
     expect(html).not.toContain("gaps-evidence-unavailable");
     expect(html).not.toContain("gaps-evidence-pending");
+  });
+});
+
+describe("MatchesTab: the re-run matching control (#442)", () => {
+  // The generation gate refuses when every approved match is
+  // stranded and tells the user to re-run matching. That
+  // instruction was unreachable: the auto-trigger will not fire
+  // while matches exist, and this tab had no control. A refusal
+  // naming an impossible action is worse than no refusal. Codex
+  // P2 on PR #449.
+  const group: RequirementWithMatches = {
+    requirement: {
+      id: "req-1",
+      owner_uid: "u",
+      role_id: "role-1",
+      raw_text: "raw",
+      normalized_requirement: "norm",
+      category: "skill",
+      keywords: [],
+      tools: [],
+      domains: [],
+      priority: "high",
+      must_have: true,
+      extracted_from: "qualifications",
+    },
+    matches: [],
+  };
+
+  it("renders the control when a handler is supplied", () => {
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("rerun-matching");
+    expect(html).toContain("Re-run matching");
+  });
+
+  it("says approvals are carried forward, because they are", () => {
+    // `replaceMatchesForRole` carries `approved_for_use` and
+    // `user_rejected` across a rerun. Without saying so the
+    // control reads as destructive, and a user who has approved
+    // matches will not press it.
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).toContain("carried");
+  });
+
+  it("disables the control while matching is already running", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      computingMatches: true,
+    });
+    expect(html).toContain("disabled");
+    expect(html).toContain("Re-running matching…");
+  });
+
+  it("surfaces a failure rather than failing silently", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingError: new Error("Matching timed out."),
+    });
+    expect(html).toContain("rerun-matching-error");
+    expect(html).toContain("Matching timed out.");
+  });
+
+  it("renders nothing extra when no handler is supplied", () => {
+    const html = render({ groups: [group] });
+    expect(html).not.toContain("rerun-matching");
   });
 });

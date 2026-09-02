@@ -145,6 +145,7 @@ export default function RoleDetail(): ReactElement {
   // doesn't re-fire the trigger and so the latest value is
   // always read inside async closures.
   const [computingMatches, setComputingMatches] = useState(false);
+  const [matchingError, setMatchingError] = useState<Error | null>(null);
   // Two-state gate (cursor #134 r1):
   //   - `matchesFirstSnapshotReceived` flips on the first
   //     real Matches snapshot delivery for the current Role.
@@ -364,8 +365,10 @@ export default function RoleDetail(): ReactElement {
           // round 2 Phase 4b on PR #206.
           //
           // Fire-and-forget — the matches subscription
-          // delivers the result; failures log + the user can
-          // re-trigger from the Matches tab affordances. The
+          // delivers the result; on failure the user re-triggers
+          // with the Matches tab's "Re-run matching" control,
+          // which did not exist when this comment first claimed
+          // it did (added for #442 after Codex P2 on PR #449). The
           // computingMatches UX hint stays on for the
           // duration so the user knows new matches are
           // computing.
@@ -458,6 +461,7 @@ export default function RoleDetail(): ReactElement {
     // findings against #438.
     setMatchEvidence(undefined);
     setEvidenceStatus("current");
+    setMatchingError(null);
 
     // Stale-closure guard. If the user navigates to a new
     // roleId before the in-flight Role fetch resolves, we
@@ -806,6 +810,50 @@ export default function RoleDetail(): ReactElement {
       });
   }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
 
+  /**
+   * Manual "re-run matching" from the Matches tab.
+   *
+   * The post-parse `runMatching` is fire-and-forget, and the
+   * auto-trigger deliberately will not fire while
+   * `matches.length > 0` — so when that call fails the Role is
+   * left holding matches against Requirement ids the re-parse
+   * deleted, with no way back. The comment on that call already
+   * claimed "the user can re-trigger from the Matches tab
+   * affordances"; there were none. #442's generation gate then
+   * started refusing to generate and naming exactly this action,
+   * which turned a silent inconsistency into a dead end. Codex P2
+   * on PR #449.
+   *
+   * Sets `triggeredRef` for the same reason the post-parse call
+   * does: the auto-trigger must not also fire if this run clears
+   * the match set.
+   */
+  const onRerunMatching = useCallback((): void => {
+    if (roleId === undefined || roleId === "" || computingMatches) return;
+    const issuedAgainst = roleId;
+    const issuedToken = visitTokenRef.current;
+    const stale = (): boolean =>
+      currentRoleIdRef.current !== issuedAgainst ||
+      visitTokenRef.current !== issuedToken;
+
+    triggeredRef.current = true;
+    setMatchingError(null);
+    setComputingMatches(true);
+    void invokeRunMatching(roleId)
+      .catch((err: unknown) => {
+        if (stale()) return;
+        setMatchingError(
+          new Error(
+            friendlyCallableError(err, { operation: "re-running matching" }),
+          ),
+        );
+      })
+      .finally(() => {
+        if (stale()) return;
+        setComputingMatches(false);
+      });
+  }, [roleId, computingMatches]);
+
   // Build the unit lookup once per units array. The matching
   // pipeline reads units owner-scoped and the Role's matches
   // can only reference the user's own units, so a single
@@ -932,6 +980,8 @@ export default function RoleDetail(): ReactElement {
       requirements={requirements}
       matches={matches}
       matchEvidence={matchEvidence}
+      onRerunMatching={onRerunMatching}
+      matchingError={matchingError}
       evidenceStatus={evidenceStatus}
       unitsById={unitsById}
       error={error}

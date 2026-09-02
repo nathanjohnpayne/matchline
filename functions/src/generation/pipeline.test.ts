@@ -401,6 +401,42 @@ describe("runGenerationPipeline", () => {
     expect(result.content.summary.source_unit_ids).toEqual(["u1"]);
   });
 
+  it("STRANDED-MATCH GATE (#442): the no-approved-Units diagnosis wins over the stranded one", async () => {
+    // Matches load Role-wide while Units come from the
+    // Application's `approved_unit_ids` snapshot, so zero loaded
+    // Units can coexist with orphaned Role matches — a legacy
+    // Application with an empty snapshot, or one whose Units were
+    // later deleted or unapproved.
+    //
+    // The first version reported the stranded case there, which
+    // printed the self-contradicting "Approved Units present (0)"
+    // and told the user to re-run matching — an action that
+    // cannot make such an Application generate. Codex P2 on PR
+    // #449.
+    let thrown: unknown;
+    try {
+      await runGenerationPipeline(CTX, {
+        client: mockClient([]).client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => ({
+          units: [],
+          role: makeRole(),
+          requirements: [makeReq("req-1")],
+          approvedMatches: [makeMatch("u1", "req-deleted")],
+        }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(GenerationNoApprovedUnitsError);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toContain("No approved ExperienceUnits");
+      expect(thrown.message).not.toContain("Approved Units present (0)");
+      expect(thrown.message).not.toContain("re-run matching");
+    }
+  });
+
   it("APPROVED-MATCHES GATE: only Units WITH approved matches reach the prompt + cross-validation", async () => {
     // 3 Units approved, but only u1 + u2 have approved
     // matches. u3 is approved-but-unmatched. The pipeline

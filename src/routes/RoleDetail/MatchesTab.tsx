@@ -51,6 +51,13 @@ export interface MatchesTabProps {
    * above the requirements grid.
    */
   readonly computingMatches: boolean;
+  /**
+   * Manual re-run of matching. Optional so the existing view
+   * tests and any other caller keep working without it; the
+   * control simply does not render when absent.
+   */
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
 }
 
 export default function MatchesTab({
@@ -61,6 +68,8 @@ export default function MatchesTab({
   unitsById,
   onApprovalStateChange,
   computingMatches,
+  onRerunMatching,
+  matchingError,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -117,6 +126,32 @@ export default function MatchesTab({
         evidenceStatus={evidenceStatus}
         strandedMatches={strandedMatches}
       />
+      {onRerunMatching !== undefined && (
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={onRerunMatching}
+            disabled={computingMatches}
+            data-testid="rerun-matching"
+            className="rounded border border-zinc-300 dark:border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {computingMatches ? "Re-running matching…" : "Re-run matching"}
+          </button>
+          <p className="text-xs text-zinc-500">
+            Rebuilds this Role&rsquo;s matches against its current
+            requirements. Your approve and reject decisions are carried
+            forward.
+          </p>
+          {matchingError !== undefined && matchingError !== null && (
+            <p
+              className="text-xs text-red-700 dark:text-red-400"
+              data-testid="rerun-matching-error"
+            >
+              {matchingError.message}
+            </p>
+          )}
+        </div>
+      )}
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (
         <li
