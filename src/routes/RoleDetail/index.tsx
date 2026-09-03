@@ -847,6 +847,10 @@ export default function RoleDetail(): ReactElement {
     // so. Codex P2 on PR #446.
     setMatchEvidence(undefined);
     setEvidenceStatus("pending");
+    // deriveMatchEvidence also carries a 150s budget, and reloading
+    // remounts the unchanged Role and starts another derivation while
+    // the first may still be consuming Firestore reads (Codex P2, #434).
+    const releaseEvidenceBusy = beginAppBusy("roleDetail.deriveEvidence");
     void invokeDeriveMatchEvidence(roleId)
       .then((evidence) => {
         if (superseded()) return;
@@ -858,6 +862,11 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeDeriveMatchEvidence failed", err);
         setMatchEvidence(undefined);
         setEvidenceStatus("unavailable");
+      })
+      .finally(() => {
+        // Before the supersede checks above can return early, so a
+        // superseded derivation cannot strand the lease.
+        releaseEvidenceBusy();
       });
   }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
 
