@@ -1,39 +1,49 @@
 #!/usr/bin/env bash
 # check_deploy_service_list (#441 follow-up)
 #
-# Every HTTP-triggered function exported from `functions/src/index.ts`
-# becomes a Cloud Run service that needs a manual
-# `--no-invoker-iam-check` before a browser can call it — `firebase
-# deploy` creates the service but cannot set its invoker policy.
+# Every function exported from `functions/src/index.ts` must appear in
+# the function-inventory table in DEPLOYMENT.md § Cloud Run IAM
+# prerequisites.
 #
-# That step is documented in DEPLOYMENT.md § Cloud Run IAM
-# prerequisites against an explicit list of service names. The list
-# went stale the moment #441 added `deriveMatchEvidence`, and nothing
-# noticed until the deploy: the function shipped fine, the invoker
-# policy did not, and the callable answered every browser request with
-# a CORS-preflight 403 that the SDK reports as a bare `internal`.
+# ## What went wrong that this catches
 #
-# It cannot verify what is actually deployed — CI has no cloud
-# credentials — but the drift that bit us was the doc, not the cloud.
+# HTTP-triggered functions need a manual `--no-invoker-iam-check` on
+# first deploy: `firebase deploy` creates the Cloud Run service but
+# cannot set its invoker policy. The function ships fine, the policy
+# does not, and the callable then answers every browser request with a
+# CORS-preflight 403 that the SDK reports as a bare `internal`. The
+# documented list went stale the moment #441 added
+# `deriveMatchEvidence`, and nothing noticed until the deploy failed.
 #
-# ## Why python3 rather than grep
+# ## Why this checks ACCOUNTING, not trigger type
 #
-# The first version used `grep | awk` over `^export const` and
-# `^export { X as Y }`. Three ways that was wrong, all found in review
-# on PR #452:
+# Earlier versions tried to infer which exports were HTTP-triggered and
+# to generate the exact remediation command. Review on PR #452 found,
+# in successive rounds, that this required correctly handling: bare and
+# aliased re-exports, multi-symbol and multi-line export clauses, local
+# `export { foo }` with no `from`, generic calls like
+# `onCall<RequestData>(...)`, per-SYMBOL trigger resolution when one
+# module exports both an HTTP and an event handler, the `_` -> `-`
+# service-name rule, and per-function `region` options.
 #
-#   - It missed valid TypeScript: `export { foo }` with no alias,
-#     multi-symbol statements, and re-exports split across lines.
-#   - Under `set -o pipefail` a non-matching `grep | awk` returns 1,
-#     so a repo with one export style and not the other aborted the
-#     script *before* the "found no exports" guard could report it.
-#   - It treated EVERY export as needing a public invoker. A
-#     scheduled or Firestore-triggered function must not be made
-#     publicly invokable, so telling a maintainer to run
-#     `--no-invoker-iam-check` on one would be actively harmful advice.
+# Each fix was correct and the next round found another valid form. The
+# honest reading is that "which binding becomes which service, where"
+# is the TypeScript compiler's job plus firebase-tools' naming logic,
+# and approximating it in CI produced a check that was confidently
+# wrong in new ways — including, at one point, advising that an
+# event-triggered function be made publicly invokable.
 #
-# Parsing is a parsing job. python3 is already used by five sibling
-# checks here.
+# So the contract is narrowed to something a text check can actually
+# guarantee: every export is ACCOUNTED FOR in the table. The trigger
+# type and service name are recorded there by a human, deliberately,
+# which is also where that judgement belongs. This check only enforces
+# that nobody adds a function and forgets.
+#
+# Fails closed on a missing heading, a missing table, or zero parsed
+# exports — a check that cannot see its inputs must not report OK.
+#
+# Portability: stock macOS Bash 3.2 + python3 (five sibling checks here
+# already use python3).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -49,127 +59,90 @@ for p in (index_path, doc_path):
     if not os.path.isfile(p):
         sys.exit(f"check_deploy_service_list: missing {os.path.relpath(p, root)}")
 
-index_src = open(index_path, encoding="utf-8").read()
-
-# Strip comments so a commented-out export cannot register, and a
-# mention of `onCall` in prose cannot classify one.
 def strip_comments(text):
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     return re.sub(r"(?m)//.*$", "", text)
 
-src = strip_comments(index_src)
+src = strip_comments(open(index_path, encoding="utf-8").read())
 
-# One logical statement per entry, so a re-export split across lines
-# parses the same as an inline one.
-statements = [s.strip() for s in src.split(";")]
-
-TRIGGERS = ("onCall", "onRequest")
-
-def module_is_http(spec):
-    """Does the re-exported module define an HTTP-triggered function?"""
-    rel = spec.strip("\"'")
-    if not rel.startswith("."):
-        return None                      # not a local module; unknown
-    cand = os.path.normpath(
-        os.path.join(os.path.dirname(index_path), re.sub(r"\.js$", ".ts", rel))
-    )
-    if not os.path.isfile(cand):
-        return None
-    body = strip_comments(open(cand, encoding="utf-8").read())
-    return any(f"{t}(" in body for t in TRIGGERS)
-
-http_exports = {}     # exported name -> where we decided from
-unknown = []          # exported name -> could not classify
-
-for st in statements:
-    m = re.match(r"^export\s+const\s+([A-Za-z0-9_$]+)\s*=\s*(.*)$", st, flags=re.S)
+exports = set()
+for st in (s.strip() for s in src.split(";")):
+    # `export const X = ...` / `export function X(...)`
+    m = re.match(r"^export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z0-9_$]+)", st)
     if m:
-        name, rhs = m.group(1), m.group(2)
-        if any(re.search(rf"\b{t}\s*\(", rhs) for t in TRIGGERS):
-            http_exports[name] = "direct"
+        exports.add(m.group(1))
         continue
-
-    m = re.match(r"^export\s*\{(.+?)\}\s*from\s*(\S+)$", st, flags=re.S)
+    # `export { A, B as C } [from "..."]` — with or without `from`,
+    # single- or multi-line, any number of symbols.
+    m = re.match(r"^export\s+(type\s+)?\{(.+?)\}", st, flags=re.S)
     if m:
-        clause, spec = m.group(1), m.group(2)
-        verdict = module_is_http(spec)
-        for part in clause.split(","):
+        if m.group(1):
+            continue                     # `export type { ... }` is not a function
+        for part in m.group(2).split(","):
             part = part.strip()
-            if not part:
-                continue
-            # `X as Y` exports as Y; bare `X` exports as X.
+            if not part or part.startswith("type "):
+                continue                 # inline `type X` specifier
             alias = re.match(r"^([A-Za-z0-9_$]+)\s+as\s+([A-Za-z0-9_$]+)$", part)
             name = alias.group(2) if alias else part
-            if not re.match(r"^[A-Za-z0-9_$]+$", name):
-                continue
-            if verdict is True:
-                http_exports[name] = "re-export"
-            elif verdict is None:
-                unknown.append((name, spec))
+            if re.match(r"^[A-Za-z0-9_$]+$", name) and name != "default":
+                exports.add(name)
 
-if unknown:
-    for name, spec in unknown:
-        print(
-            f"FAIL: cannot classify export '{name}' from {spec} — its module "
-            f"was not found, so this check cannot tell whether it is an "
-            f"HTTP-triggered function.",
-            file=sys.stderr,
-        )
-        print(
-            "      Resolve the path, or classify it explicitly here rather "
-            "than letting the check pass on an unknown.",
-            file=sys.stderr,
-        )
-    sys.exit(1)
-
-if not http_exports:
+if not exports:
     sys.exit(
-        "check_deploy_service_list: found no HTTP-triggered exports in "
-        "functions/src/index.ts — the parser is probably broken, so failing "
-        "rather than reporting a vacuous pass."
+        "check_deploy_service_list: parsed no exports from "
+        "functions/src/index.ts — failing rather than reporting a vacuous "
+        "pass."
     )
 
-# The service list lives in ONE section. Searching the whole document
-# let an unrelated mention — a troubleshooting note, a command example —
-# satisfy the check while the IAM list stayed stale. Reproduced in
-# review on PR #452.
 doc = open(doc_path, encoding="utf-8").read()
 HEADING = "## Cloud Run IAM prerequisites (Functions)"
 if HEADING not in doc:
     sys.exit(
         f"check_deploy_service_list: '{HEADING}' not found in DEPLOYMENT.md. "
-        "The service list moved or was renamed; this check cannot verify "
-        "anything and will not pass by default."
+        "The inventory moved or was renamed; this check will not pass by "
+        "default."
     )
-section = doc.split(HEADING, 1)[1]
-section = re.split(r"(?m)^## ", section)[0]
+section = re.split(r"(?m)^## ", doc.split(HEADING, 1)[1])[0]
 
-failed = False
-for name in sorted(http_exports):
-    service = name.lower()                       # Cloud Run lowercases it
-    if f"`{service}`" not in section:
-        failed = True
-        print(
-            f"FAIL: function '{name}' deploys as Cloud Run service "
-            f"'{service}', which DEPLOYMENT.md does not list.",
-            file=sys.stderr,
-        )
-        print(
-            f"      Add `{service}` to the service-name list in\n"
-            f"      {HEADING}, and run this once after the next deploy or\n"
-            f"      the callable will 403 every browser request at the\n"
-            f"      CORS preflight:\n"
-            f"        gcloud run services update {service} \\\n"
-            f"          --region=us-central1 --project=<proj> "
-            f"--no-invoker-iam-check",
-            file=sys.stderr,
-        )
+# The inventory rows: | `function` | `service` | note |
+rows = re.findall(r"(?m)^\|\s*`([A-Za-z0-9_$]+)`\s*\|", section)
+if not rows:
+    sys.exit(
+        "check_deploy_service_list: found no function-inventory rows under "
+        f"'{HEADING}'. Expected a table whose first column is a backticked "
+        "function name."
+    )
+documented = set(rows)
 
-if failed:
+missing = sorted(exports - documented)
+stale = sorted(documented - exports)
+
+for name in missing:
+    print(
+        f"FAIL: '{name}' is exported from functions/src/index.ts but is not "
+        f"in the function inventory in DEPLOYMENT.md.",
+        file=sys.stderr,
+    )
+for name in stale:
+    print(
+        f"FAIL: '{name}' is in the DEPLOYMENT.md function inventory but is "
+        f"no longer exported from functions/src/index.ts.",
+        file=sys.stderr,
+    )
+
+if missing or stale:
+    print(
+        f"\n      Update the table under {HEADING}.\n"
+        "      For a NEW HTTP-triggered function, also run the invoker step\n"
+        "      documented there once after its first deploy, or it will 403\n"
+        "      every browser request at the CORS preflight. Do NOT run it\n"
+        "      for an event-triggered function.",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 print(
-    f"check_deploy_service_list: OK ({len(http_exports)} HTTP-triggered "
-    f"functions, all listed in DEPLOYMENT.md)"
+    f"check_deploy_service_list: OK ({len(exports)} exports, all accounted "
+    "for in DEPLOYMENT.md)"
 )
 PY

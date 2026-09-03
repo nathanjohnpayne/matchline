@@ -653,7 +653,28 @@ Under a **domain restricted sharing** org policy (`constraints/iam.allowedPolicy
 gcloud run services update <service> --region=us-central1   --project=<proj> --no-invoker-iam-check
 ```
 
-This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422). Service names are the lowercased function names: `extractfromresume`, `parsejobrequirements`, `generateresume`, `validateasset`, `reembedexperienceunit`, `runmatching`, `health`, `derivematchevidence`.
+This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422).
+
+**Service naming.** Firebase Tools derives the Cloud Run service id from the function id by lowercasing it and replacing `_` with `-`. So `webhook_receiver` deploys as `webhook-receiver`, not `webhook_receiver`.
+
+**Region.** The commands below assume `us-central1`. A function that sets its own `region` option deploys elsewhere, and the command must name that region — targeting the wrong one silently "succeeds" against a service that is not the one serving traffic.
+
+### Function inventory
+
+Every function exported from `functions/src/index.ts` appears here. HTTP-triggered functions (`onCall` / `onRequest`) need the invoker step above once, on first deploy. Event-triggered functions must **NOT** get it: they rely on authenticated event delivery, and making one publicly invokable would be a security regression.
+
+`scripts/ci/check_deploy_service_list` fails the build when an export is missing from this table. It deliberately does **not** infer the trigger type — see its header for why that inference proved unreliable — so the `invoker step` column is a human judgement and must be set deliberately when a function is added.
+
+| function (`index.ts`) | Cloud Run service | invoker step |
+|---|---|---|
+| `health` | `health` | required |
+| `extractFromResume` | `extractfromresume` | required |
+| `parseJobRequirements` | `parsejobrequirements` | required |
+| `generateResume` | `generateresume` | required |
+| `validateAsset` | `validateasset` | required |
+| `reembedExperienceUnit` | `reembedexperienceunit` | required |
+| `runMatching` | `runmatching` | required |
+| `deriveMatchEvidence` | `derivematchevidence` | required |
 
 > **Every NEW callable needs this once.** `firebase deploy` creates the
 > Cloud Run service but cannot set the invoker policy, so the deploy
