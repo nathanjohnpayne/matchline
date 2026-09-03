@@ -34,7 +34,7 @@ import {
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
-import { beginUnsavedWork } from "../../lib/appBusy.ts";
+import { beginAppBusy, beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
@@ -119,6 +119,17 @@ export default function UnitRow({
     // (Codex P2, #434).
     if (status.kind === "view") return;
     return beginUnsavedWork("unitReview.inlineEdit");
+  }, [status.kind]);
+
+  // While the save is actually in flight this is a BUSY operation, not
+  // merely unsaved content. Unsaved work only gates the reload behind a
+  // confirmation, and "Reload anyway" would still discard an edit the
+  // server may be moments from acknowledging; a busy lease suppresses
+  // the prompt outright, which is the correct treatment for any call
+  // already under way (CodeRabbit P1, #434).
+  useEffect(() => {
+    if (status.kind !== "saving") return;
+    return beginAppBusy("unitReview.saveEdit");
   }, [status.kind]);
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
     kind: "idle",

@@ -186,9 +186,18 @@ export function createVersionPoller({
   let issued = 0;
   let newestApplied = 0;
   let stopped = false;
+  // The interval starts a check without awaiting the previous one, and
+  // `stop()` alone only prevented a stale result being APPLIED — the
+  // request itself kept running, holding a connection past unmount and
+  // overlapping later checks. Abort the outstanding one instead
+  // (CodeRabbit P1, #434).
+  let inFlight: AbortController | undefined;
 
   const check = async (): Promise<void> => {
     const seq = ++issued;
+    inFlight?.abort();
+    const controller = new AbortController();
+    inFlight = controller;
     try {
       // Cache-busting query AND `no-store`: `firebase.json` sets
       // `no-cache` on this path, but an intermediary that ignores the
@@ -196,6 +205,7 @@ export function createVersionPoller({
       // check would never observe a deploy.
       const res = await doFetch(`${VERSION_URL}?t=${Date.now()}`, {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (!res.ok) return;
       const payload = parseVersionPayload(await res.json());
@@ -207,8 +217,10 @@ export function createVersionPoller({
       newestApplied = seq;
       onBuildId(payload.buildId);
     } catch {
-      // Offline, DNS, or a non-JSON body. Transient by assumption; the
-      // next tick tries again.
+      // Offline, DNS, a non-JSON body, or our own abort. All transient
+      // by assumption; the next tick tries again.
+    } finally {
+      if (inFlight === controller) inFlight = undefined;
     }
   };
 
@@ -216,6 +228,8 @@ export function createVersionPoller({
     check,
     stop: () => {
       stopped = true;
+      inFlight?.abort();
+      inFlight = undefined;
     },
   };
 }

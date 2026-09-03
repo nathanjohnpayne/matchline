@@ -18,7 +18,13 @@
  * and keep working.
  */
 
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ReactElement,
+} from "react";
 
 import {
   hasUnsavedWork,
@@ -45,18 +51,14 @@ export default function UpdatePrompt(): ReactElement | null {
   const [dismissedBuildId, setDismissedBuildId] = useState<string | null>(() =>
     readDismissedBuild(),
   );
-  const [busy, setBusy] = useState<boolean>(() => isAppBusy());
-  const [dirty, setDirty] = useState<boolean>(() => hasUnsavedWork());
+  // useSyncExternalStore, not useState + useEffect: the latter reads the
+  // store at mount and subscribes in a later passive effect, so a lease
+  // transition in that window is missed and the value stays stale. For
+  // `dirty` that is a data-loss path — the first Reload click would skip
+  // confirmation and discard the editor's content (CodeRabbit P1, #434).
+  const busy = useSyncExternalStore(subscribeAppBusy, isAppBusy);
+  const dirty = useSyncExternalStore(subscribeUnsavedWork, hasUnsavedWork);
   const [confirming, setConfirming] = useState(false);
-
-  // Track in-flight long operations so the banner can hold off. The
-  // poll keeps running underneath — only display is suppressed, so the
-  // prompt appears the instant the operation settles.
-  useEffect(() => subscribeAppBusy(setBusy), []);
-  // Unsaved editor content does NOT suppress the banner — see
-  // appBusy.ts — but it does gate the reload behind a confirmation,
-  // because that content lives only in React state (Codex P2, #434).
-  useEffect(() => subscribeUnsavedWork(setDirty), []);
 
   useEffect(() => {
     // No stamp means the define did not run (dev server, test). There

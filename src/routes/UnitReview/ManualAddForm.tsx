@@ -254,8 +254,22 @@ export default function ManualAddForm({
   // EMPTY_FORM rather than tracking a flag keeps it correct when the
   // user edits a field back to its original value.
   useEffect(() => {
+    // Value comparison, not reference: `metrics` is an array, so adding
+    // and then removing the last one yields a NEW empty array that is
+    // `!==` the pristine one — leaving the form permanently dirty and
+    // demanding a confirmation to protect nothing (CodeRabbit P2, #434).
     const dirty = (Object.keys(EMPTY_FORM) as Array<keyof FormState>).some(
-      (k) => state[k] !== EMPTY_FORM[k],
+      (k) => {
+        const current = state[k];
+        const pristine = EMPTY_FORM[k];
+        if (Array.isArray(current) && Array.isArray(pristine)) {
+          return (
+            current.length !== pristine.length ||
+            JSON.stringify(current) !== JSON.stringify(pristine)
+          );
+        }
+        return current !== pristine;
+      },
     );
     if (!dirty) return;
     return beginUnsavedWork("unitReview.manualAdd");
