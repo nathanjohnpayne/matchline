@@ -728,8 +728,13 @@ Every function exported from `functions/src/index.ts` appears here. The `invoker
   > `"public"` retries the IAM write on **every** deploy — and under the
   > domain-restricted-sharing policy above that write fails every time,
   > turning a one-off first-deploy chore into a permanent deploy failure.
-- **must not** — anything whose access is meant to be restricted. That covers most event-triggered functions, which rely on authenticated event delivery, *and* **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts.
-  > **Auth blocking triggers are the exception**, and "event-triggered" is the wrong instinct for them. `beforeUserCreated` / `beforeUserSignedIn` get `setInvokerCreate(..., ["public"])` on both create and update (`release/fabricator.js`, the `isBlockingTriggered && AUTH_BLOCKING_EVENTS` branches), so under the domain-restriction policy their binding fails exactly like a callable's and the trigger is left unavailable. Mark them **required**. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
+- **must not** — anything whose access is meant to be restricted: most event-triggered functions, which rely on authenticated event delivery, and **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so applying `--no-invoker-iam-check` to one would defeat the protection its author asked for.
+
+Two traps in that split, both of which look like `must not` and are not:
+
+> **Auth blocking triggers are `required`.** "Event-triggered" is the wrong instinct for `beforeUserCreated` / `beforeUserSignedIn`: `firebase-tools` gives them `setInvokerCreate(..., ["public"])` on create and assigns `invoker = ["public"]` then calls `setInvokerUpdate` on every update (`release/fabricator.js`, the `isBlockingTriggered && AUTH_BLOCKING_EVENTS` branches). Under the domain-restriction policy that write is forbidden, so the binding fails and the trigger is left unavailable.
+>
+> Worse, it is **not** a one-time cost like an ordinary `required` row: because the update path re-asserts `["public"]` unconditionally, every later deploy retries the forbidden write and exits non-zero — the `--no-invoker-iam-check` setting survives, but it does not stop the attempt. Expect a permanently failing deploy step for any Auth blocking function under this org policy, and treat that as a reason not to add one here.
 
 > **`invoker` does nothing on `onCall`.** A callable declared as
 > `onCall({ invoker: "private" }, ...)` is **not** private: the pinned
