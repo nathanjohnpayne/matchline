@@ -583,8 +583,11 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 > `serviceAccount` options needs a grant for each — binding only one leaves
 > the deploy failing on the others.
 >
-> `{RUNTIME_SA}` is the function's own `serviceAccount` option when it sets
-> one, and the compute default —
+> `{RUNTIME_SA}` is the function's **effective** runtime account: its own
+> `serviceAccount` option, or one inherited from
+> `setGlobalOptions({ serviceAccount: ... })` — the SDK copies that onto the
+> endpoint, so a function with no local option can still run as a custom
+> principal — and the compute default —
 > `{project-number}-compute@developer.gserviceaccount.com` — only when it
 > does not. `firebase-tools` resolves it that way
 > (`deploy/functions/ensure.js`: `e.serviceAccount || defaultServiceAccount(e)`),
@@ -713,6 +716,8 @@ This is a service-level setting, so it does **not** create a new revision and it
 
 **Region.** The commands below assume `us-central1`. A function that sets its own `region` option deploys elsewhere, and the command must name that region — targeting the wrong one silently "succeeds" against a service that is not the one serving traffic.
 
+`region` can also be **inherited**: `setGlobalOptions({ region: "us-east1" })` is copied onto every generated endpoint, so a function with no `region` option of its own may still deploy outside `us-central1`. Read the effective region per endpoint rather than assuming the default when the function itself is silent.
+
 `region` also takes an **array**. `region: ["us-central1", "us-east1"]` expands into one Cloud Run service per region, each needing its own invoker step, because `gcloud run services update --region` selects exactly one. Treat "run this once" below as once *per region the function declares*.
 
 ### Function inventory
@@ -730,6 +735,20 @@ Every function exported from `functions/src/index.ts` appears here. The `invoker
   > turning a one-off first-deploy chore into a permanent deploy failure.
 - **must not** — anything whose access is meant to be restricted: most event-triggered functions, which rely on authenticated event delivery, and **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so applying `--no-invoker-iam-check` to one would defeat the protection its author asked for.
 
+> **Changing a row to `must not` does not restore protection.**
+> `--no-invoker-iam-check` is a service-level setting that survives
+> `firebase deploy` — that is why it only has to be applied once, and it is
+> also why it does not go away on its own. If a handler that already
+> received it is later changed to `onRequest({ invoker: "private" })` or a
+> named service account, Firebase will add the restricted IAM binding while
+> Cloud Run keeps bypassing the invoker check entirely, so the endpoint
+> stays open to anyone. Re-enable it explicitly, per region:
+>
+> ```bash
+> gcloud run services update {service} --region={region} \
+>   --project={project-id} --invoker-iam-check
+> ```
+
 Two traps in that split, both of which look like `must not` and are not:
 
 > **Auth blocking triggers are `required`.** "Event-triggered" is the wrong instinct for `beforeUserCreated` / `beforeUserSignedIn`: `firebase-tools` gives them `setInvokerCreate(..., ["public"])` on create and assigns `invoker = ["public"]` then calls `setInvokerUpdate` on every update (`release/fabricator.js`, the `isBlockingTriggered && AUTH_BLOCKING_EVENTS` branches). Under the domain-restriction policy that write is forbidden, so the binding fails and the trigger is left unavailable.
@@ -739,9 +758,12 @@ Two traps in that split, both of which look like `must not` and are not:
 > **`invoker` does nothing on `onCall`.** A callable declared as
 > `onCall({ invoker: "private" }, ...)` is **not** private: the pinned
 > `firebase-functions@7.3.2` builds `callableTrigger: {}` and drops the
-> option, and the CLI then applies `["public"]` to every callable service
-> unconditionally, on create and on update
-> (`release/fabricator.js`: `isCallableTriggered` → `setInvokerCreate(..., ["public"])`).
+> option, and the CLI then applies `["public"]` to the service when it is
+> **created** (`release/fabricator.js`: the `isCallableTriggered` branches in
+> `createV2Function` / `createRunFunction`). `updateV2Function` has no
+> callable branch, so an ordinary update does not re-assert it — which is
+> why a callable is a one-time `required` cost and an Auth blocking trigger
+> is not.
 > So such a function stays **required** here, and anyone who wrote that
 > option believing it restricted access is mistaken — enforce authorization
 > inside the handler against `request.auth`, which is what callables are
