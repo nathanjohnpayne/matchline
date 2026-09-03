@@ -25,7 +25,8 @@ import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
 import { callableOptions } from "./callable-timeouts.ts";
-import { parseProgressEvent, type ProgressEvent } from "./progress.ts";
+import { type ProgressEvent } from "./progress.ts";
+import { invokeStreaming } from "./streamCall.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 export interface ExtractFromResumeResponse {
@@ -69,28 +70,12 @@ export async function invokeExtractFromResume(
 
   // Streaming path (#428). The server emits a chunk per stage and per
   // retry attempt so the UI can report what is actually happening
-  // across a ~108s call.
-  //
-  // **The deadline has to be re-supplied here.** `HttpsCallableStreamOptions`
-  // has no `timeout` field, and `streamAtURL` — unlike `callAtURL` —
-  // races nothing: it passes only `options.signal` to `fetch`. So the
-  // streaming path silently escapes BOTH the SDK's 70s default (which
-  // is what we want, since extraction runs longer than that) and the
-  // explicit budget from #424 (which we do not want, because it leaves
-  // a hung connection waiting forever). Driving an AbortSignal from
-  // the same table keeps one source of truth for both paths.
-  const { stream, data } = await fn.stream(
-    { text },
-    { signal: AbortSignal.timeout(callableOptions("extractFromResume").timeout) },
-  );
-
-  for await (const chunk of stream) {
-    // Unrecognized chunks are dropped rather than rendered: the
-    // deployed function is not necessarily the version this client was
-    // built against (#422 made that concrete).
-    const event = parseProgressEvent(chunk);
-    if (event !== null) onProgress(event);
-  }
-
-  return await data;
+  // across a ~108s call. `invokeStreaming` owns the three subtleties
+  // this path has (unhandled `data` rejection, abort-vs-timeout
+  // labelling, unknown-chunk handling) — see `streamCall.ts`.
+  return await invokeStreaming(fn, {
+    payload: { text },
+    timeoutMs: callableOptions("extractFromResume").timeout,
+    onProgress,
+  });
 }

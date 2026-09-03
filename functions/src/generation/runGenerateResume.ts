@@ -24,14 +24,22 @@ import { randomUUID } from "node:crypto";
 
 import { getAdminDb } from "../firestore/admin.js";
 import type { AssetRef, GeneratedAssetContent } from "../types/crm.js";
+import type {
+  JobRequirementUnit,
+  UnitMatch,
+} from "../types/capability.js";
 
 import {
+  findStaleGroundingId,
+  requirementSetToken,
   runGenerationPipeline,
   type GenerationDeps,
   type RunGenerationContext,
 } from "./pipeline.js";
 
 const APPLICATIONS_COLLECTION = "applications";
+const REQUIREMENTS_COLLECTION = "jobRequirementUnits";
+const MATCHES_COLLECTION = "unitMatches";
 
 export interface RunGenerateResumeResult {
   readonly assetId: string;
@@ -59,6 +67,21 @@ export interface RunGenerateResumeDeps extends GenerationDeps {
 }
 
 export interface PersistAssetParams {
+  /**
+   * Token for the Requirement set the artifact was generated
+   * against. The persist rejects the write if the Role's set has
+   * changed since — see `requirementSetToken`.
+   *
+   * **Required.** It was briefly optional "so existing callers
+   * keep working", which contradicted the policy this same
+   * transaction states for `role_id` and `generated_content`: an
+   * absent input rejects, it does not skip. A future
+   * `persistAsset` caller omitting the token would have lost the
+   * identity check with no compile error — a silent fail-open of
+   * exactly the kind this PR keeps finding. Required makes that a
+   * type error instead. CodeRabbit on PR #449.
+   */
+  readonly requirementSetToken: string;
   readonly ownerUid: string;
   readonly applicationId: string;
   readonly asset: AssetRef;
@@ -104,6 +127,7 @@ export async function runGenerateResume(
     ownerUid: ctx.ownerUid,
     applicationId: ctx.applicationId,
     asset,
+    requirementSetToken: result.requirement_set_token,
   });
 
   return {
@@ -132,6 +156,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
     }
     const app = snap.data() as {
       owner_uid?: string;
+      role_id?: string;
       generated_assets?: AssetRef[];
     };
     if (app.owner_uid !== ownerUid) {
@@ -144,6 +169,136 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
         `Application ${applicationId} not found during persist.`,
       );
     }
+    // Re-verify the grounding INSIDE the transaction (#442,
+    // Codex P1 on PR #449).
+    //
+    // Exactly the discipline the ownership re-check above already
+    // applies, pointed at a different invariant. `loadInputs`
+    // reads Requirements and matches through plain parallel
+    // queries, so a JD re-parse that commits between that read
+    // and this persist leaves the eligibility gate having
+    // approved grounding that has since evaporated — and the
+    // window is the entire LLM call, which runs for minutes. A
+    // second tab or a direct callable invocation is enough.
+    //
+    // Doing it as a transactional READ rather than a fresh
+    // `get()` is what makes it hold instead of merely narrowing
+    // the window: `writeRequirementsAsBatch` replaces
+    // Requirements in a transaction over this same query, so a
+    // re-parse racing this persist puts the two in contention and
+    // one of them retries against the other's committed state.
+    //
+    // Reads must precede writes in a Firestore transaction, and
+    // these are issued sequentially rather than through
+    // `Promise.all` to keep that ordering unambiguous.
+    // **Absent inputs REJECT; they do not skip.**
+    //
+    // The first version guarded with `if (roleId && content)`,
+    // which made a missing `role_id` a reason to bypass every
+    // check and append the asset anyway. `firestore.rules` permits
+    // owner-preserving Application updates, so an authenticated
+    // owner clearing `role_id` mid-generation was enough to walk
+    // straight past the guard this transaction exists to enforce.
+    // A validation step whose absent-input path is "allow" is not
+    // a validation step. Codex P1 on PR #449.
+    //
+    // Neither field can legitimately be missing here: the resume
+    // path always sets `generated_content`, and `defaultLoadInputs`
+    // could not have produced a result without resolving the
+    // Role from `role_id`. So both are hard failures.
+    const roleId = app.role_id;
+    const content = asset.generated_content;
+    if (typeof roleId !== "string" || roleId.length === 0) {
+      throw new GenerateResumeGroundingStale(
+        `Application ${applicationId} has no role_id at persist time, so ` +
+          `the generated content cannot be verified against the Role's ` +
+          `current requirements. Nothing was saved.`,
+      );
+    }
+    if (content === undefined) {
+      throw new GenerateResumeGroundingStale(
+        `Generated asset for application ${applicationId} carries no ` +
+          `content to verify. Nothing was saved.`,
+      );
+    }
+    {
+      const reqSnap = await tx.get(
+        db
+          .collection(REQUIREMENTS_COLLECTION)
+          .where("owner_uid", "==", ownerUid)
+          .where("role_id", "==", roleId),
+      );
+      const matchSnap = await tx.get(
+        db
+          .collection(MATCHES_COLLECTION)
+          .where("owner_uid", "==", ownerUid)
+          .where("role_id", "==", roleId)
+          .where("approved_for_use", "==", true),
+      );
+      const requirements = reqSnap.docs.map(
+        (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
+      );
+
+      // Identity of the SET, not just of the cited grounding.
+      //
+      // `findStaleGroundingId` reduces both sides to Unit ids, so
+      // it cannot distinguish "still grounded" from "a different
+      // requirement now grounds the same Unit" — a re-parse
+      // followed by the user approving a freshly computed match
+      // for that Unit makes the citation look live while the
+      // artifact was written for requirements that are gone.
+      // Codex P1 on PR #449, after the first revalidation landed.
+      //
+      // Both checks stay: this one catches a changed Requirement
+      // set, the other catches a citation losing its approved
+      // match (an un-approval mid-flight) without the set moving.
+      // The remedy depends on what the re-parse produced. Against
+      // an EMPTY Requirement set, re-running matching can only
+      // discard the surviving matches — and `MatchesTab`
+      // deliberately hides that control in this state, so naming
+      // it would be both unavailable and ineffective. Same
+      // distinction the pre-generation gate already makes. Codex
+      // P2 on PR #449.
+      const remedy =
+        requirements.length === 0
+          ? `This Role now has no requirements at all; parse the job ` +
+            `description again on the Requirements tab.`
+          : `Re-run matching on the Matches tab and generate again.`;
+      const tokenChanged =
+        requirementSetToken(requirements) !== params.requirementSetToken;
+      if (tokenChanged) {
+        throw new GenerateResumeGroundingStale(
+          `This Role's requirements changed while the resume was being ` +
+            `generated — the job description was re-parsed, so the content ` +
+            `was written against requirements that no longer exist. Nothing ` +
+            `was saved. ${remedy}`,
+        );
+      }
+
+      const staleId = findStaleGroundingId(
+        content,
+        matchSnap.docs.map((d) => ({ ...(d.data() as UnitMatch), id: d.id })),
+        requirements,
+      );
+      if (staleId !== null) {
+        // Reached only when the Requirement set is UNCHANGED —
+        // the token check above already handled a re-parse. So
+        // the cause is on the match side: the user unapproved or
+        // deleted the cited match mid-generation. Saying "the job
+        // description was re-parsed" would misdiagnose it, and
+        // "re-run matching" is worse than useless — a rerun
+        // carries the unapproved decision forward for that pair,
+        // so generation stays blocked. Codex P2 on PR #449.
+        throw new GenerateResumeGroundingStale(
+          `Generated content cites Experience Unit ${staleId}, which no ` +
+            `longer has an approved match for this Role — the match it was ` +
+            `grounded on was unapproved or removed while this resume was ` +
+            `being generated. Nothing was saved; approve a current match ` +
+            `for that Unit on the Matches tab, or generate again without it.`,
+        );
+      }
+    }
+
     const assets = app.generated_assets ?? [];
     tx.update(ref, {
       generated_assets: [...assets, asset],
@@ -164,5 +319,24 @@ export class GenerateResumePersistNotFound extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GenerateResumePersistNotFound";
+  }
+}
+
+/**
+ * Thrown when the grounding a generated asset cites stopped
+ * holding between the LLM call and the persist — in practice, a
+ * JD re-parse replaced the Role's Requirements mid-generation and
+ * stranded the approved matches the content was grounded on.
+ *
+ * Nothing is written: the transaction aborts, so the user loses
+ * the generation rather than gaining an artifact that cites
+ * requirements the job description no longer contains. The
+ * callable maps this to `failed-precondition`, alongside the
+ * other "your inputs are not ready" refusals.
+ */
+export class GenerateResumeGroundingStale extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GenerateResumeGroundingStale";
   }
 }

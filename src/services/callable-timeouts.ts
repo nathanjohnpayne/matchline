@@ -46,6 +46,7 @@ export const CALLABLE_TIMEOUT_MS = {
    */
   reembedExperienceUnit: 150_000,
   runMatching: 150_000,
+  deriveMatchEvidence: 150_000,
 } as const;
 
 export type CallableName = keyof typeof CALLABLE_TIMEOUT_MS;

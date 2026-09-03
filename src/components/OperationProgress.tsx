@@ -65,6 +65,7 @@ export default function OperationProgress({
   // negative elapsed time.
   const elapsedMs = Math.max(0, now - startedAt);
   const retrying = event?.stage === "analyzing" && (event.attempt ?? 1) > 1;
+  const statusText = progressMessage(event, vocabulary);
 
   return (
     <div className="space-y-2" data-testid={testId}>
@@ -72,6 +73,13 @@ export default function OperationProgress({
         role="progressbar"
         aria-label={label}
         aria-busy="true"
+        // Dynamic `aria-valuetext`, not just a static label. The bar is
+        // intentionally indeterminate (no aria-valuenow), so valuetext
+        // is the only channel that carries the stage and retry count to
+        // a screen reader. RequirementsTab previously supplied a static
+        // one and replacing it with visual-only text was a regression —
+        // Codex P2 on PR #436.
+        aria-valuetext={statusText}
         data-testid={`${testId}-bar`}
         className="h-0.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
       >
@@ -85,6 +93,12 @@ export default function OperationProgress({
       </div>
       <div className="flex items-baseline justify-between gap-4 text-xs">
         <span
+          // `role="status"` + polite live region so stage and retry
+          // changes are announced as they happen. Assertive would
+          // interrupt; these are informational, and the operation can
+          // run for minutes.
+          role="status"
+          aria-live="polite"
           data-testid={`${testId}-message`}
           data-stage={event?.stage ?? "unknown"}
           className={
@@ -93,7 +107,7 @@ export default function OperationProgress({
               : "text-zinc-600 dark:text-zinc-400"
           }
         >
-          {progressMessage(event, vocabulary)}
+          {statusText}
         </span>
         <span
           data-testid={`${testId}-elapsed`}

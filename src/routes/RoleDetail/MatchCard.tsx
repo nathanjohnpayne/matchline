@@ -45,6 +45,7 @@ import {
   type MatchApprovalState,
 } from "../../services/matches.ts";
 
+import { isRationaleTrustworthy } from "./matchProvenance.ts";
 import MatchScoreBadge from "./MatchScoreBadge.tsx";
 
 export interface MatchCardProps {
@@ -56,11 +57,29 @@ export interface MatchCardProps {
   ) => void;
 }
 
+// The rationale-provenance predicate moved to
+// `./matchProvenance.ts` (#444). It used to live here and ask
+// whether `component_applicability` was present — correct, but
+// a coincidence used as a contract: nothing declared that the
+// field and the rationale's axis-gating shipped together, so
+// nothing could break it loudly. The rule is now a declared
+// `schema_version` plus a dated bridge for #435-era rows.
+//
+// The user-facing copy below still deliberately states NO
+// remedy. The obvious line — "re-run matching to regenerate
+// it" — describes an action that can destroy data: a rematch
+// clear-and-replaces the Role's match set, and Units that are
+// `reembed_pending` are excluded from scoring, so their rows
+// are deleted with no replacement and the user's approve and
+// reject flags go with them. Flagged by nathanpayne-codex in
+// the Phase 4b review of #438.
+
 export default function MatchCard({
   match,
   unit,
   onApprovalStateChange,
 }: MatchCardProps): ReactElement {
+  const rationaleIsTrustworthy = isRationaleTrustworthy(match);
   const state = approvalStateOf(match);
 
   const onClickApprove = () => {
@@ -93,17 +112,31 @@ export default function MatchCard({
         <MatchScoreBadge
           finalScore={match.final_score}
           components={match.components}
+          componentApplicability={match.component_applicability}
           confidence={unit !== null ? unit.confidence_score : null}
         />
       </header>
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
-        <span className="font-medium">Why: </span>
-        {match.rationale}
-      </p>
-      <p className="text-xs text-zinc-600 dark:text-zinc-400">
-        <span className="font-medium">Evidence: </span>
-        <q className="italic">{match.surface_evidence}</q>
-      </p>
+      {rationaleIsTrustworthy ? (
+        <>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">
+            <span className="font-medium">Why: </span>
+            {match.rationale}
+          </p>
+          <p className="text-xs text-zinc-600 dark:text-zinc-400">
+            <span className="font-medium">Evidence: </span>
+            <q className="italic">{match.surface_evidence}</q>
+          </p>
+        </>
+      ) : (
+        <p
+          className="text-xs italic text-zinc-500"
+          data-testid="match-rationale-untrusted"
+        >
+          Explanation unavailable — this match predates the check that stops a
+          rationale describing an axis the engine never evaluated, so its
+          stored wording can&rsquo;t be trusted. The score above is unchanged.
+        </p>
+      )}
       <footer className="flex items-center gap-2 pt-1">
         <button
           type="button"

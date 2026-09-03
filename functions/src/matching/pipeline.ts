@@ -48,6 +48,22 @@ import {
   type ScoreResult,
 } from "./score.js";
 
+/**
+ * Version stamped on every UnitMatch this pipeline writes (#444).
+ *
+ * Bump when a change alters what a reader may conclude from a
+ * persisted row — not for every schema addition. Version 1 means:
+ * `components` and `component_applicability` are present, and the
+ * `rationale` was generated under #435's axis-gating, so it may be
+ * shown to the user as a claim.
+ *
+ * `src/routes/RoleDetail/matchProvenance.ts` holds the reader's
+ * copy of this number; `tests/match-schema-version.test.ts` is the
+ * only tsconfig project spanning both packages and pins them
+ * together. Same arrangement as the callable timeout tables.
+ */
+export const MATCH_SCHEMA_VERSION = 1;
+
 const COLLECTION = "unitMatches";
 const ROLES_COLLECTION = "roles";
 const REQUIREMENTS_COLLECTION = "jobRequirementUnits";
@@ -215,6 +231,22 @@ export async function runMatchingPipeline(
         // type contract aligned with `ScoreComponents`'s
         // canonical shape in `../types/capability.ts`.
         components: { ...result.components },
+        // Whether the Requirement constrained any axis the
+        // engine could evaluate. Consumed by `computeGaps`
+        // so a must-have with no evaluable signal can't be
+        // reported as covered off neutral credit alone
+        // (Codex P1 round 1 on PR #435).
+        structural_evidence: result.structural_evidence,
+        // Per-axis applicability, so the breakdown tooltip can
+        // render an unevaluated axis as unavailable instead of
+        // presenting its neutral as a measured score.
+        component_applicability: { ...result.component_applicability },
+        // Declares what a reader may conclude from this row —
+        // notably that `rationale` was generated under the
+        // axis-gated rule and can be presented as a claim (#444).
+        // Deliberately not carried forward: a rerun re-derives
+        // everything, so it must stamp the current version.
+        schema_version: MATCH_SCHEMA_VERSION,
         // Rationale + surface_evidence populated by #100's
         // deterministic generator. Cached on the doc so the
         // Matches tab (#21) doesn't re-render compute.

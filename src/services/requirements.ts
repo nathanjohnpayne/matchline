@@ -26,7 +26,8 @@ import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
 import { callableOptions } from "./callable-timeouts.ts";
-import { parseProgressEvent, type ProgressEvent } from "./progress.ts";
+import { type ProgressEvent } from "./progress.ts";
+import { invokeStreaming } from "./streamCall.ts";
 import type { JobRequirementUnit } from "../types/capability.ts";
 
 export interface ParseJobRequirementsResponse {
@@ -74,21 +75,11 @@ export async function invokeParseJobRequirements(
     return result.data;
   }
 
-  // Streaming path — see `invokeExtractFromResume` for why the
-  // deadline has to be re-supplied as an AbortSignal here (#428).
-  const { stream, data } = await fn.stream(
-    { roleId, text },
-    {
-      signal: AbortSignal.timeout(
-        callableOptions("parseJobRequirements").timeout,
-      ),
-    },
-  );
-
-  for await (const chunk of stream) {
-    const event = parseProgressEvent(chunk);
-    if (event !== null) onProgress(event);
-  }
-
-  return await data;
+  // Streaming path (#428); see `streamCall.ts` for the subtleties it
+  // handles on behalf of both call sites.
+  return await invokeStreaming(fn, {
+    payload: { roleId, text },
+    timeoutMs: callableOptions("parseJobRequirements").timeout,
+    onProgress,
+  });
 }

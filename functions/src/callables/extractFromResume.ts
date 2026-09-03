@@ -54,16 +54,28 @@ export const extractFromResumeCallable = onCall(
     }
 
     try {
-    // `response` is undefined for a non-streaming invocation, and
-    // `sendChunk` resolves false rather than throwing when the request
-    // did not ask for a stream — so emitting unconditionally is safe
-    // and an older client is unaffected. `safeProgress` in
-    // llm/progress.ts additionally guarantees a rejected send (client
-    // disconnected mid-call) cannot fail work already paid for.
+      // Streaming progress (#428). Emitting is unconditional and safe:
+      // `response` is undefined for a non-streaming invocation, and
+      // `sendChunk` resolves false rather than throwing when the
+      // request did not ask for a stream, so an older client is
+      // unaffected.
+      //
+      // `.catch`, not `void`. `sendChunk` returns a promise that can
+      // reject asynchronously on a write error — a client that
+      // disconnected mid-call is the common case — and by then
+      // `safeProgress`'s synchronous try/catch has already returned,
+      // so it cannot see it. A discarded rejection becomes an
+      // unhandled rejection, which on Node 20 can terminate an
+      // otherwise successful, already-paid-for call. Codex P1 on
+      // PR #436.
       const units = await runExtractionPipeline(
         text,
         { ownerUid: request.auth.uid },
-        { onProgress: (event) => void response?.sendChunk(event) },
+        {
+          onProgress: (event) => {
+            response?.sendChunk(event).catch(() => {});
+          },
+        },
       );
       return { units };
     } catch (err) {

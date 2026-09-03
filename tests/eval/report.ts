@@ -45,6 +45,12 @@ export interface EvalReport {
     readonly totalModeledCostUsd?: number | null;
   };
   /**
+   * Token source that produced this run (#389). Present whenever the
+   * harness knows it, so a subscription-billed report is not mistaken
+   * for a metered one.
+   */
+  readonly tokenSource?: string;
+  /**
    * Stage-cache rollup for the run (#389). Omitted when caching is
    * off, so a `--no-cache` run's report is byte-identical to the
    * pre-#389 shape.
@@ -78,7 +84,10 @@ export interface EvalReport {
  */
 export function formatReport(report: EvalReport): string {
   const lines: string[] = [];
-  lines.push(`# Matchline eval — mode: ${report.mode}`);
+  lines.push(
+    `# Matchline eval — mode: ${report.mode}` +
+      (report.tokenSource !== undefined ? `  token-source: ${report.tokenSource}` : ""),
+  );
 
   if (report.promptVersions && report.promptVersions.length > 0) {
     lines.push("");
@@ -96,6 +105,13 @@ export function formatReport(report: EvalReport): string {
   } else {
     lines.push("");
     lines.push("## Per-fixture");
+    // Codex P2: a CLI-measured modeled cost comes from
+    // `estimateTokens`' ~4-chars-per-token approximation, not metered
+    // token counts. `formatSweepReport` marks those with `~`; this
+    // formatter labeled only the latency, so the plain report's
+    // uncached figures read as exact. Same `~` convention here, so the
+    // two reports agree about what is measured and what is estimated.
+    const est = report.tokenSource !== undefined && report.tokenSource !== "api" ? "~" : "";
     for (const r of report.fixtureResults) {
       // Show the modeled cost alongside real spend only when the two
       // differ — on a cold run they're equal and the extra column is
@@ -104,7 +120,7 @@ export function formatReport(report: EvalReport): string {
         r.modeledCostUsd !== undefined &&
         r.modeledCostUsd !== null &&
         r.modeledCostUsd !== r.costUsd
-          ? ` (uncached ${fmtUsd(r.modeledCostUsd)})`
+          ? ` (uncached ${est}${fmtUsd(r.modeledCostUsd)})`
           : "";
       lines.push(
         `- ${r.id.padEnd(30)} extraction=${fmtPct(r.extractionAccuracy)} ` +
@@ -119,6 +135,26 @@ export function formatReport(report: EvalReport): string {
     lines.push(
       `latency p50 / p95:          ${fmtMs(report.aggregate.latencyP50)} / ${fmtMs(report.aggregate.latencyP95)}`,
     );
+    // Codex P2: the cache caveat below covers a WARM run, but a COLD
+    // CLI run reaches this line just as misleadingly. Those timings
+    // carry agent startup and tool-loop overhead a production API call
+    // never pays — the sweep formatter measured 399s on an extraction
+    // the API serves far faster — so a bare p50/p95 here reads as
+    // production-comparable when it is not. The sweep already refuses
+    // to rank on CLI latency for exactly this reason; the plain report
+    // should not present it unlabeled either. Both caveats can apply,
+    // and both print.
+    if (report.tokenSource !== undefined && report.tokenSource !== "api") {
+      lines.push(
+        `  ⚠️  NOT a production latency reading — \`${report.tokenSource}\` timings include`,
+      );
+      lines.push(
+        "      agent startup and tool-loop overhead a production API call never pays.",
+      );
+      lines.push(
+        "      Verify the <20s p95 target on --token-source api.",
+      );
+    }
     // Codex P2 round 2: a warm run reaches this line having served
     // extraction, parsing, and embeddings from disk, so the elapsed
     // time is matching-only. Printed bare, the aggregate could appear
@@ -149,9 +185,12 @@ export function formatReport(report: EvalReport): string {
       report.aggregate.totalModeledCostUsd !== null &&
       report.aggregate.totalModeledCostUsd !== report.aggregate.totalCostUsd
     ) {
+      const aggEst =
+        report.tokenSource !== undefined && report.tokenSource !== "api" ? "~" : "";
       lines.push(
-        `total uncached cost:        ${fmtUsd(report.aggregate.totalModeledCostUsd)}  ` +
-          `(what this config costs with a cold cache)`,
+        `total uncached cost:        ${aggEst}${fmtUsd(report.aggregate.totalModeledCostUsd)}  ` +
+          `(what this config costs with a cold cache` +
+          `${aggEst ? "; ~ = estimated from a ~4-chars-per-token approximation" : ""})`,
       );
     }
     if (report.cache) {

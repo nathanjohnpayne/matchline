@@ -80,6 +80,34 @@ export interface BreakdownRow {
   readonly weight: number;
   /** `value × weight` — what this row contributes to the final number. */
   readonly contribution: number;
+  /**
+   * Did the engine actually evaluate this axis for this pair?
+   *
+   * `false` means `value` is a no-constraint neutral rather than
+   * a measurement, and the row must NOT be rendered as a score:
+   * "Skill 0.50 × 0.20 = 0.100" tells the user they achieved 50%
+   * overlap on a comparison that never happened, which is the
+   * opposite of what the spec's neutral-fallback rule requires.
+   * Codex P2 on #435.
+   *
+   * Legacy rows (no persisted `component_applicability`) default
+   * to `false`. My first pass defaulted them to `true` on the
+   * claim that pre-#430 components "hard-zeroed unevaluated
+   * axes rather than paying a neutral" — that is wrong, and it
+   * is the second time I have made it. The old scorer stored
+   * `0.5` for both-empty Jaccard axes and `1.0` for
+   * unconstrained seniority and scope, so legacy rows contain
+   * exactly the neutrals this flag exists to suppress. During
+   * the backfill window — or permanently, if the backfill
+   * fails — a `true` default would put ignorance back on screen
+   * as measured overlap. Codex P2 on #435.
+   *
+   * The cost of the conservative default is that a legacy row
+   * shows no per-axis numbers until matching reruns, which is
+   * the honest state: we cannot tell which of its components
+   * were measured.
+   */
+  readonly evaluated: boolean;
 }
 
 /**
@@ -90,6 +118,7 @@ export interface BreakdownRow {
  */
 export function buildBreakdownRows(
   components: ScoreComponents | undefined,
+  applicability?: Readonly<Record<keyof ScoreComponents, boolean>>,
 ): readonly BreakdownRow[] | null {
   if (components === undefined) return null;
   return COMPONENT_DISPLAY_ORDER.map((key) => {
@@ -101,6 +130,7 @@ export function buildBreakdownRows(
       value,
       weight,
       contribution: value * weight,
+      evaluated: applicability?.[key] ?? false,
     };
   });
 }

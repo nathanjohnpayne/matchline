@@ -101,3 +101,71 @@ describe("buildBreakdownRows", () => {
     ]);
   });
 });
+
+describe("buildBreakdownRows: axis applicability (Codex P2 on #435)", () => {
+  const components: ScoreComponents = {
+    semantic_similarity: 0.45,
+    skill_overlap: 0.5,
+    domain_overlap: 0.5,
+    tool_overlap: 0.5,
+    seniority_alignment: 1,
+    scope_alignment: 1,
+    recency: 1,
+  };
+
+  it("marks unevaluated axes so the tooltip can't present a neutral as a score", () => {
+    // The out-of-domain case: the Requirement named nothing the
+    // canonical vocabulary recognizes, so skill/domain/tool hold
+    // the 0.5 no-constraint neutral. Rendering that as
+    // "0.50 x 0.20 = 0.100" tells the user they achieved 50%
+    // overlap on a comparison that never ran.
+    const rows = buildBreakdownRows(components, {
+      semantic_similarity: true,
+      skill_overlap: false,
+      domain_overlap: false,
+      tool_overlap: false,
+      seniority_alignment: false,
+      scope_alignment: false,
+      recency: true,
+    })!;
+    const byKey = new Map(rows.map((r) => [r.key, r]));
+    expect(byKey.get("skill_overlap")!.evaluated).toBe(false);
+    expect(byKey.get("domain_overlap")!.evaluated).toBe(false);
+    expect(byKey.get("tool_overlap")!.evaluated).toBe(false);
+    expect(byKey.get("seniority_alignment")!.evaluated).toBe(false);
+    expect(byKey.get("scope_alignment")!.evaluated).toBe(false);
+    expect(byKey.get("semantic_similarity")!.evaluated).toBe(true);
+    expect(byKey.get("recency")!.evaluated).toBe(true);
+  });
+
+  it("keeps the raw value and weight on an unevaluated row", () => {
+    // The row still carries its stored numbers — the renderer
+    // decides not to show them. Dropping them here would make
+    // the helper lossy for any future consumer.
+    const rows = buildBreakdownRows(components, {
+      semantic_similarity: true,
+      skill_overlap: false,
+      domain_overlap: true,
+      tool_overlap: true,
+      seniority_alignment: true,
+      scope_alignment: true,
+      recency: true,
+    })!;
+    const skill = rows.find((r) => r.key === "skill_overlap")!;
+    expect(skill.value).toBe(0.5);
+    expect(skill.weight).toBe(0.2);
+    expect(skill.contribution).toBeCloseTo(0.1, 10);
+  });
+
+  it("treats legacy rows (no applicability persisted) as UNEVALUATED", () => {
+    // Deliberately conservative. Pre-#430 rows contain the very
+    // neutrals this flag suppresses — both-empty Jaccard stored
+    // 0.5, unconstrained seniority and scope stored 1.0 — so a
+    // permissive default would put ignorance back on screen as
+    // measured overlap during the backfill window, or forever if
+    // the backfill fails. Showing no per-axis numbers until
+    // matching reruns is the honest state.
+    const rows = buildBreakdownRows(components)!;
+    expect(rows.every((r) => r.evaluated)).toBe(false);
+  });
+});

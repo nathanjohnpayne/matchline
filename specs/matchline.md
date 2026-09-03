@@ -79,7 +79,19 @@ Acceptance criteria:
   `confidence_score`; a low-confidence Unit can never produce a
   high-confidence match.
 - The Role Detail → Matches tab surfaces ranked matches with scores,
-  rationales, and a specific `surface_evidence` string.
+  rationales, and a specific `surface_evidence` string — **except where
+  the stored explanation cannot be trusted.** A match written before the
+  rationale was restricted to axes the engine actually evaluated may
+  describe a comparison that never happened, so its rationale and
+  `surface_evidence` are withheld and the card says so. The score, the
+  ranking, and the approve/reject actions are unaffected; only the
+  explanation is suppressed.
+
+  Withholding is deliberate and follows from the neutral-fallback rule
+  below: an explanation that may describe an unevaluated axis is a
+  claim the data does not support, and no explanation is better than a
+  false one. The card offers no remedy, because the only rematch path
+  available today is destructive.
 - Requirements with no qualifying match appear in an explicit **Gaps**
   view, not hidden.
 - No match is auto-approved. Generation uses only matches with
@@ -129,7 +141,34 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+  - `components`, `structural_evidence` and `component_applicability`
+    are **optional**: records written before those fields existed carry
+    none of them, and the coverage gate depends on being able to
+    recognize such a record. A rerun of matching populates all three.
+    A record missing `structural_evidence` is resolved on read by the
+    derivation below, and falls back to its pre-existing coverage
+    behaviour when no verdict is available — never to a stricter
+    reading, so neither deploying the gate nor a failed derivation can
+    make an already-matched Role sprout gaps.
+  - `schema_version` declares what a reader may conclude from the
+    record. Version 1 means `components` and `component_applicability`
+    are present and the `rationale` was generated under the axis-gated
+    rule, so it may be presented to the user as a claim. **Provenance
+    must be read from this field, never inferred from another field's
+    presence** — an inference that happens to hold because two things
+    shipped together is a coincidence, not a contract, and cannot fail
+    loudly when it stops holding. Records written before the field
+    existed but carrying `component_applicability` are also
+    trustworthy; that bridge is explicit and ends once every Role has
+    been re-matched.
+  - `component_applicability` records, per axis, whether the engine
+    actually evaluated it for this pair. A `false` axis means the
+    corresponding value in `components` is a no-constraint neutral, and
+    **no consumer may present it as a measurement** — the breakdown
+    renders it as unavailable rather than as a score. When the field is
+    absent, readers must assume nothing was measured: pre-existing
+    records store the same neutrals without marking them.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
 
 ### Invariants
@@ -137,7 +176,18 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `ExperienceUnit.user_approved == true` is required for the Unit to
   enter any match or generation pipeline.
 - `UnitMatch.approved_for_use == true` is required for the match to
-  contribute to generation.
+  contribute to generation, and is **not sufficient**: the match's
+  `job_requirement_unit_id` must still resolve to a Requirement the
+  Role currently has. A JD re-parse replaces the Requirement set under
+  new ids, so an approved match can outlive the requirement it
+  answered; grounding a generated claim on one would assert relevance
+  to something the job description no longer asks for. Such matches are
+  refused at generation rather than deleted — the approval is the
+  user's decision to keep, and a rematch may well reinstate the pair.
+  The check is applied again inside the persist transaction, because
+  the inputs are read minutes before the artifact is written and a
+  re-parse can land in between; a generation whose grounding stops
+  holding mid-flight is discarded rather than saved.
 - `Application.approved_unit_ids` is a snapshot of the Units used to
   generate a specific artifact. Changing a Unit later must not mutate
   a historical Application's grounding set.
@@ -167,7 +217,77 @@ Acceptance criteria:
 - Recency is exponential decay on the Unit's end date, floored so
   ancient-but-relevant experience still contributes.
 - Skill, tool, and domain overlaps use Jaccard similarity on canonical
-  vocabularies normalized at extraction time.
+  vocabularies normalized at extraction time. The empty-set case is
+  **directional**: when the Requirement side carries nothing the
+  canonical vocabulary recognizes, the axis places no evaluable
+  constraint and scores a neutral `0.5`; when the Requirement side is
+  populated and the Unit's is empty, the axis scores `0.0`. An
+  unrecognized Requirement must not be scored as a candidate
+  deficiency — that inversion made an out-of-domain Role unmatchable
+  in principle (#430).
+- Every neutral fallback in the scoring layer is a **statement of
+  ignorance, not a measurement**, and no consumer may read it as
+  evidence. This covers the Jaccard neutral above, the `1.0` that
+  seniority and scope alignment return when the Requirement doesn't
+  constrain them, the `0.5` seniority alignment returns when a Unit's
+  signals are all unmapped by the ladder, and the `0.5` recency
+  returns when a Unit carries no usable date.
+- The rule is about MEANING, not about values. Seniority alignment
+  also returns a hard `0` when a Unit has no seniority signals at
+  all, and that IS a measurement — "no evidence of meeting the bar" —
+  so it must be presented as one. Only the signals-present-but-
+  unmapped case is ignorance. A consumer that keys off the number
+  rather than the reason will get this backwards.
+- `UnitMatch.structural_evidence` records, per (Unit, Requirement)
+  pair, whether the Unit scored above zero on at least one axis the
+  Requirement actually constrains. It is a property of the pair, not
+  of the Requirement: a Requirement naming one recognized term must
+  not mark every Unit as evidenced. Seniority counts only when the
+  Unit carries a ladder-mapped signal, since the mapped and unmapped
+  cases produce an identical `0.5`.
+- A must-have Requirement is **covered** only by a non-rejected match
+  that both clears the score threshold and carries
+  `structural_evidence`. Semantic similarity alone cannot establish
+  coverage: embedding proximity with no shared skill, tool, domain,
+  seniority or scope vocabulary is what produces
+  plausible-but-unfounded generated claims downstream. Such matches
+  still rank and still render — see the non-goals below — they simply
+  cannot silently satisfy a hard requirement.
+- Structural evidence for a record that lacks it is **derived on
+  read**, never backfilled by a write. The derivation recomputes the
+  five structural axes from the ID-linked Unit and Requirement, which
+  is possible because none of those axes reads an embedding, and
+  applies the same predicate the matcher applies at write time.
+  Persisted ids, `approved_for_use` and `user_rejected` are untouched
+  by it; an explicit rematch remains the only path that changes what
+  is stored.
+- The derivation has **three outcomes, not two**. Beyond evidenced and
+  unevidenced, a pair the matching pipeline would currently decline to
+  produce is **unverifiable** — a missing Unit or Requirement, a Unit
+  that is unapproved or awaiting re-embedding, either side lacking a
+  usable embedding, or two embeddings of incompatible dimensions. The test is whether a rematch would yield the
+  pair, not whether the structural axes can be computed: they can be
+  in every one of those cases, and answering anyway would outlive the
+  match the answer describes. A Requirement carrying only an unverifiable match
+  is reported distinctly from one carrying no match at all: they call
+  for different actions, and collapsing them either invents a gap the
+  user cannot act on or hides one they need to see.
+- Stored `structural_evidence` is **authoritative over any derived
+  verdict**. A derivation is a snapshot; the document is live, and a
+  snapshot that folded a value in at build time does not track it
+  afterwards.
+- A match whose Requirement no longer exists is reported at the Role
+  level rather than attributed to a surviving Requirement, and is
+  determined structurally — from whether the id is in the current
+  Requirement set — not from a derived verdict, so it holds for matches
+  of every vintage and needs no round trip. The
+  stranding is a consequence of the Requirement set being replaced
+  wholesale, so tying it to whichever Requirement remains would assert
+  a relationship that does not exist.
+- A derivation that cannot run degrades to the permissive reading and
+  says so, and the affirmative "every must-have is covered" statement
+  is withheld entirely until the check has actually run. Silence would let "every must-have has a qualifying match"
+  stand on a check that never happened.
 - Matching is nearly-free after embeddings exist; no per-match LLM call
   is required. Rationale strings may be LLM-generated but must be
   cached per `UnitMatch`.

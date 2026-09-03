@@ -37,7 +37,15 @@ import {
 } from "../../functions/src/prompts/loader.js";
 
 import { resolveCacheMode, StageCache } from "./cache.js";
+import {
+  claudeCliClient,
+  CLI_ADAPTER_VERSION,
+  isTokenSourceKind,
+  TOKEN_SOURCE_KINDS,
+  type TokenSourceKind,
+} from "./tokenSource.js";
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
+import { assertModelsPriced, parseVariants, runSweep } from "./sweep.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
 import { runForFixture, type RunForFixtureResult } from "./runForFixture.js";
 
@@ -69,6 +77,208 @@ function parseMode(argv: readonly string[]): Mode {
  * a `--samples 5 --full` run on a 100-cell labeled corpus
  * doesn't silently project 1× spend.
  */
+/**
+ * Cache-key discriminators for a token source.
+ *
+ * Codex P1: unconditionally adding `{ tokenSource }` changed all four
+ * stage hashes for ordinary `api` runs, because every entry written by
+ * the pre-#389 harness was keyed with NO discriminator. An operator
+ * upgrading with a fully warm cache would silently lose all of it and
+ * pay to re-warm — the exact cost #391 exists to remove.
+ *
+ * `api` therefore keeps the legacy keyspace (no discriminator), and
+ * only the CLI sources add one. That still gives the property the
+ * discriminator was introduced for: CLI-produced entries never collide
+ * with metered-API entries, which is what makes comparing them
+ * meaningful.
+ */
+export function cacheDiscriminatorsFor(
+  tokenSource: TokenSourceKind,
+): Readonly<Record<string, string>> | undefined {
+  // Codex P2: `tokenSource` alone pins WHICH adapter produced an entry,
+  // not WHICH VERSION of it. `cache.ts`'s STAGE_IMPL_VERSION covers the
+  // production pipeline and explicitly not this adapter, so without the
+  // version here a warm CLI cache keeps hitting after `tokenSource.ts`
+  // changes its prompt rewrite, flags, or response adaptation — and the
+  // sweep replays pre-change results through the path it was run to
+  // measure.
+  return tokenSource === "api"
+    ? undefined
+    : { tokenSource, cliAdapter: String(CLI_ADAPTER_VERSION) };
+}
+
+/** Flags that consume the following token as their value. */
+const FLAGS_WITH_VALUES: readonly string[] = [
+  "--samples",
+  "--prompt",
+  "--variant",
+  "--token-source",
+];
+
+/** Flags that stand alone; an `=value` on these is a mistake. */
+const BOOLEAN_FLAGS: readonly string[] = [
+  "--full",
+  "--smoke",
+  "--no-cache",
+  "--refresh-cache",
+];
+
+/** Every flag `main` understands. Anything else is an operator typo. */
+const KNOWN_FLAGS: readonly string[] = [...FLAGS_WITH_VALUES, ...BOOLEAN_FLAGS];
+
+/**
+ * Reject unrecognized argv before any dispatch decision is made.
+ *
+ * Codex P1: the per-parser guards each cover only their own
+ * neighbourhood — `parseTokenSource` rejects `--token-*`,
+ * `parseVariants` rejects `--variant*`. A typo missing those prefixes
+ * entirely (`--tokn-source claude-cli`, `--token_source claude-cli`)
+ * matched nothing, was silently ignored, and left `parseTokenSource`
+ * returning its `api` default. With both keys present `main` then
+ * dispatched a full corpus of METERED Anthropic calls for an operator
+ * who had asked to bill the run to a subscription.
+ *
+ * CodeRabbit P1: checking only `--`-prefixed tokens left the same hole
+ * open one keystroke further — `--full token-source claude-cli` (a
+ * dropped leading `--`) parsed as a stray positional, was ignored, and
+ * produced exactly the same silent metered run. Nothing else in the
+ * harness consumes positionals, so an unconsumed one is always a
+ * mistake. `--full=1` is rejected for the same reason: a value on a
+ * boolean flag means the operator believed it did something.
+ *
+ * A closed allowlist over BOTH shapes is the only form that closes the
+ * class; per-parser prefix checks can only catch typos near their own
+ * flag.
+ */
+export function assertKnownFlags(argv: readonly string[]): void {
+  const unknown: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (!arg.startsWith("--")) {
+      // Not consumed as a value below, so it is a stray positional.
+      unknown.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf("=");
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    if (!KNOWN_FLAGS.includes(name)) {
+      unknown.push(arg);
+      continue;
+    }
+    if (eq !== -1 && BOOLEAN_FLAGS.includes(name)) {
+      unknown.push(arg);
+      continue;
+    }
+    // Consume this flag's value so it is not read as a positional.
+    // Mirrors the parsers' own rule that a value never starts with
+    // `--`, so `--samples --full` still reaches parseSamples' error.
+    if (eq === -1 && FLAGS_WITH_VALUES.includes(name)) {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) i += 1;
+    }
+  }
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unrecognized argument(s): ${unknown.map((u) => JSON.stringify(u)).join(", ")}. ` +
+        `Known flags: ${KNOWN_FLAGS.join(", ")}. Refusing to run — an ignored ` +
+        `argument silently falls back to the metered API default, spending real ` +
+        `money on a run you may have meant to bill to a subscription.`,
+    );
+  }
+}
+
+/**
+ * Parse `--token-source <kind>` / `--token-source=<kind>`. Default
+ * `api`, so an unflagged run behaves exactly as before.
+ *
+ * Rejects an unknown kind or token-source option loudly: a typo that
+ * silently falls back to `api` would spend real money on a run the
+ * operator believed was subscription-billed.
+ */
+export function parseTokenSource(argv: readonly string[]): TokenSourceKind {
+  const read = (raw: string | undefined): TokenSourceKind => {
+    if (raw === undefined || raw.startsWith("--")) {
+      throw new Error(
+        `--token-source requires a value (one of ${TOKEN_SOURCE_KINDS.join(", ")})`,
+      );
+    }
+    if (!isTokenSourceKind(raw)) {
+      throw new Error(
+        `--token-source must be one of ${TOKEN_SOURCE_KINDS.join(", ")} (got ${JSON.stringify(raw)})`,
+      );
+    }
+    return raw;
+  };
+  // Codex P2: scan every occurrence rather than returning on the
+  // first. A composed command (a wrapper prepending `--token-source
+  // api`, a caller appending `--token-source claude-cli`) previously
+  // selected the wrapper's value silently — the metered API ran a
+  // billing source the caller explicitly overrode. Repeats of the
+  // SAME value are harmless (composition can legitimately produce
+  // them); a genuine conflict between two different values is a
+  // caller error and fails loudly rather than picking one silently.
+  let found: TokenSourceKind | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    let value: TokenSourceKind | undefined;
+    if (arg === "--token-source") {
+      value = read(argv[i + 1]);
+      i += 1;
+    } else if (arg.startsWith("--token-source=")) {
+      value = read(arg.slice("--token-source=".length));
+    } else if (arg.startsWith("--token-")) {
+      throw new Error(
+        `Unknown token-source option ${JSON.stringify(arg)}. Use --token-source.`,
+      );
+    }
+    if (value === undefined) continue;
+    if (found !== undefined && found !== value) {
+      throw new Error(
+        `--token-source specified with conflicting values (${found} vs ${value}); pass it once`,
+      );
+    }
+    found = value;
+  }
+  return found ?? "api";
+}
+
+/**
+ * Embeddings-only per-flow estimate, for runs whose LLM tokens come
+ * from a subscription CLI rather than the metered API.
+ *
+ * A flow embeds ~20 Unit summaries plus ~15 Requirement strings at
+ * ~50 tokens each — about 1,750 tokens, or ~$0.000035 at
+ * `text-embedding-3-small`'s $0.02/1M. The constant is ~30x that for
+ * headroom while staying three orders of magnitude under the generic
+ * per-flow figure.
+ *
+ * Codex P1: reusing the generic estimate's OpenAI share (30% of
+ * $0.75) for CLI runs projected $45 for a 10x10 corpus and refused it
+ * at the $23.75 threshold — blocking exactly the subscription-backed
+ * runs this exists to enable. This applies to the NORMAL path too,
+ * not just sweeps: a plain `--token-source claude-cli --full` was
+ * projecting $52.50 of Anthropic spend it never incurs.
+ */
+const PER_FLOW_EMBEDDINGS_ONLY_USD = 0.001;
+
+/**
+ * Planned spend, split by whether LLM tokens are metered. Anthropic
+ * spend is zero for a CLI source because those tokens come from the
+ * subscription, not the API budget the caps govern.
+ */
+export function estimateSpendForSource(
+  mode: Mode,
+  flowCount: number,
+  tokenSource: TokenSourceKind,
+): { anthropicUsd: number; openaiUsd: number; firebaseUsd: number } {
+  if (tokenSource === "api") return estimatePlannedSpend(mode, flowCount);
+  return {
+    anthropicUsd: 0,
+    openaiUsd: flowCount * PER_FLOW_EMBEDDINGS_ONLY_USD,
+    firebaseUsd: 0,
+  };
+}
+
 export function parseSamples(argv: readonly string[]): number {
   // Accept both `--samples 5` and `--samples=5`.
   for (let i = 0; i < argv.length; i++) {
@@ -270,6 +480,9 @@ function mean(values: readonly number[]): number | null {
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
+  // Codex P1: before ANY dispatch decision, including the metered-API
+  // default that an ignored `--token-source` typo silently selects.
+  assertKnownFlags(argv);
   const mode = parseMode(argv);
   const samples = parseSamples(argv);
   // Apply `--prompt stage/name=version` overrides BEFORE any
@@ -283,10 +496,34 @@ async function main(): Promise<number> {
   // `--samples N > 1` so repeated samples still measure real
   // run-to-run variance instead of replaying one cached answer N
   // times — see cache.ts § Sampling.
+  const tokenSource = parseTokenSource(argv);
+  // Parsed and pricing-validated up front so a malformed --variant
+  // fails loudly even on the no-keys stub path.
+  // Codex P3: `--varaint 'haiku:...'` was ignored, so `main` proceeded
+  // with an ordinary run that still spends the default model's tokens
+  // while producing none of the comparison the operator asked for.
+  for (const arg of argv) {
+    const flag = arg.split("=")[0]!;
+    if (flag !== "--variant" && /^--var/i.test(flag)) {
+      throw new Error(
+        `Unknown flag ${JSON.stringify(flag)} — did you mean --variant? ` +
+          `Refusing to run, because ignoring it would spend tokens on a ` +
+          `non-sweep run while looking like the sweep you asked for.`,
+      );
+    }
+  }
+  const variants = parseVariants(argv, tokenSource);
+  assertModelsPriced(variants);
   const cacheMode = resolveCacheMode(argv, samples);
   const cache = new StageCache({ mode: cacheMode });
   // Omitted from the report when caching is off, so a `--no-cache`
   // run's output stays byte-identical to the pre-#389 shape.
+  // Projection-guard baseline. Hoisted above the sweep branch so the
+  // sweep and the normal path share ONE definition — duplicating it
+  // is how the sweep came to bypass the guard entirely in the first
+  // place. Phase 1 (#41) replaces this mock with a real llm_calls
+  // aggregation.
+  const currentUsage = { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 };
   const cacheRollup = (): EvalReport["cache"] => {
     if (cacheMode === "bypass") return undefined;
     const s = cache.stats();
@@ -307,7 +544,12 @@ async function main(): Promise<number> {
   const haveOpenAiKey =
     typeof process.env.OPENAI_API_KEY === "string" &&
     process.env.OPENAI_API_KEY.length > 0;
-  const haveKeys = haveAnthropicKey && haveOpenAiKey;
+  // CLI token sources replace only Anthropic completion tokens;
+  // embeddings still call OpenAI. Requiring ANTHROPIC_API_KEY for a
+  // claude-cli run turned an otherwise authenticated subscription run
+  // into the no-key stub before the adapter could ever execute.
+  const hasLiveCredentials =
+    haveOpenAiKey && (tokenSource === "api" ? haveAnthropicKey : true);
 
 
   // Smoke mode pins to a SPECIFIC (resume, JD) pair via
@@ -339,6 +581,11 @@ async function main(): Promise<number> {
   );
 
   const fixtureResults: FixtureResult[] = [];
+  // Flow tallies for the all-failure exit check below. Counted from the
+  // raw per-sample results, because `FixtureResult` maps a failure to
+  // 0-accuracy rather than carrying an ok flag.
+  let attemptedFlows = 0;
+  let successfulFlows = 0;
   // Emit a "skipped" entry per unlabeled pair so the operator
   // sees the gap explicitly. `extractionAccuracy: null` and
   // `matchAccuracy: null` keep skipped cells out of the mean
@@ -375,19 +622,101 @@ async function main(): Promise<number> {
   // cache to be non-empty restores that contract exactly: nothing on
   // disk means nothing to serve, so fall back to the stub.
   const canAttemptOffline = cacheMode === "read-write" && cache.hasEntries();
-  const runnable = pairs.length > 0 && (haveKeys || canAttemptOffline);
+  const runnable = pairs.length > 0 && (hasLiveCredentials || canAttemptOffline);
   if (runnable) {
     // Codex P2: select each client on ITS OWN key. Gating both on
     // `haveKeys` meant a run with only ANTHROPIC_API_KEY set fell back
     // to placeholders for both providers, so an Anthropic cache miss
     // failed even though the key needed to fill it was right there —
     // directly contradicting the placeholder's own advice.
-    const anthropicClient = haveAnthropicKey
-      ? anthropicForCli()
-      : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
+    // The CLI sources satisfy the same `messages.create` shape the
+    // pipelines already inject, so nothing downstream changes. They
+    // take precedence over the key-based selection below because they
+    // do not use a key at all.
+    const anthropicClient =
+      tokenSource === "claude-cli"
+        ? claudeCliClient()
+        : haveAnthropicKey
+          ? anthropicForCli()
+          : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
     const openaiClient = haveOpenAiKey
       ? openaiForCli()
       : offlineOnlyClient<ReturnType<typeof openaiForCli>>("OpenAI", "OPENAI_API_KEY");
+    // -- Sweep mode --------------------------------------------------
+    // `--variant` turns the run into a matrix and prints a
+    // quality-vs-cost Pareto table instead of a single report.
+    if (variants.length > 0) {
+      const sweepFlows = pairs.length * samples * variants.length;
+      // Codex P2: the normal path scales by real cache state but this
+      // did not, so a warm sweep — which performs few or no paid
+      // calls — could be refused for spend it will never incur. The
+      // guard runs BEFORE the sweep, so it uses whatever the cache
+      // already holds from previous runs rather than this run's
+      // outcome; that is the conservative direction.
+      const sweepChecks = checkCaps(
+        currentUsage,
+        scaleSpendByProvider(
+          estimateSpendForSource(mode, sweepFlows, tokenSource),
+          cache.stats(),
+        ),
+        DEFAULT_CAPS,
+      );
+      if (shouldBlock(sweepChecks)) {
+        console.error(
+          `\nRefusing to sweep ${variants.length} variant(s) x ${pairs.length} pair(s) x ` +
+            `${samples} sample(s) = ${sweepFlows} flows: projection exceeds a monthly cap.\n` +
+            "Reduce --variant count, or use --token-source claude-cli so LLM tokens " +
+            "come from the subscription instead of the metered API.\n",
+        );
+        console.log(formatReport(buildReport(mode, fixtureResults, sweepChecks, cacheRollup(), tokenSource)));
+        return 1;
+      }
+      const runCorpus = async (): Promise<readonly RunForFixtureResult[]> => {
+        const out: RunForFixtureResult[] = [];
+        for (const pair of pairs) {
+          for (let i = 0; i < samples; i++) {
+            out.push(
+              await runForFixture(
+                {
+                  resumeFixtureId: pair.resume.replace(/\.txt$/, ""),
+                  jdFixtureId: pair.jd.replace(/\.txt$/, ""),
+                },
+                {
+                  anthropicClient,
+                  // Codex P2: only `api` is metered — CLI sources are
+                  // subscription-billed, so their Anthropic usage must
+                  // not count as real spend in `costUsd`.
+                  anthropicIsMetered: tokenSource === "api",
+                  openaiClient,
+                  cache,
+                  cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
+                },
+              ),
+            );
+          }
+        }
+        return out;
+      };
+      // Command-wide `--prompt` flags survive into every variant;
+      // variant-level prompt overrides layer on top.
+      const { results, report } = await runSweep(
+        variants,
+        { runCorpus },
+        { basePromptVersions: promptOverrides },
+      );
+      console.log(report);
+      // An all-failure sweep produced no usable measurements; CI and
+      // shell callers must not read that as success.
+      if (!results.some((r) => r.flows > 0 && r.failures < r.flows)) {
+        console.error(
+          "\nSweep produced no usable measurements: every flow failed in every " +
+            "variant. Check credentials, model availability, and the token source.\n",
+        );
+        return 1;
+      }
+      return 0;
+    }
+
     for (const pair of pairs) {
       // Strip `.txt` from the fixture filename to get the
       // fixture id (resumes/jds are always `<id>.txt`).
@@ -402,25 +731,59 @@ async function main(): Promise<number> {
         samplesForThisPair.push(
           await runForFixture(
             { resumeFixtureId, jdFixtureId },
-            { anthropicClient, openaiClient, cache },
+            {
+              anthropicClient,
+              // Codex P2: only `api` is metered — CLI sources are
+              // subscription-billed, so their Anthropic usage must
+              // not count as real spend in `costUsd`.
+              anthropicIsMetered: tokenSource === "api",
+              openaiClient,
+              cache,
+              // Keep API- and CLI-produced entries in separate
+              // keyspaces — comparing them is the point.
+              cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
+            },
           ),
         );
       }
+      // Codex P2: the sweep branch already refuses to report success
+      // when nothing measured, but the ordinary branch returned 0
+      // unconditionally. `runForFixture` turns every adapter exception
+      // into an `ok: false` row, so a `--token-source claude-cli` run
+      // against a missing, logged-out, or preflight-rejected Claude
+      // printed a table of failures and still exited 0 — CI and shell
+      // callers read that as a passing eval.
+      attemptedFlows += samplesForThisPair.length;
+      successfulFlows += samplesForThisPair.filter((r) => r.ok).length;
       fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
     }
+  } else if (variants.length > 0) {
+    // Codex P2: a requested sweep that cannot run used to print the
+    // ordinary no-key fixture listing and exit 0, so CI and shell
+    // callers read "produced no comparison at all" as success. If the
+    // operator asked for a matrix, silence is the wrong answer.
+    console.error(
+      `\nRefusing to sweep ${variants.length} variant(s): ` +
+        (pairs.length === 0
+          ? "no labeled (resume, JD) pairs are available. Label at least one pair under tests/fixtures/expected-matches/.\n"
+          : `credentials for --token-source ${tokenSource} are missing.\n`),
+    );
+    return 2;
   } else {
     // No API keys (or no JD fixtures yet) — list each
     // resume fixture without scoring. Same shape as the
     // pre-#136 Phase 0 stub.
-    const stubReason = haveKeys
+    const stubReason = hasLiveCredentials
       ? "no JD fixtures available — extraction + matching needs at least one (resume, JD) pair"
       : cacheMode === "read-write"
-        ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running for real scoring"
+        ? tokenSource === "api"
+          ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set — export both before running API scoring"
+          : "OPENAI_API_KEY not set — embeddings require it even with a subscription CLI token source"
         : // Keys absent AND the cache was explicitly disabled, so the
           // offline path isn't available either. Say which flag closed
           // it so the operator isn't left guessing (#389).
-          `ANTHROPIC_API_KEY and/or OPENAI_API_KEY not set, and the stage cache is ` +
-          `in ${cacheMode} mode so it cannot serve the run offline — export the keys, ` +
+          `${tokenSource === "api" ? "ANTHROPIC_API_KEY and/or OPENAI_API_KEY" : "OPENAI_API_KEY"} not set, and the stage cache is ` +
+          `in ${cacheMode} mode so it cannot serve the run offline — export the required key, ` +
           "or drop --no-cache/--refresh-cache/--samples so a warm cache can be used";
     for (const r of selectedResumes) {
       fixtureResults.push({
@@ -438,7 +801,6 @@ async function main(): Promise<number> {
   // always reports against the caps so the output shape is stable
   // and operators see the monthly picture. Phase 1 replaces the
   // zero-currentUsage mock with a real Firestore aggregation.
-  const currentUsage = { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 };
   // A flow is one (resume × JD) pair THAT WILL ACTUALLY RUN —
   // skipped pairs (no expected-matches label yet) don't dispatch
   // to the engine and therefore don't add to projected spend.
@@ -464,7 +826,7 @@ async function main(): Promise<number> {
   // actually needed a live call. This guard runs after execution, so
   // the real hit/miss split is already known.
   const plannedAdd = scaleSpendByProvider(
-    estimatePlannedSpend(mode, flowCount),
+    estimateSpendForSource(mode, flowCount, tokenSource),
     cache.stats(),
   );
   const capChecks = checkCaps(currentUsage, plannedAdd, DEFAULT_CAPS);
@@ -491,15 +853,27 @@ async function main(): Promise<number> {
       `\nRefusing to run ${refusedDescriptor}: projection exceeds a monthly cap.\n` +
         "Re-run with --smoke / smaller --samples or wait for next month's cap reset.\n",
     );
-    console.log(formatReport(buildReport(mode, fixtureResults, capChecks, cacheRollup())));
+    console.log(formatReport(buildReport(mode, fixtureResults, capChecks, cacheRollup(), tokenSource)));
     return 1;
   }
 
-  const report = buildReport(mode, fixtureResults, capChecks, cacheRollup());
+  const report = buildReport(mode, fixtureResults, capChecks, cacheRollup(), tokenSource);
   console.log(formatReport(report));
   console.log(
     `\n(fixtures available: ${resumeFixtures.length} resumes × ${jdFixtures.length} JDs)`,
   );
+
+  // Codex P2: mirror the sweep branch's all-failure guard. Gated on
+  // `attemptedFlows > 0` so the no-key and no-fixture listings — which
+  // legitimately measure nothing and legitimately exit 0 — are
+  // untouched.
+  if (attemptedFlows > 0 && successfulFlows === 0) {
+    console.error(
+      `\nRun produced no usable measurements: all ${attemptedFlows} flow(s) failed. ` +
+        "Check credentials, model availability, and the token source.\n",
+    );
+    return 1;
+  }
 
   return 0;
 }
@@ -694,6 +1068,7 @@ function buildReport(
   fixtureResults: readonly FixtureResult[],
   capChecks: ReturnType<typeof checkCaps>,
   cache?: EvalReport["cache"],
+  tokenSource?: string,
 ): EvalReport {
   const modeledCosts = fixtureResults
     .map((r) => r.modeledCostUsd)
@@ -731,6 +1106,10 @@ function buildReport(
     },
     promptVersions: resolvePromptVersionsForReport(),
     ...(cache !== undefined && { cache }),
+    // Codex P2: without this a `--token-source claude-cli` run's report
+    // was indistinguishable from a metered one, even though the source
+    // changes both execution and accounting.
+    ...(tokenSource !== undefined && { tokenSource }),
   };
 }
 
