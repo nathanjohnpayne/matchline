@@ -1,74 +1,175 @@
 #!/usr/bin/env bash
 # check_deploy_service_list (#441 follow-up)
 #
-# Every function exported from `functions/src/index.ts` becomes a Cloud
-# Run service on deploy, and every NEW one needs a manual
+# Every HTTP-triggered function exported from `functions/src/index.ts`
+# becomes a Cloud Run service that needs a manual
 # `--no-invoker-iam-check` before a browser can call it — `firebase
 # deploy` creates the service but cannot set its invoker policy.
 #
 # That step is documented in DEPLOYMENT.md § Cloud Run IAM
-# prerequisites, against an explicit list of service names. The list
+# prerequisites against an explicit list of service names. The list
 # went stale the moment #441 added `deriveMatchEvidence`, and nothing
-# noticed until the deploy failed: the function deployed fine, the
-# invoker policy did not, and the callable answered every browser
-# request with a CORS-preflight 403 that the SDK reports as a bare
-# `internal`.
+# noticed until the deploy: the function shipped fine, the invoker
+# policy did not, and the callable answered every browser request with
+# a CORS-preflight 403 that the SDK reports as a bare `internal`.
 #
-# So this check pins the doc against the code. It cannot verify what is
-# actually deployed — CI has no cloud credentials — but the drift that
-# bit us was the doc, not the cloud.
+# It cannot verify what is actually deployed — CI has no cloud
+# credentials — but the drift that bit us was the doc, not the cloud.
 #
-# Portability: stock macOS Bash 3.2, same constraint as the other
-# locally runnable checks here (no `mapfile`, no `\b`).
+# ## Why python3 rather than grep
+#
+# The first version used `grep | awk` over `^export const` and
+# `^export { X as Y }`. Three ways that was wrong, all found in review
+# on PR #452:
+#
+#   - It missed valid TypeScript: `export { foo }` with no alias,
+#     multi-symbol statements, and re-exports split across lines.
+#   - Under `set -o pipefail` a non-matching `grep | awk` returns 1,
+#     so a repo with one export style and not the other aborted the
+#     script *before* the "found no exports" guard could report it.
+#   - It treated EVERY export as needing a public invoker. A
+#     scheduled or Firestore-triggered function must not be made
+#     publicly invokable, so telling a maintainer to run
+#     `--no-invoker-iam-check` on one would be actively harmful advice.
+#
+# Parsing is a parsing job. python3 is already used by five sibling
+# checks here.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-INDEX="$ROOT/functions/src/index.ts"
-DOC="$ROOT/DEPLOYMENT.md"
 
-for f in "$INDEX" "$DOC"; do
-  if [ ! -r "$f" ]; then
-    echo "check_deploy_service_list: missing ${f#"$ROOT/"}" >&2
-    exit 1
-  fi
-done
+python3 - "$ROOT" <<'PY'
+import os, re, sys
 
-# Exported function names, both shapes the index uses:
-#   export const health = onRequest(...)
-#   export { xCallable as runMatching } from "./callables/x.js";
-names=$(
-  {
-    grep -oE '^export const [A-Za-z0-9_]+' "$INDEX" | awk '{print $3}'
-    grep -oE '^export \{ [A-Za-z0-9_]+ as [A-Za-z0-9_]+' "$INDEX" | awk '{print $5}'
-  } | sort -u
+root = sys.argv[1]
+index_path = os.path.join(root, "functions", "src", "index.ts")
+doc_path = os.path.join(root, "DEPLOYMENT.md")
+
+for p in (index_path, doc_path):
+    if not os.path.isfile(p):
+        sys.exit(f"check_deploy_service_list: missing {os.path.relpath(p, root)}")
+
+index_src = open(index_path, encoding="utf-8").read()
+
+# Strip comments so a commented-out export cannot register, and a
+# mention of `onCall` in prose cannot classify one.
+def strip_comments(text):
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"(?m)//.*$", "", text)
+
+src = strip_comments(index_src)
+
+# One logical statement per entry, so a re-export split across lines
+# parses the same as an inline one.
+statements = [s.strip() for s in src.split(";")]
+
+TRIGGERS = ("onCall", "onRequest")
+
+def module_is_http(spec):
+    """Does the re-exported module define an HTTP-triggered function?"""
+    rel = spec.strip("\"'")
+    if not rel.startswith("."):
+        return None                      # not a local module; unknown
+    cand = os.path.normpath(
+        os.path.join(os.path.dirname(index_path), re.sub(r"\.js$", ".ts", rel))
+    )
+    if not os.path.isfile(cand):
+        return None
+    body = strip_comments(open(cand, encoding="utf-8").read())
+    return any(f"{t}(" in body for t in TRIGGERS)
+
+http_exports = {}     # exported name -> where we decided from
+unknown = []          # exported name -> could not classify
+
+for st in statements:
+    m = re.match(r"^export\s+const\s+([A-Za-z0-9_$]+)\s*=\s*(.*)$", st, flags=re.S)
+    if m:
+        name, rhs = m.group(1), m.group(2)
+        if any(re.search(rf"\b{t}\s*\(", rhs) for t in TRIGGERS):
+            http_exports[name] = "direct"
+        continue
+
+    m = re.match(r"^export\s*\{(.+?)\}\s*from\s*(\S+)$", st, flags=re.S)
+    if m:
+        clause, spec = m.group(1), m.group(2)
+        verdict = module_is_http(spec)
+        for part in clause.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            # `X as Y` exports as Y; bare `X` exports as X.
+            alias = re.match(r"^([A-Za-z0-9_$]+)\s+as\s+([A-Za-z0-9_$]+)$", part)
+            name = alias.group(2) if alias else part
+            if not re.match(r"^[A-Za-z0-9_$]+$", name):
+                continue
+            if verdict is True:
+                http_exports[name] = "re-export"
+            elif verdict is None:
+                unknown.append((name, spec))
+
+if unknown:
+    for name, spec in unknown:
+        print(
+            f"FAIL: cannot classify export '{name}' from {spec} — its module "
+            f"was not found, so this check cannot tell whether it is an "
+            f"HTTP-triggered function.",
+            file=sys.stderr,
+        )
+        print(
+            "      Resolve the path, or classify it explicitly here rather "
+            "than letting the check pass on an unknown.",
+            file=sys.stderr,
+        )
+    sys.exit(1)
+
+if not http_exports:
+    sys.exit(
+        "check_deploy_service_list: found no HTTP-triggered exports in "
+        "functions/src/index.ts — the parser is probably broken, so failing "
+        "rather than reporting a vacuous pass."
+    )
+
+# The service list lives in ONE section. Searching the whole document
+# let an unrelated mention — a troubleshooting note, a command example —
+# satisfy the check while the IAM list stayed stale. Reproduced in
+# review on PR #452.
+doc = open(doc_path, encoding="utf-8").read()
+HEADING = "## Cloud Run IAM prerequisites (Functions)"
+if HEADING not in doc:
+    sys.exit(
+        f"check_deploy_service_list: '{HEADING}' not found in DEPLOYMENT.md. "
+        "The service list moved or was renamed; this check cannot verify "
+        "anything and will not pass by default."
+    )
+section = doc.split(HEADING, 1)[1]
+section = re.split(r"(?m)^## ", section)[0]
+
+failed = False
+for name in sorted(http_exports):
+    service = name.lower()                       # Cloud Run lowercases it
+    if f"`{service}`" not in section:
+        failed = True
+        print(
+            f"FAIL: function '{name}' deploys as Cloud Run service "
+            f"'{service}', which DEPLOYMENT.md does not list.",
+            file=sys.stderr,
+        )
+        print(
+            f"      Add `{service}` to the service-name list in\n"
+            f"      {HEADING}, and run this once after the next deploy or\n"
+            f"      the callable will 403 every browser request at the\n"
+            f"      CORS preflight:\n"
+            f"        gcloud run services update {service} \\\n"
+            f"          --region=us-central1 --project=<proj> "
+            f"--no-invoker-iam-check",
+            file=sys.stderr,
+        )
+
+if failed:
+    sys.exit(1)
+
+print(
+    f"check_deploy_service_list: OK ({len(http_exports)} HTTP-triggered "
+    f"functions, all listed in DEPLOYMENT.md)"
 )
-
-if [ -z "$names" ]; then
-  echo "check_deploy_service_list: found no exported functions to check" >&2
-  exit 1
-fi
-
-fail=0
-count=0
-for name in $names; do
-  count=$((count + 1))
-  # Cloud Run lowercases the function name.
-  service=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
-  if ! grep -q "\`$service\`" "$DOC"; then
-    fail=1
-    echo "FAIL: function '$name' deploys as Cloud Run service '$service'," >&2
-    echo "      which DEPLOYMENT.md does not list." >&2
-    echo "      Add \`$service\` to the service-name list in" >&2
-    echo "      § Cloud Run IAM prerequisites, and run this once after" >&2
-    echo "      the next deploy or the callable will 403 every browser" >&2
-    echo "      request at the CORS preflight:" >&2
-    echo "        gcloud run services update $service \\" >&2
-    echo "          --region=us-central1 --project=<proj> --no-invoker-iam-check" >&2
-  fi
-done
-
-if [ "$fail" -ne 0 ]; then
-  exit 1
-fi
-
-echo "check_deploy_service_list: OK ($count functions, all listed in DEPLOYMENT.md)"
+PY
