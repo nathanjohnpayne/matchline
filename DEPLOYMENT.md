@@ -554,14 +554,23 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 > runtime bindings, so the plan had nothing to grant. The first deploy that
 > introduces a secret will.
 >
-> Least-privilege fix — pre-grant the runtime service account on the secret,
-> leaving the deployer read-only and giving firebase-tools nothing to write:
+> Least-privilege fix — pre-grant the function's **runtime** service account
+> on the secret, leaving the deployer read-only and giving firebase-tools
+> nothing to write:
 >
 > ```bash
 > gcloud secrets add-iam-policy-binding {SECRET_NAME} --project={project-id} \
->   --member=serviceAccount:{project-number}-compute@developer.gserviceaccount.com \
+>   --member=serviceAccount:{RUNTIME_SA} \
 >   --role=roles/secretmanager.secretAccessor
 > ```
+>
+> `{RUNTIME_SA}` is the function's own `serviceAccount` option when it sets
+> one, and the compute default —
+> `{project-number}-compute@developer.gserviceaccount.com` — only when it
+> does not. `firebase-tools` resolves it that way
+> (`deploy/functions/ensure.js`: `e.serviceAccount || defaultServiceAccount(e)`),
+> so granting the compute default for a function that configures its own
+> account leaves the real principal unbound and the deploy still fails.
 >
 > The blunt alternative is `roles/secretmanager.admin` on the deployer, which
 > lets it manage every secret in the project. Prefer the per-secret grant.
@@ -710,8 +719,11 @@ So when you add a function to `functions/src/index.ts`, add a row here, and set 
 > non-zero *after* the function itself deployed successfully. The
 > service then exists and rejects every browser call at the CORS
 > preflight. `deriveMatchEvidence` hit exactly this on first deploy
-> (#441); `scripts/ci/check_deploy_service_list` now fails the build
-> when a function is added without being listed above.
+> (#441).
+>
+> **Nothing enforces this.** The inventory above is maintained by hand
+> and no CI check verifies it — see the note under the table. Adding a
+> function without adding its row is silent until the deploy fails.
 
 **2. The runtime service account needs Firestore.** Functions run as the compute default SA (`<project-number>-compute@developer.gserviceaccount.com`). Where the org disables automatic grants for default service accounts, that account holds only build-time roles and every admin-SDK call fails with `7 PERMISSION_DENIED: Missing or insufficient permissions` — note the admin SDK bypasses `firestore.rules` but still needs IAM:
 
