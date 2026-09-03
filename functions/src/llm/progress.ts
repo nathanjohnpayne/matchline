@@ -73,7 +73,22 @@ export function safeProgress(
   if (report === undefined) return () => {};
   return (event) => {
     try {
-      report(event);
+      // TypeScript allows an async function to satisfy a `=> void`
+      // type — the return is simply ignored — so a caller can hand us
+      // a reporter that rejects LATER, outside this try/catch. That is
+      // not hypothetical: the callables' reporter wraps
+      // `response.sendChunk`, which returns a promise. Absorb a
+      // thenable result as well as a synchronous throw, or the
+      // rejection escapes as an unhandled one and can terminate an
+      // otherwise successful call on Node 20 (CodeRabbit P1, #436).
+      const result = report(event) as unknown;
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        typeof (result as PromiseLike<unknown>).then === "function"
+      ) {
+        void (result as Promise<unknown>).catch(() => {});
+      }
     } catch {
       // Intentionally silent: a failed progress emission is not worth
       // a log line on every attempt, and the call continues.

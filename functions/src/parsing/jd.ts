@@ -51,6 +51,12 @@ export interface JdParsingDeps {
   readonly generateId?: () => string;
   /** Optional progress sink (#428); reports each attempt. */
   readonly onProgress?: ProgressReporter;
+  /**
+   * Aborted when the caller is gone (client disconnect). Checked only
+   * BEFORE starting a new attempt — never to discard work already
+   * done. See the check in the retry loop for why (#436).
+   */
+  readonly signal?: AbortSignal;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -108,6 +114,7 @@ export async function parseJobRequirements(
   const record = deps.record ?? recordUsage;
   const generateId = deps.generateId ?? randomUUID;
   const report = safeProgress(deps.onProgress);
+  const signal = deps.signal;
 
   const prompt = loadPromptText("parsing", "jd");
   const { provider, model } = modelFor("requirement_parsing");
@@ -122,6 +129,11 @@ export async function parseJobRequirements(
   const failures: JdParsingAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Stop starting NEW attempts once the caller has gone: a
+    // retry only happens after a failure, so it is pure waste
+    // for a disconnected client. Deliberately not a check
+    // before persistence — see the callable (#436).
+    if (attempt > 0 && signal?.aborted === true) break;
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder =

@@ -33,21 +33,31 @@ export interface ProgressEvent {
  * its last known-good state rather than render a stage it has no copy
  * for.
  */
+function isPositiveInt(v: unknown): boolean {
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
+}
+
 export function parseProgressEvent(raw: unknown): ProgressEvent | null {
   if (typeof raw !== "object" || raw === null) return null;
   const { stage, attempt, maxAttempts } = raw as Record<string, unknown>;
   if (typeof stage !== "string") return null;
   if (!(PROGRESS_STAGES as readonly string[]).includes(stage)) return null;
+  // Positive INTEGERS only, and `maxAttempts` is dropped when it is
+  // below `attempt`. Without both checks a malformed chunk renders
+  // copy like "Attempt 3 of 2" or "Attempt 2.5" — text that reads as a
+  // bug in the product rather than in the payload (CodeRabbit P2,
+  // #436).
+  const validAttempt = isPositiveInt(attempt) ? (attempt as number) : undefined;
+  const rawMax = isPositiveInt(maxAttempts) ? (maxAttempts as number) : undefined;
+  const validMax =
+    rawMax !== undefined && (validAttempt === undefined || rawMax >= validAttempt)
+      ? rawMax
+      : undefined;
+
   return {
     stage: stage as ProgressStage,
-    ...(typeof attempt === "number" && Number.isFinite(attempt) && attempt > 0
-      ? { attempt }
-      : {}),
-    ...(typeof maxAttempts === "number" &&
-    Number.isFinite(maxAttempts) &&
-    maxAttempts > 0
-      ? { maxAttempts }
-      : {}),
+    ...(validAttempt !== undefined ? { attempt: validAttempt } : {}),
+    ...(validMax !== undefined ? { maxAttempts: validMax } : {}),
   };
 }
 

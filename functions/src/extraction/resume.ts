@@ -61,6 +61,12 @@ export interface ExtractionDeps {
    * visible to the user instead of looking like a hang.
    */
   readonly onProgress?: ProgressReporter;
+  /**
+   * Aborted when the caller is gone (client disconnect). Checked only
+   * BEFORE starting a new attempt — never to discard work already
+   * done. See the check in the retry loop for why (#436).
+   */
+  readonly signal?: AbortSignal;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -108,6 +114,7 @@ export async function extractFromResume(
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date());
   const report = safeProgress(deps.onProgress);
+  const signal = deps.signal;
 
   const prompt = loadPromptText("extraction", "resume");
   const { provider, model } = modelFor("extraction");
@@ -125,6 +132,11 @@ export async function extractFromResume(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // 1-based for display: "attempt 2 of 3" reads correctly, and a
     // value above 1 is what tells the user a retry is under way.
+    // Stop starting NEW attempts once the caller has gone: a
+    // retry only happens after a failure, so it is pure waste
+    // for a disconnected client. Deliberately not a check
+    // before persistence — see the callable (#436).
+    if (attempt > 0 && signal?.aborted === true) break;
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");

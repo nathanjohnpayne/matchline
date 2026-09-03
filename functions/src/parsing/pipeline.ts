@@ -39,6 +39,8 @@ export interface JdPipelineDeps {
   ) => Promise<void>;
   /** Optional progress sink (#428), forwarded to the parser. */
   readonly onProgress?: ProgressReporter;
+  /** Forwarded to the model call; see the retry loop (#436). */
+  readonly signal?: AbortSignal;
 }
 
 export async function runJdParsingPipeline(
@@ -51,7 +53,7 @@ export async function runJdParsingPipeline(
   const persistBatch = deps.persistBatch ?? writeRequirementsAsBatch;
   const report = safeProgress(deps.onProgress);
 
-  const units = await parse(text, ctx, { onProgress: deps.onProgress });
+  const units = await parse(text, ctx, { onProgress: deps.onProgress, signal: deps.signal });
 
   // Do NOT short-circuit on `units.length === 0`. Re-parsing a Role
   // whose JD has been edited down to zero Requirements must still

@@ -102,6 +102,13 @@ export const parseJobRequirementsCallable = onCall(
           onProgress: (event) => {
             response?.sendChunk(event).catch(() => {});
           },
+          // Bounds wasted work when the client disconnects: the retry
+          // loop stops starting NEW attempts. Deliberately NOT a gate
+          // on persistence — a completed extraction is already paid
+          // for, and the Units are what the user returns to. Throwing
+          // them away would maximise the waste rather than bound it
+          // (CodeRabbit P1, #436).
+          signal: response?.signal,
         },
       );
       return { requirements };

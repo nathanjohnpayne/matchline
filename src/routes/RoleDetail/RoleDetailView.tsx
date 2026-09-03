@@ -100,9 +100,9 @@ export interface RoleDetailViewProps {
    */
   readonly parsingStatus: RequirementsTabStatus;
   /** Latest JD-parse progress event, or null (#428). */
-  readonly parseProgress?: ProgressEvent | null;
-  /** Epoch ms the parse started. */
-  readonly parseStartedAt?: number;
+  readonly parseProgress: ProgressEvent | null;
+  /** Epoch ms the parse started. Required — see RequirementsTabProps. */
+  readonly parseStartedAt: number;
   readonly parseError: Error | null;
   readonly savingJd: boolean;
   readonly jdDraft: string;

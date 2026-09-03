@@ -63,13 +63,17 @@ export interface RequirementsTabProps {
   readonly requirements: readonly JobRequirementUnit[];
   /** Parse-call status. */
   readonly status: RequirementsTabStatus;
+  /** Latest parse progress event, or null before the first arrives (#428). */
+  readonly parseProgress: ProgressEvent | null;
   /**
-   * Latest parse progress event, or null before the first arrives
-   * (#428). Optional so existing render tests need no fixture.
+   * Epoch ms the parse started; drives elapsed time.
+   *
+   * Required, not optional-with-a-0-default: `0` is a valid-looking
+   * number that renders elapsed time from the Unix epoch, so a caller
+   * that forgot it produced a plausible component showing a ~56-year
+   * duration rather than an obvious failure (CodeRabbit P2, #436).
    */
-  readonly parseProgress?: ProgressEvent | null;
-  /** Epoch ms the parse started; drives elapsed time. */
-  readonly parseStartedAt?: number;
+  readonly parseStartedAt: number;
   /** Last parse error, if any. Surfaced inline. */
   readonly error: Error | null;
   /** True while an upsertRole(jd_raw) save is in flight. */
@@ -210,8 +214,8 @@ export default function RequirementsTab({
           visible while a parse is in flight. */}
       {parsing && (
         <OperationProgress
-          event={parseProgress ?? null}
-          startedAt={parseStartedAt ?? 0}
+          event={parseProgress}
+          startedAt={parseStartedAt}
           vocabulary={JD_PARSING_VOCABULARY}
           typicalMs={TYPICAL_DURATION_MS.jdParsing}
           label="Parsing job requirements"

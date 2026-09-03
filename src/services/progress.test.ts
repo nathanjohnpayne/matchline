@@ -45,6 +45,27 @@ describe("parseProgressEvent", () => {
     expect(parseProgressEvent({ stage: 3 })).toBeNull();
   });
 
+  it("rejects fractional counters", () => {
+    // "Attempt 2.5" reads as a bug in the product, not the payload
+    // (CodeRabbit P2, #436).
+    expect(
+      parseProgressEvent({ stage: "analyzing", attempt: 2.5, maxAttempts: 3 }),
+    ).toEqual({ stage: "analyzing", maxAttempts: 3 });
+  });
+
+  it("drops maxAttempts when it is below attempt", () => {
+    // Otherwise the copy reads "Attempt 3 of 2".
+    expect(
+      parseProgressEvent({ stage: "analyzing", attempt: 3, maxAttempts: 2 }),
+    ).toEqual({ stage: "analyzing", attempt: 3 });
+  });
+
+  it("keeps maxAttempts when it equals attempt", () => {
+    expect(
+      parseProgressEvent({ stage: "analyzing", attempt: 3, maxAttempts: 3 }),
+    ).toEqual({ stage: "analyzing", attempt: 3, maxAttempts: 3 });
+  });
+
   it("drops nonsensical attempt values instead of rendering them", () => {
     expect(
       parseProgressEvent({ stage: "analyzing", attempt: 0, maxAttempts: -1 }),

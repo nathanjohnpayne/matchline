@@ -45,6 +45,8 @@ export interface PipelineDeps {
    * per-attempt events reach the caller too.
    */
   readonly onProgress?: ProgressReporter;
+  /** Forwarded to the model call; see the retry loop (#436). */
+  readonly signal?: AbortSignal;
 }
 
 export async function runExtractionPipeline(
@@ -59,7 +61,7 @@ export async function runExtractionPipeline(
 
   // Step 1: LLM extraction. Throws ExtractionError on retry-budget
   // exhaustion; the callable maps that to "needs manual review".
-  const units = await extract(text, ctx, { onProgress: deps.onProgress });
+  const units = await extract(text, ctx, { onProgress: deps.onProgress, signal: deps.signal });
   if (units.length === 0) return [];
 
   report({ stage: "embedding" });
