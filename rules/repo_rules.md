@@ -82,8 +82,7 @@ Checks with no mergepath counterpart are wired in the never-propagated annex
 `.github/workflows/repo_lint_local.yml`, which `check_ci_scripts_wired` scans as
 a union with the canonical file. Currently in the annex:
 `check_prompt_schema_pairs`, `check_no_other_skill_normalization`,
-`check_fixture_match_ids`, `check_no_duplicate_document_contracts`,
-`check_deploy_service_list`.
+`check_fixture_match_ids`, `check_no_duplicate_document_contracts`.
 
 The annex runs no `npm ci`, so a check wired there must depend on nothing
 beyond a stock shell and the checked-out tree.
@@ -102,4 +101,3 @@ All checks must pass before merge.
 - check_no_duplicate_document_contracts: the Firestore document contracts (`ExperienceUnit`, `JobRequirementUnit`, `UnitMatch`, `UnitCluster`, `ScoreComponents` and the enums they use) are declared exactly once **repo-wide**, in `functions/src/types/capability.ts`. Every `.ts`/`.tsx` file under `src/`, `functions/src/` and `tests/` is scanned; `src/types/capability.ts` type-only re-exports and must never redeclare. The two files were previously hand-synced copies and had already drifted — each documented invariants the other could not see, and nothing failed. See #443.
 - check_no_other_skill_normalization: only `functions/src/matching/normalize.ts` may define `normalizeSkill` / `normalizeTool` / `normalizeDomain`, and only that module may import the `*.seed.json` ontology files directly. Enforces the single-source-of-truth invariant for canonical-vocabulary normalization (#96, parent #20).
 - check_fixture_match_ids: every `expected_top_matches` entry in `tests/fixtures/expected-matches/*.json` must resolve to a real unit id in `tests/fixtures/expected-units/<resume>.json` and a real requirement id in the same expected-matches file's `expected_requirements`. Closes the silent ID-drift window flagged on #138.
-- check_deploy_service_list: every function exported from `functions/src/index.ts` must appear in the function-inventory table in `DEPLOYMENT.md` § Cloud Run IAM prerequisites, and vice versa. The check verifies **accounting only** — it deliberately does not infer trigger type, Cloud Run service name, or region, because approximating firebase-tools' naming and the TypeScript compiler's binding resolution produced a check that was confidently wrong in new ways each round (PR #452), at one point advising that an event-triggered function be made publicly invokable. Those columns are human judgement recorded in the table; this only enforces that nobody adds a function and forgets. Fails closed on a missing heading, a missing table, or zero parsed exports.

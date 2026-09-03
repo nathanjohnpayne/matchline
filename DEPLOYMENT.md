@@ -689,7 +689,9 @@ This is a service-level setting, so it does **not** create a new revision and it
 
 Every function exported from `functions/src/index.ts` appears here. HTTP-triggered functions (`onCall` / `onRequest`) need the invoker step above once, on first deploy. Event-triggered functions must **NOT** get it: they rely on authenticated event delivery, and making one publicly invokable would be a security regression.
 
-`scripts/ci/check_deploy_service_list` fails the build when an export is missing from this table. It deliberately does **not** infer the trigger type — see its header for why that inference proved unreliable — so the `invoker step` column is a human judgement and must be set deliberately when a function is added.
+**This table is maintained by hand.** A CI check to enforce it was attempted and withdrawn (PR #452): deciding which exports become which Cloud Run services requires resolving TypeScript binding forms and firebase-tools' naming rules, and five review rounds kept finding valid shapes it parsed wrongly — at one point it would have advised making an event-triggered function publicly invokable. Approximating a compiler in a lint script produced a guard that was confidently wrong more often than the drift it was meant to catch.
+
+So when you add a function to `functions/src/index.ts`, add a row here, and set the `invoker step` column deliberately — HTTP-triggered functions need it, event-triggered functions must not have it.
 
 | function (`index.ts`) | Cloud Run service | invoker step |
 |---|---|---|
