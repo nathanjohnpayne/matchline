@@ -576,6 +576,13 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 > impersonation is in effect; the absence of that line is the tell that
 > the override worked.
 >
+> Run it **once per distinct runtime account that consumes the secret**.
+> `ensure.js:secretsToServiceAccounts` builds a *set* of every consuming
+> account per secret and `grantSecretAccess` writes whenever any member is
+> still unbound, so a secret shared by functions with different
+> `serviceAccount` options needs a grant for each — binding only one leaves
+> the deploy failing on the others.
+>
 > `{RUNTIME_SA}` is the function's own `serviceAccount` option when it sets
 > one, and the compute default —
 > `{project-number}-compute@developer.gserviceaccount.com` — only when it
@@ -721,7 +728,8 @@ Every function exported from `functions/src/index.ts` appears here. The `invoker
   > `"public"` retries the IAM write on **every** deploy — and under the
   > domain-restricted-sharing policy above that write fails every time,
   > turning a one-off first-deploy chore into a permanent deploy failure.
-- **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
+- **must not** — anything whose access is meant to be restricted. That covers most event-triggered functions, which rely on authenticated event delivery, *and* **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts.
+  > **Auth blocking triggers are the exception**, and "event-triggered" is the wrong instinct for them. `beforeUserCreated` / `beforeUserSignedIn` get `setInvokerCreate(..., ["public"])` on both create and update (`release/fabricator.js`, the `isBlockingTriggered && AUTH_BLOCKING_EVENTS` branches), so under the domain-restriction policy their binding fails exactly like a callable's and the trigger is left unavailable. Mark them **required**. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
 
 > **`invoker` does nothing on `onCall`.** A callable declared as
 > `onCall({ invoker: "private" }, ...)` is **not** private: the pinned
