@@ -520,6 +520,25 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
    - `roles/iam.serviceAccountUser`
    - `roles/artifactregistry.writer`
    - `roles/run.admin`
+
+> **`roles/secretmanager.viewer` is NOT in that list and is required.**
+> Any function declaring `secrets: [...]` makes `firebase deploy` call
+> `secretmanager.secrets.get` as the *deployer* service account, which
+> fails with `403 Permission 'secretmanager.secrets.get' denied` — and
+> the message's "or it may not exist" wording sends you looking for a
+> missing secret that is present. `roles/firebase.admin` does not
+> include it. Note the check runs as the deployer SA, not as you, so
+> your own access proves nothing here.
+>
+> Until `op-firebase-setup` grants it upstream, add it per project:
+>
+> ```bash
+> gcloud projects add-iam-policy-binding {project-id} \
+>   --member=serviceAccount:firebase-deployer@{project-id}.iam.gserviceaccount.com \
+>   --role=roles/secretmanager.viewer --condition=None
+> ```
+>
+> Granted on `matchline-dev` on 2026-09-02 after it blocked a deploy.
 4. Grants your user `roles/iam.serviceAccountTokenCreator` on the deployer service account
 5. Creates or updates a dedicated `gcloud` configuration named `{project-id}` with project, impersonation, and `billing/quota_project` defaults
 
@@ -634,7 +653,16 @@ Under a **domain restricted sharing** org policy (`constraints/iam.allowedPolicy
 gcloud run services update <service> --region=us-central1   --project=<proj> --no-invoker-iam-check
 ```
 
-This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422). Service names are the lowercased function names: `extractfromresume`, `parsejobrequirements`, `generateresume`, `validateasset`, `reembedexperienceunit`, `runmatching`, `health`.
+This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422). Service names are the lowercased function names: `extractfromresume`, `parsejobrequirements`, `generateresume`, `validateasset`, `reembedexperienceunit`, `runmatching`, `health`, `derivematchevidence`.
+
+> **Every NEW callable needs this once.** `firebase deploy` creates the
+> Cloud Run service but cannot set the invoker policy, so the deploy
+> reports `Failed to set the IAM Policy on the Service ...` and exits
+> non-zero *after* the function itself deployed successfully. The
+> service then exists and rejects every browser call at the CORS
+> preflight. `deriveMatchEvidence` hit exactly this on first deploy
+> (#441); `scripts/ci/check_deploy_service_list` now fails the build
+> when a function is added without being listed above.
 
 **2. The runtime service account needs Firestore.** Functions run as the compute default SA (`<project-number>-compute@developer.gserviceaccount.com`). Where the org disables automatic grants for default service accounts, that account holds only build-time roles and every admin-SDK call fails with `7 PERMISSION_DENIED: Missing or insufficient permissions` — note the admin SDK bypasses `firestore.rules` but still needs IAM:
 

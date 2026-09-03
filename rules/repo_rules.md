@@ -82,7 +82,8 @@ Checks with no mergepath counterpart are wired in the never-propagated annex
 `.github/workflows/repo_lint_local.yml`, which `check_ci_scripts_wired` scans as
 a union with the canonical file. Currently in the annex:
 `check_prompt_schema_pairs`, `check_no_other_skill_normalization`,
-`check_fixture_match_ids`, `check_no_duplicate_document_contracts`.
+`check_fixture_match_ids`, `check_no_duplicate_document_contracts`,
+`check_deploy_service_list`.
 
 The annex runs no `npm ci`, so a check wired there must depend on nothing
 beyond a stock shell and the checked-out tree.
@@ -101,3 +102,4 @@ All checks must pass before merge.
 - check_no_duplicate_document_contracts: the Firestore document contracts (`ExperienceUnit`, `JobRequirementUnit`, `UnitMatch`, `UnitCluster`, `ScoreComponents` and the enums they use) are declared exactly once **repo-wide**, in `functions/src/types/capability.ts`. Every `.ts`/`.tsx` file under `src/`, `functions/src/` and `tests/` is scanned; `src/types/capability.ts` type-only re-exports and must never redeclare. The two files were previously hand-synced copies and had already drifted — each documented invariants the other could not see, and nothing failed. See #443.
 - check_no_other_skill_normalization: only `functions/src/matching/normalize.ts` may define `normalizeSkill` / `normalizeTool` / `normalizeDomain`, and only that module may import the `*.seed.json` ontology files directly. Enforces the single-source-of-truth invariant for canonical-vocabulary normalization (#96, parent #20).
 - check_fixture_match_ids: every `expected_top_matches` entry in `tests/fixtures/expected-matches/*.json` must resolve to a real unit id in `tests/fixtures/expected-units/<resume>.json` and a real requirement id in the same expected-matches file's `expected_requirements`. Closes the silent ID-drift window flagged on #138.
+- check_deploy_service_list: every function exported from `functions/src/index.ts` must appear, lowercased, in `DEPLOYMENT.md` § Cloud Run IAM prerequisites. Each becomes a Cloud Run service that needs a manual `--no-invoker-iam-check` before a browser can call it — `firebase deploy` creates the service but cannot set its invoker policy, so a missing entry surfaces as a CORS-preflight 403 the SDK reports as a bare `internal`. The list went stale when #441 added `deriveMatchEvidence` and nothing caught it until the deploy failed.

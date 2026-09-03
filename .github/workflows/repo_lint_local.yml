@@ -32,3 +32,5 @@ jobs:
         run: ./scripts/ci/check_fixture_match_ids
       - name: check_no_duplicate_document_contracts
         run: ./scripts/ci/check_no_duplicate_document_contracts
+      - name: check_deploy_service_list
+        run: ./scripts/ci/check_deploy_service_list

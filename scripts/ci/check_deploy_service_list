@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# check_deploy_service_list (#441 follow-up)
+#
+# Every function exported from `functions/src/index.ts` becomes a Cloud
+# Run service on deploy, and every NEW one needs a manual
+# `--no-invoker-iam-check` before a browser can call it — `firebase
+# deploy` creates the service but cannot set its invoker policy.
+#
+# That step is documented in DEPLOYMENT.md § Cloud Run IAM
+# prerequisites, against an explicit list of service names. The list
+# went stale the moment #441 added `deriveMatchEvidence`, and nothing
+# noticed until the deploy failed: the function deployed fine, the
+# invoker policy did not, and the callable answered every browser
+# request with a CORS-preflight 403 that the SDK reports as a bare
+# `internal`.
+#
+# So this check pins the doc against the code. It cannot verify what is
+# actually deployed — CI has no cloud credentials — but the drift that
+# bit us was the doc, not the cloud.
+#
+# Portability: stock macOS Bash 3.2, same constraint as the other
+# locally runnable checks here (no `mapfile`, no `\b`).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+INDEX="$ROOT/functions/src/index.ts"
+DOC="$ROOT/DEPLOYMENT.md"
+
+for f in "$INDEX" "$DOC"; do
+  if [ ! -r "$f" ]; then
+    echo "check_deploy_service_list: missing ${f#"$ROOT/"}" >&2
+    exit 1
+  fi
+done
+
+# Exported function names, both shapes the index uses:
+#   export const health = onRequest(...)
+#   export { xCallable as runMatching } from "./callables/x.js";
+names=$(
+  {
+    grep -oE '^export const [A-Za-z0-9_]+' "$INDEX" | awk '{print $3}'
+    grep -oE '^export \{ [A-Za-z0-9_]+ as [A-Za-z0-9_]+' "$INDEX" | awk '{print $5}'
+  } | sort -u
+)
+
+if [ -z "$names" ]; then
+  echo "check_deploy_service_list: found no exported functions to check" >&2
+  exit 1
+fi
+
+fail=0
+count=0
+for name in $names; do
+  count=$((count + 1))
+  # Cloud Run lowercases the function name.
+  service=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
+  if ! grep -q "\`$service\`" "$DOC"; then
+    fail=1
+    echo "FAIL: function '$name' deploys as Cloud Run service '$service'," >&2
+    echo "      which DEPLOYMENT.md does not list." >&2
+    echo "      Add \`$service\` to the service-name list in" >&2
+    echo "      § Cloud Run IAM prerequisites, and run this once after" >&2
+    echo "      the next deploy or the callable will 403 every browser" >&2
+    echo "      request at the CORS preflight:" >&2
+    echo "        gcloud run services update $service \\" >&2
+    echo "          --region=us-central1 --project=<proj> --no-invoker-iam-check" >&2
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  exit 1
+fi
+
+echo "check_deploy_service_list: OK ($count functions, all listed in DEPLOYMENT.md)"
