@@ -26,12 +26,7 @@ import {
   type ReactElement,
 } from "react";
 
-import {
-  hasUnsavedWork,
-  isAppBusy,
-  subscribeAppBusy,
-  subscribeUnsavedWork,
-} from "../lib/appBusy.ts";
+import { isAppBusy, subscribeAppBusy } from "../lib/appBusy.ts";
 import {
   CURRENT_BUILD_ID,
   createVersionPoller,
@@ -57,8 +52,7 @@ export default function UpdatePrompt(): ReactElement | null {
   // `dirty` that is a data-loss path — the first Reload click would skip
   // confirmation and discard the editor's content (CodeRabbit P1, #434).
   const busy = useSyncExternalStore(subscribeAppBusy, isAppBusy);
-  const dirty = useSyncExternalStore(subscribeUnsavedWork, hasUnsavedWork);
-  const [confirming, setConfirming] = useState(false);
+
 
   useEffect(() => {
     // No stamp means the define did not run (dev server, test). There
@@ -103,23 +97,11 @@ export default function UpdatePrompt(): ReactElement | null {
   // user who asked for stillness (Codex P1, #434).
   const TRANSITION = "motion-safe:transition-colors motion-safe:duration-150";
 
-  const onReloadClick = (): void => {
-    // One extra click when there is unsaved content, rather than a
-    // blocking confirm() dialog: it keeps the choice in the banner and
-    // states exactly what is at risk.
-    if (dirty && !confirming) {
-      setConfirming(true);
-      return;
-    }
-    window.location.reload();
-  };
-
   return (
     <div
       role="status"
       aria-live="polite"
       data-testid="update-prompt"
-      data-confirming={confirming ? "true" : "false"}
       // In the shell's flex column rather than `fixed`: a fixed
       // banner sat over the bottom of the scroll container, and on
       // pages whose content reaches the bottom (Onboarding, New Role)
@@ -128,34 +110,22 @@ export default function UpdatePrompt(): ReactElement | null {
       // (Codex P2, #434).
       className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
     >
-      <span>
-        {confirming
-          ? "Reloading will discard your unsaved changes on this page."
-          : "A new version of match\u007Cline is available."}
-      </span>
+      <span>A new version of match&#124;line is available.</span>
       <button
         type="button"
         data-action="update-reload"
-        onClick={onReloadClick}
-        className={`rounded-md px-3 py-1.5 text-xs font-medium ${TRANSITION} ${FOCUS_RING} ${
-          confirming
-            ? // amber-800 with white, and a dark foreground on the light
-              // amber used in dark mode. `text-xs` counts as body text,
-              // so ui-guidance.md § Accessibility requires 4.5:1;
-              // white-on-amber-600 measured ~3.2:1 (Codex P1, #434).
-              "bg-amber-800 text-white hover:bg-amber-900 dark:bg-amber-300 dark:text-zinc-950 dark:hover:bg-amber-200"
-            : "bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        }`}
+        onClick={() => window.location.reload()}
+        className={`rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 ${TRANSITION} ${FOCUS_RING}`}
       >
-        {confirming ? "Reload anyway" : "Reload"}
+        Reload
       </button>
       <button
         type="button"
         data-action="update-dismiss"
-        onClick={confirming ? () => setConfirming(false) : onDismiss}
+        onClick={onDismiss}
         className={`rounded-md px-2 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 ${TRANSITION} ${FOCUS_RING}`}
       >
-        {confirming ? "Keep editing" : "Not now"}
+        Not now
       </button>
     </div>
   );

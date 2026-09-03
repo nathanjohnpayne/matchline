@@ -34,7 +34,7 @@ import {
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
-import { beginAppBusy, beginUnsavedWork } from "../../lib/appBusy.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
@@ -107,19 +107,6 @@ export default function UnitRow({
 }: UnitRowProps): ReactElement {
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
 
-  // An open inline edit holds its draft only in React state, so the
-  // update banner must confirm before a reload discards it
-  // (Codex P2, #434).
-  useEffect(() => {
-    // "saving" holds the lease too. The write is in flight — the row's
-    // handler is still awaiting Firestore `updateDoc` — so this is the
-    // window where a reload does the MOST damage: the edit is neither
-    // in the document nor recoverable from the form. Releasing here
-    // and re-acquiring on failure would open exactly that gap
-    // (Codex P2, #434).
-    if (status.kind === "view") return;
-    return beginUnsavedWork("unitReview.inlineEdit");
-  }, [status.kind]);
 
   // While the save is actually in flight this is a BUSY operation, not
   // merely unsaved content. Unsaved work only gates the reload behind a

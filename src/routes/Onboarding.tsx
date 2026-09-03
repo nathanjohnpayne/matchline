@@ -26,11 +26,11 @@
  *     the textarea, allow retry on next keystroke / Submit
  */
 
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
 import ResumeEditor from "../components/ResumeEditor.tsx";
-import { beginAppBusy, beginUnsavedWork } from "../lib/appBusy.ts";
+import { beginAppBusy } from "../lib/appBusy.ts";
 import { friendlyCallableError } from "../lib/callable-errors.ts";
 import { invokeExtractFromResume } from "../services/extraction.ts";
 
@@ -47,14 +47,6 @@ export default function Onboarding(): ReactElement {
   // knows the call failed.
   const [error, setError] = useState<string | null>(null);
 
-  // The pasted résumé lives only in React state — no draft persistence
-  // anywhere in the repo — so a one-click reload from the update banner
-  // would silently discard it (Codex P2 on PR #434). Declaring it as
-  // unsaved work gates that reload behind a confirmation.
-  useEffect(() => {
-    if (text.trim().length === 0) return;
-    return beginUnsavedWork("onboarding.resumeDraft");
-  }, [text]);
 
   const onEditorChange = (markdown: string): void => {
     setText(markdown);

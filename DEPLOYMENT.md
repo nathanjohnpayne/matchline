@@ -716,7 +716,7 @@ curl -sI http://localhost:5000/version.json | grep -i cache-control # must be no
 The prompt is advisory and never forces a reload. Two rules govern when it appears, both of which exist to avoid destroying work:
 
 - **Suppressed entirely while a long call is in flight** — extraction (~108s), JD parsing, generation, validation, matching. Reloading mid-call abandons work that is about to succeed and pays the LLM cost twice. Producers take a lease from `src/lib/appBusy.ts`; the poll keeps running underneath, so the prompt appears as soon as the call settles.
-- **Gated behind a confirmation when an editor holds unsaved content** — a pasted résumé, a JD draft, a new-Role form, a bullet edit inside its autosave debounce, an inline Unit edit. These live only in React state; nothing persists drafts and nothing guards `beforeunload`. A dirty editor does *not* suppress the prompt, because a filled paste box is a normal resting state and suppression would hide it forever.
+Unsaved editor content is **not** yet protected: a résumé draft, a JD draft, or an in-progress form lives only in React state, and accepting the reload discards it. That guard ships separately — see the unsaved-work issue — because a dirty editor should not *suppress* the prompt (a filled paste box is a normal resting state, so suppression would hide it forever) but should qualify it with a confirmation.
 
 Dismissal is scoped to the declined build id, so that build stays quiet while a newer one asks again.
 

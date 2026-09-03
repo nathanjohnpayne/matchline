@@ -74,7 +74,7 @@ import {
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
-import { beginAppBusy, beginUnsavedWork } from "../../lib/appBusy.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 import { friendlyCallableError } from "../../lib/callable-errors.ts";
 import type {
   ExperienceUnit,
@@ -299,14 +299,6 @@ export default function RoleDetail(): ReactElement {
   // reads owned-Role + applies its own retry budget, so on
   // success the subscription delivers the new Requirements;
   // failures surface inline + leave the user free to retry.
-  // A JD draft that differs from the persisted Role is unsaved work —
-  // the tab already labels it "unsaved changes" — so the update banner
-  // must confirm before discarding it (Codex P2 on PR #434).
-  useEffect(() => {
-    if (role === null) return;
-    if (jdDraft === role.jd_raw) return;
-    return beginUnsavedWork("roleDetail.jdDraft");
-  }, [jdDraft, role]);
   const onParseJd = useCallback(
     (text: string): void => {
       if (roleId === undefined || roleId === "" || role === null) return;
