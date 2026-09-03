@@ -560,9 +560,20 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 >
 > ```bash
 > gcloud secrets add-iam-policy-binding {SECRET_NAME} --project={project-id} \
+>   --impersonate-service-account="" \
 >   --member=serviceAccount:{RUNTIME_SA} \
 >   --role=roles/secretmanager.secretAccessor
 > ```
+>
+> **`--impersonate-service-account=""` is load-bearing.** `op-firebase-setup`
+> sets `auth/impersonate_service_account` on the per-project gcloud
+> configuration, and `--project` does not override it — so once you have
+> activated that configuration this command runs *as the deployer*, the
+> same read-only identity that cannot write the policy. It would fail with
+> the exact permission error it is meant to fix. gcloud prints
+> `WARNING: This command is using service account impersonation` when
+> impersonation is in effect; the absence of that line is the tell that
+> the override worked.
 >
 > `{RUNTIME_SA}` is the function's own `serviceAccount` option when it sets
 > one, and the compute default —
@@ -700,7 +711,15 @@ This is a service-level setting, so it does **not** create a new revision and it
 
 Every function exported from `functions/src/index.ts` appears here. The `invoker step` column has two values and the distinction is a security one:
 
-- **required** — a publicly-invoked HTTP function: `onCall`, or `onRequest` that either omits `invoker` or sets it explicitly to `"public"`. Both emit the same public binding, so the explicit form needs the step just as much as the implicit one. Run it once per declared region, on first deploy.
+- **required** — a publicly-invoked HTTP function: `onCall`, or `onRequest` that either omits `invoker` or sets it explicitly to `"public"`. Both need the step, once per declared region, on first deploy.
+  > **Prefer omitting `invoker` to writing `"public"`.** They are equivalent at create, but not afterwards. On the update path `firebase-tools` reads
+  > `invoker = httpsTrigger.invoker === null ? ["public"] : httpsTrigger.invoker`
+  > and then calls `setInvokerUpdate` whenever that value is truthy
+  > (`release/fabricator.js`, verified in the pinned 15.28.2). An omitted
+  > option leaves it `undefined`, so nothing is attempted; an explicit
+  > `"public"` retries the IAM write on **every** deploy — and under the
+  > domain-restricted-sharing policy above that write fails every time,
+  > turning a one-off first-deploy chore into a permanent deploy failure.
 - **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* HTTP functions that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
 
 The two ways to get this wrong are not equally bad:
