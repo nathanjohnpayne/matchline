@@ -70,7 +70,24 @@ for st in (s.strip() for s in src.split(";")):
     # `export const X = ...` / `export function X(...)`
     m = re.match(r"^export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z0-9_$]+)", st)
     if m:
-        exports.add(m.group(1))
+        name = m.group(1)
+        # Firebase's grouped-export shape — `export const api = { foo:
+        # onCall(...) }` — publishes endpoints as `api-foo`, not `api`.
+        # Recording `api` would document a service that does not exist
+        # while omitting the one that does, so the accounting guarantee
+        # would be false rather than merely incomplete. Refuse the shape
+        # instead of guessing at its members. Codex P2 on PR #452.
+        if re.match(r"^export\s+(?:async\s+)?const\s+[A-Za-z0-9_$]+\s*=\s*\{", st):
+            sys.exit(
+                f"check_deploy_service_list: '{name}' looks like a Firebase "
+                "grouped export (`export const x = { ... }`), which "
+                "publishes endpoints as `x-member`, not `x`.\n"
+                "      This check cannot enumerate group members, so it "
+                "fails rather than record a service name that will not "
+                "exist. Export the functions individually, or extend this "
+                "check to walk the group."
+            )
+        exports.add(name)
         continue
     # `export { A, B as C } [from "..."]` — with or without `from`,
     # single- or multi-line, any number of symbols.

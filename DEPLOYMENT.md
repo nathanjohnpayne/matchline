@@ -539,6 +539,32 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 > ```
 >
 > Granted on `matchline-dev` on 2026-09-02 after it blocked a deploy.
+>
+> **`viewer` is enough only while no NEW secret binding is needed.** When a
+> function declares a secret its runtime service account cannot yet access,
+> `firebase deploy` does not merely read it — `Fabricator.applyPlan` calls
+> `grantSecretAccess`, which writes the secret's IAM policy via
+> `secretmanager.secrets.setIamPolicy` (verified in the installed
+> `firebase-tools@15.28.2`: `fabricator.js` → `gcp/secretManager.js`).
+> `roles/secretmanager.viewer` is read-only, so the deploy clears
+> `secrets.get` and then fails while adding
+> `roles/secretmanager.secretAccessor`.
+>
+> The 2026-09-02 deploy did not hit this: both secrets already had their
+> runtime bindings, so the plan had nothing to grant. The first deploy that
+> introduces a secret will.
+>
+> Least-privilege fix — pre-grant the runtime service account on the secret,
+> leaving the deployer read-only and giving firebase-tools nothing to write:
+>
+> ```bash
+> gcloud secrets add-iam-policy-binding {SECRET_NAME} --project={project-id} \
+>   --member=serviceAccount:{project-number}-compute@developer.gserviceaccount.com \
+>   --role=roles/secretmanager.secretAccessor
+> ```
+>
+> The blunt alternative is `roles/secretmanager.admin` on the deployer, which
+> lets it manage every secret in the project. Prefer the per-secret grant.
 4. Grants your user `roles/iam.serviceAccountTokenCreator` on the deployer service account
 5. Creates or updates a dedicated `gcloud` configuration named `{project-id}` with project, impersonation, and `billing/quota_project` defaults
 
