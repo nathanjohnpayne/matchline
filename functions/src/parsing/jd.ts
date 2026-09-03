@@ -184,7 +184,7 @@ export async function parseJobRequirements(
           attempt: attempt + 2,
           maxAttempts: MAX_ATTEMPTS,
         });
-        await sleep(transportBackoffMs(attempt, err));
+        await sleep(transportBackoffMs(attempt, err), signal);
       }
       continue;
     }

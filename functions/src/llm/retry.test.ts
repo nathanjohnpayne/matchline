@@ -386,3 +386,39 @@ describe("sleep", () => {
     expect(resolved).toBe(true);
   });
 });
+
+describe("sleep abort-awareness (#436)", () => {
+  it("resolves immediately when the signal is already aborted", async () => {
+    const c = new AbortController();
+    c.abort();
+    const t0 = Date.now();
+    await sleep(10_000, c.signal);
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
+
+  it("resolves early when aborted mid-wait", async () => {
+    // A 429's retry-after can be long; without this the callable stays
+    // alive through the whole backoff for a caller that has gone.
+    const c = new AbortController();
+    const t0 = Date.now();
+    const p = sleep(10_000, c.signal);
+    setTimeout(() => c.abort(), 20);
+    await p;
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
+  it("still waits the full duration with no signal", async () => {
+    const t0 = Date.now();
+    await sleep(30);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(25);
+  });
+
+  it("resolves rather than rejecting on abort", async () => {
+    // The retry loop owns cancellation via its pre-attempt check;
+    // rejecting here would add a second path for the same decision.
+    const c = new AbortController();
+    const p = sleep(5_000, c.signal);
+    c.abort();
+    await expect(p).resolves.toBeUndefined();
+  });
+});

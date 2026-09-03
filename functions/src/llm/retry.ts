@@ -115,8 +115,23 @@ export function transportBackoffMs(attempt: number, err?: unknown): number {
  * call sites use the same primitive and tests can pin behavior by
  * spying on `setTimeout` once.
  */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  // Abort-aware: a transport failure can carry a long `retry-after`,
+  // and an unconditional wait keeps the callable alive through it even
+  // though the caller has gone and the next attempt will be skipped
+  // anyway. Resolves (rather than rejecting) on abort so the retry loop
+  // handles cancellation in one place — its pre-attempt check — instead
+  // of needing a second path here (CodeRabbit P1, #436).
+  if (signal?.aborted === true) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms);
+    function finish(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function extractStatus(err: unknown): number | undefined {

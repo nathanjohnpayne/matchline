@@ -88,7 +88,7 @@ export default function OperationProgress({
             routine retry telemetry would give a non-blocking state a
             conflicting semantic (Codex P1, #436). The retry is
             conveyed by the copy, which says so explicitly. */}
-        <div className="h-full w-1/3 animate-pulse bg-zinc-900 dark:bg-zinc-100" />
+        <div className="h-full w-1/3 motion-safe:animate-pulse bg-zinc-900 dark:bg-zinc-100" />
       </div>
       <div className="flex items-baseline justify-between gap-4 text-xs">
         <span
