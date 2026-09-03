@@ -5,9 +5,10 @@
  * version has a known failure mode — the cases below name which.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  createVersionPoller,
   parseVersionPayload,
   readDismissedBuild,
   rememberDismissedBuild,
@@ -141,5 +142,121 @@ describe("dismissal persistence", () => {
   it("treats absent storage as no dismissal", () => {
     expect(readDismissedBuild(undefined)).toBeNull();
     expect(() => rememberDismissedBuild("b", undefined)).not.toThrow();
+  });
+});
+
+describe("createVersionPoller", () => {
+  function jsonResponse(body: unknown, ok = true): Response {
+    return {
+      ok,
+      json: async () => body,
+    } as unknown as Response;
+  }
+
+  it("reports the build id from a well-formed response", async () => {
+    const onBuildId = vi.fn();
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => jsonResponse({ buildId: "b1" }),
+    });
+    await poller.check();
+    expect(onBuildId).toHaveBeenCalledWith("b1");
+  });
+
+  it("cache-busts the request and asks for no-store", async () => {
+    // firebase.json sets no-cache, but an intermediary that ignores the
+    // header would otherwise pin the first response forever.
+    const seen: Array<[string, RequestInit | undefined]> = [];
+    const poller = createVersionPoller({
+      onBuildId: vi.fn(),
+      fetchImpl: async (url, init) => {
+        seen.push([String(url), init]);
+        return jsonResponse({ buildId: "b1" });
+      },
+    });
+    await poller.check();
+    expect(seen[0]![0]).toMatch(/\/version\.json\?t=\d+/);
+    expect(seen[0]![1]?.cache).toBe("no-store");
+  });
+
+  it("ignores a non-ok response", async () => {
+    const onBuildId = vi.fn();
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => jsonResponse({ buildId: "b1" }, false),
+    });
+    await poller.check();
+    expect(onBuildId).not.toHaveBeenCalled();
+  });
+
+  it("ignores the SPA index.html arriving via the catch-all rewrite", async () => {
+    const onBuildId = vi.fn();
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => jsonResponse("<!doctype html>"),
+    });
+    await poller.check();
+    expect(onBuildId).not.toHaveBeenCalled();
+  });
+
+  it("swallows a network error and stays usable", async () => {
+    const onBuildId = vi.fn();
+    let fail = true;
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => {
+        if (fail) throw new Error("offline");
+        return jsonResponse({ buildId: "b2" });
+      },
+    });
+    await expect(poller.check()).resolves.toBeUndefined();
+    fail = false;
+    await poller.check();
+    expect(onBuildId).toHaveBeenCalledWith("b2");
+  });
+
+  it("discards an out-of-order response that would drag the build backwards", async () => {
+    // The interval starts a new check without awaiting the previous
+    // one, so a slow response carrying build A can land after a later
+    // poll already observed B — hiding the prompt, possibly for good.
+    const onBuildId = vi.fn();
+    const gates: Array<() => void> = [];
+    let call = 0;
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => {
+        const n = ++call;
+        await new Promise<void>((r) => gates.push(r));
+        return jsonResponse({ buildId: n === 1 ? "A" : "B" });
+      },
+    });
+    const first = poller.check();
+    const second = poller.check();
+    // Let the SECOND resolve first, then the stale first.
+    gates[1]!();
+    await second;
+    gates[0]!();
+    await first;
+    expect(onBuildId).toHaveBeenCalledTimes(1);
+    expect(onBuildId).toHaveBeenCalledWith("B");
+  });
+
+  it("drops a response that lands after stop()", async () => {
+    // Cleanup must prevent a late response updating an unmounted
+    // component.
+    const onBuildId = vi.fn();
+    let release!: () => void;
+    const poller = createVersionPoller({
+      onBuildId,
+      fetchImpl: async () => {
+        await new Promise<void>((r) => (release = r));
+        return jsonResponse({ buildId: "late" });
+      },
+    });
+    const p = poller.check();
+    poller.stop();
+    release();
+    await p;
+    expect(onBuildId).not.toHaveBeenCalled();
   });
 });

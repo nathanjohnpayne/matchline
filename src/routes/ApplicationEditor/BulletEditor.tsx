@@ -44,6 +44,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export type BulletEditorStatus = "editing" | "saving" | "error";
 
@@ -90,6 +91,13 @@ export default function BulletEditor({
   // "can't perform state update on unmounted component" warning
   // in dev. CodeRabbit Trivial on PR #192.
   const unmountedRef = useRef(false);
+
+  // An edit inside the 1.5s autosave debounce exists only here, so a
+  // reload from the update banner would lose it (Codex P2, #434).
+  useEffect(() => {
+    if (draft === lastSavedRef.current) return;
+    return beginUnsavedWork("applicationEditor.bulletDraft");
+  }, [draft]);
   useEffect(() => {
     return () => {
       unmountedRef.current = true;

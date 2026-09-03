@@ -692,6 +692,34 @@ rm -f /tmp/k
 
 `functions/src/llm/apiKey.ts` now trims defensively at client construction, so a contaminated secret can no longer cause this. The guidance still matters: the trim is a backstop, not a licence to store dirty values.
 
+## Update-reload contract (Hosting)
+
+A deployed tab must be able to notice that a newer build exists, or it runs superseded code indefinitely. That happened during #422: the app was redeployed four times with a tab open, and nothing told that tab it was stale — which is exactly what makes a "still failing" report ambiguous.
+
+Three pieces have to stay in agreement. Changing any one without the others silently disables the check; there is no error, and the symptom is indistinguishable from "no deploy has happened".
+
+**1. The build stamp.** `vite.config.ts` injects `__BUILD_ID__` into the bundle and writes the same value to `version.json` in the resolved output directory. It reads `outDir` from `configResolved` rather than assuming `dist`, so `vite build --outDir <dir>` keeps the two together — an earlier version hardcoded `dist` and wrote the stamp somewhere the deploy never uploaded.
+
+**2. The static file must win over the SPA rewrite.** `firebase.json` rewrites `**` to `/index.html`. Files present in the output directory are matched first, so a real `version.json` is served as itself — but if the build ever stops emitting it, the fetch returns the SPA's HTML with a `200`. `parseVersionPayload` validates the shape for exactly this reason and reports "not a version document" separately from "no newer build"; a bare `JSON.parse` in a `try` would kill the check permanently and silently.
+
+**3. Cache headers must cover the paths users actually load.** Header `source` globs match the **request** path, not the rewritten one. A rule naming `/index.html` matches only that literal path — not `/`, `/onboarding`, or `/roles/:id`, which all rewrite to it while keeping their own request paths. `firebase.json` therefore defaults `**` to `no-cache` and re-allows `/assets/**` as `immutable`, which is safe because Vite content-hashes those filenames. Verify with the hosting emulator after any change here:
+
+```bash
+firebase emulators:start --only hosting
+curl -sI http://localhost:5000/           | grep -i cache-control   # must be no-cache
+curl -sI http://localhost:5000/onboarding | grep -i cache-control   # must be no-cache
+curl -sI http://localhost:5000/version.json | grep -i cache-control # must be no-cache
+```
+
+### User-facing reload semantics
+
+The prompt is advisory and never forces a reload. Two rules govern when it appears, both of which exist to avoid destroying work:
+
+- **Suppressed entirely while a long call is in flight** — extraction (~108s), JD parsing, generation, validation, matching. Reloading mid-call abandons work that is about to succeed and pays the LLM cost twice. Producers take a lease from `src/lib/appBusy.ts`; the poll keeps running underneath, so the prompt appears as soon as the call settles.
+- **Gated behind a confirmation when an editor holds unsaved content** — a pasted résumé, a JD draft, a new-Role form, a bullet edit inside its autosave debounce, an inline Unit edit. These live only in React state; nothing persists drafts and nothing guards `beforeunload`. A dirty editor does *not* suppress the prompt, because a filled paste box is a normal resting state and suppression would hide it forever.
+
+Dismissal is scoped to the declined build id, so that build stays quiet while a newer one asks again.
+
 ## Cloud Run IAM prerequisites (Functions)
 
 Firebase callables are **not** protected by Cloud Run IAM. Auth is enforced *inside* each function against the Firebase ID token in the callable envelope (`request.auth?.uid`). Cloud Run must therefore let the request through, or the browser's CORS preflight is rejected with a 403 carrying no `Access-Control-*` headers, `fetch` rejects, and the SDK reports a bare `internal` with no diagnostic.

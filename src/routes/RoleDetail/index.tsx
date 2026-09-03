@@ -407,12 +407,18 @@ export default function RoleDetail(): ReactElement {
           // on PR #449.
           setMatchingError(null);
           setComputingMatches(true);
+          // runMatching carries a 150s budget. Reloading mid-run resets
+          // triggeredRef and remounts the same still-empty Role, which
+          // can start a SECOND matching transaction before the first
+          // commits (Codex P2, #434).
+          const releaseMatchBusy0 = beginAppBusy("roleDetail.runMatching");
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
 
               console.warn("invokeRunMatching after re-parse failed", err);
             })
             .finally(() => {
+              releaseMatchBusy0();
               if (isStale()) return;
               setComputingMatches(false);
             });
@@ -730,6 +736,11 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = true;
     setMatchingError(null);
     setComputingMatches(true);
+    // runMatching carries a 150s budget. Reloading mid-run resets
+    // triggeredRef and remounts the same still-empty Role, which
+    // can start a SECOND matching transaction before the first
+    // commits (Codex P2, #434).
+    const releaseMatchBusy1 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
         // Subscription delivers the new matches on success;
@@ -739,6 +750,7 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeRunMatching failed", err);
       })
       .finally(() => {
+        releaseMatchBusy1();
         if (
           currentRoleIdRef.current !== issuedAgainstAuto ||
           visitTokenRef.current !== issuedTokenAuto
@@ -878,6 +890,11 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = true;
     setMatchingError(null);
     setComputingMatches(true);
+    // runMatching carries a 150s budget. Reloading mid-run resets
+    // triggeredRef and remounts the same still-empty Role, which
+    // can start a SECOND matching transaction before the first
+    // commits (Codex P2, #434).
+    const releaseMatchBusy2 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
         if (stale()) return;
@@ -888,6 +905,7 @@ export default function RoleDetail(): ReactElement {
         );
       })
       .finally(() => {
+        releaseMatchBusy2();
         if (stale()) return;
         setComputingMatches(false);
       });

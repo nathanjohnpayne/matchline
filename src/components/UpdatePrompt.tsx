@@ -28,8 +28,7 @@ import {
 } from "../lib/appBusy.ts";
 import {
   CURRENT_BUILD_ID,
-  VERSION_URL,
-  parseVersionPayload,
+  createVersionPoller,
   readDismissedBuild,
   rememberDismissedBuild,
   shouldPromptForUpdate,
@@ -64,34 +63,13 @@ export default function UpdatePrompt(): ReactElement | null {
     // is nothing to compare against, so don't poll at all.
     if (CURRENT_BUILD_ID === "") return;
 
-    let cancelled = false;
-
-    const check = async (): Promise<void> => {
-      try {
-        // Cache-busting query AND no-store: `firebase.json` now sets
-        // `no-cache` on this path, but an intermediary that ignores the
-        // header would otherwise pin the first response forever and the
-        // check would never observe a deploy.
-        const res = await fetch(`${VERSION_URL}?t=${Date.now()}`, {
-          cache: "no-store",
-        });
-        if (!res.ok) return;
-        const payload = parseVersionPayload(await res.json());
-        // `null` means the response was not a version document — most
-        // likely the SPA's index.html arriving via the catch-all
-        // rewrite. Treat it as "no reading", never as "no update".
-        if (payload === null || cancelled) return;
-        setLatestBuildId(payload.buildId);
-      } catch {
-        // Offline, DNS, or a non-JSON body. Transient by assumption;
-        // the next tick tries again.
-      }
-    };
-
-    void check();
-    const id = setInterval(() => void check(), POLL_INTERVAL_MS);
+    const poller = createVersionPoller({ onBuildId: setLatestBuildId });
+    void poller.check();
+    const id = setInterval(() => void poller.check(), POLL_INTERVAL_MS);
     return () => {
-      cancelled = true;
+      // stop() before clearInterval: an in-flight response must not
+      // reach setState after unmount.
+      poller.stop();
       clearInterval(id);
     };
   }, []);
@@ -117,6 +95,12 @@ export default function UpdatePrompt(): ReactElement | null {
     // background in both themes (Codex P1, #434).
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-900";
 
+  // ui-guidance.md § Motion: "Respect prefers-reduced-motion: every
+  // transition class wrapped or gated accordingly." `motion-safe:`
+  // gates rather than merely overriding, so nothing animates for a
+  // user who asked for stillness (Codex P1, #434).
+  const TRANSITION = "motion-safe:transition-colors motion-safe:duration-150";
+
   const onReloadClick = (): void => {
     // One extra click when there is unsaved content, rather than a
     // blocking confirm() dialog: it keeps the choice in the banner and
@@ -134,7 +118,13 @@ export default function UpdatePrompt(): ReactElement | null {
       aria-live="polite"
       data-testid="update-prompt"
       data-confirming={confirming ? "true" : "false"}
-      className="fixed inset-x-0 bottom-0 z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+      // In the shell's flex column rather than `fixed`: a fixed
+      // banner sat over the bottom of the scroll container, and on
+      // pages whose content reaches the bottom (Onboarding, New Role)
+      // the final form actions ended up underneath it. Occupying real
+      // layout space costs a row and cannot obscure anything
+      // (Codex P2, #434).
+      className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
     >
       <span>
         {confirming
@@ -145,9 +135,13 @@ export default function UpdatePrompt(): ReactElement | null {
         type="button"
         data-action="update-reload"
         onClick={onReloadClick}
-        className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${FOCUS_RING} ${
+        className={`rounded-md px-3 py-1.5 text-xs font-medium ${TRANSITION} ${FOCUS_RING} ${
           confirming
-            ? "bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-zinc-900 dark:hover:bg-amber-400"
+            ? // amber-800 with white, and a dark foreground on the light
+              // amber used in dark mode. `text-xs` counts as body text,
+              // so ui-guidance.md § Accessibility requires 4.5:1;
+              // white-on-amber-600 measured ~3.2:1 (Codex P1, #434).
+              "bg-amber-800 text-white hover:bg-amber-900 dark:bg-amber-300 dark:text-zinc-950 dark:hover:bg-amber-200"
             : "bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
         }`}
       >
@@ -157,7 +151,7 @@ export default function UpdatePrompt(): ReactElement | null {
         type="button"
         data-action="update-dismiss"
         onClick={confirming ? () => setConfirming(false) : onDismiss}
-        className={`rounded-md px-2 py-1.5 text-xs font-medium text-zinc-500 transition-colors duration-150 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 ${FOCUS_RING}`}
+        className={`rounded-md px-2 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 ${TRANSITION} ${FOCUS_RING}`}
       >
         {confirming ? "Keep editing" : "Not now"}
       </button>

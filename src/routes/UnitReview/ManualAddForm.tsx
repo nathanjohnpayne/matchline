@@ -37,6 +37,7 @@ import type {
 } from "../../types/capability.ts";
 
 import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
+import { beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export interface ManualAddFormProps {
   /**
@@ -244,7 +245,21 @@ export default function ManualAddForm({
   const [state, setState] = useState<FormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+
   const [touched, setTouched] = useState(false);
+
+  // Draft content here lives only in React state, so the update banner
+  // must confirm before a reload discards it (Codex P2, #434). Dirty
+  // means any field diverges from the pristine form — comparing against
+  // EMPTY_FORM rather than tracking a flag keeps it correct when the
+  // user edits a field back to its original value.
+  useEffect(() => {
+    const dirty = (Object.keys(EMPTY_FORM) as Array<keyof FormState>).some(
+      (k) => state[k] !== EMPTY_FORM[k],
+    );
+    if (!dirty) return;
+    return beginUnsavedWork("unitReview.manualAdd");
+  }, [state]);
 
   const errors = validateForm(state);
   const hasErrors = Object.keys(errors).length > 0;

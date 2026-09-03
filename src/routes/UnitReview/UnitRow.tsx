@@ -34,6 +34,7 @@ import {
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
+import { beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
@@ -105,6 +106,14 @@ export default function UnitRow({
   onSetApproval,
 }: UnitRowProps): ReactElement {
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
+
+  // An open inline edit holds its draft only in React state, so the
+  // update banner must confirm before a reload discards it
+  // (Codex P2, #434).
+  useEffect(() => {
+    if (status.kind !== "editing" && status.kind !== "error") return;
+    return beginUnsavedWork("unitReview.inlineEdit");
+  }, [status.kind]);
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
     kind: "idle",
   });

@@ -140,3 +140,82 @@ export function shouldPromptForUpdate(input: ShouldPromptInput): boolean {
   if (dismissedBuildId !== null && dismissedBuildId === latestBuildId) return false;
   return true;
 }
+
+/* ------------------------------------------------------------------ *
+ * Polling
+ * ------------------------------------------------------------------ */
+
+export interface VersionPollerOptions {
+  /** Injected for tests; defaults to global `fetch`. */
+  readonly fetchImpl?: typeof fetch;
+  /** Called with each newly observed build id. */
+  readonly onBuildId: (buildId: string) => void;
+}
+
+export interface VersionPoller {
+  /** Run one check. Resolves when it has settled, for tests. */
+  readonly check: () => Promise<void>;
+  /** Stop accepting results. Idempotent. */
+  readonly stop: () => void;
+}
+
+/**
+ * Poll `VERSION_URL` for the deployed build id.
+ *
+ * Extracted from the component so the fetch/parse/ordering logic is
+ * testable without a DOM. The repo has no jsdom or Testing Library in
+ * devDependencies and its component convention is
+ * `renderToStaticMarkup`, so a React-effect fixture would have meant
+ * adding a test stack to cover logic that does not need React at all.
+ * Codex P1 on PR #434 asked for coverage of this path; extracting it
+ * gives that without the dependency.
+ *
+ * **Ordering.** The interval starts a new check without awaiting the
+ * previous one, so a slow response carrying build A can land after a
+ * later poll already saw build B and drag `latestBuildId` backwards —
+ * hiding the prompt until another successful poll, possibly
+ * indefinitely if the tab is then throttled or offline. Each check
+ * takes a monotonic sequence number and a stale one is discarded.
+ * Codex P2, same round.
+ */
+export function createVersionPoller({
+  fetchImpl,
+  onBuildId,
+}: VersionPollerOptions): VersionPoller {
+  const doFetch = fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+  let issued = 0;
+  let newestApplied = 0;
+  let stopped = false;
+
+  const check = async (): Promise<void> => {
+    const seq = ++issued;
+    try {
+      // Cache-busting query AND `no-store`: `firebase.json` sets
+      // `no-cache` on this path, but an intermediary that ignores the
+      // header would otherwise pin the first response forever and the
+      // check would never observe a deploy.
+      const res = await doFetch(`${VERSION_URL}?t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const payload = parseVersionPayload(await res.json());
+      // `null` means the response was not a version document — most
+      // likely the SPA's index.html arriving via the catch-all rewrite.
+      // Treat it as "no reading", never as "no update".
+      if (payload === null) return;
+      if (stopped || seq <= newestApplied) return;
+      newestApplied = seq;
+      onBuildId(payload.buildId);
+    } catch {
+      // Offline, DNS, or a non-JSON body. Transient by assumption; the
+      // next tick tries again.
+    }
+  };
+
+  return {
+    check,
+    stop: () => {
+      stopped = true;
+    },
+  };
+}

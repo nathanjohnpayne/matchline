@@ -49,10 +49,6 @@ export default function App() {
   // Authenticated: the app shell.
   return (
     <div className="flex h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      {/* Deploy-detection banner (#429). Inside the authenticated
-          shell: an unauthenticated visitor is on /sign-in and about to
-          navigate anyway, so a reload offer there is noise. */}
-      <UpdatePrompt />
       <header className="border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between">
           <Wordmark className="text-lg" />
@@ -107,6 +103,12 @@ export default function App() {
           <Route path="*" element={<Navigate to="/units" replace />} />
         </Routes>
       </main>
+      {/* Deploy-detection banner (#429). Last child of the shell's
+          flex column so it sits below the scroll container and takes
+          real layout space rather than covering page content. Inside
+          the authenticated shell because an unauthenticated visitor is
+          on /sign-in and about to navigate anyway. */}
+      <UpdatePrompt />
     </div>
   );
 }
