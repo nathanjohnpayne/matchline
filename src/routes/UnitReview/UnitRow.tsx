@@ -111,7 +111,13 @@ export default function UnitRow({
   // update banner must confirm before a reload discards it
   // (Codex P2, #434).
   useEffect(() => {
-    if (status.kind !== "editing" && status.kind !== "error") return;
+    // "saving" holds the lease too. The write is in flight — the row's
+    // handler is still awaiting Firestore `updateDoc` — so this is the
+    // window where a reload does the MOST damage: the edit is neither
+    // in the document nor recoverable from the form. Releasing here
+    // and re-acquiring on failure would open exactly that gap
+    // (Codex P2, #434).
+    if (status.kind === "view") return;
     return beginUnsavedWork("unitReview.inlineEdit");
   }, [status.kind]);
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
