@@ -20,7 +20,12 @@
 
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { isAppBusy, subscribeAppBusy } from "../lib/appBusy.ts";
+import {
+  hasUnsavedWork,
+  isAppBusy,
+  subscribeAppBusy,
+  subscribeUnsavedWork,
+} from "../lib/appBusy.ts";
 import {
   CURRENT_BUILD_ID,
   VERSION_URL,
@@ -42,11 +47,17 @@ export default function UpdatePrompt(): ReactElement | null {
     readDismissedBuild(),
   );
   const [busy, setBusy] = useState<boolean>(() => isAppBusy());
+  const [dirty, setDirty] = useState<boolean>(() => hasUnsavedWork());
+  const [confirming, setConfirming] = useState(false);
 
   // Track in-flight long operations so the banner can hold off. The
   // poll keeps running underneath — only display is suppressed, so the
   // prompt appears the instant the operation settles.
   useEffect(() => subscribeAppBusy(setBusy), []);
+  // Unsaved editor content does NOT suppress the banner — see
+  // appBusy.ts — but it does gate the reload behind a confirmation,
+  // because that content lives only in React state (Codex P2, #434).
+  useEffect(() => subscribeUnsavedWork(setDirty), []);
 
   useEffect(() => {
     // No stamp means the define did not run (dev server, test). There
@@ -100,29 +111,55 @@ export default function UpdatePrompt(): ReactElement | null {
 
   if (!visible) return null;
 
+  const FOCUS_RING =
+    // ui-guidance.md line 120: every interactive element has a visible
+    // focus ring. Ring + offset so it reads against the banner's own
+    // background in both themes (Codex P1, #434).
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-900";
+
+  const onReloadClick = (): void => {
+    // One extra click when there is unsaved content, rather than a
+    // blocking confirm() dialog: it keeps the choice in the banner and
+    // states exactly what is at risk.
+    if (dirty && !confirming) {
+      setConfirming(true);
+      return;
+    }
+    window.location.reload();
+  };
+
   return (
     <div
       role="status"
       aria-live="polite"
       data-testid="update-prompt"
-      className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center gap-3 border-t border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+      data-confirming={confirming ? "true" : "false"}
+      className="fixed inset-x-0 bottom-0 z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-700 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
     >
-      <span>A new version of match&#124;line is available.</span>
+      <span>
+        {confirming
+          ? "Reloading will discard your unsaved changes on this page."
+          : "A new version of match\u007Cline is available."}
+      </span>
       <button
         type="button"
         data-action="update-reload"
-        onClick={() => window.location.reload()}
-        className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+        onClick={onReloadClick}
+        className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${FOCUS_RING} ${
+          confirming
+            ? "bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-500 dark:text-zinc-900 dark:hover:bg-amber-400"
+            : "bg-zinc-900 text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+        }`}
       >
-        Reload
+        {confirming ? "Reload anyway" : "Reload"}
       </button>
       <button
         type="button"
         data-action="update-dismiss"
-        onClick={onDismiss}
-        className="rounded-md px-2 py-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+        onClick={confirming ? () => setConfirming(false) : onDismiss}
+        className={`rounded-md px-2 py-1.5 text-xs font-medium text-zinc-500 transition-colors duration-150 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100 ${FOCUS_RING}`}
       >
-        Not now
+        {confirming ? "Keep editing" : "Not now"}
       </button>
     </div>
   );

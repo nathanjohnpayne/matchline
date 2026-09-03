@@ -1,5 +1,5 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
@@ -22,15 +22,32 @@ const BUILD_ID = new Date().toISOString();
  * what happens if it ever stops being emitted.
  */
 function emitVersionFile(): Plugin {
+  // Captured from the resolved config rather than hardcoded: `dist` is
+  // only the default, and `vite build --outDir <dir>` (or a config
+  // override) moves the bundle without moving this file. Codex verified
+  // on PR #434 that the literal path wrote version.json to `dist/` while
+  // the bundle went elsewhere — silently where `dist/` happened to
+  // exist, and ENOENT on a clean checkout.
+  let outDir = "dist";
+  let root = process.cwd();
+
   return {
     name: "matchline-version-file",
     apply: "build",
+    configResolved(config) {
+      outDir = config.build.outDir;
+      root = config.root;
+    },
     // `closeBundle` rather than `generateBundle`: writing through
     // `emitFile` would put version.json under Rollup's asset pipeline
     // and expose it to hashing. This file's URL has to stay literal.
     closeBundle() {
+      // `outDir` may be absolute (as `--outDir /tmp/x` gives) or
+      // relative to the project root; `resolve` handles both.
+      const target = resolve(root, outDir);
+      mkdirSync(target, { recursive: true });
       writeFileSync(
-        join("dist", "version.json"),
+        join(target, "version.json"),
         `${JSON.stringify({ buildId: BUILD_ID }, null, 2)}\n`,
         "utf8",
       );

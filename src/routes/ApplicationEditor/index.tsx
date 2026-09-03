@@ -66,6 +66,7 @@ import ApplicationEditorView, {
 const UNDO_STACK_LIMIT = 10;
 import ManualAddForm from "../UnitReview/ManualAddForm.tsx";
 import { selectPrimaryResumeAsset } from "./selectPrimaryResumeAsset.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 
 export default function ApplicationEditor(): ReactElement {
   const { applicationId } = useParams<{ applicationId: string }>();
@@ -464,6 +465,8 @@ function ApplicationEditorInner({
       if (asset === null || applicationId === undefined) return;
       if (mutationInFlightRef.current) return;
       mutationInFlightRef.current = true;
+      // Declared before the outer try so its finally can release it.
+      let releaseValidateBusy: (() => void) | undefined;
       // Capture pre-mutation snapshot up front; commit only on
       // a real "edited" result. no-change / empty-text / *-not-
       // found short-circuit without filling the undo cap with
@@ -505,6 +508,15 @@ function ApplicationEditorInner({
       //    edit landed; validation just couldn't run. Surface as
       //    a console warning + leave the UI in stale state until
       //    the user retries.
+      // Hold a busy lease across validation AND the refetch below.
+      // validateAsset carries a 330s budget, and the edit has already
+      // written `validation_status: "stale"`. A reload offered mid-flight
+      // would not just interrupt a paid call: the editor reloads the
+      // Application with a one-shot read rather than a subscription, so
+      // if that read wins the race against the server's validation write
+      // the reopened editor stays stale even after validation finishes
+      // (Codex P2 on PR #434).
+      releaseValidateBusy = beginAppBusy("applicationEditor.validate");
       try {
         await invokeValidateAsset(applicationId, asset.id);
       } catch (err) {
@@ -541,6 +553,10 @@ function ApplicationEditorInner({
         // `throw new Error("Couldn't save edit: ...")` would
         // leave the gate locked indefinitely.
         mutationInFlightRef.current = false;
+        // Same reasoning for the busy lease: released here rather
+        // than after the refetch so an early return or throw cannot
+        // strand it and suppress the update banner for the session.
+        releaseValidateBusy?.();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],

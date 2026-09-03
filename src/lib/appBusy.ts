@@ -93,4 +93,78 @@ export function _resetAppBusyForTests(): void {
   leases.clear();
   listeners.clear();
   nextToken = 1;
+  unsavedWork.clear();
+  unsavedListeners.clear();
+  nextUnsavedToken = 1;
+}
+
+/* ------------------------------------------------------------------ *
+ * Unsaved work
+ * ------------------------------------------------------------------ */
+
+/**
+ * Editors holding content that exists only in React state.
+ *
+ * Separate from the busy leases above because the two mean different
+ * things to the reload prompt. A call in flight *suppresses* the prompt
+ * outright — reloading would destroy paid work already under way. A
+ * dirty editor does not: the user may well want the new build, and
+ * hiding the banner because a textarea has content would hide it
+ * indefinitely, since a filled paste box is a normal resting state.
+ *
+ * So this drives a warning and an explicit confirm instead. Codex
+ * raised the risk on PR #434: `Onboarding`'s pasted résumé and a Role's
+ * unsaved JD draft live only in component state, and nothing in the
+ * repo guards `beforeunload`, so a one-click reload silently discarded
+ * them.
+ */
+const unsavedWork = new Map<number, string>();
+const unsavedListeners = new Set<Listener>();
+let nextUnsavedToken = 1;
+
+export function hasUnsavedWork(): boolean {
+  return unsavedWork.size > 0;
+}
+
+/**
+ * Declare that an editor holds unsaved content. Returns a release
+ * function; call it when the content is saved, submitted, or cleared.
+ *
+ * Same lease shape as `beginAppBusy`, and for the same reason: two
+ * editors can be dirty at once, and one going clean must not speak for
+ * the other.
+ */
+export function beginUnsavedWork(label: string): () => void {
+  const token = nextUnsavedToken++;
+  const before = hasUnsavedWork();
+  unsavedWork.set(token, label);
+  notifyUnsaved(before);
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const was = hasUnsavedWork();
+    unsavedWork.delete(token);
+    notifyUnsaved(was);
+  };
+}
+
+export function subscribeUnsavedWork(listener: Listener): () => void {
+  unsavedListeners.add(listener);
+  return () => {
+    unsavedListeners.delete(listener);
+  };
+}
+
+function notifyUnsaved(before: boolean): void {
+  const after = hasUnsavedWork();
+  if (before === after) return;
+  for (const listener of unsavedListeners) {
+    try {
+      listener(after);
+    } catch {
+      // See notify() above.
+    }
+  }
 }
