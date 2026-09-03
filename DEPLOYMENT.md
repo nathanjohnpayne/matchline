@@ -534,6 +534,7 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
 >
 > ```bash
 > gcloud projects add-iam-policy-binding {project-id} \
+>   --impersonate-service-account="" \
 >   --member=serviceAccount:firebase-deployer@{project-id}.iam.gserviceaccount.com \
 >   --role=roles/secretmanager.viewer --condition=None
 > ```
@@ -720,7 +721,18 @@ Every function exported from `functions/src/index.ts` appears here. The `invoker
   > `"public"` retries the IAM write on **every** deploy — and under the
   > domain-restricted-sharing policy above that write fails every time,
   > turning a one-off first-deploy chore into a permanent deploy failure.
-- **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* HTTP functions that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
+- **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
+
+> **`invoker` does nothing on `onCall`.** A callable declared as
+> `onCall({ invoker: "private" }, ...)` is **not** private: the pinned
+> `firebase-functions@7.3.2` builds `callableTrigger: {}` and drops the
+> option, and the CLI then applies `["public"]` to every callable service
+> unconditionally, on create and on update
+> (`release/fabricator.js`: `isCallableTriggered` → `setInvokerCreate(..., ["public"])`).
+> So such a function stays **required** here, and anyone who wrote that
+> option believing it restricted access is mistaken — enforce authorization
+> inside the handler against `request.auth`, which is what callables are
+> designed for. The restricted-invoker row above applies to `onRequest` only.
 
 The two ways to get this wrong are not equally bad:
 
