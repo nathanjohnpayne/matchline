@@ -77,10 +77,98 @@ guard short-circuits `--full` runs that would exceed any per-provider
 monthly cap (see `tests/eval/projection.ts`, defaults from
 `memory/matchline_budget_ceilings.md`).
 
+### Token sources (#389)
+
+By default the harness bills the metered API. `--token-source` routes
+the LLM calls through a subscription CLI instead, so tuning iterations
+do not draw on the $25/mo Anthropic cap.
+
+```bash
+npm run eval -- --token-source claude-cli
+```
+
+| source | billing | status |
+|---|---|---|
+| `api` (default) | metered Anthropic + OpenAI | the fidelity reference, and the only source that yields meaningful latency |
+| `claude-cli` | Claude Code subscription | verified end-to-end on `nathan-2026` — see `claudeCliClient`'s docstring in `tokenSource.ts` for the spike record |
+
+`OPENAI_API_KEY` is required by **every** source, because embeddings
+have no CLI equivalent. `ANTHROPIC_API_KEY` is required only by `api`.
+
+#### Fidelity — the CLI path ranks, it does not replicate
+
+- **Different structured-output semantics.** The API constrains output
+  with `tool_choice`; Claude CLI validates its final JSON response
+  against the same schema but does not replicate an API tool call.
+- **No output-token budget.** Production sets `max_tokens: 16_384`
+  (raised in #145 after real truncation). The CLI does not expose an
+  equivalent, so a model whose default ceiling is lower could truncate
+  here and not in production.
+- **Latency is not comparable.** Wall-clock includes agent startup —
+  399s measured on a call the API serves far faster.
+
+Confirm the top finalists on `--token-source api` before editing
+`functions/src/llm/config.ts`.
+
+#### Security constraints
+
+The subprocess environment is built by **allowlist**, not by filtering
+`process.env` (`buildChildEnv`), mirroring the `env -i` invocations in
+`scripts/phase-4b/adapters/`. No ambient credentials —
+`OP_PREFLIGHT_*`, `GH_TOKEN`, GCP paths — reach the child.
+
+⚠️ **Fixture text is untrusted prompt input.** Resume and JD text is
+embedded verbatim in the agent prompt. The Claude adapter uses native
+JSON-schema output with `--tools ""` and `--safe-mode`: it grants the
+model neither filesystem nor shell tools, while the environment
+allowlist keeps ambient credentials out of the child. Keep those flags
+in place before widening the corpus to scraped or third-party fixtures
+(#38, #87, and #28).
+
+### Model sweep (#389)
+
+`--variant` runs the corpus once per configuration and prints a
+quality-vs-cost Pareto table, so the model pins in
+`functions/src/llm/config.ts` can be chosen from data.
+
+```bash
+npm run eval -- --token-source claude-cli \
+  --variant 'sonnet:model.extraction=claude-sonnet-4-6' \
+  --variant 'haiku:model.extraction=claude-haiku-4-5-20251001'
+```
+
+Grammar: `--variant '<label>:<key>=<value>[,<key>=<value>...]'`, where
+`<key>` is `model.<stage>` or `prompt.<stage>/<name>`. Repeatable.
+Command-wide `--prompt` flags carry into every variant; a variant's own
+prompt override wins on conflict.
+
+Cost is **modeled** — payload tokens priced through
+`functions/src/llm/rates.ts` — never the CLI's reported
+`total_cost_usd`, which is shadow cost of the agent harness (measured
+$0.105 against ~$0.066 of real Haiku payload).
+
+The sweep refuses to start rather than produce a mislabeled table. It
+rejects a model with no `rates.ts` entry (it would report $0.00 and win
+on cost), a misspelled stage, a stage the corpus never runs
+(`generation`, `validation`, `rationale`), an OpenAI model (see #402),
+a prompt key the corpus never resolves — only `extraction/resume` and
+`parsing/jd` are exercised, so `--variant
+'x:prompt.validation/traceability=v2'` and a command-wide `--prompt`
+naming any other key both fail before the run starts — a variant label
+outside `[A-Za-z0-9._-]` (it would corrupt the Markdown results table),
+and a prompt version containing path separators (it would resolve to a
+different prompt file while the table credited this variant).
+
+Unknown command-line flags are rejected too, for the same reason one
+level up: an ignored `--tokn-source claude-cli` would leave the default
+metered API selected and spend real money on a run you meant to bill to
+a subscription.
+
 ### API keys
 
 Both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are required for real
-scoring. Without them the harness falls back to listing fixtures
+scoring on the default `api` token source (see § Token sources for the
+subscription-backed alternatives, which need only `OPENAI_API_KEY`). Without them the harness falls back to listing fixtures
 without scoring (clear "set API keys" note in each fixture's
 output). The `*ForCli()` factories in `functions/src/llm/{anthropic,openai}.ts`
 read the env vars directly, bypassing `defineSecret` (which only
@@ -99,6 +187,8 @@ tests/eval/
 ├── loadFixtures.ts    typed fixture-file readers (#136)
 ├── mapping.ts         runtime UUID → labeler mnemonic (#136)
 ├── cache.ts           content-addressed stage cache (#389)
+├── tokenSource.ts     api / claude-cli adapters (#389)
+├── sweep.ts           pure: model×prompt matrix + Pareto table (#389)
 ├── scoring.ts         pure: jaccard, unit-set accuracy, top-K overlap
 ├── projection.ts      pure: monthly-spend cap check
 ├── report.ts          pure: stdout formatter

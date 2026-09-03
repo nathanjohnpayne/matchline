@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasMappedSenioritySignal,
+  hasMeasurableSeniority,
+  hasStructuralEvidence,
   recency,
+  requirementAxes,
   scopeAlignment,
   score,
   semanticSimilarityScore,
@@ -121,13 +125,41 @@ describe("skillOverlap", () => {
     expect(skillOverlap(unit, req)).toBe(1);
   });
 
-  it("returns 0.0 when one side is empty and the other isn't", () => {
-    expect(
-      skillOverlap(makeUnit({ skills: ["sql"] }), makeRequirement()),
-    ).toBe(0);
+  it("returns 0.0 when the Requirement asks and the Unit attests to nothing", () => {
     expect(
       skillOverlap(makeUnit(), makeRequirement({ keywords: ["sql"] })),
     ).toBe(0);
+  });
+
+  it("returns 0.5 (neutral) when the REQUIREMENT side is empty, whatever the Unit brings", () => {
+    // Directional empty-set rule. An empty Requirement side means
+    // the Requirement places no evaluable constraint on this axis
+    // — either the JD named nothing, or the seed ontology didn't
+    // recognize what it named. "No signal" must not be scored as
+    // "candidate fails."
+    //
+    // Regression: the `coursera-staff-pm-2026` fixture. Its
+    // JD-side vocabulary canonicalized at 13% / 9% / 0%
+    // (keywords / domains / tools) against 100% on the unit side,
+    // so under the prior symmetric rule skill + domain + tool
+    // hard-zeroed on EVERY pair. That removed 0.45 of the weight,
+    // capped `final_score` below the Gaps view's 0.4 threshold,
+    // and rendered a well-matched Role as "every must-have unmet."
+    //
+    // It also inverted extraction quality: a Unit whose skills all
+    // canonicalized scored 0.0 here, while a Unit whose vocabulary
+    // was junk (and so normalized away to nothing) collected the
+    // both-empty 0.5. Cleaning up a Unit lowered its score. Both
+    // Units now sit at the same honest neutral.
+    expect(
+      skillOverlap(makeUnit({ skills: ["sql"] }), makeRequirement()),
+    ).toBe(0.5);
+    expect(
+      skillOverlap(
+        makeUnit({ skills: ["not-in-any-ontology-xyzzy"] }),
+        makeRequirement(),
+      ),
+    ).toBe(0.5);
   });
 
   it("returns 0.5 (neutral) when BOTH sides are empty (#148 ranking-pathology fix)", () => {
@@ -208,6 +240,23 @@ describe("toolOverlap", () => {
     // dimension neutral when neither side asserts a constraint.
     expect(toolOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
+
+  it("applies the directional rule: 0.5 when the Requirement names no tool, 0.0 when it names one the Unit lacks", () => {
+    // `tools` is the axis where requirement-side-empty dominates in
+    // production — the live Google Compute SPM trace cited above had
+    // 14/15 requirements at `tools = []` — so a Unit that carries
+    // tools meets an empty Requirement side constantly. Pin both
+    // halves here, not just the both-empty case: a refactor that
+    // reintroduced the symmetric rule would keep the both-empty
+    // test green while silently restoring the 0.10-weight hard-zero
+    // this change exists to remove.
+    expect(
+      toolOverlap(makeUnit({ tools: ["jira"] }), makeRequirement()),
+    ).toBe(0.5);
+    expect(
+      toolOverlap(makeUnit(), makeRequirement({ tools: ["jira"] })),
+    ).toBe(0);
+  });
 });
 
 // -- domainOverlap ----------------------------------------------------------
@@ -220,14 +269,19 @@ describe("domainOverlap", () => {
     expect(domainOverlap(makeUnit(), makeRequirement())).toBe(0.5);
   });
 
-  it("returns 0.0 when one side is non-empty and the other empty", () => {
-    // Use a canonical-known domain ("streaming video"); a raw
-    // term that doesn't normalize would drop and produce a
-    // false 1.0 (both-empty after canonicalization).
+  it("returns 0.5 when the Requirement names no domain, 0.0 when it names one the Unit lacks", () => {
+    // Use canonical-known domains so the assertions exercise the
+    // empty-set rule rather than an incidental normalize() miss.
     expect(
       domainOverlap(
         makeUnit({ domains: ["streaming video"] }),
         makeRequirement(),
+      ),
+    ).toBe(0.5);
+    expect(
+      domainOverlap(
+        makeUnit(),
+        makeRequirement({ domains: ["streaming video"] }),
       ),
     ).toBe(0);
   });
@@ -370,12 +424,17 @@ describe("scopeAlignment", () => {
     expect(scopeAlignment(makeUnit(), req)).toBe(0.5);
   });
 
-  it("returns 0 when only one side is non-empty on a scope requirement", () => {
+  it("returns 0 when the scope Requirement asks and the Unit attests to nothing", () => {
     const req = makeRequirement({ category: "scope", keywords: ["40M users"] });
     expect(scopeAlignment(makeUnit(), req)).toBe(0);
+  });
+
+  it("returns 0.5 (neutral) when a scope Requirement carries no keywords", () => {
+    // Same directional rule as skill/tool/domain: a scope-category
+    // Requirement with nothing in `keywords` constrains nothing.
     const reqEmpty = makeRequirement({ category: "scope", keywords: [] });
     const unit = makeUnit({ scope_signals: ["40M users"] });
-    expect(scopeAlignment(unit, reqEmpty)).toBe(0);
+    expect(scopeAlignment(unit, reqEmpty)).toBe(0.5);
   });
 
   it("returns 1.0 for an exact-string scope match", () => {
@@ -794,5 +853,278 @@ describe("score (master composer)", () => {
     const b = score(unit, req, { asOf });
     expect(a.final_score).toBe(b.final_score);
     expect(a.rule_score).toBe(b.rule_score);
+  });
+});
+
+// -- hasStructuralEvidence --------------------------------------------------
+
+describe("hasStructuralEvidence (Codex P1 rounds 1 + 3 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  // A well-formed, recent Unit at the extraction prompt's
+  // confidence anchor. Everything below varies the Requirement.
+  function recentUnit(overrides: Partial<ExperienceUnit> = {}): ExperienceUnit {
+    return makeUnit({
+      skills: ["product strategy"],
+      tools: ["jira"],
+      domains: ["streaming video"],
+      seniority_signals: ["led"],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+      ...overrides,
+    });
+  }
+
+  it("is false when the Requirement constrains nothing evaluable", () => {
+    // The credential shape `jd.v1.md` emits for "BS in Computer
+    // Science required": no keywords, tools, domains, or
+    // seniority level. Every structural axis falls back to its
+    // no-constraint default, so `rule_score` collects ~0.425
+    // nothing earned.
+    const req = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    expect(score(recentUnit(), req, { asOf }).structural_evidence).toBe(false);
+  });
+
+  it("is false when the Requirement names terms the ontology can't canonicalize", () => {
+    // Populated arrays are not evidence on their own. If nothing
+    // survives canonicalization the engine has nothing to
+    // compare, which is the same position as an empty array.
+    const req = makeRequirement({
+      keywords: ["xyzzy-not-a-real-skill"],
+      tools: ["plugh-not-a-real-tool"],
+      domains: ["frobnitz-not-a-real-domain"],
+    });
+    expect(score(recentUnit(), req, { asOf }).structural_evidence).toBe(false);
+  });
+
+  it("is FALSE when the Requirement constrains an axis but this Unit scores 0 on it", () => {
+    // Codex P1 round 3. The round-1 fix asked only "was this axis
+    // evaluable", which is identical for every Unit — so one
+    // recognized keyword marked EVERY Unit as evidenced,
+    // including Units scoring 0.0 on that exact axis, and the
+    // remaining neutral credit carried them over 0.4.
+    //
+    // "adding one recognized but wholly unmatched term bypasses
+    // the new gate while most invented neutral credit remains."
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const unmatched = recentUnit({ skills: ["python"] });
+    const result = score(unmatched, req, { asOf });
+    expect(result.components.skill_overlap).toBe(0);
+    // Still clears the gap threshold on neutral credit alone —
+    // which is exactly why the flag, not the score, is the gate.
+    expect(result.final_score).toBeGreaterThan(0.4);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("is true when the Unit actually scores on a constrained axis", () => {
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const result = score(recentUnit(), req, { asOf });
+    expect(result.components.skill_overlap).toBeGreaterThan(0);
+    expect(result.structural_evidence).toBe(true);
+  });
+
+  it("accepts evidence from any single structural axis", () => {
+    const unit = recentUnit();
+    expect(
+      score(unit, makeRequirement({ keywords: ["product strategy"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    expect(
+      score(unit, makeRequirement({ tools: ["jira"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    expect(
+      score(unit, makeRequirement({ domains: ["streaming video"] }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+    // "led" maps to `senior`; an exact-level Requirement scores
+    // 1.0 on the seniority axis, which is evidence.
+    expect(
+      score(unit, makeRequirement({ seniority_level: "senior" }), { asOf })
+        .structural_evidence,
+    ).toBe(true);
+  });
+
+  it("does not accept a constrained axis the Unit hard-zeroed", () => {
+    // A two-level seniority gap drives `seniorityAlignment` to
+    // 0.0. The Requirement constrained the axis, but this Unit
+    // failed it — that is the opposite of evidence.
+    const unit = recentUnit({ skills: [], tools: [], domains: [] });
+    const result = score(
+      unit,
+      makeRequirement({ seniority_level: "director" }),
+      { asOf },
+    );
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("does not count the neutral on an UNCONSTRAINED axis as evidence", () => {
+    // The interaction that makes the predicate subtle: an
+    // unconstrained axis scores 0.5, which is `> 0`. It must
+    // still not qualify, because `requirementAxes` marks it
+    // inapplicable. Both conditions have to be read together.
+    const req = makeRequirement({
+      category: "credential",
+      keywords: [],
+      tools: [],
+      domains: [],
+    });
+    const result = score(recentUnit(), req, { asOf });
+    expect(result.components.skill_overlap).toBe(0.5);
+    expect(result.components.tool_overlap).toBe(0.5);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("pairs with requirementAxes rather than duplicating its branches", () => {
+    // Direct call, so a future refactor that lets the two drift
+    // fails here rather than silently in the Gaps view.
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const axes = requirementAxes(req);
+    expect(axes.skill_overlap).toBe(true);
+    expect(axes.tool_overlap).toBe(false);
+    const components = score(recentUnit(), req, { asOf }).components;
+    expect(
+      hasStructuralEvidence({ components, axes, seniorityMapped: true }),
+    ).toBe(true);
+    expect(
+      hasStructuralEvidence({
+        components: { ...components, skill_overlap: 0 },
+        axes,
+        seniorityMapped: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasStructuralEvidence: unmapped seniority (Codex P1 round 4 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("does not count seniorityAlignment's unmapped-signal neutral as evidence", () => {
+    // `seniorityAlignment` returns 0.5 for two different
+    // situations that `components` alone cannot tell apart:
+    //   1. a real one-level gap between LADDER-MAPPED levels, and
+    //   2. the "we don't know" fallback when every signal is
+    //      unmapped.
+    // Only (1) is evidence. Counting (2) let a seniority
+    // must-have clear on a Unit with no mapped signal at all —
+    // the same invented-credit shape as jaccard's neutral, on a
+    // different axis.
+    const unit = makeUnit({
+      // `mentored` is not on the ladder and not in the verb map.
+      seniority_signals: ["mentored"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(hasMappedSenioritySignal(unit)).toBe(false);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("DOES count a mapped one-level gap, which scores the same 0.5", () => {
+    // The discriminator is the mapping, not the value. `led`
+    // maps to `senior`; against a `staff` ask that is a
+    // one-level gap → 0.5, and it is real evidence.
+    const unit = makeUnit({
+      seniority_signals: ["led"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(hasMappedSenioritySignal(unit)).toBe(true);
+    expect(result.structural_evidence).toBe(true);
+  });
+
+  it("does not count a mapped signal that scored 0 (multi-level gap)", () => {
+    // Mapped but failed is evidence of absence, not of fit.
+    const unit = makeUnit({
+      seniority_signals: ["led"],
+      skills: [],
+      tools: [],
+      domains: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "director" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.structural_evidence).toBe(false);
+  });
+
+  it("hasMappedSenioritySignal tracks seniorityAlignment's own mapping", () => {
+    // Paired pin: if the ladder or the verb map changes, both
+    // sides have to move together.
+    expect(hasMappedSenioritySignal({ seniority_signals: [] })).toBe(false);
+    expect(hasMappedSenioritySignal({ seniority_signals: ["mentored"] })).toBe(
+      false,
+    );
+    expect(hasMappedSenioritySignal({ seniority_signals: ["staff"] })).toBe(
+      true,
+    );
+    expect(hasMappedSenioritySignal({ seniority_signals: ["architected"] })).toBe(
+      true,
+    );
+    expect(
+      hasMappedSenioritySignal({ seniority_signals: ["mentored", "led"] }),
+    ).toBe(true);
+  });
+});
+
+describe("hasMeasurableSeniority: a hard zero is a measurement (Codex P2 on #435)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("treats NO signals as measurable — the 0 is a real negative finding", () => {
+    // `seniorityAlignment` hard-zeroes a Unit with no signals:
+    // "no evidence of meeting the bar". An intermediate revision
+    // of #435 marked that inapplicable because there was no
+    // MAPPED signal, so the breakdown reported "not evaluated"
+    // and concealed an actual negative measurement.
+    expect(hasMeasurableSeniority({ seniority_signals: [] })).toBe(true);
+    const unit = makeUnit({
+      seniority_signals: [],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0);
+    expect(result.component_applicability.seniority_alignment).toBe(true);
+  });
+
+  it("treats signals-present-but-unmapped as UNmeasurable — that 0.5 is ignorance", () => {
+    expect(hasMeasurableSeniority({ seniority_signals: ["mentored"] })).toBe(
+      false,
+    );
+    const unit = makeUnit({
+      seniority_signals: ["mentored"],
+      confidence_score: 0.85,
+      date_range: { start: "2021-01-01" },
+    });
+    const req = makeRequirement({ seniority_level: "staff" });
+    const result = score(unit, req, { asOf });
+    expect(result.components.seniority_alignment).toBe(0.5);
+    expect(result.component_applicability.seniority_alignment).toBe(false);
+  });
+
+  it("treats a mapped signal as measurable whatever it scores", () => {
+    expect(hasMeasurableSeniority({ seniority_signals: ["led"] })).toBe(true);
+    expect(
+      hasMeasurableSeniority({ seniority_signals: ["mentored", "led"] }),
+    ).toBe(true);
   });
 });

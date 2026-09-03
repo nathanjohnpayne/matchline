@@ -29,6 +29,8 @@ import RequirementsTab, {
   type RequirementsTabStatus,
 } from "./RequirementsTab.tsx";
 import { computeGaps } from "./computeGaps.ts";
+import type { EvidenceStatus } from "./GapsView.tsx";
+import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
@@ -49,6 +51,15 @@ export interface RoleDetailViewProps {
   readonly role: Role | null;
   readonly requirements: readonly JobRequirementUnit[];
   readonly matches: readonly UnitMatch[];
+  /**
+   * Derived structural-evidence verdicts keyed by match id
+   * (#441). `undefined` while the derivation is in flight or
+   * after it failed — `computeGaps` then falls back to the
+   * permissive pre-#441 reading, and `evidenceStatus` is what
+   * discloses that to the user.
+   */
+  readonly matchEvidence?: ReadonlyMap<string, MatchEvidence>;
+  readonly evidenceStatus?: EvidenceStatus;
   readonly unitsById: ReadonlyMap<string, ExperienceUnit>;
   readonly error: Error | null;
   readonly activeTab: Tab;
@@ -72,6 +83,14 @@ export interface RoleDetailViewProps {
    * regardless, so this is purely a UX signal.
    */
   readonly computingMatches: boolean;
+  /**
+   * Manual re-run of the matching pipeline (#442 / Codex P2 on
+   * PR #449). Needed because the auto-trigger will not fire while
+   * matches exist, so a Role holding matches stranded by a
+   * re-parse has no other way forward.
+   */
+  readonly onRerunMatching?: () => void;
+  readonly matchingError?: Error | null;
   /**
    * Requirements tab parse state (#201). The container holds
    * `parseJobRequirements`-call state + the in-flight save
@@ -108,12 +127,16 @@ export default function RoleDetailView({
   role,
   requirements,
   matches,
+  matchEvidence,
+  evidenceStatus,
   unitsById,
   error,
   activeTab,
   onTabChange,
   onApprovalStateChange,
   computingMatches,
+  onRerunMatching,
+  matchingError,
   parsingStatus,
   parseError,
   savingJd,
@@ -143,9 +166,9 @@ export default function RoleDetailView({
     () => groupMatchesByRequirement(requirements, matches),
     [requirements, matches],
   );
-  const gaps = useMemo(
-    () => computeGaps(requirements, matches),
-    [requirements, matches],
+  const gapReport = useMemo(
+    () => computeGaps(requirements, matches, matchEvidence),
+    [requirements, matches, matchEvidence],
   );
 
   if (status === "loading") {
@@ -248,8 +271,12 @@ export default function RoleDetailView({
         )}
         {activeTab === "matches" && (
           <MatchesTab
+            onRerunMatching={onRerunMatching}
+            matchingError={matchingError}
             groups={groups}
-            gaps={gaps}
+            gaps={gapReport.gaps}
+            evidenceStatus={evidenceStatus}
+            strandedMatches={gapReport.strandedMatches}
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}

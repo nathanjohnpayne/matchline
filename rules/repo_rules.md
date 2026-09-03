@@ -75,7 +75,18 @@ the runbook an agent follows before moving an L/XL ticket to
 
 ## CI Enforcement
 
-The following checks run from `scripts/ci/` locally and via `.github/workflows/repo_lint.yml` in CI.
+The following checks run from `scripts/ci/` locally and, in CI, from one of two
+workflows. `.github/workflows/repo_lint.yml` is manifest-canonical — propagated
+byte-for-byte from mergepath, so it cannot carry matchline-specific wiring.
+Checks with no mergepath counterpart are wired in the never-propagated annex
+`.github/workflows/repo_lint_local.yml`, which `check_ci_scripts_wired` scans as
+a union with the canonical file. Currently in the annex:
+`check_prompt_schema_pairs`, `check_no_other_skill_normalization`,
+`check_fixture_match_ids`, `check_no_duplicate_document_contracts`.
+
+The annex runs no `npm ci`, so a check wired there must depend on nothing
+beyond a stock shell and the checked-out tree.
+
 All checks must pass before merge.
 
 - check_required_root_files
@@ -87,5 +98,6 @@ All checks must pass before merge.
 - check_review_policy_exists (inline in repo_lint.yml): .github/review-policy.yml and REVIEW_POLICY.md must both exist
 - check_codex_scripts: `scripts/codex-review-request.sh` and `scripts/codex-review-check.sh` must exist and be executable in every repo. Required for `CLAUDE.md` step 8 Phase 4a (automated external review via the OpenAI Codex GitHub App) — missing either script silently forces callers to Phase 4b fallback.
 - check_prompt_schema_pairs: every `functions/src/prompts/<stage>/<name>.v<N>.md` must have a co-located `<name>.v<N>.schema.ts` and vice versa. Enforces the versioned-prompt pair invariant the loader in `functions/src/prompts/loader.ts` depends on. See issue #49.
+- check_no_duplicate_document_contracts: the Firestore document contracts (`ExperienceUnit`, `JobRequirementUnit`, `UnitMatch`, `UnitCluster`, `ScoreComponents` and the enums they use) are declared exactly once **repo-wide**, in `functions/src/types/capability.ts`. Every `.ts`/`.tsx` file under `src/`, `functions/src/` and `tests/` is scanned; `src/types/capability.ts` type-only re-exports and must never redeclare. The two files were previously hand-synced copies and had already drifted — each documented invariants the other could not see, and nothing failed. See #443.
 - check_no_other_skill_normalization: only `functions/src/matching/normalize.ts` may define `normalizeSkill` / `normalizeTool` / `normalizeDomain`, and only that module may import the `*.seed.json` ontology files directly. Enforces the single-source-of-truth invariant for canonical-vocabulary normalization (#96, parent #20).
 - check_fixture_match_ids: every `expected_top_matches` entry in `tests/fixtures/expected-matches/*.json` must resolve to a real unit id in `tests/fixtures/expected-units/<resume>.json` and a real requirement id in the same expected-matches file's `expected_requirements`. Closes the silent ID-drift window flagged on #138.

@@ -169,6 +169,12 @@ const ENTRY_SCHEMA_VERSION = 1 as const;
  * or any Zod schema they validate against, in a way that can alter
  * output for unchanged inputs.
  *
+ * This list is the production pipeline and stops there. The
+ * `claude-cli` adapter in `tokenSource.ts` carries its own
+ * `CLI_ADAPTER_VERSION`, folded in through the token-source
+ * discriminator — bump that one instead when the adapter's prompt
+ * rewrite, flags, or response handling change.
+ *
  * A source-content hash would remove the discipline requirement, but
  * it would also invalidate on comment-only edits and needs a build
  * step to see the whole import graph. An explicit constant is the

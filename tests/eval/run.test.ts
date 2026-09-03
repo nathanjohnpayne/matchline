@@ -11,10 +11,14 @@ import {
   SMOKE_RESUME,
   aggregateSampledFixture,
   computeFlowCount,
+  estimateSpendForSource,
   estimatePlannedSpend,
+  assertKnownFlags,
+  cacheDiscriminatorsFor,
   filterToLabeledPairs,
   liveStageFraction,
   offlineOnlyClient,
+  parseTokenSource,
   parsePromptOverrides,
   parseSamples,
   resolvePromptVersionsForReport,
@@ -23,6 +27,7 @@ import {
   toFixtureResult,
 } from "./run.js";
 import type { RunForFixtureResult } from "./runForFixture.js";
+import { CLI_ADAPTER_VERSION } from "./tokenSource.js";
 
 function makeOrchestratorResult(
   overrides: Partial<RunForFixtureResult> = {},
@@ -152,6 +157,166 @@ describe("scaleSpendByProvider", () => {
     expect(scaled.anthropicUsd).toBe(full.anthropicUsd);
     expect(scaled.openaiUsd).toBe(0);
     expect(shouldBlock(checkCaps({ anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 }, scaled, DEFAULT_CAPS))).toBe(true);
+  });
+});
+
+describe("cacheDiscriminatorsFor", () => {
+  // Codex P1: unconditionally adding { tokenSource } changed all four
+  // stage hashes for ordinary `api` runs, because every entry the
+  // pre-#389 harness wrote had NO discriminator. An operator upgrading
+  // with a warm cache silently lost it and paid to re-warm — the exact
+  // cost the cache exists to remove.
+  it("keeps the legacy keyspace for the api source", () => {
+    expect(cacheDiscriminatorsFor("api")).toBeUndefined();
+  });
+
+  it("still separates CLI-produced entries from metered ones", () => {
+    // The property the discriminator was introduced for: comparing the
+    // two sources is only meaningful if they cannot collide.
+    expect(cacheDiscriminatorsFor("claude-cli")).toMatchObject({
+      tokenSource: "claude-cli",
+    });
+  });
+
+  it("versions the CLI adapter so an adapter change invalidates its entries", () => {
+    // Codex P2: `tokenSource` alone pins which adapter produced an
+    // entry, not which version of it. `cache.ts`'s STAGE_IMPL_VERSION
+    // covers the production pipeline and explicitly not
+    // `tokenSource.ts`, so without this a warm CLI cache keeps hitting
+    // after the adapter's prompt rewrite / flags / response handling
+    // change, and the sweep replays pre-change results.
+    expect(cacheDiscriminatorsFor("claude-cli")).toEqual({
+      tokenSource: "claude-cli",
+      cliAdapter: String(CLI_ADAPTER_VERSION),
+    });
+    // The api source keeps the legacy keyspace — no adapter is involved.
+    expect(cacheDiscriminatorsFor("api")).toBeUndefined();
+  });
+});
+
+describe("assertKnownFlags", () => {
+  it("accepts every documented flag, in both value forms", () => {
+    expect(() =>
+      assertKnownFlags([
+        "--full",
+        "--smoke",
+        "--samples", "5",
+        "--samples=5",
+        "--prompt", "extraction/resume=v1",
+        "--prompt=extraction/resume=v1",
+        "--variant", "a:model.extraction=claude-haiku-4-5-20251001",
+        "--token-source", "claude-cli",
+        "--token-source=claude-cli",
+        "--no-cache",
+        "--refresh-cache",
+      ]),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["--tokn-source", "a typo before the --token- prefix"],
+    ["--token_source", "an underscore instead of a hyphen"],
+    ["--tokensource", "a missing separator"],
+    ["--nocache", "a missing hyphen"],
+    ["--verbose", "a flag this harness never had"],
+  ])("rejects %j — %s", (flag) => {
+    // Codex P1: each per-parser guard only covers typos near its own
+    // flag, so these all slipped through and left the metered-API
+    // default selected. With both keys present that is a full corpus of
+    // real Anthropic spend on a run the operator asked to bill to a
+    // subscription.
+    expect(() => assertKnownFlags([flag, "claude-cli"])).toThrow(/Unrecognized argument/);
+  });
+
+  it("does not mistake a flag's value for a flag", () => {
+    expect(() => assertKnownFlags(["--samples", "5"])).not.toThrow();
+    expect(() =>
+      assertKnownFlags(["--variant", "a:prompt.extraction/resume=v1"]),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [["--full", "token-source", "claude-cli"], "a dropped leading --"],
+    [["--full", "stray"], "a lone positional"],
+    [["--samples", "5", "extra"], "a positional after a consumed value"],
+  ])("rejects %j — %s", (argv) => {
+    // CodeRabbit P1: checking only `--`-prefixed tokens left the same
+    // silent-metered-spend hole open one keystroke further along.
+    // Nothing in the harness consumes positionals, so an unconsumed one
+    // is always a mistake.
+    expect(() => assertKnownFlags(argv)).toThrow(/Unrecognized argument/);
+  });
+
+  it.each(["--full=1", "--smoke=true", "--no-cache=1", "--refresh-cache=yes"])(
+    "rejects a value on the boolean flag %s",
+    (arg) => {
+      // A value here means the operator believed it did something.
+      expect(() => assertKnownFlags([arg])).toThrow(/Unrecognized argument/);
+    },
+  );
+
+  it("leaves a missing value to the flag's own parser", () => {
+    // `--samples --full`: the value slot holds a flag, so it is not
+    // consumed, `--full` is checked normally, and parseSamples still
+    // raises its own "requires a value" error.
+    expect(() => assertKnownFlags(["--samples", "--full"])).not.toThrow();
+    expect(() => parseSamples(["--samples", "--full"])).toThrow(/requires/);
+  });
+
+  it("reports every unknown flag at once", () => {
+    expect(() => assertKnownFlags(["--nope", "--also-nope"])).toThrow(
+      /"--nope", "--also-nope"/,
+    );
+  });
+});
+
+describe("parseTokenSource", () => {
+  it("defaults to the metered API when the flag is absent", () => {
+    expect(parseTokenSource([])).toBe("api");
+    expect(parseTokenSource(["--full"])).toBe("api");
+  });
+
+  it("accepts both token-source flag forms", () => {
+    expect(parseTokenSource(["--token-source", "claude-cli"])).toBe("claude-cli");
+    expect(parseTokenSource(["--token-source=api"])).toBe("api");
+  });
+
+  it("rejects missing, flag-like, and unsupported values", () => {
+    expect(() => parseTokenSource(["--token-source"])).toThrow(/requires a value/);
+    expect(() => parseTokenSource(["--token-source", "--full"])).toThrow(/requires a value/);
+    expect(() => parseTokenSource(["--token-source", "codex-cli"])).toThrow(/must be one of/);
+    expect(() => parseTokenSource(["--token-soruce", "claude-cli"])).toThrow(
+      /Unknown token-source option/,
+    );
+  });
+
+  // Codex P2: composed commands (a wrapper prepending one value, a
+  // caller appending another) previously selected whichever occurrence
+  // came first in argv and silently ignored the rest.
+  it("scans every occurrence: repeats of the same value are fine, conflicts throw", () => {
+    expect(
+      parseTokenSource(["--token-source", "api", "--token-source", "api"]),
+    ).toBe("api");
+    expect(() =>
+      parseTokenSource(["--token-source", "api", "--token-source", "claude-cli"]),
+    ).toThrow(/conflicting values/);
+    expect(() =>
+      parseTokenSource(["--token-source=claude-cli", "--token-source=api"]),
+    ).toThrow(/conflicting values/);
+  });
+});
+
+describe("estimateSpendForSource", () => {
+  it("preserves the metered estimate for the API source", () => {
+    expect(estimateSpendForSource("full", 7, "api")).toEqual(estimatePlannedSpend("full", 7));
+  });
+
+  it("charges CLI sources for embeddings only", () => {
+    expect(estimateSpendForSource("smoke", 10, "claude-cli")).toEqual({
+      anthropicUsd: 0,
+      openaiUsd: 0.01,
+      firebaseUsd: 0,
+    });
   });
 });
 

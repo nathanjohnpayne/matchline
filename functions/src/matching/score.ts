@@ -78,6 +78,42 @@ export const WEIGHTS = Object.freeze({
 
 export interface ScoreResult {
   readonly components: ScoreComponents;
+  /**
+   * Did THIS PAIR score on an axis the Requirement actually
+   * constrains? See `hasStructuralEvidence`.
+   *
+   * False means the Unit earned nothing on any axis the
+   * employer asked about — either because the Requirement
+   * constrains none (every structural axis fell back to a
+   * no-constraint default: `jaccard()`'s 0.5 neutral, or the
+   * 1.0 from `seniorityAlignment` / `scopeAlignment`), or
+   * because it constrains some and this Unit scored 0.0 on all
+   * of them. Both cases leave `final_score` resting on
+   * semantics plus up to ~0.425 of unearned neutral credit,
+   * which is enough for a recent Unit to clear the Gaps view's
+   * 0.4 threshold.
+   *
+   * `computeGaps` consumes this so a must-have with no
+   * evaluable signal can never be reported as covered. The
+   * score itself is left alone: the spec's non-goals say
+   * matching "does not hide low-quality matches; they appear
+   * in the Gaps view," so the match still renders and still
+   * ranks — it just cannot silently satisfy a hard
+   * requirement.
+   *
+   * Codex P1 round 1 on PR #435 caught the false-positive
+   * path, using the credential-shaped Requirement that
+   * `jd.v1.md` emits with empty `keywords` / `tools` /
+   * `domains` as the worked example.
+   */
+  readonly structural_evidence: boolean;
+  /**
+   * Per-axis applicability for this pair — see `effectiveAxes`.
+   * Persisted on the match so the breakdown tooltip can render
+   * an unevaluated axis as unavailable instead of presenting
+   * its neutral as a measured score.
+   */
+  readonly component_applicability: RequirementAxes;
   /** Weighted sum of components, BEFORE the confidence multiplier. */
   readonly rule_score: number;
   /**
@@ -99,47 +135,332 @@ export interface ScoreResult {
 // -- Jaccard primitives -----------------------------------------------------
 
 /**
- * Jaccard similarity on two string sets, with each input
+ * Jaccard similarity between the UNIT side (`unitValues`) and the
+ * REQUIREMENT side (`requirementValues`), with each input
  * normalized through the supplied canonicalizer before
  * comparison. Inputs that don't normalize (return `null`) are
  * dropped — they're typically novel terms not yet in the
  * ontology, and including them as raw strings would defeat the
  * canonical-set discipline.
  *
- * Edge cases:
- *   - Both empty → **0.5 (neutral)**. Originally 1.0 per the
- *     spec's "no constraint on this dimension" framing, BUT
- *     that produced a false-positive cliff: the live matching
- *     trace on PR #148 showed `skill/tool/domain` flattening
- *     to 1.0 across **every** (Unit, Requirement) pair on the
- *     Nathan-2026 × Google SPM fixture — because the seed
- *     ontology only recognizes ~10% of the LLM's extraction
- *     vocabulary, so most Units AND most Requirement keywords
- *     normalize to all-nulls. With empty-empty = 1.0, that
- *     reads as "perfect agreement on every dimension" and
- *     14-year-old CNN broadcast Units rank above current
- *     streaming work. The ontology under-coverage is a
- *     separate fix (Phase 3 #38); this jaccard change closes
- *     the worst-case ranking pathology without waiting for it.
- *   - One empty → 0.0 (signal mismatch).
+ * **The parameter order is load-bearing**: the empty-set rule
+ * below is directional, so every caller must pass the Unit's
+ * values first and the Requirement's values second. All four
+ * call sites (skill / tool / domain / scope) do.
  *
- * 0.5 is the same neutral the seniority component uses for
- * "we don't know" — consistent semantics across the rule
- * components.
+ * Empty-set rule (#148 → this change):
+ *
+ *   - **Requirement side empty → 0.5 (neutral).** The
+ *     Requirement places no evaluable constraint on this axis
+ *     — either the JD genuinely names nothing (very common for
+ *     `tools` on a PM req) or the ontology doesn't recognize
+ *     what it named. Either way we have no signal, and "no
+ *     signal" must not read as "candidate fails this axis."
+ *     Same neutral the seniority component uses for "we don't
+ *     know," so the semantics stay consistent across the rule
+ *     components.
+ *   - **Requirement side non-empty, Unit side empty → 0.0.**
+ *     The employer asked for something the Unit doesn't attest
+ *     to. That IS a signal, and a negative one.
+ *   - Otherwise → ordinary Jaccard.
+ *
+ * Why the rule had to become directional. The prior shape
+ * ("either side empty → 0.0, both empty → 0.5") made the score
+ * depend on how well the extractor did rather than on how well
+ * the candidate fits, in two ways that compounded:
+ *
+ *   1. **Out-of-domain JDs lost 45% of the weight.** When a
+ *      Role's vocabulary sits outside the seed ontology, every
+ *      Requirement keyword normalizes to null, so
+ *      `skill_overlap + domain_overlap + tool_overlap` (0.20 +
+ *      0.15 + 0.10) hard-zeroed for EVERY pair. The remaining
+ *      axes cap `rule_score` around 0.55, and after the
+ *      `confidence_score` multiplier (~0.85 at the extraction
+ *      prompt's anchor) nothing could clear the Gaps view's
+ *      0.4 threshold — so a well-matched Role rendered as
+ *      "every must-have unmet." Reproduced on the
+ *      `coursera-staff-pm-2026` fixture, whose JD-side
+ *      vocabulary the seed ontology recognized at 13% / 9% / 0%
+ *      (keywords / domains / tools) against 100% on the
+ *      unit side.
+ *   2. **Better extraction scored worse.** A Unit whose skills
+ *      and tools all canonicalize got 0.0 against an
+ *      unrecognized Requirement, while a Unit whose vocabulary
+ *      was junk (and so normalized to nothing) got the 0.5
+ *      both-empty neutral. Cleaning up a Unit lowered its
+ *      score.
+ *
+ * The ontology under-coverage that triggers case 1 is still
+ * worth closing on its own (#38, #159 slices) — this rule
+ * change stops an ontology gap from being scored as a
+ * candidate deficiency in the meantime.
+ *
+ * **Known residual — a synthetic neutral is not free.** A
+ * Requirement whose `keywords`, `tools` AND `domains` all
+ * canonicalize to nothing now collects 0.5 on all three axes
+ * (0.225 of rule_score) from every Unit, which is enough for a
+ * recent Unit to clear the 0.4 gap threshold on semantics
+ * alone. That trades the old false negative for a milder false
+ * positive. The principled end state is to drop an unsignalled
+ * axis and renormalize the remaining weights, so the score
+ * stays comparable across Requirements instead of absorbing an
+ * invented 0.5 — deferred because `ScoreComponents` is
+ * persisted on `UnitMatch` and the breakdown tooltip (#131)
+ * renders a fixed weight per row, so per-match effective
+ * weights need a data-contract change. Tracked in #433.
  */
 function jaccard(
-  a: readonly string[],
-  b: readonly string[],
+  unitValues: readonly string[],
+  requirementValues: readonly string[],
   normalize: (raw: string) => string | null,
 ): number {
-  const aSet = canonicalize(a, normalize);
-  const bSet = canonicalize(b, normalize);
-  if (aSet.size === 0 && bSet.size === 0) return 0.5;
-  if (aSet.size === 0 || bSet.size === 0) return 0;
+  const unitSet = canonicalize(unitValues, normalize);
+  const requirementSet = canonicalize(requirementValues, normalize);
+  // Requirement side first: an unconstrained axis is neutral
+  // regardless of what the Unit brings to it.
+  if (requirementSet.size === 0) return 0.5;
+  if (unitSet.size === 0) return 0;
   let intersection = 0;
-  for (const v of aSet) if (bSet.has(v)) intersection += 1;
-  const union = aSet.size + bSet.size - intersection;
+  for (const v of unitSet) if (requirementSet.has(v)) intersection += 1;
+  const union = unitSet.size + requirementSet.size - intersection;
   return intersection / union;
+}
+
+/**
+ * Which axes does this Requirement actually constrain in a way
+ * the engine can evaluate?
+ *
+ * An axis counts only when the Requirement side survives
+ * canonicalization — a `keywords` array full of terms the seed
+ * ontology doesn't recognize constrains nothing we can score,
+ * exactly like an empty array. Seniority counts when the level
+ * is on the ladder; scope counts when the Requirement is
+ * scope-category AND its keywords canonicalize.
+ *
+ * `semantic_similarity` and `recency` are always applicable:
+ * both are computed from the pair itself rather than from a
+ * Requirement-side constraint, so there's nothing for a
+ * Requirement to leave unspecified.
+ *
+ * Deliberately mirrors the branch conditions in `jaccard()`,
+ * `seniorityAlignment()` and `scopeAlignment()`. If a future
+ * change moves one of those thresholds, this has to move with
+ * it — the pairing is pinned in score.test.ts.
+ *
+ * Two consumers, and they need the same answer:
+ *   - `hasStructuralEvidence` → `computeGaps`, so an
+ *     unevaluated Requirement can't be reported as covered.
+ *   - `generateRationale` → so a template can't claim "matched
+ *     on skill overlap" for an axis that was never compared.
+ */
+export type RequirementAxes = Readonly<Record<keyof ScoreComponents, boolean>>;
+
+export function requirementAxes(
+  requirement: Pick<
+    JobRequirementUnit,
+    "category" | "keywords" | "tools" | "domains" | "seniority_level"
+  >,
+): RequirementAxes {
+  return {
+    semantic_similarity: true,
+    recency: true,
+    skill_overlap: canonicalize(requirement.keywords, normalizeSkill).size > 0,
+    tool_overlap: canonicalize(requirement.tools, normalizeTool).size > 0,
+    domain_overlap: canonicalize(requirement.domains, normalizeDomain).size > 0,
+    seniority_alignment:
+      requirement.seniority_level !== undefined &&
+      SENIORITY_LADDER.indexOf(requirement.seniority_level) !== -1,
+    scope_alignment:
+      requirement.category === "scope" &&
+      canonicalize(requirement.keywords, normalizeScopeKey).size > 0,
+  };
+}
+
+/**
+ * The five axes that carry Requirement-side evidence.
+ * `semantic_similarity` and `recency` are excluded: neither is
+ * something the employer asked for, so neither can substantiate
+ * a must-have on its own.
+ */
+const STRUCTURAL_AXES = [
+  "skill_overlap",
+  "domain_overlap",
+  "tool_overlap",
+  "seniority_alignment",
+  "scope_alignment",
+] as const satisfies readonly (keyof ScoreComponents)[];
+
+/**
+ * Did THIS PAIR produce real evidence on an axis the Requirement
+ * constrains?
+ *
+ * Both halves are load-bearing, and the pair half is the subtle
+ * one. `requirementAxes` alone answers "was this axis
+ * evaluable," which is identical for every Unit — so a
+ * Requirement asking for one recognized skill would mark
+ * EVERY Unit as evidenced, including Units scoring 0.0 on that
+ * exact axis. The rest of the neutral credit then carries them
+ * over the 0.4 gap threshold and the must-have reads as covered
+ * by a Unit that matched nothing the employer asked for. Codex
+ * P1 round 3 on PR #435: "adding one recognized but wholly
+ * unmatched term bypasses the new gate while most invented
+ * neutral credit remains."
+ *
+ * So the axis must be constrained AND the Unit must actually
+ * score on it. `> 0` rather than a threshold: this is a
+ * yes/no evidence question, and how MUCH evidence is what
+ * `final_score` and the 0.4 threshold already answer.
+ *
+ * Note the interaction with `jaccard()`'s neutral. On an
+ * unconstrained axis the component is 0.5, which is `> 0` — but
+ * `axes[a]` is false there, so it can't contribute. The two
+ * conditions have to be read together.
+ */
+export interface EvidenceInputs {
+  /**
+   * Only the five structural axes are read, so only those are
+   * required. A full `ScoreComponents` satisfies this — `score()`
+   * passes one — but the narrower type lets the read-only
+   * derivation in `evidence.ts` (#441) recompute exactly the five
+   * values it needs instead of fabricating a `semantic_similarity`
+   * and a `recency` it has no way to measure. Inventing those two
+   * to satisfy a type would be the same neutral-as-measurement
+   * move this predicate exists to prevent.
+   */
+  readonly components: Readonly<
+    Pick<ScoreComponents, (typeof STRUCTURAL_AXES)[number]>
+  >;
+  readonly axes: RequirementAxes;
+  /**
+   * Did the Unit attest to at least one seniority signal the
+   * ladder recognizes?
+   *
+   * Needed because `seniorityAlignment` returns 0.5 for two
+   * different situations that `components` alone can't tell
+   * apart: a real one-level gap between mapped levels, and the
+   * "we don't know" fallback when every signal is unmapped
+   * (`mentored`, say). The first is evidence. The second is the
+   * same kind of invented credit as `jaccard()`'s neutral, and
+   * counting it let a seniority must-have clear on a Unit with
+   * no mapped signal at all. Codex P1 round 4 on PR #435.
+   */
+  readonly seniorityMapped: boolean;
+}
+
+export function hasStructuralEvidence(input: EvidenceInputs): boolean {
+  const { components, axes, seniorityMapped } = input;
+  return STRUCTURAL_AXES.some((axis) => {
+    if (!axes[axis] || components[axis] <= 0) return false;
+    // Seniority is the one axis whose score can be a neutral
+    // rather than a measurement; everything else in
+    // STRUCTURAL_AXES scores 0 when it can't be evaluated.
+    if (axis === "seniority_alignment") return seniorityMapped;
+    return true;
+  });
+}
+
+/**
+ * The per-axis applicability for a specific (Unit, Requirement)
+ * PAIR: which axes did the engine actually evaluate?
+ *
+ * `requirementAxes` answers the Requirement-side half. Two axes
+ * need the Unit side too, because both can return a value that
+ * is a statement of ignorance rather than a measurement:
+ * `seniorityAlignment` returns 0.5 when the Unit's signals are
+ * all unmapped, and `recency` returns 0.5 when the Unit has no
+ * usable date.
+ *
+ * Every consumer of "was this axis evaluated" derives from this
+ * one function — the coverage gate, the rationale's driving-axis
+ * filter, and the breakdown persisted for the tooltip — so they
+ * cannot drift apart. Codex P2 on PR #435 found the tooltip
+ * reading a neutral as a measured 50% overlap, which is the
+ * failure this consolidation is meant to make structurally
+ * hard.
+ */
+export function effectiveAxes(
+  unit: Pick<ExperienceUnit, "seniority_signals" | "date_range">,
+  requirement: Pick<
+    JobRequirementUnit,
+    "category" | "keywords" | "tools" | "domains" | "seniority_level"
+  >,
+): RequirementAxes {
+  const axes = requirementAxes(requirement);
+  return {
+    ...axes,
+    seniority_alignment:
+      axes.seniority_alignment && hasMeasurableSeniority(unit),
+    recency: axes.recency && hasMeasurableRecency(unit),
+  };
+}
+
+/**
+ * Does this Unit carry a date the recency curve can actually
+ * measure? Mirrors `recency()`'s own validity checks — an
+ * absent `date_range`, a missing/blank `start` on an ongoing
+ * role, or an unparseable date all make it return the neutral
+ * 0.5, which is a statement of ignorance and not a measurement.
+ *
+ * `recency` is otherwise always applicable (it's Unit-side, so
+ * there is nothing for a Requirement to leave unspecified),
+ * which is why this predicate is needed to stop the neutral
+ * being read as a reason for a match. Codex P2 on PR #435.
+ */
+export function hasMeasurableRecency(
+  unit: Pick<ExperienceUnit, "date_range">,
+): boolean {
+  const range = unit.date_range;
+  if (range === undefined) return false;
+  if (range.end === undefined) {
+    return (
+      typeof range.start === "string" &&
+      range.start.length > 0 &&
+      !Number.isNaN(new Date(range.start).getTime())
+    );
+  }
+  return (
+    typeof range.end === "string" &&
+    range.end.length > 0 &&
+    !Number.isNaN(new Date(range.end).getTime())
+  );
+}
+
+/**
+ * Is this Unit's seniority score a MEASUREMENT rather than a
+ * statement of ignorance?
+ *
+ * `seniorityAlignment` has three outcomes for a constrained
+ * Requirement, and only one of them is ignorance:
+ *
+ *   - `seniority_signals: []` → **0**. The Unit attests to no
+ *     level at all; that is a real negative finding, not a
+ *     shrug. Marking it inapplicable would hide an actual
+ *     "doesn't meet the bar" behind "not evaluated". Codex P2
+ *     on PR #435 caught exactly that.
+ *   - signals present but NONE ladder-mapped → **0.5**. This is
+ *     the ignorance case: the Unit says something we can't
+ *     interpret.
+ *   - signals present and mapped → a real gap-based score.
+ *
+ * So the axis is unmeasurable only in the middle case.
+ */
+export function hasMeasurableSeniority(
+  unit: Pick<ExperienceUnit, "seniority_signals">,
+): boolean {
+  if (unit.seniority_signals.length === 0) return true; // hard zero is a measurement
+  return hasMappedSenioritySignal(unit);
+}
+
+/**
+ * Does this Unit attest to any seniority signal the ladder can
+ * map? Mirrors the filter inside `seniorityAlignment` — if that
+ * mapping changes, this has to change with it, which the paired
+ * test in score.test.ts pins.
+ */
+export function hasMappedSenioritySignal(
+  unit: Pick<ExperienceUnit, "seniority_signals">,
+): boolean {
+  return unit.seniority_signals.some((s) => seniorityIndex(s) !== null);
 }
 
 function canonicalize(
@@ -153,6 +474,7 @@ function canonicalize(
   }
   return out;
 }
+
 
 // -- Component scorers ------------------------------------------------------
 
@@ -317,10 +639,10 @@ export function seniorityAlignment(
  * Because scope strings are heterogeneous and the JD parser
  * doesn't currently emit a `requirement.scope_signals` field
  * (only `keywords` + `tools` + `domains`), V1 falls back to:
- *   - Both sides empty → 0.5 (neutral; #148 changed this from
- *     the original 1.0 to stop "no signal = perfect match"
- *     ranking inflation — see jaccard's docstring above)
- *   - Only one side empty → 0.0
+ *   - Requirement keywords empty → 0.5 (neutral: the
+ *     Requirement constrains nothing evaluable on this axis)
+ *   - Requirement keywords present but the Unit attests to no
+ *     scope signals → 0.0
  *   - Else: Jaccard on `normalizeKey`-canonicalized signal sets.
  *     Loose: "40M users" and "40M monthly viewers" don't match
  *     even though they're semantically similar; that's what the
@@ -336,9 +658,9 @@ export function seniorityAlignment(
  * Wrap `normalizeKey` to match the `jaccard()` helper's
  * "normalizer returns string | null" contract: empty/whitespace
  * inputs collapse to null and get filtered out by `canonicalize`,
- * preserving the both-empty → 0.5 / one-empty → 0.0 semantics
- * the helper enforces (#148 changed both-empty from 1.0 to 0.5
- * to fix rule_score flattening).
+ * preserving the directional empty-set semantics the helper
+ * enforces (empty Requirement side → 0.5 neutral; empty Unit
+ * side against a populated Requirement → 0.0).
  */
 function normalizeScopeKey(raw: string): string | null {
   const key = normalizeKey(raw);
@@ -472,6 +794,7 @@ export function score(
   requirement: JobRequirementUnit,
   options?: { readonly asOf?: Date },
 ): ScoreResult {
+  const axes = effectiveAxes(unit, requirement);
   const components: ScoreComponents = {
     semantic_similarity: semanticSimilarityScore(unit, requirement),
     skill_overlap: skillOverlap(unit, requirement),
@@ -492,6 +815,12 @@ export function score(
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
+    component_applicability: axes,
+    structural_evidence: hasStructuralEvidence({
+      components,
+      axes,
+      seniorityMapped: hasMappedSenioritySignal(unit),
+    }),
     rule_score,
     semantic_score: components.semantic_similarity,
     final_score,

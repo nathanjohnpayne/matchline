@@ -33,6 +33,13 @@ export { reembedExperienceUnitCallable as reembedExperienceUnit } from "./callab
 export { runMatchingCallable as runMatching } from "./callables/runMatching.js";
 
 /**
+ * Read-only derivation of structural evidence for legacy matches
+ * (#441). Writes nothing; see the handler docblock for why that
+ * is load-bearing.
+ */
+export { deriveMatchEvidenceCallable as deriveMatchEvidence } from "./callables/deriveMatchEvidence.js";
+
+/**
  * Phase 1: extract claims from an Application's generated asset;
  * check each claim for traceability + specificity; persist the
  * flag set + validation_status on the asset. Step 4 of the

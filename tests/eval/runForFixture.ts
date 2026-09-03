@@ -64,6 +64,17 @@ const EVAL_ROLE_ID = "eval-role";
 export interface RunForFixtureDeps {
   /** Anthropic client used by extraction + parsing. */
   readonly anthropicClient: Anthropic;
+  /**
+   * Whether `anthropicClient` is billed by the metered API. Defaults
+   * to `true`. Codex P2: a subscription-backed `claude-cli` token
+   * source produced usage records that were priced into `costUsd`
+   * exactly like a real API call, so a `--token-source claude-cli`
+   * run reported the modeled Anthropic cost as "real new spend" —
+   * only the OpenAI embeddings were actually metered. Set to `false`
+   * so the Anthropic-served stages still feed `modeledCostUsd` (via
+   * `modeledUsage`, unconditionally) but contribute $0 to `costUsd`.
+   */
+  readonly anthropicIsMetered?: boolean;
   /** OpenAI client used by embedding. */
   readonly openaiClient: OpenAI;
   /** Override fixture root for tests. */
@@ -89,6 +100,19 @@ export interface RunForFixtureDeps {
    * workstream A, score weights, ontology) run offline at zero cost.
    */
   readonly cache?: StageCache;
+  /**
+   * Discriminators folded into the cache keys of the LLM stages this
+   * run serves — e.g. `{ tokenSource: "claude-cli" }` so
+   * subscription-CLI-produced entries never collide with metered-API
+   * entries for the same model. Comparing the two is the point of the
+   * sweep, so they must occupy separate keyspaces.
+   *
+   * Applied to extraction and requirement parsing only. The two
+   * embedding stages always call OpenAI and take their token-source
+   * dependence through their `input`, so discriminating them would
+   * only re-pay for identical vectors — see the call sites.
+   */
+  readonly cacheDiscriminators?: Readonly<Record<string, string | number>>;
 }
 
 export interface RunForFixtureInput {
@@ -326,7 +350,8 @@ interface StageTally {
 async function runStage<T>(
   tally: StageTally,
   cache: StageCache | undefined,
-  keyInput: CacheKeyInput,
+  discriminators: Readonly<Record<string, string | number>> | undefined,
+  keyInput: Omit<CacheKeyInput, "discriminators">,
   liveRecord: (usage: UsageRecord) => Promise<number>,
   compute: (record: (usage: UsageRecord) => Promise<number>) => Promise<T>,
 ): Promise<T> {
@@ -354,7 +379,7 @@ async function runStage<T>(
   // `outcome.usage` below instead.
   try {
     const outcome = await cache.run(
-      keyInput,
+      { ...keyInput, ...(discriminators !== undefined && { discriminators }) },
       // On a miss the cache hands us its own collector; chain the live
       // recorder so real spend still lands in `costAccum`.
       (cacheRecord) =>
@@ -388,7 +413,16 @@ async function runForFixtureInner(
   getCostAccum: () => number,
   tally: StageTally,
 ): Promise<RunForFixtureResult> {
-  const { cache } = deps;
+  const { cache, cacheDiscriminators, anthropicIsMetered = true } = deps;
+  // Codex P2: the Anthropic-served stages (extraction, parsing) must
+  // not add to `costAccum` when `anthropicClient` is a subscription
+  // CLI adapter — real spend there is $0. `modeledUsage` still gets
+  // every usage record regardless (via `runStage`'s own tracking), so
+  // `modeledCostUsd` is unaffected and still ranks the CLI source
+  // correctly against `api`.
+  const recordAnthropicCost = anthropicIsMetered
+    ? recordCost
+    : async (): Promise<number> => 0;
   const extractionModel = modelFor("extraction");
   const parsingModel = modelFor("requirement_parsing");
   // 1. Load fixtures.
@@ -410,6 +444,7 @@ async function runForFixtureInner(
   const extractedUnits = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "extraction",
       provider: extractionModel.provider,
@@ -417,7 +452,7 @@ async function runForFixtureInner(
       promptVersion: promptFingerprint("extraction", "resume"),
       input: resumeText,
     },
-    recordCost,
+    recordAnthropicCost,
     (record) =>
       extractFromResume(
         resumeText,
@@ -437,6 +472,17 @@ async function runForFixtureInner(
   const unitEmbeddings = await runStage(
     tally,
     cache,
+    // CodeRabbit P1: deliberately NOT `cacheDiscriminators`. Embeddings
+    // always go to OpenAI, so the token source cannot change their
+    // output except through the upstream Units — and those arrive as
+    // `input` below, which is already part of the cache key. The
+    // discriminator therefore can never prevent a wrong hit here; it
+    // can only force a miss, re-embedding the whole corpus and paying
+    // OpenAI a second time for identical vectors every time
+    // `--token-source` flips. `cache.ts` scopes discriminators to
+    // things "that change the output but aren't captured above",
+    // which for embeddings this is not.
+    undefined,
     {
       stage: "embedding",
       provider: "openai",
@@ -469,6 +515,7 @@ async function runForFixtureInner(
   const parsedRequirements = await runStage(
     tally,
     cache,
+    cacheDiscriminators,
     {
       stage: "requirement_parsing",
       provider: parsingModel.provider,
@@ -476,7 +523,7 @@ async function runForFixtureInner(
       promptVersion: promptFingerprint("parsing", "jd"),
       input: jdText,
     },
-    recordCost,
+    recordAnthropicCost,
     (record) =>
       parseJobRequirements(
         jdText,
@@ -490,6 +537,9 @@ async function runForFixtureInner(
   const reqEmbeddings = await runStage(
     tally,
     cache,
+    // Same reasoning as the Unit embeddings above: the parsed
+    // Requirements this depends on are already in `input`.
+    undefined,
     {
       stage: "embedding",
       provider: "openai",

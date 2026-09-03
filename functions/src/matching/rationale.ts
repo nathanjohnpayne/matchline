@@ -27,7 +27,12 @@ import {
   normalizeSkill,
   normalizeTool,
 } from "./normalize.js";
-import { WEIGHTS, type ScoreComponents } from "./score.js";
+import {
+  effectiveAxes,
+  WEIGHTS,
+  type RequirementAxes,
+  type ScoreComponents,
+} from "./score.js";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -90,7 +95,29 @@ const TIE_BREAKER_ORDER: readonly (keyof ScoreComponents)[] = [
 const SUMMARY_TRUNCATE_AT = 200;
 
 export function generateRationale(input: RationaleInput): RationaleResult {
-  const drivingComponent = pickDrivingComponent(input.components);
+  // Only axes the Requirement actually constrains may drive the
+  // rationale. Applicability is derived from `input.requirement`
+  // rather than passed in, so a caller can't forget it and
+  // reopen the hole below.
+  const axes = effectiveAxes(input.unit, input.requirement);
+  // `seniorityAlignment` returns the same 0.5 for a real
+  // one-level gap and for the "we don't know" fallback when the
+  // Unit's signals are all unmapped. Only the first is a
+  // comparison; narrating the second as "Matched on seniority
+  // alignment" describes an evaluation that never happened.
+  // The pair-level fact lives in `hasMappedSenioritySignal`,
+  // which the coverage gate already consumes — Codex P2 round 5
+  // caught that the rationale wasn't consuming it too.
+  //
+  // `recency` gets the same treatment for the same reason: it
+  // returns 0.5 when the Unit has no `date_range`, or an
+  // unparseable one, and `requirementAxes` always marks it
+  // applicable because it's a Unit-side axis. With a weak
+  // semantic score that neutral can win and emit "Matched on
+  // recency axis (no date range on Unit)" — an explicit lack of
+  // information offered as the reason for the match. Codex P2
+  // on #435.
+  const drivingComponent = pickDrivingComponent(input.components, axes);
   switch (drivingComponent) {
     case "semantic_similarity":
       return semanticTemplate(input, drivingComponent);
@@ -111,12 +138,34 @@ export function generateRationale(input: RationaleInput): RationaleResult {
 
 // -- Driving-component selection --------------------------------------------
 
+/**
+ * Highest weighted contribution wins, but ONLY among axes the
+ * Requirement actually constrains.
+ *
+ * The applicability filter is load-bearing for the module's
+ * zero-fabrication invariant. `jaccard()` returns the 0.5
+ * neutral when the Requirement side is empty or unrecognized
+ * (#430), which is 0.10 of contribution on `skill_overlap` —
+ * enough to win the tie-break against a Requirement that named
+ * no skills at all. `skillTemplate` would then take its
+ * no-canonical-overlap branch and emit "Matched on skill axis"
+ * with the UNIT's raw skills as `surface_evidence`, presenting
+ * them as support for a comparison that never happened.
+ * `seniorityAlignment` and `scopeAlignment` have the same
+ * shape: both return 1.0 when unconstrained, worth another 0.10
+ * each. CodeRabbit Major on PR #435 caught the leak.
+ *
+ * `semantic_similarity` is always applicable, so the filter can
+ * never empty the candidate set.
+ */
 function pickDrivingComponent(
   components: ScoreComponents,
+  axes: RequirementAxes,
 ): keyof ScoreComponents {
   let best: keyof ScoreComponents = TIE_BREAKER_ORDER[0]!;
   let bestContribution = WEIGHTS[best] * components[best];
   for (const key of TIE_BREAKER_ORDER) {
+    if (!axes[key]) continue;
     const contribution = WEIGHTS[key] * components[key];
     if (contribution > bestContribution) {
       best = key;
@@ -316,18 +365,36 @@ function recencyTemplate(
   driving: keyof ScoreComponents,
 ): RationaleResult {
   const range = input.unit.date_range;
-  if (!range || typeof range.start !== "string" || range.start.length === 0) {
-    // No date_range to point at. surface_evidence stays empty
-    // rather than fabricating "no date recorded" (CodeRabbit
-    // Minor on PR #105). The rationale prose acknowledges the
-    // absence without claiming a date.
+  // Surface only the endpoints that PARSE. `hasMeasurableRecency`
+  // gates this template on `end` when `end` is present, so a
+  // range like `{ start: "not-a-date", end: "2021-01-01" }`
+  // reaches here with a measurable end and an unusable start —
+  // and an end-only range reaches here with no start at all. The
+  // prior guard keyed on `start` alone, so the first case
+  // surfaced "not-a-date" as evidence and the second claimed
+  // "no date range on Unit" despite having a real end date.
+  // CodeRabbit on #435.
+  const usable = (v: unknown): v is string =>
+    typeof v === "string" &&
+    v.length > 0 &&
+    !Number.isNaN(new Date(v).getTime());
+  const start = range !== undefined && usable(range.start) ? range.start : null;
+  const end = range !== undefined && usable(range.end) ? range.end : null;
+  if (start === null && end === null) {
+    // Nothing parseable to point at. surface_evidence stays
+    // empty rather than fabricating "no date recorded"
+    // (CodeRabbit Minor on PR #105). The rationale prose
+    // acknowledges the absence without claiming a date.
     return {
-      rationale: "Matched on recency axis (no date range on Unit).",
+      rationale: "Matched on recency axis (no usable date on Unit).",
       surface_evidence: "",
       driving_component: driving,
     };
   }
-  const evidence = `${range.start}${range.end ? ` to ${range.end}` : " (ongoing)"}`;
+  const evidence =
+    start === null
+      ? `through ${end!}`
+      : `${start}${end !== null ? ` to ${end}` : " (ongoing)"}`;
   return {
     rationale: `Recent: Unit dates within the relevant window (${evidence}).`,
     surface_evidence: evidence,

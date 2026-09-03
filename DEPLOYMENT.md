@@ -520,6 +520,82 @@ FIREBASE_IMPERSONATION_MEMBER=email@example.com op-firebase-setup {project-id}
    - `roles/iam.serviceAccountUser`
    - `roles/artifactregistry.writer`
    - `roles/run.admin`
+
+> **`roles/secretmanager.viewer` is NOT in that list and is required.**
+> Any function declaring `secrets: [...]` makes `firebase deploy` call
+> `secretmanager.secrets.get` as the *deployer* service account, which
+> fails with `403 Permission 'secretmanager.secrets.get' denied` — and
+> the message's "or it may not exist" wording sends you looking for a
+> missing secret that is present. `roles/firebase.admin` does not
+> include it. Note the check runs as the deployer SA, not as you, so
+> your own access proves nothing here.
+>
+> Until `op-firebase-setup` grants it upstream, add it per project:
+>
+> ```bash
+> gcloud projects add-iam-policy-binding {project-id} \
+>   --impersonate-service-account="" \
+>   --member=serviceAccount:firebase-deployer@{project-id}.iam.gserviceaccount.com \
+>   --role=roles/secretmanager.viewer --condition=None
+> ```
+>
+> Granted on `matchline-dev` on 2026-09-02 after it blocked a deploy.
+>
+> **`viewer` is enough only while no NEW secret binding is needed.** When a
+> function declares a secret its runtime service account cannot yet access,
+> `firebase deploy` does not merely read it — `Fabricator.applyPlan` calls
+> `grantSecretAccess`, which writes the secret's IAM policy via
+> `secretmanager.secrets.setIamPolicy` (verified in the installed
+> `firebase-tools@15.28.2`: `fabricator.js` → `gcp/secretManager.js`).
+> `roles/secretmanager.viewer` is read-only, so the deploy clears
+> `secrets.get` and then fails while adding
+> `roles/secretmanager.secretAccessor`.
+>
+> The 2026-09-02 deploy did not hit this: both secrets already had their
+> runtime bindings, so the plan had nothing to grant. The first deploy that
+> introduces a secret will.
+>
+> Least-privilege fix — pre-grant the function's **runtime** service account
+> on the secret, leaving the deployer read-only and giving firebase-tools
+> nothing to write:
+>
+> ```bash
+> gcloud secrets add-iam-policy-binding {SECRET_NAME} --project={project-id} \
+>   --impersonate-service-account="" \
+>   --member=serviceAccount:{RUNTIME_SA} \
+>   --role=roles/secretmanager.secretAccessor
+> ```
+>
+> **`--impersonate-service-account=""` is load-bearing.** `op-firebase-setup`
+> sets `auth/impersonate_service_account` on the per-project gcloud
+> configuration, and `--project` does not override it — so once you have
+> activated that configuration this command runs *as the deployer*, the
+> same read-only identity that cannot write the policy. It would fail with
+> the exact permission error it is meant to fix. gcloud prints
+> `WARNING: This command is using service account impersonation` when
+> impersonation is in effect; the absence of that line is the tell that
+> the override worked.
+>
+> Run it **once per distinct runtime account that consumes the secret**.
+> `ensure.js:secretsToServiceAccounts` builds a *set* of every consuming
+> account per secret and `grantSecretAccess` writes whenever any member is
+> still unbound, so a secret shared by functions with different
+> `serviceAccount` options needs a grant for each — binding only one leaves
+> the deploy failing on the others.
+>
+> `{RUNTIME_SA}` is the function's **effective** runtime account: its own
+> `serviceAccount` option, or one inherited from
+> `setGlobalOptions({ serviceAccount: ... })` — the SDK copies that onto the
+> endpoint, so a function with no local option can still run as a custom
+> principal — and the compute default —
+> `{project-number}-compute@developer.gserviceaccount.com` — only when it
+> does not. `firebase-tools` resolves it that way
+> (`deploy/functions/ensure.js`: `e.serviceAccount || defaultServiceAccount(e)`),
+> so granting the compute default for a function that configures its own
+> account leaves the real principal unbound and the deploy still fails.
+>
+> The blunt alternative is `roles/secretmanager.admin` on the deployer, which
+> lets it manage every secret in the project. Prefer the per-secret grant.
 4. Grants your user `roles/iam.serviceAccountTokenCreator` on the deployer service account
 5. Creates or updates a dedicated `gcloud` configuration named `{project-id}` with project, impersonation, and `billing/quota_project` defaults
 
@@ -634,7 +710,99 @@ Under a **domain restricted sharing** org policy (`constraints/iam.allowedPolicy
 gcloud run services update <service> --region=us-central1   --project=<proj> --no-invoker-iam-check
 ```
 
-This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422). Service names are the lowercased function names: `extractfromresume`, `parsejobrequirements`, `generateresume`, `validateasset`, `reembedexperienceunit`, `runmatching`, `health`.
+This is a service-level setting, so it does **not** create a new revision and it **does** survive `firebase deploy` (verified on matchline-dev, #422).
+
+**Service naming.** Firebase Tools derives the Cloud Run service id from the function id by lowercasing it and replacing `_` with `-`. So `webhook_receiver` deploys as `webhook-receiver`, not `webhook_receiver`.
+
+**Region.** The commands below assume `us-central1`. A function that sets its own `region` option deploys elsewhere, and the command must name that region — targeting the wrong one silently "succeeds" against a service that is not the one serving traffic.
+
+`region` can also be **inherited**: `setGlobalOptions({ region: "us-east1" })` is copied onto every generated endpoint, so a function with no `region` option of its own may still deploy outside `us-central1`. Read the effective region per endpoint rather than assuming the default when the function itself is silent.
+
+`region` also takes an **array**. `region: ["us-central1", "us-east1"]` expands into one Cloud Run service per region, each needing its own invoker step, because `gcloud run services update --region` selects exactly one. Treat "run this once" below as once *per region the function declares*.
+
+### Function inventory
+
+Every function exported from `functions/src/index.ts` appears here. The `invoker step` column has two values and the distinction is a security one:
+
+- **required** — a publicly-invoked HTTP function: `onCall`, or `onRequest` that either omits `invoker` or sets it explicitly to `"public"`. Both need the step, once per declared region, on first deploy.
+  > **Prefer omitting `invoker` to writing `"public"`.** They are equivalent at create, but not afterwards. On the update path `firebase-tools` reads
+  > `invoker = httpsTrigger.invoker === null ? ["public"] : httpsTrigger.invoker`
+  > and then calls `setInvokerUpdate` whenever that value is truthy
+  > (`release/fabricator.js`, verified in the pinned 15.28.2). An omitted
+  > option leaves it `undefined`, so nothing is attempted; an explicit
+  > `"public"` retries the IAM write on **every** deploy — and under the
+  > domain-restricted-sharing policy above that write fails every time,
+  > turning a one-off first-deploy chore into a permanent deploy failure.
+- **must not** — anything whose access is meant to be restricted: most event-triggered functions, which rely on authenticated event delivery, and **`onRequest`** handlers that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so applying `--no-invoker-iam-check` to one would defeat the protection its author asked for.
+
+> **Changing a row to `must not` does not restore protection.**
+> `--no-invoker-iam-check` is a service-level setting that survives
+> `firebase deploy` — that is why it only has to be applied once, and it is
+> also why it does not go away on its own. If a handler that already
+> received it is later changed to `onRequest({ invoker: "private" })` or a
+> named service account, Firebase will add the restricted IAM binding while
+> Cloud Run keeps bypassing the invoker check entirely, so the endpoint
+> stays open to anyone. Re-enable it explicitly, per region:
+>
+> ```bash
+> gcloud run services update {service} --region={region} \
+>   --project={project-id} --invoker-iam-check
+> ```
+
+Two traps in that split, both of which look like `must not` and are not:
+
+> **Auth blocking triggers are `required`.** "Event-triggered" is the wrong instinct for `beforeUserCreated` / `beforeUserSignedIn`: `firebase-tools` gives them `setInvokerCreate(..., ["public"])` on create and assigns `invoker = ["public"]` then calls `setInvokerUpdate` on every update (`release/fabricator.js`, the `isBlockingTriggered && AUTH_BLOCKING_EVENTS` branches). Under the domain-restriction policy that write is forbidden, so the binding fails and the trigger is left unavailable.
+>
+> Worse, it is **not** a one-time cost like an ordinary `required` row: because the update path re-asserts `["public"]` unconditionally, every later deploy retries the forbidden write and exits non-zero — the `--no-invoker-iam-check` setting survives, but it does not stop the attempt. Expect a permanently failing deploy step for any Auth blocking function under this org policy, and treat that as a reason not to add one here.
+
+> **`invoker` does nothing on `onCall`.** A callable declared as
+> `onCall({ invoker: "private" }, ...)` is **not** private: the pinned
+> `firebase-functions@7.3.2` builds `callableTrigger: {}` and drops the
+> option, and the CLI then applies `["public"]` to the service when it is
+> **created** (`release/fabricator.js`: the `isCallableTriggered` branches in
+> `createV2Function` / `createRunFunction`). `updateV2Function` has no
+> callable branch, so an ordinary update does not re-assert it — which is
+> why a callable is a one-time `required` cost and an Auth blocking trigger
+> is not.
+> So such a function stays **required** here, and anyone who wrote that
+> option believing it restricted access is mistaken — enforce authorization
+> inside the handler against `request.auth`, which is what callables are
+> designed for. The restricted-invoker row above applies to `onRequest` only.
+
+The two ways to get this wrong are not equally bad:
+
+- Marking a **restricted** function `required` (or running the public step on a `must not` row) **fails open, and silently.** Nothing breaks; the endpoint is simply reachable by anyone, which is the failure this whole section exists to prevent.
+- Marking a **public** function `must not` fails closed: the deploy or the browser call breaks visibly and someone fixes it within minutes.
+
+So when uncertain, prefer `must not` — and only run the public invoker step for a row this table marks `required`.
+
+**This table is maintained by hand.** A CI check to enforce it was attempted and withdrawn (PR #452): deciding which exports become which Cloud Run services requires resolving TypeScript binding forms and firebase-tools' naming rules, and five review rounds kept finding valid shapes it parsed wrongly — at one point it would have advised making an event-triggered function publicly invokable. Approximating a compiler in a lint script produced a guard that was confidently wrong more often than the drift it was meant to catch.
+
+So when you add a function to `functions/src/index.ts`, add a row here and set the `invoker step` column deliberately, using the two definitions above.
+
+| function (`index.ts`) | Cloud Run service | invoker step |
+|---|---|---|
+| `health` | `health` | required |
+| `extractFromResume` | `extractfromresume` | required |
+| `parseJobRequirements` | `parsejobrequirements` | required |
+| `generateResume` | `generateresume` | required |
+| `validateAsset` | `validateasset` | required |
+| `reembedExperienceUnit` | `reembedexperienceunit` | required |
+| `runMatching` | `runmatching` | required |
+| `deriveMatchEvidence` | `derivematchevidence` | required |
+
+> **Every new `required` row needs this once per region.** Only rows this
+> table marks `required` — never a `must not` row. `firebase deploy` creates the
+> Cloud Run service but cannot set the invoker policy, so the deploy
+> reports `Failed to set the IAM Policy on the Service ...` and exits
+> non-zero *after* the function itself deployed successfully. The
+> service then exists and rejects every browser call at the CORS
+> preflight. `deriveMatchEvidence` hit exactly this on first deploy
+> (#441).
+>
+> **Nothing enforces this.** The inventory above is maintained by hand
+> and no CI check verifies it — see the note under the table. Adding a
+> function without adding its row is silent until the deploy fails.
 
 **2. The runtime service account needs Firestore.** Functions run as the compute default SA (`<project-number>-compute@developer.gserviceaccount.com`). Where the org disables automatic grants for default service accounts, that account holds only build-time roles and every admin-SDK call fails with `7 PERMISSION_DENIED: Missing or insufficient permissions` — note the admin SDK bypasses `firestore.rules` but still needs IAM:
 
