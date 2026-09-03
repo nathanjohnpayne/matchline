@@ -13,7 +13,12 @@
  */
 
 /** Must stay identical to `PROGRESS_STAGES` in the functions package. */
-export const PROGRESS_STAGES = ["analyzing", "embedding", "saving"] as const;
+export const PROGRESS_STAGES = [
+  "analyzing",
+  "retrying",
+  "embedding",
+  "saving",
+] as const;
 
 export type ProgressStage = (typeof PROGRESS_STAGES)[number];
 
@@ -101,6 +106,15 @@ export function progressMessage(
         return `Retrying — the last attempt didn't come back usable. Attempt ${attempt}${of}.`;
       }
       return `Reading ${vocab.subject}…`;
+    }
+    case "retrying": {
+      const { attempt, maxAttempts } = event;
+      const of = maxAttempts !== undefined ? ` of ${maxAttempts}` : "";
+      const which = attempt !== undefined ? ` Attempt ${attempt}${of} next.` : "";
+      // Named separately from `analyzing` because the wait can be long
+      // — a 429 carries `retry-after` — and saying "Reading…" through
+      // it recreates the apparent hang (Codex P2, #436).
+      return `That attempt didn't come back usable. Waiting before trying again.${which}`;
     }
     case "embedding":
       return `Indexing the ${vocab.product} for matching…`;

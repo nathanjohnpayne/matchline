@@ -115,6 +115,7 @@ export async function extractFromResume(
   const now = deps.now ?? (() => new Date());
   const report = safeProgress(deps.onProgress);
   const signal = deps.signal;
+  let abortedBeforeAttempt = false;
 
   const prompt = loadPromptText("extraction", "resume");
   const { provider, model } = modelFor("extraction");
@@ -132,11 +133,17 @@ export async function extractFromResume(
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // 1-based for display: "attempt 2 of 3" reads correctly, and a
     // value above 1 is what tells the user a retry is under way.
-    // Stop starting NEW attempts once the caller has gone: a
-    // retry only happens after a failure, so it is pure waste
-    // for a disconnected client. Deliberately not a check
-    // before persistence — see the callable (#436).
-    if (attempt > 0 && signal?.aborted === true) break;
+    // Checked before EVERY attempt, including the first: the
+    // client can disconnect while the callable is still doing
+    // its pre-flight work (the Role ownership read, for the JD
+    // path), so `attempt > 0` let a full request launch for a
+    // caller already gone — defeating the bound it was added
+    // for (Codex P2, #436). Still never used to discard work
+    // already done; see the callable.
+    if (signal?.aborted === true) {
+      abortedBeforeAttempt = true;
+      break;
+    }
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
@@ -176,6 +183,15 @@ export async function extractFromResume(
       // window isn't compounded by a 3× rapid burst — see
       // functions/src/llm/retry.ts.
       if (attempt < MAX_ATTEMPTS - 1) {
+        // Announce the wait BEFORE sleeping: a 429 carries a
+        // retry-after that can be long, and staying on
+        // "analyzing" through it recreates the apparent hang
+        // this feature exists to remove (Codex P2, #436).
+        report({
+          stage: "retrying",
+          attempt: attempt + 2,
+          maxAttempts: MAX_ATTEMPTS,
+        });
         await sleep(transportBackoffMs(attempt, err));
       }
       continue;
@@ -251,7 +267,10 @@ export async function extractFromResume(
   // Log before throwing: `failures` reaches the browser via
   // HttpsError.details but nothing wrote it to Cloud Logging, so a
   // production failure left no server-side trace of WHY (#426).
-  logRetryExhaustion("extraction.resume", model, failures);
+  // Not a retry-budget exhaustion when we stopped because the
+  // caller disconnected — logging it as one would misattribute
+  // a deliberate stop as a failure (#436).
+  if (!abortedBeforeAttempt) logRetryExhaustion("extraction.resume", model, failures);
   throw new ExtractionError(
     `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

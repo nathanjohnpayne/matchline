@@ -124,8 +124,20 @@ describe("progressMessage", () => {
     expect(msg).not.toMatch(/saving|indexing|retry/i);
   });
 
+  it("names the wait explicitly during backoff", () => {
+    // Staying on "Reading…" through a 429's retry-after recreates the
+    // apparent hang this feature removes (Codex P2, #436).
+    const msg = progressMessage(
+      { stage: "retrying", attempt: 2, maxAttempts: 3 },
+      EXTRACTION_VOCABULARY,
+    );
+    expect(msg).toMatch(/waiting/i);
+    expect(msg).toContain("2");
+    expect(msg).toContain("3");
+  });
+
   it("covers every stage without falling through", () => {
-    for (const stage of ["analyzing", "embedding", "saving"] as const) {
+    for (const stage of ["analyzing", "retrying", "embedding", "saving"] as const) {
       expect(
         progressMessage({ stage }, EXTRACTION_VOCABULARY).length,
       ).toBeGreaterThan(0);

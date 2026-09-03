@@ -37,9 +37,19 @@
  *
  * - `analyzing` — the LLM call (extraction or JD parsing).
  * - `embedding` — batch embeddings over the returned units.
- * - `saving`    — the atomic Firestore write.
+ * - `saving`    — the atomic Firestore write. *
+ * - `retrying`   — an attempt failed; waiting out the backoff before
+ *                  the next one. Its own stage because the sleep can be
+ *                  long (a 429 carries `retry-after`) and without it the
+ *                  UI keeps claiming to be reading, which is exactly the
+ *                  apparent-hang this feature removes (#436).
  */
-export const PROGRESS_STAGES = ["analyzing", "embedding", "saving"] as const;
+export const PROGRESS_STAGES = [
+  "analyzing",
+  "retrying",
+  "embedding",
+  "saving",
+] as const;
 
 export type ProgressStage = (typeof PROGRESS_STAGES)[number];
 

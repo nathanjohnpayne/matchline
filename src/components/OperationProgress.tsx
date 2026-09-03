@@ -64,7 +64,6 @@ export default function OperationProgress({
   // Clamp: a clock adjustment mid-operation would otherwise render a
   // negative elapsed time.
   const elapsedMs = Math.max(0, now - startedAt);
-  const retrying = event?.stage === "analyzing" && (event.attempt ?? 1) > 1;
   const statusText = progressMessage(event, vocabulary);
 
   return (
@@ -83,13 +82,13 @@ export default function OperationProgress({
         data-testid={`${testId}-bar`}
         className="h-0.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
       >
-        <div
-          className={`h-full w-1/3 animate-pulse ${
-            retrying
-              ? "bg-amber-500 dark:bg-amber-400"
-              : "bg-zinc-900 dark:bg-zinc-100"
-          }`}
-        />
+        {/* Neutral throughout. An earlier version coloured the retry
+            state amber, but ui-guidance.md reserves amber for
+            specificity flags and cap warnings — borrowing it for
+            routine retry telemetry would give a non-blocking state a
+            conflicting semantic (Codex P1, #436). The retry is
+            conveyed by the copy, which says so explicitly. */}
+        <div className="h-full w-1/3 animate-pulse bg-zinc-900 dark:bg-zinc-100" />
       </div>
       <div className="flex items-baseline justify-between gap-4 text-xs">
         <span
@@ -101,11 +100,7 @@ export default function OperationProgress({
           aria-live="polite"
           data-testid={`${testId}-message`}
           data-stage={event?.stage ?? "unknown"}
-          className={
-            retrying
-              ? "text-amber-700 dark:text-amber-400"
-              : "text-zinc-600 dark:text-zinc-400"
-          }
+          className="text-zinc-600 dark:text-zinc-400"
         >
           {statusText}
         </span>
