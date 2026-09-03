@@ -696,11 +696,16 @@ This is a service-level setting, so it does **not** create a new revision and it
 
 ### Function inventory
 
-Every function exported from `functions/src/index.ts` appears here. HTTP-triggered functions (`onCall` / `onRequest`) need the invoker step above once, on first deploy. Event-triggered functions must **NOT** get it: they rely on authenticated event delivery, and making one publicly invokable would be a security regression.
+Every function exported from `functions/src/index.ts` appears here. The `invoker step` column has two values and the distinction is a security one:
+
+- **required** — a publicly-invoked HTTP function (`onCall`, or `onRequest` without an `invoker` option). Needs the step above once, on first deploy.
+- **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* HTTP functions that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
+
+Getting this column wrong in the "must not" direction is a security regression, not a broken deploy — it fails open and silently.
 
 **This table is maintained by hand.** A CI check to enforce it was attempted and withdrawn (PR #452): deciding which exports become which Cloud Run services requires resolving TypeScript binding forms and firebase-tools' naming rules, and five review rounds kept finding valid shapes it parsed wrongly — at one point it would have advised making an event-triggered function publicly invokable. Approximating a compiler in a lint script produced a guard that was confidently wrong more often than the drift it was meant to catch.
 
-So when you add a function to `functions/src/index.ts`, add a row here, and set the `invoker step` column deliberately — HTTP-triggered functions need it, event-triggered functions must not have it.
+So when you add a function to `functions/src/index.ts`, add a row here and set the `invoker step` column deliberately, using the two definitions above.
 
 | function (`index.ts`) | Cloud Run service | invoker step |
 |---|---|---|
