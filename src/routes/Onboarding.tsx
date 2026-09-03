@@ -30,7 +30,7 @@ import { useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
 import ResumeEditor from "../components/ResumeEditor.tsx";
-import { setAppBusy } from "../lib/appBusy.ts";
+import { beginAppBusy } from "../lib/appBusy.ts";
 import { friendlyCallableError } from "../lib/callable-errors.ts";
 import { invokeExtractFromResume } from "../services/extraction.ts";
 
@@ -64,8 +64,10 @@ export default function Onboarding(): ReactElement {
     setError(null);
     // Suppress the update-reload banner for the duration: extraction
     // runs ~108s, and offering a reload mid-call invites destroying
-    // work that is about to succeed (#429).
-    setAppBusy("onboarding.extract", true);
+    // work that is about to succeed (#429). A per-invocation lease, so
+    // one extraction settling cannot un-suppress another that is still
+    // running (Codex P2 on PR #434).
+    const releaseBusy = beginAppBusy("onboarding.extract");
     try {
       await invokeExtractFromResume(text);
       // Pipeline persisted the Units; the Unit Review
@@ -82,9 +84,9 @@ export default function Onboarding(): ReactElement {
       );
     } finally {
       // finally, not the two branches: the success path navigates away
-      // and an un-cleared key would suppress the banner for the rest of
-      // the session.
-      setAppBusy("onboarding.extract", false);
+      // and an unreleased lease would suppress the banner for the rest
+      // of the session.
+      releaseBusy();
     }
   };
 

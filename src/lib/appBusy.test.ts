@@ -1,17 +1,19 @@
 /**
  * Unit tests for the busy store (#429).
  *
- * The keyed design exists because two surfaces can be busy at once — a
- * JD parse on one Role while an extraction runs elsewhere. A boolean
- * would let whichever finished first clear the other's suppression.
+ * The lease design exists because a caller-supplied string key had a
+ * race Codex found on PR #434: an operation that survives navigation,
+ * followed by a second operation with the same key, meant the first
+ * one settling released the only entry while the second was still
+ * running — exposing the reload prompt during a live call.
  */
 
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
 import {
   _resetAppBusyForTests,
+  beginAppBusy,
   isAppBusy,
-  setAppBusy,
   subscribeAppBusy,
 } from "./appBusy.ts";
 
@@ -22,40 +24,55 @@ describe("appBusy", () => {
     expect(isAppBusy()).toBe(false);
   });
 
-  it("reports busy while a key is set, idle once cleared", () => {
-    setAppBusy("a", true);
+  it("is busy while a lease is held, idle once released", () => {
+    const release = beginAppBusy("extract");
     expect(isAppBusy()).toBe(true);
-    setAppBusy("a", false);
+    release();
     expect(isAppBusy()).toBe(false);
   });
 
-  it("stays busy until EVERY key clears", () => {
-    // The reason the store is keyed rather than a boolean.
-    setAppBusy("extract", true);
-    setAppBusy("parse", true);
-    setAppBusy("parse", false);
+  it("stays busy until EVERY lease is released", () => {
+    const a = beginAppBusy("extract");
+    const b = beginAppBusy("parse");
+    b();
     expect(isAppBusy()).toBe(true);
-    setAppBusy("extract", false);
+    a();
     expect(isAppBusy()).toBe(false);
   });
 
-  it("is idempotent for repeated set and clear", () => {
-    // React effects can re-run; a counter would drift.
-    setAppBusy("a", true);
-    setAppBusy("a", true);
-    setAppBusy("a", false);
+  it("keeps concurrent same-label operations independent", () => {
+    // The exact race Codex found: two extractions with the same label,
+    // the first settling while the second is still in flight. With a
+    // shared string key the first release cleared the only entry and
+    // un-suppressed the banner mid-call.
+    const first = beginAppBusy("onboarding.extract");
+    const second = beginAppBusy("onboarding.extract");
+    first();
+    expect(isAppBusy()).toBe(true);
+    second();
     expect(isAppBusy()).toBe(false);
-    setAppBusy("a", false);
+  });
+
+  it("makes release idempotent", () => {
+    // Effects and finally blocks can both run; a second call must not
+    // release someone else's lease.
+    const a = beginAppBusy("extract");
+    const b = beginAppBusy("parse");
+    a();
+    a();
+    a();
+    expect(isAppBusy()).toBe(true);
+    b();
     expect(isAppBusy()).toBe(false);
   });
 
   it("notifies subscribers only on aggregate change", () => {
     const seen = vi.fn();
     subscribeAppBusy(seen);
-    setAppBusy("a", true);
-    setAppBusy("b", true); // already busy — no churn
-    setAppBusy("b", false); // still busy — no churn
-    setAppBusy("a", false);
+    const a = beginAppBusy("a");
+    const b = beginAppBusy("b"); // already busy — no churn
+    b(); // still busy — no churn
+    a();
     expect(seen.mock.calls.map(([v]) => v)).toEqual([true, false]);
   });
 
@@ -63,7 +80,7 @@ describe("appBusy", () => {
     const seen = vi.fn();
     const off = subscribeAppBusy(seen);
     off();
-    setAppBusy("a", true);
+    beginAppBusy("a");
     expect(seen).not.toHaveBeenCalled();
   });
 
@@ -73,7 +90,18 @@ describe("appBusy", () => {
       throw new Error("bad subscriber");
     });
     subscribeAppBusy(good);
-    expect(() => setAppBusy("a", true)).not.toThrow();
+    expect(() => beginAppBusy("a")).not.toThrow();
     expect(good).toHaveBeenCalledWith(true);
+  });
+
+  it("releases in any order", () => {
+    const a = beginAppBusy("a");
+    const b = beginAppBusy("b");
+    const c = beginAppBusy("c");
+    b();
+    c();
+    expect(isAppBusy()).toBe(true);
+    a();
+    expect(isAppBusy()).toBe(false);
   });
 });
