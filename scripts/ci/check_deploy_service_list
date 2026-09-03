@@ -89,6 +89,24 @@ for st in (s.strip() for s in src.split(";")):
             )
         exports.add(name)
         continue
+    # `export * from "..."` / `export * as ns from "..."` hides an
+    # unknown set of bindings behind one statement. Enumerating them
+    # means resolving another module's exports, which is the inference
+    # this check deliberately stopped doing — so refuse the form rather
+    # than skip it silently and report a guarantee that no longer
+    # holds. Codex P2 on PR #452.
+    m = re.match(r"^export\s+\*", st)
+    if m:
+        sys.exit(
+            "check_deploy_service_list: wildcard re-export found in "
+            "functions/src/index.ts:\n"
+            f"        {st.splitlines()[0][:100]}\n"
+            "      This check cannot enumerate what a wildcard exports, so "
+            "it fails rather than\n"
+            "      report an accounting guarantee it cannot make. Name the "
+            "exports explicitly."
+        )
+
     # `export { A, B as C } [from "..."]` — with or without `from`,
     # single- or multi-line, any number of symbols.
     m = re.match(r"^export\s+(type\s+)?\{(.+?)\}", st, flags=re.S)
@@ -121,13 +139,38 @@ if HEADING not in doc:
     )
 section = re.split(r"(?m)^## ", doc.split(HEADING, 1)[1])[0]
 
-# The inventory rows: | `function` | `service` | note |
-rows = re.findall(r"(?m)^\|\s*`([A-Za-z0-9_$]+)`\s*\|", section)
+# Narrow again to the inventory SUBSECTION and its FIRST table.
+# Scoping to the H2 alone was still too loose: an unrelated table later
+# in the same section — troubleshooting, examples — could supply a name
+# the inventory had lost, masking exactly the drift this exists to
+# catch. Reproduced in review. Codex P2 on PR #452.
+SUBHEADING = "### Function inventory"
+if SUBHEADING not in section:
+    sys.exit(
+        f"check_deploy_service_list: '{SUBHEADING}' not found under "
+        f"'{HEADING}'. The inventory moved or was renamed; this check will "
+        "not pass by default."
+    )
+inventory = re.split(r"(?m)^#{2,3} ", section.split(SUBHEADING, 1)[1])[0]
+
+# The first contiguous run of table rows in that subsection.
+table_lines = []
+seen_table = False
+for line in inventory.splitlines():
+    if line.lstrip().startswith("|"):
+        seen_table = True
+        table_lines.append(line)
+    elif seen_table and line.strip() == "":
+        continue
+    elif seen_table:
+        break
+
+rows = re.findall(r"(?m)^\|\s*`([A-Za-z0-9_$]+)`\s*\|", "\n".join(table_lines))
 if not rows:
     sys.exit(
         "check_deploy_service_list: found no function-inventory rows under "
-        f"'{HEADING}'. Expected a table whose first column is a backticked "
-        "function name."
+        f"'{SUBHEADING}'. Expected a table whose first column is a "
+        "backticked function name."
     )
 documented = set(rows)
 
