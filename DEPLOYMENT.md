@@ -694,14 +694,21 @@ This is a service-level setting, so it does **not** create a new revision and it
 
 **Region.** The commands below assume `us-central1`. A function that sets its own `region` option deploys elsewhere, and the command must name that region — targeting the wrong one silently "succeeds" against a service that is not the one serving traffic.
 
+`region` also takes an **array**. `region: ["us-central1", "us-east1"]` expands into one Cloud Run service per region, each needing its own invoker step, because `gcloud run services update --region` selects exactly one. Treat "run this once" below as once *per region the function declares*.
+
 ### Function inventory
 
 Every function exported from `functions/src/index.ts` appears here. The `invoker step` column has two values and the distinction is a security one:
 
-- **required** — a publicly-invoked HTTP function (`onCall`, or `onRequest` without an `invoker` option). Needs the step above once, on first deploy.
+- **required** — a publicly-invoked HTTP function: `onCall`, or `onRequest` that either omits `invoker` or sets it explicitly to `"public"`. Both emit the same public binding, so the explicit form needs the step just as much as the implicit one. Run it once per declared region, on first deploy.
 - **must not** — anything whose access is meant to be restricted. That covers event-triggered functions, which rely on authenticated event delivery, *and* HTTP functions that set `invoker: "private"` or name specific service accounts. `firebase-tools` deliberately skips the public binding for those (`deploy/functions/release/fabricator.js`: `invoker || ["public"]`, then `if (!invoker.includes("private"))`), so running `--no-invoker-iam-check` on one would defeat the protection the author asked for.
 
-Getting this column wrong in the "must not" direction is a security regression, not a broken deploy — it fails open and silently.
+The two ways to get this wrong are not equally bad:
+
+- Marking a **restricted** function `required` (or running the public step on a `must not` row) **fails open, and silently.** Nothing breaks; the endpoint is simply reachable by anyone, which is the failure this whole section exists to prevent.
+- Marking a **public** function `must not` fails closed: the deploy or the browser call breaks visibly and someone fixes it within minutes.
+
+So when uncertain, prefer `must not` — and only run the public invoker step for a row this table marks `required`.
 
 **This table is maintained by hand.** A CI check to enforce it was attempted and withdrawn (PR #452): deciding which exports become which Cloud Run services requires resolving TypeScript binding forms and firebase-tools' naming rules, and five review rounds kept finding valid shapes it parsed wrongly — at one point it would have advised making an event-triggered function publicly invokable. Approximating a compiler in a lint script produced a guard that was confidently wrong more often than the drift it was meant to catch.
 
@@ -718,7 +725,8 @@ So when you add a function to `functions/src/index.ts`, add a row here and set t
 | `runMatching` | `runmatching` | required |
 | `deriveMatchEvidence` | `derivematchevidence` | required |
 
-> **Every NEW callable needs this once.** `firebase deploy` creates the
+> **Every new `required` row needs this once per region.** Only rows this
+> table marks `required` — never a `must not` row. `firebase deploy` creates the
 > Cloud Run service but cannot set the invoker policy, so the deploy
 > reports `Failed to set the IAM Policy on the Service ...` and exits
 > non-zero *after* the function itself deployed successfully. The
