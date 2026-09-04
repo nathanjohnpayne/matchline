@@ -99,8 +99,13 @@ export function safeProgress(
       // job is to never throw. `Promise.resolve` adopts any thenable
       // and hands back a real promise (CodeRabbit Minor, #457).
       const result = report(event) as unknown;
+      // `object` is not the only thenable shape: a *function* can carry
+      // a `then` method too, and `Promise.resolve` adopts it just the
+      // same. Testing only for "object" skipped those, leaving a
+      // rejecting callable thenable unhandled — the exact failure this
+      // helper exists to prevent (CodeRabbit, #457).
       if (
-        typeof result === "object" &&
+        (typeof result === "object" || typeof result === "function") &&
         result !== null &&
         typeof (result as PromiseLike<unknown>).then === "function"
       ) {
