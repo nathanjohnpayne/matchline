@@ -61,6 +61,22 @@ export default function UpdatePrompt(): ReactElement | null {
   const dirty = useSyncExternalStore(subscribeUnsavedWork, hasUnsavedWork);
   const [confirming, setConfirming] = useState(false);
 
+  // Clear the warning the moment the last dirty editor goes clean.
+  //
+  // `UpdatePrompt` lives in the app shell and never unmounts, and only
+  // "Keep editing" reset this state — so a user who entered the
+  // confirmation and then saved (or let the autosave fire) instead of
+  // reloading was left with a banner claiming a reload would discard
+  // unsaved changes when nothing was dirty, and every later editing
+  // session inherited that stale confirmation (Codex P2, #456).
+  //
+  // `nextReloadAction` already makes the *action* correct in that
+  // state; this makes the *message* correct, which is the half that
+  // was lying to the user.
+  useEffect(() => {
+    if (!dirty) setConfirming(false);
+  }, [dirty]);
+
   useEffect(() => {
     // No stamp means the define did not run (dev server, test). There
     // is nothing to compare against, so don't poll at all.
