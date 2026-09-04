@@ -26,6 +26,8 @@ import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
 import { callableOptions } from "./callable-timeouts.ts";
+import { type ProgressEvent } from "./progress.ts";
+import { invokeStreaming } from "./streamCall.ts";
 import type { JobRequirementUnit } from "../types/capability.ts";
 
 export interface ParseJobRequirementsResponse {
@@ -56,15 +58,28 @@ export interface ParseJobRequirementsResponse {
 export async function invokeParseJobRequirements(
   roleId: string,
   text: string,
+  onProgress?: (event: ProgressEvent) => void,
 ): Promise<ParseJobRequirementsResponse> {
   const fn = httpsCallable<
     { roleId: string; text: string },
-    ParseJobRequirementsResponse
+    ParseJobRequirementsResponse,
+    unknown
   >(
     getFunctionsClient(),
     "parseJobRequirements",
     callableOptions("parseJobRequirements"),
   );
-  const result = await fn({ roleId, text });
-  return result.data;
+
+  if (onProgress === undefined) {
+    const result = await fn({ roleId, text });
+    return result.data;
+  }
+
+  // Streaming path (#428); see `streamCall.ts` for the subtleties it
+  // handles on behalf of both call sites.
+  return await invokeStreaming(fn, {
+    payload: { roleId, text },
+    timeoutMs: callableOptions("parseJobRequirements").timeout,
+    onProgress,
+  });
 }

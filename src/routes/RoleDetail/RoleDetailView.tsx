@@ -34,6 +34,7 @@ import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
 import { groupMatchesByRequirement } from "./groupMatchesByRequirement.ts";
 import type { JobRequirementUnit } from "../../types/capability.ts";
 import type { MatchApprovalState } from "../../services/matches.ts";
+import { type ProgressEvent } from "../../services/progress.ts";
 
 /**
  * Subscription load state for the Role doc + per-tab data.
@@ -98,6 +99,10 @@ export interface RoleDetailViewProps {
    * tab switches.
    */
   readonly parsingStatus: RequirementsTabStatus;
+  /** Latest JD-parse progress event, or null (#428). */
+  readonly parseProgress: ProgressEvent | null;
+  /** Epoch ms the parse started. Required — see RequirementsTabProps. */
+  readonly parseStartedAt: number;
   readonly parseError: Error | null;
   readonly savingJd: boolean;
   readonly jdDraft: string;
@@ -138,6 +143,8 @@ export default function RoleDetailView({
   onRerunMatching,
   matchingError,
   parsingStatus,
+  parseProgress,
+  parseStartedAt,
   parseError,
   savingJd,
   jdDraft,
@@ -262,6 +269,8 @@ export default function RoleDetailView({
             onDraftChange={onJdDraftChange}
             requirements={requirements}
             status={parsingStatus}
+            parseProgress={parseProgress}
+            parseStartedAt={parseStartedAt}
             error={parseError}
             savingJd={savingJd}
             computingMatches={computingMatches}

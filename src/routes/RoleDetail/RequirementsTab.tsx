@@ -37,6 +37,12 @@ import {
 } from "react";
 
 import type { JobRequirementUnit } from "../../types/capability.ts";
+import OperationProgress from "../../components/OperationProgress.tsx";
+import {
+  JD_PARSING_VOCABULARY,
+  TYPICAL_DURATION_MS,
+  type ProgressEvent,
+} from "../../services/progress.ts";
 
 export type RequirementsTabStatus = "editing" | "parsing" | "error";
 
@@ -57,6 +63,17 @@ export interface RequirementsTabProps {
   readonly requirements: readonly JobRequirementUnit[];
   /** Parse-call status. */
   readonly status: RequirementsTabStatus;
+  /** Latest parse progress event, or null before the first arrives (#428). */
+  readonly parseProgress: ProgressEvent | null;
+  /**
+   * Epoch ms the parse started; drives elapsed time.
+   *
+   * Required, not optional-with-a-0-default: `0` is a valid-looking
+   * number that renders elapsed time from the Unix epoch, so a caller
+   * that forgot it produced a plausible component showing a ~56-year
+   * duration rather than an obvious failure (CodeRabbit P2, #436).
+   */
+  readonly parseStartedAt: number;
   /** Last parse error, if any. Surfaced inline. */
   readonly error: Error | null;
   /** True while an upsertRole(jd_raw) save is in flight. */
@@ -118,6 +135,8 @@ export default function RequirementsTab({
   onDraftChange,
   requirements,
   status,
+  parseProgress,
+  parseStartedAt,
   error,
   savingJd,
   computingMatches,
@@ -194,22 +213,14 @@ export default function RequirementsTab({
       {/* Thin top progress bar per UI guidance rule 6 — only
           visible while a parse is in flight. */}
       {parsing && (
-        <div
-          role="progressbar"
-          aria-label="Parsing job requirements"
-          aria-busy="true"
-          // No aria-valuenow — this is intentionally
-          // indeterminate (the parse pipeline doesn't
-          // expose progress percent). aria-valuetext
-          // gives screen readers a status message
-          // beyond the bare label (CodeRabbit nit on
-          // PR #206).
-          aria-valuetext="Parsing in progress"
-          data-testid="requirements-tab-progress"
-          className="h-0.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
-        >
-          <div className="h-full w-1/3 animate-pulse bg-zinc-900 dark:bg-zinc-100" />
-        </div>
+        <OperationProgress
+          event={parseProgress}
+          startedAt={parseStartedAt}
+          vocabulary={JD_PARSING_VOCABULARY}
+          typicalMs={TYPICAL_DURATION_MS.jdParsing}
+          label="Parsing job requirements"
+          testId="requirements-tab-progress"
+        />
       )}
 
       {status === "error" && error !== null && (

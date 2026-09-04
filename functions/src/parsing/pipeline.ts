@@ -15,6 +15,7 @@
  */
 
 import { embedMany } from "../llm/embeddings.js";
+import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import type { JobRequirementUnit } from "../types/capability.js";
 
 import { getAdminDb } from "../firestore/admin.js";
@@ -36,6 +37,10 @@ export interface JdPipelineDeps {
     ctx: JdParsingContext,
     units: readonly JobRequirementUnit[],
   ) => Promise<void>;
+  /** Optional progress sink (#428), forwarded to the parser. */
+  readonly onProgress?: ProgressReporter;
+  /** Forwarded to the model call; see the retry loop (#436). */
+  readonly signal?: AbortSignal;
 }
 
 export async function runJdParsingPipeline(
@@ -46,8 +51,9 @@ export async function runJdParsingPipeline(
   const parse = deps.parse ?? parseJobRequirements;
   const embed = deps.embed ?? embedMany;
   const persistBatch = deps.persistBatch ?? writeRequirementsAsBatch;
+  const report = safeProgress(deps.onProgress);
 
-  const units = await parse(text, ctx);
+  const units = await parse(text, ctx, { onProgress: deps.onProgress, signal: deps.signal });
 
   // Do NOT short-circuit on `units.length === 0`. Re-parsing a Role
   // whose JD has been edited down to zero Requirements must still
@@ -55,6 +61,11 @@ export async function runJdParsingPipeline(
   // matching and gap detection operate on stale data. persistBatch
   // handles the empty case (it performs the clear without any new
   // writes).
+  // Only announce embedding when there is something to embed; a
+  // zero-Requirement re-parse still runs persistBatch to clear stale
+  // rows, so "saving" below is still truthful.
+  if (units.length > 0) report({ stage: "embedding" });
+
   const embeddings =
     units.length === 0
       ? []
@@ -74,6 +85,7 @@ export async function runJdParsingPipeline(
     embedding: embeddings[i],
   }));
 
+  report({ stage: "saving" });
   await persistBatch(ctx, stamped);
 
   return stamped;
