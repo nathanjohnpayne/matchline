@@ -25,6 +25,8 @@ import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
 import { callableOptions } from "./callable-timeouts.ts";
+import { type ProgressEvent } from "./progress.ts";
+import { invokeStreaming } from "./streamCall.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 export interface ExtractFromResumeResponse {
@@ -49,12 +51,31 @@ export interface ExtractFromResumeResponse {
  */
 export async function invokeExtractFromResume(
   text: string,
+  onProgress?: (event: ProgressEvent) => void,
 ): Promise<ExtractFromResumeResponse> {
-  const fn = httpsCallable<{ text: string }, ExtractFromResumeResponse>(
+  const fn = httpsCallable<
+    { text: string },
+    ExtractFromResumeResponse,
+    unknown
+  >(
     getFunctionsClient(),
     "extractFromResume",
     callableOptions("extractFromResume"),
   );
-  const result = await fn({ text });
-  return result.data;
+
+  if (onProgress === undefined) {
+    const result = await fn({ text });
+    return result.data;
+  }
+
+  // Streaming path (#428). The server emits a chunk per stage and per
+  // retry attempt so the UI can report what is actually happening
+  // across a ~108s call. `invokeStreaming` owns the three subtleties
+  // this path has (unhandled `data` rejection, abort-vs-timeout
+  // labelling, unknown-chunk handling) — see `streamCall.ts`.
+  return await invokeStreaming(fn, {
+    payload: { text },
+    timeoutMs: callableOptions("extractFromResume").timeout,
+    onProgress,
+  });
 }

@@ -334,6 +334,39 @@ Model strategy:
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
 
+## Streaming progress
+
+Extraction and JD parsing run long enough that silence reads as failure — extraction was measured at 108.6s against the p95 target below. Both callables therefore stream progress to the client while they work, and the contract is specified here because the event vocabulary is necessarily declared twice (once in `functions/src/llm/progress.ts`, once in `src/services/progress.ts`) and neither copy should become the source of truth by default.
+
+### Event schema
+
+A chunk is `{ stage, attempt?, maxAttempts? }`. Stages are a closed set:
+
+| Stage | Meaning |
+|---|---|
+| `analyzing` | the LLM call is running; `attempt` is 1-based |
+| `retrying` | an attempt failed and the backoff is being waited out |
+| `embedding` | batch embeddings over the returned units |
+| `saving` | the atomic Firestore write |
+
+`attempt` and `maxAttempts` accompany `analyzing` and `retrying` only, and are positive integers with `maxAttempts >= attempt`. A chunk failing any of these rules is discarded rather than rendered: the deployed function is not necessarily the version the client was built against.
+
+`retrying` is a distinct stage rather than a variant of `analyzing` because the two are different states — one is working, the other waiting — and a wait can be long when a 429 carries `retry-after`. Reporting a wait as work is the apparent-hang this feature exists to remove.
+
+### Guarantees
+
+- **Progress never affects the outcome.** Emission is best-effort: `sendChunk` resolves `false` for a non-streaming request rather than throwing, and `safeProgress` absorbs both a synchronous throw and a rejected promise from an async reporter. A broken sink cannot fail a call that would otherwise succeed, the same invariant cost telemetry holds.
+- **The UI degrades honestly.** With no events — an older deployed function, a dropped stream, a non-streaming caller — the surface shows elapsed time and a duration expectation, never an invented stage.
+- **Backwards compatible.** A client that passes no progress callback takes the non-streaming path unchanged.
+
+### Timeout semantics
+
+`HttpsCallableStreamOptions` carries no `timeout`, and the SDK's streaming path races nothing, so the client budget is re-supplied as an `AbortSignal` driven by the same table as the non-streaming path (`src/services/callable-timeouts.ts`). The SDK maps any abort to `cancelled`, so a deadline we imposed is relabelled `deadline-exceeded` before it reaches the UI — otherwise a timeout would read to the user as though they had cancelled something.
+
+### Cancellation
+
+`response.signal` bounds *new* spend only. Both retry loops check it before every attempt and the backoff wait is abort-aware, so a disconnect stops work that has not started. It is never used to discard work already done: by the time the pipeline reaches embedding or persistence the model output is complete and already billed, and the resulting Units are what the user returns to. Aborting there would maximise waste rather than bound it.
+
 ## Execution targets
 
 Latency (p50 / p95):

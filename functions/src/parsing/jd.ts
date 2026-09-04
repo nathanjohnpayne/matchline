@@ -26,6 +26,7 @@ import { modelFor } from "../llm/config.js";
 import { recordUsage, safeRecordUsage } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   JdParsingResponseV1Schema,
   type JdParsingResponseV1,
@@ -48,6 +49,14 @@ export interface JdParsingDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
   readonly generateId?: () => string;
+  /** Optional progress sink (#428); reports each attempt. */
+  readonly onProgress?: ProgressReporter;
+  /**
+   * Aborted when the caller is gone (client disconnect). Checked only
+   * BEFORE starting a new attempt — never to discard work already
+   * done. See the check in the retry loop for why (#436).
+   */
+  readonly signal?: AbortSignal;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -104,6 +113,9 @@ export async function parseJobRequirements(
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
   const generateId = deps.generateId ?? randomUUID;
+  const report = safeProgress(deps.onProgress);
+  const signal = deps.signal;
+  let abortedBeforeAttempt = false;
 
   const prompt = loadPromptText("parsing", "jd");
   const { provider, model } = modelFor("requirement_parsing");
@@ -118,6 +130,18 @@ export async function parseJobRequirements(
   const failures: JdParsingAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Checked before EVERY attempt, including the first: the
+    // client can disconnect while the callable is still doing
+    // its pre-flight work (the Role ownership read, for the JD
+    // path), so `attempt > 0` let a full request launch for a
+    // caller already gone — defeating the bound it was added
+    // for (Codex P2, #436). Still never used to discard work
+    // already done; see the callable.
+    if (signal?.aborted === true) {
+      abortedBeforeAttempt = true;
+      break;
+    }
+    report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder =
       prompt.system + retryReminderFor(failures.at(-1), attempt);
@@ -151,7 +175,16 @@ export async function parseJobRequirements(
       // content failures the model can fix on the next attempt).
       // See functions/src/llm/retry.ts for the schedule.
       if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(transportBackoffMs(attempt, err));
+        // Announce the wait BEFORE sleeping: a 429 carries a
+        // retry-after that can be long, and staying on
+        // "analyzing" through it recreates the apparent hang
+        // this feature exists to remove (Codex P2, #436).
+        report({
+          stage: "retrying",
+          attempt: attempt + 2,
+          maxAttempts: MAX_ATTEMPTS,
+        });
+        await sleep(transportBackoffMs(attempt, err), signal);
       }
       continue;
     }
@@ -221,7 +254,10 @@ export async function parseJobRequirements(
   }
 
   // See extraction/resume.ts — same silent-failure gap (#426).
-  logRetryExhaustion("parsing.jd", model, failures);
+  // Not a retry-budget exhaustion when we stopped because the
+  // caller disconnected — logging it as one would misattribute
+  // a deliberate stop as a failure (#436).
+  if (!abortedBeforeAttempt) logRetryExhaustion("parsing.jd", model, failures);
   throw new JdParsingError(
     `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,

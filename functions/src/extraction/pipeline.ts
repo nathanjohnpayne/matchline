@@ -20,6 +20,7 @@
  */
 
 import { embedMany } from "../llm/embeddings.js";
+import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import type { ExperienceUnit } from "../types/capability.js";
 
 import { extractFromResume, type ExtractionContext } from "./resume.js";
@@ -39,6 +40,13 @@ export interface PipelineDeps {
    * only if it provides a non-atomic persist.
    */
   readonly persistBatch?: (units: readonly ExperienceUnit[]) => Promise<void>;
+  /**
+   * Optional progress sink (#428), forwarded to the extractor so its
+   * per-attempt events reach the caller too.
+   */
+  readonly onProgress?: ProgressReporter;
+  /** Forwarded to the model call; see the retry loop (#436). */
+  readonly signal?: AbortSignal;
 }
 
 export async function runExtractionPipeline(
@@ -49,11 +57,14 @@ export async function runExtractionPipeline(
   const extract = deps.extract ?? extractFromResume;
   const embed = deps.embed ?? embedMany;
   const persistBatch = deps.persistBatch ?? writeUnitsAsBatch;
+  const report = safeProgress(deps.onProgress);
 
   // Step 1: LLM extraction. Throws ExtractionError on retry-budget
   // exhaustion; the callable maps that to "needs manual review".
-  const units = await extract(text, ctx);
+  const units = await extract(text, ctx, { onProgress: deps.onProgress, signal: deps.signal });
   if (units.length === 0) return [];
+
+  report({ stage: "embedding" });
 
   // Step 2: batch embeddings. The embedMany contract preserves
   // input order, so `embeddings[i]` corresponds to `units[i]`.
@@ -81,6 +92,7 @@ export async function runExtractionPipeline(
   // extraction run). Without atomicity, a mid-batch failure would
   // leave partial data + fresh-id retries would duplicate the
   // survivors — a data-corruption shape Codex caught on this PR.
+  report({ stage: "saving" });
   await persistBatch(stamped);
 
   return stamped;
