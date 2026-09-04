@@ -50,6 +50,15 @@ export interface VersionPayload {
  * Returns `null` for anything that is not a well-formed payload, so the
  * caller can tell "not a version document" from "no newer build".
  */
+/** `JSON.parse`, or `null` for a body that is not JSON at all. */
+function parseJsonOrNull(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 export function parseVersionPayload(raw: unknown): VersionPayload | null {
   if (typeof raw !== "object" || raw === null) return null;
   const buildId = (raw as { buildId?: unknown }).buildId;
@@ -186,6 +195,9 @@ export function createVersionPoller({
   let issued = 0;
   let newestApplied = 0;
   let stopped = false;
+  // One warning per poller when the deployment contract is broken, so
+  // the console records the cause without a line per tick.
+  let warnedBrokenContract = false;
   // The interval starts a check without awaiting the previous one, and
   // `stop()` alone only prevented a stale result being APPLIED — the
   // request itself kept running, holding a connection past unmount and
@@ -208,11 +220,29 @@ export function createVersionPoller({
         signal: controller.signal,
       });
       if (!res.ok) return;
-      const payload = parseVersionPayload(await res.json());
+      // Read the body and parse it here rather than calling
+      // `res.json()`. A real `Response` carrying HTML rejects *inside*
+      // `json()` with a SyntaxError, which the catch below would
+      // absorb as though the client were offline — so
+      // `parseVersionPayload` would never actually see the rewritten
+      // index.html it exists to reject, and a broken deployment
+      // contract would be indistinguishable from a flaky network.
+      // Parsing explicitly keeps the two apart (Codex P2, #434).
+      const payload = parseVersionPayload(parseJsonOrNull(await res.text()));
       // `null` means the response was not a version document — most
       // likely the SPA's index.html arriving via the catch-all rewrite.
-      // Treat it as "no reading", never as "no update".
-      if (payload === null) return;
+      // Treat it as "no reading", never as "no update", and say so
+      // once: silence here is the exact failure #429 set out to avoid.
+      if (payload === null) {
+        if (!warnedBrokenContract) {
+          warnedBrokenContract = true;
+          console.warn(
+            `[appVersion] ${VERSION_URL} did not return a version document; ` +
+              `update detection is disabled. Check that the build emits version.json.`,
+          );
+        }
+        return;
+      }
       if (stopped || seq <= newestApplied) return;
       newestApplied = seq;
       onBuildId(payload.buildId);

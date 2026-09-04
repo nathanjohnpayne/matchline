@@ -146,11 +146,27 @@ describe("dismissal persistence", () => {
 });
 
 describe("createVersionPoller", () => {
-  function jsonResponse(body: unknown, ok = true): Response {
+  /**
+   * Stands in for a real `Response`: `json()` performs an actual parse
+   * and therefore REJECTS on a body that is not JSON.
+   *
+   * The previous helper resolved `json()` with whatever object it was
+   * handed, so the index.html case below fed a string straight into
+   * `parseVersionPayload` and never exercised what a browser really
+   * does — the poller's own `catch` swallowed the SyntaxError and the
+   * broken deployment contract looked like an offline client. The
+   * fixture hid the bug it was written to catch (Codex P2, #434).
+   */
+  function rawResponse(body: string, ok = true): Response {
     return {
       ok,
-      json: async () => body,
+      text: async () => body,
+      json: async () => JSON.parse(body) as unknown,
     } as unknown as Response;
+  }
+
+  function jsonResponse(body: unknown, ok = true): Response {
+    return rawResponse(JSON.stringify(body), ok);
   }
 
   it("reports the build id from a well-formed response", async () => {
@@ -190,13 +206,43 @@ describe("createVersionPoller", () => {
   });
 
   it("ignores the SPA index.html arriving via the catch-all rewrite", async () => {
-    const onBuildId = vi.fn();
-    const poller = createVersionPoller({
-      onBuildId,
-      fetchImpl: async () => jsonResponse("<!doctype html>"),
-    });
-    await poller.check();
-    expect(onBuildId).not.toHaveBeenCalled();
+    const html = "<!doctype html><html><body><div id=\"root\"></div></body></html>";
+    // Guard the fixture itself: a faithful Response rejects here, which
+    // is precisely why the poller must not rely on `json()`.
+    await expect(rawResponse(html).json()).rejects.toThrow();
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const onBuildId = vi.fn();
+      const poller = createVersionPoller({
+        onBuildId,
+        fetchImpl: async () => rawResponse(html),
+      });
+      await poller.check();
+      expect(onBuildId).not.toHaveBeenCalled();
+      // Silence is the #429 failure mode: the check would be dead and
+      // indistinguishable from "no update". Say it once.
+      expect(warn).toHaveBeenCalledTimes(1);
+      await poller.check();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("ignores a JSON body that is not a version document", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const onBuildId = vi.fn();
+      const poller = createVersionPoller({
+        onBuildId,
+        fetchImpl: async () => jsonResponse({ notABuildId: "b1" }),
+      });
+      await poller.check();
+      expect(onBuildId).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("swallows a network error and stays usable", async () => {
