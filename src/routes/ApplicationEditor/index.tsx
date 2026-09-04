@@ -66,6 +66,7 @@ import ApplicationEditorView, {
 const UNDO_STACK_LIMIT = 10;
 import ManualAddForm from "../UnitReview/ManualAddForm.tsx";
 import { selectPrimaryResumeAsset } from "./selectPrimaryResumeAsset.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 
 export default function ApplicationEditor(): ReactElement {
   const { applicationId } = useParams<{ applicationId: string }>();
@@ -318,6 +319,10 @@ function ApplicationEditorInner({
     // didn't change, so the snapshot is still the right next-undo
     // target).
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
+    // Per-invocation lease over the whole write: without it a visible
+    // update banner keeps Reload enabled while this Firestore mutation
+    // is pending (Codex P1, #434).
+    const releaseBusy = beginAppBusy("applicationEditor.undo");
     try {
       const r = await restoreAssetState(
         applicationId,
@@ -344,6 +349,7 @@ function ApplicationEditorInner({
       setUndoStack((prev) => [...prev, top]);
     } finally {
       mutationInFlightRef.current = false;
+      releaseBusy();
     }
   }, [applicationId, refetchApplication, undoStack]);
 
@@ -378,6 +384,10 @@ function ApplicationEditorInner({
       // stack if the service confirms a real reorder happened.
       // Codex P2 round 4 on PR #198.
       const undoEntry = snapshotAsset("reorder");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.reorderBullet");
       try {
         const result = await reorderBulletsInAsset(
           applicationId,
@@ -415,6 +425,7 @@ function ApplicationEditorInner({
         console.warn("reorderBulletsInAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -427,6 +438,10 @@ function ApplicationEditorInner({
       mutationInFlightRef.current = true;
       // Capture pre-mutation snapshot; commit only on success.
       const undoEntry = snapshotAsset("add");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.addBullet");
       try {
         const result = await addBulletToAsset(
           applicationId,
@@ -454,6 +469,7 @@ function ApplicationEditorInner({
         return null;
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -469,6 +485,22 @@ function ApplicationEditorInner({
       // found short-circuit without filling the undo cap with
       // junk. Codex P2 round 4 on PR #198.
       const undoEntry = snapshotAsset("edit");
+      // Hold ONE lease across the whole save: the Firestore write, the
+      // validation call, and the refetch.
+      //
+      // Acquiring it only before `invokeValidateAsset` (as this did)
+      // left `editBulletInAsset` — a read plus an `updateDoc` — running
+      // with the banner still actionable, so a reload during the write
+      // could discard the edit before it was acknowledged (Codex P2,
+      // #434). The rest of the window matters too: validateAsset
+      // carries a 330s budget, and the edit has already written
+      // `validation_status: "stale"`. A reload mid-flight would not
+      // just interrupt a paid call — the editor reloads the Application
+      // with a one-shot read rather than a subscription, so if that read
+      // wins the race against the server's validation write the
+      // reopened editor stays stale even after validation finishes.
+      // Acquired before the outer try so its finally can release it.
+      const releaseBusy = beginAppBusy("applicationEditor.saveBulletEdit");
       try {
       // 1. Patch the Application doc — flips validation_status to
       //    "stale" + clears the bullet's source_unit_ids on success.
@@ -541,6 +573,10 @@ function ApplicationEditorInner({
         // `throw new Error("Couldn't save edit: ...")` would
         // leave the gate locked indefinitely.
         mutationInFlightRef.current = false;
+        // Same reasoning for the busy lease: released here rather
+        // than after the refetch so an early return or throw cannot
+        // strand it and suppress the update banner for the session.
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -553,6 +589,10 @@ function ApplicationEditorInner({
       mutationInFlightRef.current = true;
       // Capture pre-mutation snapshot; commit only on success.
       const undoEntry = snapshotAsset("remove");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.removeBullet");
       try {
         const result = await removeBulletFromAsset(
           applicationId ?? "",
@@ -578,6 +618,7 @@ function ApplicationEditorInner({
         console.warn("removeBulletFromAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -600,6 +641,7 @@ function ApplicationEditorInner({
       // (the user sees a message and can adjust + retry without
       // losing their input). Don't close the modal on rejection.
       // CodeRabbit Major on PR #182.
+      const releaseBusy = beginAppBusy("applicationEditor.manualInsert");
       try {
         await manualInsert(input);
         setManualAddOpen(false);
@@ -607,6 +649,8 @@ function ApplicationEditorInner({
 
         console.warn("manualInsert failed", err);
         throw err;
+      } finally {
+        releaseBusy();
       }
     },
     [],

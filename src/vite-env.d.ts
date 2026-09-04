@@ -12,3 +12,9 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/**
+ * Build identity injected by `define` in `vite.config.ts` (#429).
+ * Declared here so `src/lib/appVersion.ts` can read it without a cast.
+ */
+declare const __BUILD_ID__: string;

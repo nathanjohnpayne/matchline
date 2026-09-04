@@ -73,3 +73,16 @@ to M or smaller, and the question goes away.
 Every PR that modifies production code ships with tests per
 `docs/agents/testing-requirements.md`. Sub-issues created under this
 rule must carry their tests, not punt them to a sibling ticket.
+
+## Busy leases around long or paid operations
+
+Any code path that awaits a Cloud Function callable or a Firestore write must hold a busy lease (`src/lib/appBusy.ts`) for the *entire* operation. The lease suppresses the update-reload prompt; `specs/matchline.md` § Update prompt is the contract it serves.
+
+Two mistakes recur and are worth naming, because both have shipped and both were caught in review rather than by a test:
+
+- **Leasing the callable but not the write that precedes it.** A save that patches Firestore and then invokes a validation callable is one operation from the user's point of view. Acquiring the lease before the callable leaves the write itself unguarded, so a reload can discard an edit before it is acknowledged.
+- **Leasing one branch of a component's async state.** An effect keyed to a single status (say, edit-saving) silently omits the sibling states that also await a write — approval, deletion, reordering. Enumerate them.
+
+The cost is concrete rather than theoretical: extraction runs about 108 seconds and resume generation carries a 330-second budget, both billed per call. A reload offered mid-flight invites the user to destroy work that is about to succeed and to pay for it a second time.
+
+Use a per-invocation key, never a fixed one — a shared key lets the first of two concurrent calls release the lease still owed to the second.
