@@ -122,6 +122,16 @@ export default function UnitRow({
     kind: "idle",
   });
 
+  // Approve / Flag / Reject await a Firestore write the same way an
+  // edit save does, but the lease above watches only the edit status,
+  // so a slow or offline approval left Reload actionable and able to
+  // terminate the pending write (Codex P2, #434). Same reasoning, same
+  // treatment: a call already under way suppresses the prompt outright.
+  useEffect(() => {
+    if (approvalUi.kind !== "pending") return;
+    return beginAppBusy("unitReview.setApproval");
+  }, [approvalUi.kind]);
+
   // If the underlying Unit changes while we're in view mode (e.g.
   // subscription delivered a new snapshot), nothing to do. If the
   // Unit id itself changes (row re-used for a different Unit —
