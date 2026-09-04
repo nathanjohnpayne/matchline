@@ -213,4 +213,59 @@ describe("invokeStreaming onProgress isolation (#436)", () => {
     expect(result).toEqual({ ok: true });
     expect(unhandled).not.toHaveBeenCalled();
   });
+
+  it("adopts a thenable that implements only `then`", async () => {
+    // `PromiseLike` guarantees `then`, not `catch`. The previous
+    // implementation cast to `Promise` and called `.catch` directly,
+    // which throws a TypeError on this shape. The surrounding
+    // try/catch swallowed it, so nothing appeared to break — but the
+    // rejection handler was never attached, which is the whole point
+    // of the helper. Asserting "does not throw" would therefore pass
+    // against the bug; assert the thenable is actually adopted, i.e.
+    // that `then` gets called with a rejection handler (#457).
+    const then = vi.fn(
+      (_ok: (v: unknown) => void, _err: (e: unknown) => void) => {},
+    );
+    const report = vi.fn(() => ({ then }) as unknown as void);
+
+    await invokeStreaming(
+      fakeFn({ chunks: [{ stage: "analyzing" }], data: { ok: true } }),
+      {
+        payload: { x: 1 },
+        timeoutMs: 1000,
+        onProgress: report as unknown as (e: unknown) => void,
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(then).toHaveBeenCalledTimes(1);
+    expect(typeof then.mock.calls[0]![1]).toBe("function");
+  });
+
+  it("adopts a callable thenable (a function carrying `then`)", async () => {
+    // A function can implement `then` too, and `Promise.resolve` adopts
+    // it identically. A guard testing only for `typeof === "object"`
+    // skipped these, leaving a rejecting callable thenable unhandled
+    // (CodeRabbit, #457).
+    const then = vi.fn(
+      (_ok: (v: unknown) => void, _err: (e: unknown) => void) => {},
+    );
+    const callable = Object.assign(() => {}, { then });
+    const report = vi.fn(() => callable as unknown as void);
+
+    await invokeStreaming(
+      fakeFn({ chunks: [{ stage: "analyzing" }], data: { ok: true } }),
+      {
+        payload: { x: 1 },
+        timeoutMs: 1000,
+        onProgress: report as unknown as (e: unknown) => void,
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(then).toHaveBeenCalledTimes(1);
+    expect(typeof then.mock.calls[0]![1]).toBe("function");
+  });
 });

@@ -56,9 +56,11 @@ export type ProgressStage = (typeof PROGRESS_STAGES)[number];
 export interface ProgressEvent {
   readonly stage: ProgressStage;
   /**
-   * 1-based attempt number, present only on `analyzing`. A value above
-   * 1 means the previous attempt failed and is being retried — the
-   * fact that makes a long wait legible rather than alarming.
+   * 1-based attempt number, present on `analyzing` and `retrying` —
+   * the two stages that carry retry metadata, per
+   * `specs/matchline.md` § Streaming progress. A value above 1 means
+   * the previous attempt failed and is being retried — the fact that
+   * makes a long wait legible rather than alarming.
    */
   readonly attempt?: number;
   /** Total attempts the retry budget allows, so the UI can say "2 of 3". */
@@ -91,13 +93,23 @@ export function safeProgress(
       // thenable result as well as a synchronous throw, or the
       // rejection escapes as an unhandled one and can terminate an
       // otherwise successful call on Node 20 (CodeRabbit P1, #436).
+      // `PromiseLike` guarantees `then`, not `catch`, so casting to
+      // `Promise` and calling `.catch` would itself throw on a thenable
+      // that implements only `then` — inside the helper whose whole
+      // job is to never throw. `Promise.resolve` adopts any thenable
+      // and hands back a real promise (CodeRabbit Minor, #457).
       const result = report(event) as unknown;
+      // `object` is not the only thenable shape: a *function* can carry
+      // a `then` method too, and `Promise.resolve` adopts it just the
+      // same. Testing only for "object" skipped those, leaving a
+      // rejecting callable thenable unhandled — the exact failure this
+      // helper exists to prevent (CodeRabbit, #457).
       if (
-        typeof result === "object" &&
+        (typeof result === "object" || typeof result === "function") &&
         result !== null &&
         typeof (result as PromiseLike<unknown>).then === "function"
       ) {
-        void (result as Promise<unknown>).catch(() => {});
+        void Promise.resolve(result).catch(() => {});
       }
     } catch {
       // Intentionally silent: a failed progress emission is not worth
