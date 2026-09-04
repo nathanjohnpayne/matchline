@@ -123,8 +123,18 @@ export default function UnitRow({
   // with the draft still protected, rather than opening a gap.
   useEffect(() => {
     if (status.kind === "view") return;
+    // Merely having the editor OPEN is not unsaved work. Keying on
+    // `status.kind` alone warned about discarding changes when the user
+    // had typed nothing, or had typed and then restored the original
+    // value — a confirmation for nothing, which teaches people to click
+    // through the one that matters (Codex P2, #456). `draftDiff` is the
+    // same comparison the save path uses to decide there is nothing to
+    // write, so the warning and the write now agree on "changed".
+    if (Object.keys(draftDiff(status.baseSnapshot, status.draft)).length === 0) {
+      return;
+    }
     return beginUnsavedWork("unitReview.inlineEdit");
-  }, [status.kind]);
+  }, [status]);
 
 
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
