@@ -122,13 +122,23 @@ function safeOnProgress(
 ): (event: ProgressEvent) => void {
   return (event) => {
     try {
+      // `PromiseLike` guarantees `then`, not `catch` — casting to
+      // `Promise` and calling `.catch` throws on a thenable that
+      // implements only `then`, inside the helper meant to make that
+      // safe. `Promise.resolve` adopts the thenable instead
+      // (CodeRabbit Minor, #457). Mirrors `safeProgress` server-side.
       const result = report(event) as unknown;
+      // `object` is not the only thenable shape: a *function* can carry
+      // a `then` method too, and `Promise.resolve` adopts it just the
+      // same. Testing only for "object" skipped those, leaving a
+      // rejecting callable thenable unhandled — the exact failure this
+      // helper exists to prevent (CodeRabbit, #457).
       if (
-        typeof result === "object" &&
+        (typeof result === "object" || typeof result === "function") &&
         result !== null &&
         typeof (result as PromiseLike<unknown>).then === "function"
       ) {
-        void (result as Promise<unknown>).catch(() => {});
+        void Promise.resolve(result).catch(() => {});
       }
     } catch {
       // Progress is a reporting concern; it never decides the outcome.
