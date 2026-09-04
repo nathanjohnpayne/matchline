@@ -319,6 +319,10 @@ function ApplicationEditorInner({
     // didn't change, so the snapshot is still the right next-undo
     // target).
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
+    // Per-invocation lease over the whole write: without it a visible
+    // update banner keeps Reload enabled while this Firestore mutation
+    // is pending (Codex P1, #434).
+    const releaseBusy = beginAppBusy("applicationEditor.undo");
     try {
       const r = await restoreAssetState(
         applicationId,
@@ -345,6 +349,7 @@ function ApplicationEditorInner({
       setUndoStack((prev) => [...prev, top]);
     } finally {
       mutationInFlightRef.current = false;
+      releaseBusy();
     }
   }, [applicationId, refetchApplication, undoStack]);
 
@@ -379,6 +384,10 @@ function ApplicationEditorInner({
       // stack if the service confirms a real reorder happened.
       // Codex P2 round 4 on PR #198.
       const undoEntry = snapshotAsset("reorder");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.reorderBullet");
       try {
         const result = await reorderBulletsInAsset(
           applicationId,
@@ -416,6 +425,7 @@ function ApplicationEditorInner({
         console.warn("reorderBulletsInAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -428,6 +438,10 @@ function ApplicationEditorInner({
       mutationInFlightRef.current = true;
       // Capture pre-mutation snapshot; commit only on success.
       const undoEntry = snapshotAsset("add");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.addBullet");
       try {
         const result = await addBulletToAsset(
           applicationId,
@@ -455,6 +469,7 @@ function ApplicationEditorInner({
         return null;
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -574,6 +589,10 @@ function ApplicationEditorInner({
       mutationInFlightRef.current = true;
       // Capture pre-mutation snapshot; commit only on success.
       const undoEntry = snapshotAsset("remove");
+      // Per-invocation lease over the whole write: without it a
+      // visible update banner keeps Reload enabled while this
+      // Firestore mutation is pending (Codex P1, #434).
+      const releaseBusy = beginAppBusy("applicationEditor.removeBullet");
       try {
         const result = await removeBulletFromAsset(
           applicationId ?? "",
@@ -599,6 +618,7 @@ function ApplicationEditorInner({
         console.warn("removeBulletFromAsset failed", err);
       } finally {
         mutationInFlightRef.current = false;
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
@@ -621,6 +641,7 @@ function ApplicationEditorInner({
       // (the user sees a message and can adjust + retry without
       // losing their input). Don't close the modal on rejection.
       // CodeRabbit Major on PR #182.
+      const releaseBusy = beginAppBusy("applicationEditor.manualInsert");
       try {
         await manualInsert(input);
         setManualAddOpen(false);
@@ -628,6 +649,8 @@ function ApplicationEditorInner({
 
         console.warn("manualInsert failed", err);
         throw err;
+      } finally {
+        releaseBusy();
       }
     },
     [],

@@ -108,29 +108,9 @@ export default function UnitRow({
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
 
 
-  // While the save is actually in flight this is a BUSY operation, not
-  // merely unsaved content. Unsaved work only gates the reload behind a
-  // confirmation, and "Reload anyway" would still discard an edit the
-  // server may be moments from acknowledging; a busy lease suppresses
-  // the prompt outright, which is the correct treatment for any call
-  // already under way (CodeRabbit P1, #434).
-  useEffect(() => {
-    if (status.kind !== "saving") return;
-    return beginAppBusy("unitReview.saveEdit");
-  }, [status.kind]);
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
     kind: "idle",
   });
-
-  // Approve / Flag / Reject await a Firestore write the same way an
-  // edit save does, but the lease above watches only the edit status,
-  // so a slow or offline approval left Reload actionable and able to
-  // terminate the pending write (Codex P2, #434). Same reasoning, same
-  // treatment: a call already under way suppresses the prompt outright.
-  useEffect(() => {
-    if (approvalUi.kind !== "pending") return;
-    return beginAppBusy("unitReview.setApproval");
-  }, [approvalUi.kind]);
 
   // If the underlying Unit changes while we're in view mode (e.g.
   // subscription delivered a new snapshot), nothing to do. If the
@@ -149,6 +129,14 @@ export default function UnitRow({
   const handleApproval = async (state: ApprovalState) => {
     if (onSetApproval === undefined) return;
     setApprovalUi({ kind: "pending" });
+    // Acquired synchronously, not from an effect keyed on the pending
+    // state. An effect runs after the commit, so the write starts
+    // unleased, and unmounting — navigating away from the review list —
+    // runs its cleanup while the Firestore promise is still outstanding.
+    // Either window leaves Reload actionable over a pending write
+    // (Codex P1, #434). Bound to this invocation, released in its
+    // finally.
+    const releaseBusy = beginAppBusy("unitReview.setApproval");
     try {
       await onSetApproval(unit.id, state);
       setApprovalUi({ kind: "idle" });
@@ -157,6 +145,8 @@ export default function UnitRow({
         kind: "error",
         error: err instanceof Error ? err : new Error(String(err)),
       });
+    } finally {
+      releaseBusy();
     }
   };
 
@@ -246,6 +236,10 @@ export default function UnitRow({
       return;
     }
     setStatus({ kind: "saving", draft, baseSnapshot });
+    // Same reasoning as `handleApproval`: the lease is bound to this
+    // invocation rather than to a render state, so it covers the write
+    // from the moment it starts until it settles, and survives unmount.
+    const releaseBusy = beginAppBusy("unitReview.saveEdit");
     try {
       await onSaveEdit(baseSnapshot.id, partial);
       setStatus({ kind: "view" });
@@ -256,6 +250,8 @@ export default function UnitRow({
         baseSnapshot,
         error: err instanceof Error ? err : new Error(String(err)),
       });
+    } finally {
+      releaseBusy();
     }
   };
 

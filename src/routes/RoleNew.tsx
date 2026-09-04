@@ -29,6 +29,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { upsertRole } from "../services/roles.ts";
+import { beginAppBusy } from "../lib/appBusy.ts";
 import type { RemotePolicy } from "../types/crm.ts";
 
 export type RoleNewStatus = "editing" | "saving" | "error";
@@ -85,6 +86,11 @@ export default function RoleNew(): ReactElement {
     }
     setStatus("saving");
     setError(null);
+    // Role creation is a Firestore write with no lease of its own, so a
+    // visible update banner kept Reload enabled over it and could
+    // discard the pending create (Codex P1, #434). Per-invocation lease,
+    // released in the finally below.
+    const releaseBusy = beginAppBusy("roleNew.create");
     try {
       const id = globalThis.crypto.randomUUID();
       // Build the role payload with CONDITIONAL SPREADS for the
@@ -116,6 +122,8 @@ export default function RoleNew(): ReactElement {
     } catch (err) {
       setStatus("error");
       setError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      releaseBusy();
     }
   };
 

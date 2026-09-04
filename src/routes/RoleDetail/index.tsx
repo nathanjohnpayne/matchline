@@ -234,10 +234,18 @@ export default function RoleDetail(): ReactElement {
   // deferred per #21 spec.
   const onApprovalStateChange = useCallback(
     (matchId: string, state: MatchApprovalState) => {
-      void setMatchApprovalState(matchId, state).catch((err: unknown) => {
+      // Fire-and-forget, but still a pending Firestore write: without a
+      // lease a visible banner keeps Reload enabled over it and the
+      // approval can be discarded before it lands (Codex P1, #434).
+      const releaseBusy = beginAppBusy("roleDetail.setMatchApproval");
+      void setMatchApprovalState(matchId, state)
+        .catch((err: unknown) => {
 
-        console.warn("setMatchApprovalState failed", err);
-      });
+          console.warn("setMatchApprovalState failed", err);
+        })
+        .finally(() => {
+          releaseBusy();
+        });
     },
     [],
   );
@@ -263,6 +271,10 @@ export default function RoleDetail(): ReactElement {
         currentRoleIdRef.current !== issuedAgainst ||
         visitTokenRef.current !== issuedToken;
       setSavingJd(true);
+      // Same reasoning as the match approval above: `savingJd` drives
+      // the UI but holds nothing back, so the write needs its own
+      // per-invocation lease for its whole lifetime.
+      const releaseBusy = beginAppBusy("roleDetail.saveJd");
 
       const { owner_uid: _ownerUid, ...rest } = next;
       void upsertRole(rest)
@@ -292,6 +304,10 @@ export default function RoleDetail(): ReactElement {
           setParsingStatus("error");
         })
         .finally(() => {
+          // Released unconditionally — the stale guard governs only
+          // which state updates still apply, never whether the write
+          // that was issued has settled.
+          releaseBusy();
           if (isStale()) return;
           setSavingJd(false);
         });
