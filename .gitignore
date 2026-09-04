@@ -52,3 +52,9 @@ test-results/
 # Misc
 tmp/
 .cache/
+
+# Phase 4b review-barrier markers: per-checkout runtime state, never
+# repository content. A committed marker makes another machine inherit an
+# already-expired wait and escalate instead of getting its own retry budget
+# (Codex P2, #457).
+.mergepath/
