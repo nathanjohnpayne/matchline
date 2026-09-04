@@ -21,6 +21,7 @@
  */
 
 import {
+  useEffect,
   useState,
   type ChangeEvent,
   type FormEvent,
@@ -29,7 +30,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { upsertRole } from "../services/roles.ts";
-import { beginAppBusy } from "../lib/appBusy.ts";
+import { beginAppBusy, beginUnsavedWork } from "../lib/appBusy.ts";
 import type { RemotePolicy } from "../types/crm.ts";
 
 export type RoleNewStatus = "editing" | "saving" | "error";
@@ -59,6 +60,19 @@ export default function RoleNew(): ReactElement {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [status, setStatus] = useState<RoleNewStatus>("editing");
   const [error, setError] = useState<Error | null>(null);
+
+  // The new-Role form lives only in React state, so a reload from the
+  // update banner would discard it. Declaring it as unsaved work gates
+  // that reload behind a confirmation (#456). Distinct from the create
+  // lease below: that one suppresses the prompt outright while the
+  // write is in flight, this one only asks first.
+  useEffect(() => {
+    const dirty = Object.values(form).some(
+      (v) => typeof v === "string" && v.trim() !== "",
+    );
+    if (!dirty) return;
+    return beginUnsavedWork("roleNew.form");
+  }, [form]);
 
   const onChange =
     (key: keyof FormState) =>

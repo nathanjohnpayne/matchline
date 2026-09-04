@@ -34,7 +34,7 @@ import {
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
-import { beginAppBusy } from "../../lib/appBusy.ts";
+import { beginAppBusy, beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
@@ -106,6 +106,25 @@ export default function UnitRow({
   onSetApproval,
 }: UnitRowProps): ReactElement {
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
+
+  // An open inline edit holds its draft only in React state, so the
+  // update banner must confirm before a reload discards it (#456).
+  //
+  // Unlike the busy leases in this file, an effect is the right shape
+  // here: unsaved work IS a property of render state (an editor is
+  // open with a draft), not of a promise, so acquiring after the
+  // commit and releasing on unmount is exactly the desired lifetime.
+  //
+  // "saving" holds this lease too. The write is in flight, so that is
+  // the window where a reload does the MOST damage — the edit is
+  // neither in the document nor recoverable from the form. The busy
+  // lease already suppresses the prompt outright then; keeping the
+  // unsaved lease as well means a failed save drops back to "error"
+  // with the draft still protected, rather than opening a gap.
+  useEffect(() => {
+    if (status.kind === "view") return;
+    return beginUnsavedWork("unitReview.inlineEdit");
+  }, [status.kind]);
 
 
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({

@@ -37,6 +37,7 @@ import type {
 } from "../../types/capability.ts";
 
 import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
+import { beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export interface ManualAddFormProps {
   /**
@@ -244,7 +245,35 @@ export default function ManualAddForm({
   const [state, setState] = useState<FormState>(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+
   const [touched, setTouched] = useState(false);
+
+  // Draft content here lives only in React state, so the update banner
+  // must confirm before a reload discards it (Codex P2, #434). Dirty
+  // means any field diverges from the pristine form — comparing against
+  // EMPTY_FORM rather than tracking a flag keeps it correct when the
+  // user edits a field back to its original value.
+  useEffect(() => {
+    // Value comparison, not reference: `metrics` is an array, so adding
+    // and then removing the last one yields a NEW empty array that is
+    // `!==` the pristine one — leaving the form permanently dirty and
+    // demanding a confirmation to protect nothing (CodeRabbit P2, #434).
+    const dirty = (Object.keys(EMPTY_FORM) as Array<keyof FormState>).some(
+      (k) => {
+        const current = state[k];
+        const pristine = EMPTY_FORM[k];
+        if (Array.isArray(current) && Array.isArray(pristine)) {
+          return (
+            current.length !== pristine.length ||
+            JSON.stringify(current) !== JSON.stringify(pristine)
+          );
+        }
+        return current !== pristine;
+      },
+    );
+    if (!dirty) return;
+    return beginUnsavedWork("unitReview.manualAdd");
+  }, [state]);
 
   const errors = validateForm(state);
   const hasErrors = Object.keys(errors).length > 0;
