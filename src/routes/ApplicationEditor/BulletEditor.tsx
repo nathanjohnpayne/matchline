@@ -44,6 +44,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { beginUnsavedWork } from "../../lib/appBusy.ts";
 
 export type BulletEditorStatus = "editing" | "saving" | "error";
 
@@ -84,12 +85,27 @@ export default function BulletEditor({
   // Track the last text we successfully saved so autosave doesn't
   // re-fire for the same value (idempotent debounce).
   const lastSavedRef = useRef(initialText);
+  // Mirror of `lastSavedRef` as state. The ref is what the debounce
+  // logic reads (it must not trigger renders), but the unsaved-work
+  // effect below needs the saved snapshot to be REACTIVE: depending on
+  // `draft` alone meant a successful autosave updated the ref without
+  // re-running the effect, so the lease stayed held and the update
+  // prompt claimed an already-saved bullet would be discarded
+  // (Codex P2, #434).
+  const [lastSavedText, setLastSavedText] = useState(initialText);
   // `unmountedRef` guards state-update-after-unmount when an
   // autosave (or explicit save) is in flight and the user
   // dismisses the editor mid-save. Without it React logs a
   // "can't perform state update on unmounted component" warning
   // in dev. CodeRabbit Trivial on PR #192.
   const unmountedRef = useRef(false);
+
+  // An edit inside the 1.5s autosave debounce exists only here, so a
+  // reload from the update banner would lose it (Codex P2, #434).
+  useEffect(() => {
+    if (draft === lastSavedText) return;
+    return beginUnsavedWork("applicationEditor.bulletDraft");
+  }, [draft, lastSavedText]);
   useEffect(() => {
     return () => {
       unmountedRef.current = true;
@@ -122,6 +138,7 @@ export default function BulletEditor({
         await onSave(draft);
         if (unmountedRef.current) return;
         lastSavedRef.current = draft;
+        setLastSavedText(draft);
         setStatus("editing");
       } catch (err) {
         if (unmountedRef.current) return;
@@ -157,6 +174,7 @@ export default function BulletEditor({
       await onSave(draft);
       if (unmountedRef.current) return;
       lastSavedRef.current = draft;
+      setLastSavedText(draft);
       onCancel(); // explicit save exits edit mode
     } catch (err) {
       if (unmountedRef.current) return;

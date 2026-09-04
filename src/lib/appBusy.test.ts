@@ -15,6 +15,9 @@ import {
   beginAppBusy,
   isAppBusy,
   subscribeAppBusy,
+  beginUnsavedWork,
+  hasUnsavedWork,
+  subscribeUnsavedWork,
 } from "./appBusy.ts";
 
 beforeEach(() => _resetAppBusyForTests());
@@ -103,5 +106,61 @@ describe("appBusy", () => {
     expect(isAppBusy()).toBe(true);
     a();
     expect(isAppBusy()).toBe(false);
+  });
+});
+
+describe("unsavedWork", () => {
+  it("starts clean", () => {
+    expect(hasUnsavedWork()).toBe(false);
+  });
+
+  it("tracks a dirty editor until released", () => {
+    const release = beginUnsavedWork("onboarding.resumeDraft");
+    expect(hasUnsavedWork()).toBe(true);
+    release();
+    expect(hasUnsavedWork()).toBe(false);
+  });
+
+  it("keeps two dirty editors independent", () => {
+    const a = beginUnsavedWork("onboarding.resumeDraft");
+    const b = beginUnsavedWork("roleDetail.jdDraft");
+    a();
+    expect(hasUnsavedWork()).toBe(true);
+    b();
+    expect(hasUnsavedWork()).toBe(false);
+  });
+
+  it("is a separate signal from busy", () => {
+    // The two mean different things to the reload prompt: busy
+    // suppresses it outright, dirty only gates it behind a confirm.
+    const dirty = beginUnsavedWork("draft");
+    expect(hasUnsavedWork()).toBe(true);
+    expect(isAppBusy()).toBe(false);
+    const busy = beginAppBusy("call");
+    expect(isAppBusy()).toBe(true);
+    dirty();
+    expect(isAppBusy()).toBe(true);
+    expect(hasUnsavedWork()).toBe(false);
+    busy();
+  });
+
+  it("notifies subscribers only on aggregate change", () => {
+    const seen = vi.fn();
+    subscribeUnsavedWork(seen);
+    const a = beginUnsavedWork("a");
+    const b = beginUnsavedWork("b");
+    b();
+    a();
+    expect(seen.mock.calls.map(([v]) => v)).toEqual([true, false]);
+  });
+
+  it("has an idempotent release", () => {
+    const a = beginUnsavedWork("a");
+    const b = beginUnsavedWork("b");
+    a();
+    a();
+    expect(hasUnsavedWork()).toBe(true);
+    b();
+    expect(hasUnsavedWork()).toBe(false);
   });
 });

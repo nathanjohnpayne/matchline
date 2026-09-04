@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createVersionPoller,
+  nextReloadAction,
   parseVersionPayload,
   readDismissedBuild,
   rememberDismissedBuild,
@@ -304,5 +305,28 @@ describe("createVersionPoller", () => {
     release();
     await p;
     expect(onBuildId).not.toHaveBeenCalled();
+  });
+});
+
+describe("nextReloadAction", () => {
+  it("reloads immediately when nothing is unsaved", () => {
+    expect(nextReloadAction({ dirty: false, confirming: false })).toBe("reload");
+  });
+
+  it("asks first when an editor holds unsaved content", () => {
+    expect(nextReloadAction({ dirty: true, confirming: false })).toBe("confirm");
+  });
+
+  it("reloads on the second click, so the warning cannot re-arm", () => {
+    // A user who has read the warning and clicked again means it. Were
+    // this to return "confirm" again the banner would be an unescapable
+    // gate for as long as any editor stayed dirty.
+    expect(nextReloadAction({ dirty: true, confirming: true })).toBe("reload");
+  });
+
+  it("reloads when already confirming even if the editor went clean", () => {
+    // Saving mid-confirmation must not strand the user on a warning
+    // about content that no longer exists.
+    expect(nextReloadAction({ dirty: false, confirming: true })).toBe("reload");
   });
 });

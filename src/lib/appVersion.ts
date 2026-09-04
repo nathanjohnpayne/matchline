@@ -150,6 +150,33 @@ export function shouldPromptForUpdate(input: ShouldPromptInput): boolean {
   return true;
 }
 
+export interface ReloadActionInput {
+  /** True while any editor holds content that exists only in React state. */
+  readonly dirty: boolean;
+  /** True once the banner has already warned about discarding that content. */
+  readonly confirming: boolean;
+}
+
+/**
+ * What a click on the banner's Reload button should do.
+ *
+ * Extracted from `UpdatePrompt` for the same reason as everything else
+ * in this file: it is the decision #456 turns on, and the repo has no
+ * jsdom or Testing Library, so left inside the component it could only
+ * be verified by reading it. `renderToStaticMarkup` cannot click.
+ *
+ * Two states, and the order matters. A dirty editor gets one warning
+ * and no more: `confirming` is what makes the second click actually
+ * reload, so a user who means it is never trapped behind a gate that
+ * keeps re-arming. Nothing here suppresses the prompt — that is the
+ * busy lease's job (`specs/matchline.md` § Update prompt). Unsaved
+ * work only asks first, because a filled paste box is a normal resting
+ * state and hiding the banner for it would hide it indefinitely.
+ */
+export function nextReloadAction(input: ReloadActionInput): "confirm" | "reload" {
+  return input.dirty && !input.confirming ? "confirm" : "reload";
+}
+
 /* ------------------------------------------------------------------ *
  * Polling
  * ------------------------------------------------------------------ */
