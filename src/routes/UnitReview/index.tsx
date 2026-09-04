@@ -40,6 +40,7 @@ import type { ExperienceUnit } from "../../types/capability.ts";
 import type { EditableUnitFields } from "./inlineEditState.ts";
 import UnitReviewView, { type LoadState } from "./UnitReviewView.tsx";
 import { useFilterState } from "./useFilterState.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 
 export default function UnitReview(): ReactElement {
   const [status, setStatus] = useState<LoadState>("loading");
@@ -75,7 +76,12 @@ export default function UnitReview(): ReactElement {
       // snapshot delivers the new Unit. On error the form
       // surfaces the message inline; we leave the modal open so
       // the user can adjust + retry.
-      await manualInsert(input);
+      const releaseBusy = beginAppBusy("unitReview.manualInsert");
+      try {
+        await manualInsert(input);
+      } finally {
+        releaseBusy();
+      }
       setManualAddOpen(false);
     },
     [],

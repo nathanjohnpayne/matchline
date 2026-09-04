@@ -74,6 +74,8 @@ import {
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
+import { type ProgressEvent } from "../../services/progress.ts";
 import { friendlyCallableError } from "../../lib/callable-errors.ts";
 import type {
   ExperienceUnit,
@@ -186,6 +188,10 @@ export default function RoleDetail(): ReactElement {
   const [parsingStatus, setParsingStatus] =
     useState<RequirementsTabStatus>("editing");
   const [parseError, setParseError] = useState<Error | null>(null);
+  // JD-parse progress (#428). Same shape as Onboarding's: null until
+  // the first chunk, and the view degrades to elapsed time.
+  const [parseProgress, setParseProgress] = useState<ProgressEvent | null>(null);
+  const [parseStartedAt, setParseStartedAt] = useState<number>(0);
   const [savingJd, setSavingJd] = useState(false);
   // JD textarea draft, lifted from RequirementsTab so a tab
   // switch (which unmounts RequirementsTab via the activeTab
@@ -228,10 +234,18 @@ export default function RoleDetail(): ReactElement {
   // deferred per #21 spec.
   const onApprovalStateChange = useCallback(
     (matchId: string, state: MatchApprovalState) => {
-      void setMatchApprovalState(matchId, state).catch((err: unknown) => {
+      // Fire-and-forget, but still a pending Firestore write: without a
+      // lease a visible banner keeps Reload enabled over it and the
+      // approval can be discarded before it lands (Codex P1, #434).
+      const releaseBusy = beginAppBusy("roleDetail.setMatchApproval");
+      void setMatchApprovalState(matchId, state)
+        .catch((err: unknown) => {
 
-        console.warn("setMatchApprovalState failed", err);
-      });
+          console.warn("setMatchApprovalState failed", err);
+        })
+        .finally(() => {
+          releaseBusy();
+        });
     },
     [],
   );
@@ -257,6 +271,10 @@ export default function RoleDetail(): ReactElement {
         currentRoleIdRef.current !== issuedAgainst ||
         visitTokenRef.current !== issuedToken;
       setSavingJd(true);
+      // Same reasoning as the match approval above: `savingJd` drives
+      // the UI but holds nothing back, so the write needs its own
+      // per-invocation lease for its whole lifetime.
+      const releaseBusy = beginAppBusy("roleDetail.saveJd");
 
       const { owner_uid: _ownerUid, ...rest } = next;
       void upsertRole(rest)
@@ -286,6 +304,10 @@ export default function RoleDetail(): ReactElement {
           setParsingStatus("error");
         })
         .finally(() => {
+          // Released unconditionally — the stale guard governs only
+          // which state updates still apply, never whether the write
+          // that was issued has settled.
+          releaseBusy();
           if (isStale()) return;
           setSavingJd(false);
         });
@@ -312,8 +334,14 @@ export default function RoleDetail(): ReactElement {
         visitTokenRef.current !== issuedToken;
       setParsingStatus("parsing");
       setParseError(null);
+      setParseProgress(null);
+      setParseStartedAt(Date.now());
       const trimmed = text.trim();
       const next: Role = { ...role, jd_raw: text };
+      // Suppress the update-reload banner while the parse runs (#429).
+      // Per-invocation lease: parses of different Roles can overlap, and
+      // one settling must not un-suppress another (Codex P2 on #434).
+      const releaseParseBusy = beginAppBusy("roleDetail.parseJd");
       void (async () => {
         try {
           // Persist the JD first so a parse failure doesn't
@@ -336,6 +364,15 @@ export default function RoleDetail(): ReactElement {
           const parseResult = await invokeParseJobRequirements(
             roleId,
             trimmed,
+            // Guard the progress setter with the same staleness check
+            // the completion paths use: a parse for Role A can still
+            // be streaming when the user navigates to Role B and
+            // starts another, and an unguarded setter would overwrite
+            // B's stage with A's (Codex P2 on PR #436).
+            (event) => {
+              if (isStale()) return;
+              setParseProgress(event);
+            },
           );
           // Subscription delivers the parsed Requirements;
           // flip back to editing on success and clear any
@@ -394,12 +431,18 @@ export default function RoleDetail(): ReactElement {
           // on PR #449.
           setMatchingError(null);
           setComputingMatches(true);
+          // runMatching carries a 150s budget. Reloading mid-run resets
+          // triggeredRef and remounts the same still-empty Role, which
+          // can start a SECOND matching transaction before the first
+          // commits (Codex P2, #434).
+          const releaseMatchBusy0 = beginAppBusy("roleDetail.runMatching");
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
 
               console.warn("invokeRunMatching after re-parse failed", err);
             })
             .finally(() => {
+              releaseMatchBusy0();
               if (isStale()) return;
               setComputingMatches(false);
             });
@@ -421,6 +464,12 @@ export default function RoleDetail(): ReactElement {
             ),
           );
           setParsingStatus("error");
+        } finally {
+          // Released in finally, not per-branch: several paths above
+          // return early on a stale visit, and an unreleased lease
+          // would suppress the update banner for the rest of the
+          // session (#429).
+          releaseParseBusy();
         }
       })();
     },
@@ -711,6 +760,11 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = true;
     setMatchingError(null);
     setComputingMatches(true);
+    // runMatching carries a 150s budget. Reloading mid-run resets
+    // triggeredRef and remounts the same still-empty Role, which
+    // can start a SECOND matching transaction before the first
+    // commits (Codex P2, #434).
+    const releaseMatchBusy1 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
         // Subscription delivers the new matches on success;
@@ -720,6 +774,7 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeRunMatching failed", err);
       })
       .finally(() => {
+        releaseMatchBusy1();
         if (
           currentRoleIdRef.current !== issuedAgainstAuto ||
           visitTokenRef.current !== issuedTokenAuto
@@ -816,6 +871,10 @@ export default function RoleDetail(): ReactElement {
     // so. Codex P2 on PR #446.
     setMatchEvidence(undefined);
     setEvidenceStatus("pending");
+    // deriveMatchEvidence also carries a 150s budget, and reloading
+    // remounts the unchanged Role and starts another derivation while
+    // the first may still be consuming Firestore reads (Codex P2, #434).
+    const releaseEvidenceBusy = beginAppBusy("roleDetail.deriveEvidence");
     void invokeDeriveMatchEvidence(roleId)
       .then((evidence) => {
         if (superseded()) return;
@@ -827,6 +886,11 @@ export default function RoleDetail(): ReactElement {
         console.warn("invokeDeriveMatchEvidence failed", err);
         setMatchEvidence(undefined);
         setEvidenceStatus("unavailable");
+      })
+      .finally(() => {
+        // Before the supersede checks above can return early, so a
+        // superseded derivation cannot strand the lease.
+        releaseEvidenceBusy();
       });
   }, [status, roleId, matchesFirstSnapshotReceived, evidenceKey]);
 
@@ -859,6 +923,11 @@ export default function RoleDetail(): ReactElement {
     triggeredRef.current = true;
     setMatchingError(null);
     setComputingMatches(true);
+    // runMatching carries a 150s budget. Reloading mid-run resets
+    // triggeredRef and remounts the same still-empty Role, which
+    // can start a SECOND matching transaction before the first
+    // commits (Codex P2, #434).
+    const releaseMatchBusy2 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
         if (stale()) return;
@@ -869,6 +938,7 @@ export default function RoleDetail(): ReactElement {
         );
       })
       .finally(() => {
+        releaseMatchBusy2();
         if (stale()) return;
         setComputingMatches(false);
       });
@@ -992,6 +1062,11 @@ export default function RoleDetail(): ReactElement {
     setGenerationError(null);
 
     void (async () => {
+      // Resume generation is another long, paid call — a 330s
+      // budget in callable-timeouts.ts. Offering a reload here
+      // would strand the just-created Application in `drafting`
+      // and invite duplicate work (Codex P2 on PR #434).
+      const releaseGenBusy = beginAppBusy("roleDetail.generate");
       try {
         // Build the Application payload with the conditional-
         // spread pattern from #200 — Firestore rejects
@@ -1027,6 +1102,8 @@ export default function RoleDetail(): ReactElement {
           ),
         );
         setGenerationStatus("error");
+      } finally {
+        releaseGenBusy();
       }
     })();
   }, [generationStatus, hasApprovedMatches, liveApprovedMatches, navigate, roleId]);
@@ -1048,6 +1125,8 @@ export default function RoleDetail(): ReactElement {
       onApprovalStateChange={onApprovalStateChange}
       computingMatches={computingMatches}
       parsingStatus={parsingStatus}
+      parseProgress={parseProgress}
+      parseStartedAt={parseStartedAt}
       parseError={parseError}
       savingJd={savingJd}
       jdDraft={jdDraft}

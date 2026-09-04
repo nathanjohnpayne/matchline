@@ -60,10 +60,15 @@ describe("runExtractionPipeline", () => {
       { extract, embed, persistBatch },
     );
 
-    // Extraction called with the input text and context.
-    expect(extract).toHaveBeenCalledWith("Pasted resume text", {
-      ownerUid: "user-alice",
-    });
+    // Extraction called with the input text, context, and the deps
+    // bag carrying the progress sink (#428). The third argument is
+    // part of the contract now: the extractor forwards its per-attempt
+    // events through it so a retry is visible to the caller.
+    expect(extract).toHaveBeenCalledWith(
+      "Pasted resume text",
+      { ownerUid: "user-alice" },
+      { onProgress: undefined },
+    );
 
     // Embeddings called on normalized_summary array in input order,
     // with owner context threaded through for cost attribution.
@@ -201,5 +206,59 @@ describe("runExtractionPipeline", () => {
 
     expect(persistBatch).toHaveBeenCalledTimes(1);
     expect(persistBatch.mock.calls[0]![0]).toHaveLength(5);
+  });
+});
+
+describe("runExtractionPipeline progress reporting (#428)", () => {
+  it("reports embedding and saving stages in order", async () => {
+    const events: Array<{ stage: string }> = [];
+    const unit = mockUnit();
+    await runExtractionPipeline(
+      "text",
+      { ownerUid: "user-alice" },
+      {
+        extract: vi.fn(async () => [unit]),
+        embed: vi.fn(async () => [[0.1]]),
+        persistBatch: vi.fn(async () => {}),
+        onProgress: (e) => events.push(e),
+      },
+    );
+    // The extractor is mocked here, so its per-attempt "analyzing"
+    // events don't appear — these are the pipeline's own boundaries.
+    expect(events.map((e) => e.stage)).toEqual(["embedding", "saving"]);
+  });
+
+  it("forwards the sink to the extractor so retries surface", async () => {
+    const onProgress = vi.fn();
+    const extract = vi.fn(async () => [] as never[]);
+    await runExtractionPipeline(
+      "text",
+      { ownerUid: "user-alice" },
+      { extract, embed: vi.fn(), persistBatch: vi.fn(), onProgress },
+    );
+    expect(extract).toHaveBeenCalledWith("text", { ownerUid: "user-alice" }, {
+      onProgress,
+    });
+  });
+
+  it("never lets a throwing sink fail the pipeline", async () => {
+    // Progress is a reporting concern and inherits cost.ts's
+    // invariant: it must not turn a successful extraction into a
+    // failure.
+    const unit = mockUnit();
+    await expect(
+      runExtractionPipeline(
+        "text",
+        { ownerUid: "user-alice" },
+        {
+          extract: vi.fn(async () => [unit]),
+          embed: vi.fn(async () => [[0.1]]),
+          persistBatch: vi.fn(async () => {}),
+          onProgress: () => {
+            throw new Error("sink exploded");
+          },
+        },
+      ),
+    ).resolves.toHaveLength(1);
   });
 });

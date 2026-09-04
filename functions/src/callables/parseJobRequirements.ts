@@ -32,7 +32,7 @@ export const parseJobRequirementsCallable = onCall(
     // same 3-attempt / 16,384-token loop extraction does.
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.parseJobRequirements,
   },
-  async (request) => {
+  async (request, response) => {
     if (!request.auth?.uid) {
       throw new HttpsError(
         "unauthenticated",
@@ -81,10 +81,36 @@ export const parseJobRequirementsCallable = onCall(
     }
 
     try {
-      const requirements = await runJdParsingPipeline(text, {
-        ownerUid,
-        roleId,
-      });
+      // Streaming progress (#428). Emitting is unconditional and safe:
+      // `response` is undefined for a non-streaming invocation, and
+      // `sendChunk` resolves false rather than throwing when the
+      // request did not ask for a stream, so an older client is
+      // unaffected.
+      //
+      // `.catch`, not `void`. `sendChunk` returns a promise that can
+      // reject asynchronously on a write error — a client that
+      // disconnected mid-call is the common case — and by then
+      // `safeProgress`'s synchronous try/catch has already returned,
+      // so it cannot see it. A discarded rejection becomes an
+      // unhandled rejection, which on Node 20 can terminate an
+      // otherwise successful, already-paid-for call. Codex P1 on
+      // PR #436.
+      const requirements = await runJdParsingPipeline(
+        text,
+        { ownerUid, roleId },
+        {
+          onProgress: (event) => {
+            response?.sendChunk(event).catch(() => {});
+          },
+          // Bounds wasted work when the client disconnects: the retry
+          // loop stops starting NEW attempts. Deliberately NOT a gate
+          // on persistence — a completed extraction is already paid
+          // for, and the Units are what the user returns to. Throwing
+          // them away would maximise the waste rather than bound it
+          // (CodeRabbit P1, #436).
+          signal: response?.signal,
+        },
+      );
       return { requirements };
     } catch (err) {
       if (err instanceof JdParsingError) {

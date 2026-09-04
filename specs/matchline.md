@@ -334,6 +334,68 @@ Model strategy:
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
 
+## Streaming progress
+
+Extraction and JD parsing run long enough that silence reads as failure — extraction was measured at 108.6s against the p95 target below. Both callables therefore stream progress to the client while they work, and the contract is specified here because the event vocabulary is necessarily declared twice (once in `functions/src/llm/progress.ts`, once in `src/services/progress.ts`) and neither copy should become the source of truth by default.
+
+### Event schema
+
+A chunk is `{ stage, attempt?, maxAttempts? }`. Stages are a closed set:
+
+| Stage | Meaning |
+|---|---|
+| `analyzing` | the LLM call is running; `attempt` is 1-based |
+| `retrying` | an attempt failed and the backoff is being waited out |
+| `embedding` | batch embeddings over the returned units |
+| `saving` | the atomic Firestore write |
+
+`attempt` and `maxAttempts` accompany `analyzing` and `retrying` only, and are positive integers with `maxAttempts >= attempt`. A chunk failing any of these rules is discarded rather than rendered: the deployed function is not necessarily the version the client was built against.
+
+`retrying` is a distinct stage rather than a variant of `analyzing` because the two are different states — one is working, the other waiting — and a wait can be long when a 429 carries `retry-after`. Reporting a wait as work is the apparent-hang this feature exists to remove.
+
+### Guarantees
+
+- **Progress never affects the outcome.** Emission is best-effort: `sendChunk` resolves `false` for a non-streaming request rather than throwing, and `safeProgress` absorbs both a synchronous throw and a rejected promise from an async reporter. A broken sink cannot fail a call that would otherwise succeed, the same invariant cost telemetry holds.
+- **The UI degrades honestly.** With no events — an older deployed function, a dropped stream, a non-streaming caller — the surface shows elapsed time and a duration expectation, never an invented stage.
+- **Backwards compatible.** A client that passes no progress callback takes the non-streaming path unchanged.
+
+### Timeout semantics
+
+`HttpsCallableStreamOptions` carries no `timeout`, and the SDK's streaming path races nothing, so the client budget is re-supplied as an `AbortSignal` driven by the same table as the non-streaming path (`src/services/callable-timeouts.ts`). The SDK maps any abort to `cancelled`, so a deadline we imposed is relabelled `deadline-exceeded` before it reaches the UI — otherwise a timeout would read to the user as though they had cancelled something.
+
+### Cancellation
+
+`response.signal` bounds *new* spend only. Both retry loops check it before every attempt and the backoff wait is abort-aware, so a disconnect stops work that has not started. It is never used to discard work already done: by the time the pipeline reaches embedding or persistence the model output is complete and already billed, and the resulting Units are what the user returns to. Aborting there would maximise waste rather than bound it.
+
+## Update prompt
+
+The app is a single-page bundle with no service worker, so a browser tab keeps running whatever build it loaded until something reloads it. A tab left open across a deploy therefore issues calls from stale client code against a moved contract, and the user has no way to know. The prompt exists to make that observable and to let the user act on it at a moment of their choosing rather than mid-operation.
+
+### Build stamp and detection
+
+Each build stamps an id (`__BUILD_ID__`) into the bundle and emits the same value to `dist/version.json`. The running tab polls that file and compares. Two hosting rules make the comparison meaningful: `version.json` is served `no-cache` so a deploy is observable, and `/assets/**` is `immutable` because those filenames are content-hashed.
+
+`version.json` is a deployment contract, not merely a convenience. `firebase.json` rewrites `**` to `/index.html`, so a build that stops emitting the file returns the SPA's HTML with a 200 rather than a 404. A client that simply tries to parse that body and swallows the failure would disable update detection permanently and indistinguishably from "no update available". The client therefore checks the payload *shape* and treats anything that is not a version document as "no reading" — never as "no update" — and says so once in the console. A response body must be read and parsed explicitly for this to hold: `Response.json()` rejects on an HTML body before any shape check can run.
+
+### When the prompt may appear
+
+The prompt is display-only and never reloads on its own; a reload happens only when the user asks for one.
+
+| Condition | Behavior |
+|---|---|
+| Current or latest build id unknown | No prompt — guessing produces a banner that cannot be dismissed |
+| Latest equals current | No prompt |
+| A long-running operation is in flight | Suppressed until it settles |
+| The user declined this exact build | Suppressed for that build only |
+
+**Suppression during work is a cost rule, not a politeness rule.** Extraction runs ~108s and resume generation carries a 330s budget, both billed per call. Offering a reload mid-flight invites the user to destroy a call that is about to succeed and pay for it twice; where the operation also writes, a reload can discard a write before it is acknowledged. Any code path that awaits a callable or a Firestore write must therefore hold a busy lease for the *whole* operation — including the write that precedes a callable, not just the callable itself.
+
+Leases are per invocation rather than per named operation: a fixed key lets one completing call clear the entry still owed to a second, concurrent one, re-exposing the prompt while work continues. Suppression is display-only, so a newer build observed during work is still recorded and the prompt appears the moment the last lease releases.
+
+**Dismissal is keyed to the build id.** An in-memory decline re-prompts on every later poll for the same build; a persisted session flag hides genuinely newer builds forever. Keying to the build gives both — that build stays quiet, the next one asks again.
+
+Guarding *unsaved editor content* is a related but separate contract, tracked in #456: a busy lease suppresses the prompt outright, whereas unsaved work gates the reload behind a confirmation the user can override.
+
 ## Execution targets
 
 Latency (p50 / p95):

@@ -29,9 +29,16 @@
 import { useState, type FormEvent, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 
+import OperationProgress from "../components/OperationProgress.tsx";
 import ResumeEditor from "../components/ResumeEditor.tsx";
+import { beginAppBusy } from "../lib/appBusy.ts";
 import { friendlyCallableError } from "../lib/callable-errors.ts";
 import { invokeExtractFromResume } from "../services/extraction.ts";
+import {
+  EXTRACTION_VOCABULARY,
+  TYPICAL_DURATION_MS,
+  type ProgressEvent,
+} from "../services/progress.ts";
 
 export type OnboardingStatus = "editing" | "extracting" | "error";
 
@@ -45,6 +52,12 @@ export default function Onboarding(): ReactElement {
   // user-facing text happens on the way in, at the one place that
   // knows the call failed.
   const [error, setError] = useState<string | null>(null);
+  // Progress state for the ~108s extraction (#428). `null` until the
+  // first chunk lands, which OperationProgress renders as elapsed time
+  // plus a duration expectation rather than a guessed stage.
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  const [startedAt, setStartedAt] = useState<number>(0);
+
 
   const onEditorChange = (markdown: string): void => {
     setText(markdown);
@@ -61,8 +74,16 @@ export default function Onboarding(): ReactElement {
     }
     setStatus("extracting");
     setError(null);
+    setProgress(null);
+    setStartedAt(Date.now());
+    // Suppress the update-reload banner for the duration: extraction
+    // runs ~108s, and offering a reload mid-call invites destroying
+    // work that is about to succeed (#429). A per-invocation lease, so
+    // one extraction settling cannot un-suppress another that is still
+    // running (Codex P2 on PR #434).
+    const releaseBusy = beginAppBusy("onboarding.extract");
     try {
-      await invokeExtractFromResume(text);
+      await invokeExtractFromResume(text, setProgress);
       // Pipeline persisted the Units; the Unit Review
       // subscription will deliver them on /units.
       navigate("/units");
@@ -75,6 +96,11 @@ export default function Onboarding(): ReactElement {
             "Trimming it to the roles most relevant to your target market usually helps.",
         }),
       );
+    } finally {
+      // finally, not the two branches: the success path navigates away
+      // and an unreleased lease would suppress the banner for the rest
+      // of the session.
+      releaseBusy();
     }
   };
 
@@ -107,15 +133,14 @@ export default function Onboarding(): ReactElement {
       {/* Thin top progress bar per UI guidance rule 6 — replaces
           a spinner overlay. Only visible during extraction. */}
       {extracting && (
-        <div
-          role="progressbar"
-          aria-label="Extracting Experience Units"
-          aria-busy="true"
-          data-testid="onboarding-progress"
-          className="h-0.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
-        >
-          <div className="h-full w-1/3 animate-pulse bg-zinc-900 dark:bg-zinc-100" />
-        </div>
+        <OperationProgress
+          event={progress}
+          startedAt={startedAt}
+          vocabulary={EXTRACTION_VOCABULARY}
+          typicalMs={TYPICAL_DURATION_MS.extraction}
+          label="Extracting Experience Units"
+          testId="onboarding-progress"
+        />
       )}
 
       {status === "error" && error !== null && (
@@ -156,7 +181,6 @@ export default function Onboarding(): ReactElement {
               </span>
             )}
           </span>
-          <span>{extracting ? "Extracting…" : ""}</span>
         </div>
         <div className="flex items-center justify-end gap-2">
           <button

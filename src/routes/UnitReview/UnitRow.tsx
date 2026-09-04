@@ -34,6 +34,7 @@ import {
   type EditableUnitFields,
   type EditStatus,
 } from "./inlineEditState.ts";
+import { beginAppBusy } from "../../lib/appBusy.ts";
 
 export interface UnitRowProps {
   readonly unit: ExperienceUnit;
@@ -105,6 +106,8 @@ export default function UnitRow({
   onSetApproval,
 }: UnitRowProps): ReactElement {
   const [status, setStatus] = useState<EditStatus>({ kind: "view" });
+
+
   const [approvalUi, setApprovalUi] = useState<ApprovalUiStatus>({
     kind: "idle",
   });
@@ -126,6 +129,14 @@ export default function UnitRow({
   const handleApproval = async (state: ApprovalState) => {
     if (onSetApproval === undefined) return;
     setApprovalUi({ kind: "pending" });
+    // Acquired synchronously, not from an effect keyed on the pending
+    // state. An effect runs after the commit, so the write starts
+    // unleased, and unmounting — navigating away from the review list —
+    // runs its cleanup while the Firestore promise is still outstanding.
+    // Either window leaves Reload actionable over a pending write
+    // (Codex P1, #434). Bound to this invocation, released in its
+    // finally.
+    const releaseBusy = beginAppBusy("unitReview.setApproval");
     try {
       await onSetApproval(unit.id, state);
       setApprovalUi({ kind: "idle" });
@@ -134,6 +145,8 @@ export default function UnitRow({
         kind: "error",
         error: err instanceof Error ? err : new Error(String(err)),
       });
+    } finally {
+      releaseBusy();
     }
   };
 
@@ -223,6 +236,10 @@ export default function UnitRow({
       return;
     }
     setStatus({ kind: "saving", draft, baseSnapshot });
+    // Same reasoning as `handleApproval`: the lease is bound to this
+    // invocation rather than to a render state, so it covers the write
+    // from the moment it starts until it settles, and survives unmount.
+    const releaseBusy = beginAppBusy("unitReview.saveEdit");
     try {
       await onSaveEdit(baseSnapshot.id, partial);
       setStatus({ kind: "view" });
@@ -233,6 +250,8 @@ export default function UnitRow({
         baseSnapshot,
         error: err instanceof Error ? err : new Error(String(err)),
       });
+    } finally {
+      releaseBusy();
     }
   };
 

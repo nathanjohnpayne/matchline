@@ -21,6 +21,7 @@ import type {
 import type { Role } from "../../types/crm.ts";
 
 import RoleDetailView from "./RoleDetailView.tsx";
+import { type ProgressEvent } from "../../services/progress.ts";
 
 const ALICE = "user-alice";
 
@@ -129,6 +130,13 @@ const NOOP_STATE_CHANGE = (): void => {};
 const REQS_TAB_DEFAULTS = {
   parsingStatus: "editing" as const,
   parseError: null as Error | null,
+  // Progress props (#428). `parseStartedAt` is required rather than
+  // defaulted to 0 in the component, because 0 renders elapsed time
+  // from the Unix epoch — a plausible-looking ~56-year duration
+  // instead of an obvious failure (CodeRabbit P2, #436). A fixed
+  // timestamp keeps static-render output deterministic.
+  parseProgress: null as ProgressEvent | null,
+  parseStartedAt: 1_767_225_600_000,
   savingJd: false,
   jdDraft: "",
   onJdDraftChange: NOOP as (next: string) => void,

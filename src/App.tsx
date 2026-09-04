@@ -1,6 +1,7 @@
 import { signOut } from "firebase/auth";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import UpdatePrompt from "./components/UpdatePrompt.tsx";
 import Wordmark from "./components/Wordmark.tsx";
 import { getAuthClient } from "./firebase.ts";
 import { useCurrentUser } from "./lib/auth.tsx";
@@ -102,6 +103,12 @@ export default function App() {
           <Route path="*" element={<Navigate to="/units" replace />} />
         </Routes>
       </main>
+      {/* Deploy-detection banner (#429). Last child of the shell's
+          flex column so it sits below the scroll container and takes
+          real layout space rather than covering page content. Inside
+          the authenticated shell because an unauthenticated visitor is
+          on /sign-in and about to navigate anyway. */}
+      <UpdatePrompt />
     </div>
   );
 }
