@@ -83,9 +83,10 @@ export async function invokeStreaming<Req, Res>(
     // rejects and delivers the error to the caller.
     data.catch(() => {});
 
+    const report = safeOnProgress(onProgress);
     for await (const chunk of stream) {
       const event = parseProgressEvent(chunk);
-      if (event !== null) onProgress(event);
+      if (event !== null) report(event);
     }
 
     return await data;
@@ -103,6 +104,38 @@ export async function invokeStreaming<Req, Res>(
  * through untouched — a real failure must not be relabelled just
  * because the timer happened to be running.
  */
+/**
+ * Isolate the caller's progress callback from the operation.
+ *
+ * Called bare, a throwing `onProgress` exits the stream loop and
+ * rejects an otherwise successful callable — and because TypeScript
+ * accepts an async function where a `void` return is expected, a
+ * rejecting async handler becomes an unhandled rejection instead.
+ * Either way a broken sink decides the outcome of a paid call, which
+ * contradicts the guarantee in `specs/matchline.md § Streaming
+ * progress`. That guarantee was implemented server-side in
+ * `safeProgress` and missing here; this is its client half (Codex P2,
+ * #436).
+ */
+function safeOnProgress(
+  report: (event: ProgressEvent) => void,
+): (event: ProgressEvent) => void {
+  return (event) => {
+    try {
+      const result = report(event) as unknown;
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        typeof (result as PromiseLike<unknown>).then === "function"
+      ) {
+        void (result as Promise<unknown>).catch(() => {});
+      }
+    } catch {
+      // Progress is a reporting concern; it never decides the outcome.
+    }
+  };
+}
+
 function asDeadlineExceeded(err: unknown): unknown {
   const code = (err as FunctionsError | undefined)?.code;
   if (code !== "functions/cancelled" && code !== "cancelled") return err;

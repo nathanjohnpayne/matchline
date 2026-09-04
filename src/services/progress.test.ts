@@ -45,19 +45,35 @@ describe("parseProgressEvent", () => {
     expect(parseProgressEvent({ stage: 3 })).toBeNull();
   });
 
-  it("rejects fractional counters", () => {
-    // "Attempt 2.5" reads as a bug in the product, not the payload
-    // (CodeRabbit P2, #436).
+  it("rejects the whole chunk on a fractional counter", () => {
+    // Discard, not sanitize. The spec says a chunk violating any rule
+    // is discarded; sanitizing left the parser and the documented wire
+    // contract disagreeing, which is worse than either alone (Codex
+    // P2, #436).
     expect(
       parseProgressEvent({ stage: "analyzing", attempt: 2.5, maxAttempts: 3 }),
-    ).toEqual({ stage: "analyzing", maxAttempts: 3 });
+    ).toBeNull();
   });
 
-  it("drops maxAttempts when it is below attempt", () => {
+  it("rejects the whole chunk when maxAttempts is below attempt", () => {
     // Otherwise the copy reads "Attempt 3 of 2".
     expect(
       parseProgressEvent({ stage: "analyzing", attempt: 3, maxAttempts: 2 }),
-    ).toEqual({ stage: "analyzing", attempt: 3 });
+    ).toBeNull();
+  });
+
+  it("rejects counters on a stage that does not carry them", () => {
+    // The spec scopes counters to analyzing/retrying.
+    expect(
+      parseProgressEvent({ stage: "saving", attempt: 1, maxAttempts: 3 }),
+    ).toBeNull();
+    expect(parseProgressEvent({ stage: "embedding", attempt: 2 })).toBeNull();
+  });
+
+  it("accepts counters on retrying", () => {
+    expect(
+      parseProgressEvent({ stage: "retrying", attempt: 2, maxAttempts: 3 }),
+    ).toEqual({ stage: "retrying", attempt: 2, maxAttempts: 3 });
   });
 
   it("keeps maxAttempts when it equals attempt", () => {
@@ -66,13 +82,20 @@ describe("parseProgressEvent", () => {
     ).toEqual({ stage: "analyzing", attempt: 3, maxAttempts: 3 });
   });
 
-  it("drops nonsensical attempt values instead of rendering them", () => {
+  it("rejects nonsensical attempt values rather than rendering them", () => {
     expect(
       parseProgressEvent({ stage: "analyzing", attempt: 0, maxAttempts: -1 }),
-    ).toEqual({ stage: "analyzing" });
+    ).toBeNull();
     expect(
       parseProgressEvent({ stage: "analyzing", attempt: Number.NaN }),
-    ).toEqual({ stage: "analyzing" });
+    ).toBeNull();
+  });
+
+  it("still accepts a counter-free chunk on any stage", () => {
+    expect(parseProgressEvent({ stage: "saving" })).toEqual({ stage: "saving" });
+    expect(parseProgressEvent({ stage: "analyzing" })).toEqual({
+      stage: "analyzing",
+    });
   });
 });
 

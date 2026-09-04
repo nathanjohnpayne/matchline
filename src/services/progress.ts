@@ -47,22 +47,30 @@ export function parseProgressEvent(raw: unknown): ProgressEvent | null {
   const { stage, attempt, maxAttempts } = raw as Record<string, unknown>;
   if (typeof stage !== "string") return null;
   if (!(PROGRESS_STAGES as readonly string[]).includes(stage)) return null;
-  // Positive INTEGERS only, and `maxAttempts` is dropped when it is
-  // below `attempt`. Without both checks a malformed chunk renders
-  // copy like "Attempt 3 of 2" or "Attempt 2.5" — text that reads as a
-  // bug in the product rather than in the payload (CodeRabbit P2,
-  // #436).
-  const validAttempt = isPositiveInt(attempt) ? (attempt as number) : undefined;
-  const rawMax = isPositiveInt(maxAttempts) ? (maxAttempts as number) : undefined;
-  const validMax =
-    rawMax !== undefined && (validAttempt === undefined || rawMax >= validAttempt)
-      ? rawMax
-      : undefined;
+  // Reject the whole chunk rather than sanitizing it. An earlier
+  // version dropped bad counters and kept the event, which meant the
+  // wire contract in `specs/matchline.md § Streaming progress` — where
+  // counters belong to `analyzing`/`retrying` only and a violating
+  // chunk is discarded — and the parser disagreed. Two contracts is
+  // worse than either one: a version-skewed server would get a
+  // partially-honoured event and the spec would be quietly false.
+  // Discarding leaves the UI on its last known-good state, which is
+  // the same treatment an unknown stage already gets (Codex P2, #436).
+  const hasAttempt = attempt !== undefined;
+  const hasMax = maxAttempts !== undefined;
+  const countersAllowed = stage === "analyzing" || stage === "retrying";
+
+  if ((hasAttempt || hasMax) && !countersAllowed) return null;
+  if (hasAttempt && !isPositiveInt(attempt)) return null;
+  if (hasMax && !isPositiveInt(maxAttempts)) return null;
+  if (hasAttempt && hasMax && (maxAttempts as number) < (attempt as number)) {
+    return null;
+  }
 
   return {
     stage: stage as ProgressStage,
-    ...(validAttempt !== undefined ? { attempt: validAttempt } : {}),
-    ...(validMax !== undefined ? { maxAttempts: validMax } : {}),
+    ...(hasAttempt ? { attempt: attempt as number } : {}),
+    ...(hasMax ? { maxAttempts: maxAttempts as number } : {}),
   };
 }
 

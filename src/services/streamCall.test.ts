@@ -171,3 +171,46 @@ describe("invokeStreaming", () => {
     ).rejects.toMatchObject({ code: "functions/internal" });
   });
 });
+
+describe("invokeStreaming onProgress isolation (#436)", () => {
+  it("does not let a throwing callback fail the call", async () => {
+    // The spec guarantees a broken sink cannot decide the outcome of a
+    // paid operation. That was implemented server-side and missing here.
+    const result = await invokeStreaming(
+      fakeFn({ chunks: [{ stage: "embedding" }], data: { ok: true } }),
+      {
+        payload: { x: 1 },
+        timeoutMs: 1000,
+        onProgress: () => {
+          throw new Error("sink exploded");
+        },
+      },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("does not let an async rejecting callback emit an unhandled rejection", async () => {
+    type Hook = {
+      on: (e: string, cb: () => void) => void;
+      off: (e: string, cb: () => void) => void;
+    };
+    const proc = (globalThis as { process?: Hook }).process;
+    const unhandled = vi.fn();
+    proc?.on("unhandledRejection", unhandled);
+
+    const result = await invokeStreaming(
+      fakeFn({ chunks: [{ stage: "saving" }], data: { ok: true } }),
+      {
+        payload: { x: 1 },
+        timeoutMs: 1000,
+        onProgress: (() => Promise.reject(new Error("async sink"))) as unknown as (
+          e: unknown,
+        ) => void,
+      },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    proc?.off("unhandledRejection", unhandled);
+    expect(result).toEqual({ ok: true });
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+});
