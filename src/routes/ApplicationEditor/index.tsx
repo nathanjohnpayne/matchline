@@ -465,8 +465,6 @@ function ApplicationEditorInner({
       if (asset === null || applicationId === undefined) return;
       if (mutationInFlightRef.current) return;
       mutationInFlightRef.current = true;
-      // Declared before the outer try so its finally can release it.
-      let releaseBusy: (() => void) | undefined;
       // Capture pre-mutation snapshot up front; commit only on
       // a real "edited" result. no-change / empty-text / *-not-
       // found short-circuit without filling the undo cap with
@@ -486,7 +484,8 @@ function ApplicationEditorInner({
       // with a one-shot read rather than a subscription, so if that read
       // wins the race against the server's validation write the
       // reopened editor stays stale even after validation finishes.
-      releaseBusy = beginAppBusy("applicationEditor.saveBulletEdit");
+      // Acquired before the outer try so its finally can release it.
+      const releaseBusy = beginAppBusy("applicationEditor.saveBulletEdit");
       try {
       // 1. Patch the Application doc — flips validation_status to
       //    "stale" + clears the bullet's source_unit_ids on success.
@@ -562,7 +561,7 @@ function ApplicationEditorInner({
         // Same reasoning for the busy lease: released here rather
         // than after the refetch so an early return or throw cannot
         // strand it and suppress the update banner for the session.
-        releaseBusy?.();
+        releaseBusy();
       }
     },
     [applicationId, asset, refetchApplication, snapshotAsset, commitUndo],
