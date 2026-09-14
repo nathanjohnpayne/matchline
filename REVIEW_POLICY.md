@@ -198,7 +198,7 @@ An agent proceeds to 4a first. If 4a escalates, times out, or is disabled, the a
 16a. Before merging, the agent runs `scripts/codex-review-check.sh <PR#>` to verify the merge gate. All of the following must be true:
 
      - `gh pr checks` reports all required CI checks green
-     - A reviewer identity from `available_reviewers` has posted an `APPROVED` review (Phase 2 internal self-peer review)
+     - A reviewer identity from `available_reviewers` has posted an `APPROVED` review, or the checker’s existing same-agent, current-head Codex fallback satisfies gate (b)
      - Codex has signaled clearance on the current HEAD via one of the two forms in step 12a
 
      **The merge gate must never require an `APPROVED` review state from `chatgpt-codex-connector[bot]` — the app does not emit that state.** This point is load-bearing; a merge gate that looks for Codex APPROVED will never be satisfied and the Phase 4a happy path will be unreachable.
@@ -394,7 +394,7 @@ codex:
     enabled: true
 ```
 
-This activation is a prerequisite for the [owner-approved approval-count alignment](https://github.com/nathanjohnpayne/mergepath/issues/1059#issuecomment-5658411944). It does not change live protection: the approval count stays one until representative canary evidence establishes readiness. At a zero approval count, permitted current-head Codex clearance can carry Phase 4 without a GitHub `APPROVED` review; mandatory Phase 4b and all other merge gates still apply. Administrator enforcement is a separate rollout.
+This activation is a prerequisite for the [owner-approved approval-count alignment](https://github.com/nathanjohnpayne/mergepath/issues/1059#issuecomment-5658411944). It does not change live protection: the approval count stays one until representative canary evidence establishes readiness. A zero branch-protection approval count removes GitHub’s approval-object requirement; it does not bypass checker gate (b). That gate still requires a reviewer-identity `APPROVED` review unless the existing same-agent, current-head Codex fallback passes. Only that permitted fallback carries Phase 4 without an `APPROVED` review; Phase 4b still applies when required by fallback or complex-change policy, and all other gates remain. Administrator enforcement is a separate rollout.
 
 ## Review Policy Configuration
 
