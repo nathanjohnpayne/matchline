@@ -23,3 +23,5 @@ Agent role: implement and maintain the V1 core loop — Career →
 Experience Units → Matching → Application — under the hard constraint
 that every generated claim traces back to an approved Experience Unit.
 Zero fabrication is a product-defining invariant, not a target.
+
+The repository enables current-head external-review enforcement through `codex.external_review_gate.enabled`; see [the local review policy](../../REVIEW_POLICY.md#external-clearance-enforcement-in-this-repository) for activation and approval-count rollout requirements.
