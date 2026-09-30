@@ -57,6 +57,7 @@ import {
   checkTraceability as checkTraceabilityFn,
   type TraceabilityResult,
 } from "./traceability.js";
+import { unitEvidenceVersion } from "./unitEvidenceVersion.js";
 
 export interface ValidateAssetContext {
   readonly ownerUid: string;
@@ -82,15 +83,15 @@ export interface ValidateAssetResult {
    */
   readonly content_snapshot: string;
   /**
-   * `updated_at` of every approved Unit the validator loaded as
-   * evidence, keyed by Unit id — the version of the evidence this
-   * verdict is about. Persisted on the asset as
-   * `validated_unit_versions`; the editor's export gate compares it to
-   * each cited Unit's current `updated_at`, so a Unit edited or
-   * re-approved at ANY point after it was loaded — including while
-   * this validation was still running — invalidates the verdict.
-   * Comparing versions rather than timestamps also keeps client and
-   * server clock skew out of the decision.
+   * `unitEvidenceVersion` of every approved Unit the validator loaded
+   * as evidence, keyed by Unit id: a fingerprint of the exact content
+   * this verdict is about. Persisted on the asset as
+   * `validated_unit_versions`; the editor's export gate recomputes it
+   * from each cited Unit, so evidence changed at ANY point after it
+   * was loaded (including while this validation was still running,
+   * and including a write that kept `updated_at`) invalidates the
+   * verdict. Content, not timestamps, also keeps client and server
+   * clock skew out of the decision.
    */
   readonly validated_unit_versions: Readonly<Record<string, string>>;
 }
@@ -187,7 +188,7 @@ export async function validateAsset(
     validated_at: now(),
     content_snapshot: JSON.stringify(content),
     validated_unit_versions: Object.fromEntries(
-      units.map((u) => [u.id, u.updated_at]),
+      units.map((u) => [u.id, unitEvidenceVersion(u)]),
     ),
   };
 

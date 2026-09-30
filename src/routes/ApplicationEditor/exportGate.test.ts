@@ -7,6 +7,8 @@ import type {
   ValidationStatus,
 } from "../../types/crm.ts";
 
+import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+
 import { citedUnitIds, exportGateState } from "./exportGate.ts";
 
 function flag(
@@ -247,41 +249,70 @@ describe("exportGateState: cited-evidence re-check", () => {
   describe("with validated_unit_versions (current validator output)", () => {
     const versioned = (versions: Record<string, string>) =>
       passedAsset({ validated_unit_versions: versions });
-    const V = "2026-04-01T00:00:00.000Z";
+    // What the validator recorded: the fingerprint of each Unit as it
+    // loaded it.
+    const recorded = versioned({
+      u1: unitEvidenceVersion(unit("u1")),
+      u2: unitEvidenceVersion(unit("u2")),
+      u3: unitEvidenceVersion(unit("u3")),
+    });
 
     it("stays enabled when every cited Unit is at the validated version", () => {
+      const state = exportGateState(recorded, byId(unit("u1"), unit("u2"), unit("u3")));
+      expect(state.enabled).toBe(true);
+    });
+
+    it("stays enabled when only fields the validator ignores change, timestamp included", () => {
       const state = exportGateState(
-        versioned({ u1: V, u2: V, u3: V }),
-        byId(unit("u1"), unit("u2"), unit("u3")),
+        recorded,
+        byId(
+          unit("u1"),
+          unit("u2", { updated_at: "2026-05-01T00:00:00.000Z", skills: ["go"] }),
+          unit("u3"),
+        ),
       );
       expect(state.enabled).toBe(true);
     });
 
     it("blocks an edit made DURING validation, which a timestamp comparison misses", () => {
-      // The validator read u2 at version V, the user edited it at
-      // 04-05, and the verdict was stamped at 04-10 (validated_at).
-      // updated_at < validated_at, so only the version catches it.
+      // The validator read u2, the user edited it at 04-05, and the
+      // verdict was stamped at 04-10 (validated_at). updated_at <
+      // validated_at, so only the recorded version catches it.
       const state = exportGateState(
-        versioned({ u1: V, u2: V, u3: V }),
-        byId(unit("u1"), unit("u2", { updated_at: "2026-04-05T00:00:00.000Z" }), unit("u3")),
+        recorded,
+        byId(
+          unit("u1"),
+          unit("u2", { raw_text: "Led two teams.", updated_at: "2026-04-05T00:00:00.000Z" }),
+          unit("u3"),
+        ),
       );
       expect(state.enabled).toBe(false);
       expect(state.disabledReason).toContain("1 Unit this resume cites has changed");
     });
 
-    it("is immune to a client clock that runs behind the server", () => {
-      // An edit after validation, stamped by a slow client clock with
-      // a time EARLIER than validated_at, still changes the version.
+    it("blocks changed evidence written under the validated updated_at", () => {
+      // `upsertExperienceUnit` writes the caller's timestamp verbatim,
+      // so evidence can change without updated_at moving (#501 review).
       const state = exportGateState(
-        versioned({ u1: V, u2: V, u3: V }),
-        byId(unit("u1"), unit("u2", { updated_at: "2026-03-01T00:00:00.000Z" }), unit("u3")),
+        recorded,
+        byId(
+          unit("u1"),
+          unit("u2", {
+            metrics: [{ claim: "Grew revenue", value: 40, unit: "%", confidence: "high" }],
+          }),
+          unit("u3"),
+        ),
       );
       expect(state.enabled).toBe(false);
+      expect(state.disabledReason).toContain("changed since the last validation run");
     });
 
     it("blocks a cited Unit the validator never loaded", () => {
       const state = exportGateState(
-        versioned({ u1: V, u2: V }),
+        versioned({
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: unitEvidenceVersion(unit("u2")),
+        }),
         byId(unit("u1"), unit("u2"), unit("u3")),
       );
       expect(state.enabled).toBe(false);

@@ -181,13 +181,15 @@ export interface AssetRef {
   /** Set on validateAsset's last successful completion. */
   validated_at?: ISOTimestamp;
   /**
-   * `updated_at` of each approved Unit the last validation run loaded
-   * as evidence, keyed by Unit id. The export gate treats a `passed`
-   * verdict as stale when a cited Unit's current `updated_at` differs
-   * (`src/routes/ApplicationEditor/exportGate.ts`). Absent on assets
-   * validated before this field existed.
+   * `unitEvidenceVersion` (a content fingerprint, not a timestamp) of
+   * each approved Unit the last validation run loaded as evidence,
+   * keyed by Unit id. The export gate treats a `passed` verdict as
+   * stale when a cited Unit's current fingerprint differs
+   * (`src/routes/ApplicationEditor/exportGate.ts`,
+   * `functions/src/validation/unitEvidenceVersion.ts`). Absent on
+   * assets validated before this field existed.
    */
-  validated_unit_versions?: Record<UUID, ISOTimestamp>;
+  validated_unit_versions?: Record<UUID, string>;
   /**
    * Per-application LLM cost in USD, populated by
    * `generateResume` (#121). Optional because legacy/manual

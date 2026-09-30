@@ -1,5 +1,6 @@
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
+import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
 
 /**
  * Decide whether the Export button is enabled, and the tooltip text
@@ -37,13 +38,15 @@ import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
  *
  *   - no longer exists,
  *   - is not currently approved (`user_approved !== true`), or
- *   - has changed since the validator loaded it: its `updated_at`
- *     differs from the version recorded in the asset's
- *     `validated_unit_versions`. Comparing versions, not times, catches
+ *   - has changed since the validator loaded it: its
+ *     `unitEvidenceVersion` (a fingerprint of the fields the validator
+ *     reads) differs from the one recorded in the asset's
+ *     `validated_unit_versions`. Comparing content, not times, catches
  *     an edit made WHILE validation was running (the verdict's
- *     `validated_at` is stamped after the evidence was read) and is
- *     immune to client/server clock skew. Assets validated before
- *     that field existed fall back to `updated_at > validated_at`.
+ *     `validated_at` is stamped after the evidence was read), a write
+ *     that kept `updated_at`, and is immune to client/server clock
+ *     skew. Assets validated before that field existed fall back to
+ *     `updated_at > validated_at`.
  *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
@@ -125,7 +128,7 @@ function citedEvidenceProblem(
     } else if (versions !== undefined) {
       // A cited Unit the validator did not load (absent key) was not
       // evidence for this verdict either.
-      if (versions[id] !== unit.updated_at) edited += 1;
+      if (versions[id] !== unitEvidenceVersion(unit)) edited += 1;
     } else {
       // Legacy asset: best effort on timestamps. Without
       // `validated_at` there is nothing to compare; the existence and
