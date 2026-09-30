@@ -10,11 +10,19 @@
  *   2. Email + password (fallback; rendered below an "or" divider)
  *      — kept for the no-popup case (corporate networks, strict
  *      browser privacy) and for any pre-existing accounts.
+ *
+ * Sign-in only: there is no create-account mode. V1 is single-user,
+ * so this surface has no business offering self-registration (#439).
+ * Removing the UI is not the boundary — anyone can still call the
+ * Auth REST API, and Google SSO admits any Google account — the
+ * boundary is the owner allowlist enforced by every callable
+ * (`functions/src/callables/ownerGate.ts`) and by `firestore.rules`
+ * (`config/access`). Email/password sign-up should also be disabled
+ * in the Firebase console (DEPLOYMENT.md § Owner allowlist).
  */
 
 import {
   GoogleAuthProvider,
-  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signInWithPopup,
 } from "firebase/auth";
@@ -26,21 +34,10 @@ import { getAuthClient } from "../firebase.ts";
 import { useCurrentUser } from "../lib/auth.tsx";
 import { friendlyAuthError } from "../lib/auth-errors.ts";
 
-type Mode = "sign-in" | "create-account";
-
-/**
- * Client-side minimum for new accounts. Stricter than Firebase's
- * default server-side policy (6 chars) so a new account won't be
- * created below this threshold. Sign-in does NOT enforce this —
- * existing accounts with older/looser passwords must still work.
- */
-const MIN_NEW_PASSWORD_LENGTH = 8;
-
 export default function SignIn() {
   const navigate = useNavigate();
   const { user, pending } = useCurrentUser();
 
-  const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,17 +79,6 @@ export default function SignIn() {
     event.preventDefault();
     if (busy) return;
 
-    // Client-side policy enforcement. The <form> carries noValidate
-    // so the browser's bubble-style validation doesn't fire — that
-    // means `minLength={MIN_NEW_PASSWORD_LENGTH}` on the input is
-    // UX hint, not a gate. Enforce the policy here for create-account
-    // mode only; sign-in mode must accept any length because existing
-    // accounts may have been created under an older/looser policy.
-    if (mode === "create-account" && password.length < MIN_NEW_PASSWORD_LENGTH) {
-      setError("That password is too short. Try a longer one.");
-      return;
-    }
-
     const normalizedEmail = email.trim();
     if (!normalizedEmail) {
       setError("Enter an email address.");
@@ -103,11 +89,7 @@ export default function SignIn() {
     setError(null);
     try {
       const auth = getAuthClient();
-      if (mode === "sign-in") {
-        await signInWithEmailAndPassword(auth, normalizedEmail, password);
-      } else {
-        await createUserWithEmailAndPassword(auth, normalizedEmail, password);
-      }
+      await signInWithEmailAndPassword(auth, normalizedEmail, password);
       navigate("/units", { replace: true });
     } catch (err) {
       setError(friendlyAuthError(err));
@@ -199,9 +181,8 @@ export default function SignIn() {
               </span>
               <input
                 type="password"
-                autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
+                autoComplete="current-password"
                 required
-                minLength={mode === "create-account" ? MIN_NEW_PASSWORD_LENGTH : undefined}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="mt-1 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 transition duration-150 placeholder:text-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:ring-offset-1 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-100 dark:focus:ring-zinc-100 dark:focus:ring-offset-zinc-900"
@@ -223,28 +204,7 @@ export default function SignIn() {
               disabled={busy || !email || !password}
               className="w-full rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-50 transition duration-150 hover:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 dark:focus:ring-zinc-100 dark:focus:ring-offset-zinc-900"
             >
-              {busy
-                ? mode === "sign-in"
-                  ? "Signing in…"
-                  : "Creating account…"
-                : mode === "sign-in"
-                  ? "Sign in"
-                  : "Create account"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                if (busy) return;
-                setMode(mode === "sign-in" ? "create-account" : "sign-in");
-                setError(null);
-              }}
-              disabled={busy}
-              className="w-full text-center text-xs text-zinc-500 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-zinc-400 dark:hover:text-zinc-100"
-            >
-              {mode === "sign-in"
-                ? "Don't have an account? Create one."
-                : "Already have an account? Sign in."}
+              {busy ? "Signing in…" : "Sign in"}
             </button>
           </div>
           </form>

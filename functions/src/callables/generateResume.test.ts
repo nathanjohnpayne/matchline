@@ -24,7 +24,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { HttpsError } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   generateResumeHandler,
@@ -170,6 +170,38 @@ function mockClient(toolInput: unknown): Anthropic {
 // -- Tests ------------------------------------------------------------------
 
 describe("generateResumeHandler", () => {
+  // The handler's first statement is the owner allowlist (#439). These
+  // tests exercise what sits behind it, so ALICE is the configured
+  // owner; the gate itself is pinned in ./ownerGate.test.ts.
+  beforeEach(() => {
+    vi.stubEnv("MATCHLINE_OWNER_UIDS", ALICE);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("AUTH: rejects a signed-in caller who is not on the owner allowlist", async () => {
+    // `loadInputs` is the first thing the orchestrator touches; if the
+    // gate let the call through, it would be invoked. The anti-
+    // enumeration mapping also yields `permission-denied`, so the
+    // not-called assertion is what proves the gate is the refusal.
+    const loadInputs = vi.fn();
+    const persistAsset = vi.fn();
+    let thrown: unknown;
+    try {
+      await generateResumeHandler(
+        makeRequest({ applicationId: APP_ID }, "user-mallory"),
+        { loadInputs, persistAsset },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpsError);
+    expect((thrown as HttpsError).code).toBe("permission-denied");
+    expect(loadInputs).not.toHaveBeenCalled();
+    expect(persistAsset).not.toHaveBeenCalled();
+  });
+
   it("AUTH: rejects unauthenticated requests with HttpsError(unauthenticated)", async () => {
     const req = makeRequest({ applicationId: APP_ID }, null);
     let thrown: unknown;

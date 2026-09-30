@@ -32,6 +32,7 @@ import {
   type RunGenerateResumeDeps,
 } from "../generation/runGenerateResume.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { requireOwner } from "./ownerGate.js";
 
 export interface GenerateResumeData {
   readonly applicationId?: string;
@@ -55,15 +56,11 @@ export async function generateResumeHandler(
   request: CallableRequest<GenerateResumeData>,
   deps: RunGenerateResumeDeps = {},
 ): Promise<GenerateResumeResponse> {
-  if (!request.auth?.uid) {
-    throw new HttpsError(
-      "unauthenticated",
-      "generateResume requires a signed-in user.",
-    );
-  }
+  // Owner allowlist first — before argument parsing and before any
+  // LLM or Firestore client exists (#439; see ./ownerGate.ts).
+  const ownerUid = requireOwner(request, "generateResume");
 
   const applicationId = validateApplicationId(request.data?.applicationId);
-  const ownerUid = request.auth.uid;
 
   try {
     const result = await runGenerateResume(

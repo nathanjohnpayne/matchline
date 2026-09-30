@@ -720,6 +720,37 @@ Unsaved editor content is **not** yet protected: a résumé draft, a JD draft, o
 
 Dismissal is scoped to the declined build id, so that build stays quiet while a newer one asks again.
 
+## Owner allowlist
+
+Matchline V1 is single-user, but Firebase Auth admits any account that can sign in — Google SSO alone accepts every Google account. Authorization is therefore an explicit owner allowlist, enforced in two independent places (#439). Both are keyed by the owner's Firebase Auth **uid** (Firebase console → Authentication → Users → User UID), and each fails closed on its own: an unconfigured layer admits nobody, including the owner.
+
+**1. Callables — the `MATCHLINE_OWNER_UIDS` function param.** Every callable calls `requireOwner` (`functions/src/callables/ownerGate.ts`) before parsing arguments or building any LLM or Firestore client, and rejects anyone not listed with `permission-denied`. The value is a comma-separated list of uids. It has no default, and `op-firebase-deploy` runs `firebase deploy --non-interactive`, so a functions deploy fails until the value exists in a functions env file:
+
+```bash
+# functions/.env.<projectId> is gitignored; create it on each deploying machine.
+printf 'MATCHLINE_OWNER_UIDS=%s\n' '<owner-uid>' > functions/.env.matchline-dev
+```
+
+For the functions emulator, put the same line in `functions/.env.local`.
+
+**2. Firestore rules — the `config/access` document.** `firestore.rules` admits a client read or write only when `request.auth.uid` is in `config/access.owner_uids`. Rules cannot read function params, so the deploy writes this document from the same value with an Admin SDK script:
+
+```bash
+# Reads MATCHLINE_OWNER_UIDS from functions/.env.<project>; uses Application Default Credentials.
+npx tsx functions/scripts/set-owner-allowlist.ts --project matchline-dev --dry-run   # prints the uid count
+npx tsx functions/scripts/set-owner-allowlist.ts --project matchline-dev
+```
+
+The script does a full-overwrite `set()` (never a merge) and then reads the document back, failing unless it holds exactly the configured uids. The overwrite matters. Before these rules, the previous catch-all rule let any signed-in user create a document in any collection, `config/` included. A single fixed document that the deploy replaces cannot carry anything a client pre-seeded into the new rules. For the same reason the rules trust no per-uid document: an earlier draft keyed the allowlist on `owners/{uid}`, and any such document now grants nothing. No client can read or write `config/`, not even the owner.
+
+**Order matters.** Run the script **before** deploying the rules. If `config/access` is missing or malformed, the rules admit nobody, and the owner is locked out until the script runs. Re-running the script with a different `MATCHLINE_OWNER_UIDS` changes client access immediately, without a rules deploy; the callables pick up the new value on the next functions deploy.
+
+**Close self-registration too.** The sign-in page no longer offers account creation, but that is UI, not a boundary. Also disable new email/password sign-ups in the Firebase console (Authentication → Settings → User actions → uncheck "Enable create (sign-up)", where the console offers it). Google SSO still creates an account on first sign-in; the allowlist is what makes such an account useless.
+
+**Why not an Auth blocking function.** `beforeUserCreated` would stop stranger accounts from existing at all, but see "Auth blocking triggers are `required`" under the function inventory below: under this project's domain-restricted-sharing policy it would make every functions deploy fail.
+
+**Input size.** `extractFromResume` and `parseJobRequirements` also reject pasted text over 100 KB (UTF-8 bytes) with `invalid-argument`, before any model call (`MAX_TEXT_INPUT_BYTES` in `ownerGate.ts`).
+
 ## Cloud Run IAM prerequisites (Functions)
 
 Firebase callables are **not** protected by Cloud Run IAM. Auth is enforced *inside* each function against the Firebase ID token in the callable envelope (`request.auth?.uid`). Cloud Run must therefore let the request through, or the browser's CORS preflight is rejected with a 403 carrying no `Access-Control-*` headers, `fetch` rejects, and the SDK reports a bare `internal` with no diagnostic.
