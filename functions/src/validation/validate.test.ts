@@ -491,6 +491,12 @@ describe("validateAsset orchestrator", () => {
     expect(persistedResult.flags).toHaveLength(2);
     expect(persistedResult.status).toBe("passed");
     expect(persistedResult.validated_at).toBe("2026-04-26T00:00:00.000Z");
+    // The evidence versions the verdict is about: each loaded Unit's
+    // updated_at, read BEFORE the LLM passes. The export gate compares
+    // them to the live Units, so an edit during validation is caught.
+    expect(persistedResult.validated_unit_versions).toEqual({
+      u1: "2026-01-01T00:00:00.000Z",
+    });
     // Returned result === persisted result.
     expect(result).toBe(persistedResult);
   });

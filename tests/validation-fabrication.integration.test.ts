@@ -218,6 +218,11 @@ describe("validateAsset — Firestore integration", () => {
     expect(persistedAsset!.validation_flags).toHaveLength(1);
     expect(persistedAsset!.validation_flags![0]!.status).toBe("untraceable");
     expect(persistedAsset!.validated_at).toBeDefined();
+    // The real persist path writes the evidence versions alongside the
+    // verdict (the export gate's staleness check reads them).
+    expect(persistedAsset!.validated_unit_versions).toEqual(
+      result.validated_unit_versions,
+    );
   });
 
   it("CLEAN: every claim traces + is specific → status=passed, all flags traced", async () => {

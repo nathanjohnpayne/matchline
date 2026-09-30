@@ -216,7 +216,51 @@ describe("exportGateState: cited-evidence re-check", () => {
       byId(unit("u1"), unit("u2", { updated_at: "2026-04-11T00:00:00.000Z" }), unit("u3")),
     );
     expect(state.enabled).toBe(false);
-    expect(state.disabledReason).toContain("edited after the last validation run");
+    expect(state.disabledReason).toContain("changed since the last validation run");
+  });
+
+  describe("with validated_unit_versions (current validator output)", () => {
+    const versioned = (versions: Record<string, string>) =>
+      passedAsset({ validated_unit_versions: versions });
+    const V = "2026-04-01T00:00:00.000Z";
+
+    it("stays enabled when every cited Unit is at the validated version", () => {
+      const state = exportGateState(
+        versioned({ u1: V, u2: V, u3: V }),
+        byId(unit("u1"), unit("u2"), unit("u3")),
+      );
+      expect(state.enabled).toBe(true);
+    });
+
+    it("blocks an edit made DURING validation, which a timestamp comparison misses", () => {
+      // The validator read u2 at version V, the user edited it at
+      // 04-05, and the verdict was stamped at 04-10 (validated_at).
+      // updated_at < validated_at, so only the version catches it.
+      const state = exportGateState(
+        versioned({ u1: V, u2: V, u3: V }),
+        byId(unit("u1"), unit("u2", { updated_at: "2026-04-05T00:00:00.000Z" }), unit("u3")),
+      );
+      expect(state.enabled).toBe(false);
+      expect(state.disabledReason).toContain("1 Unit this resume cites has changed");
+    });
+
+    it("is immune to a client clock that runs behind the server", () => {
+      // An edit after validation, stamped by a slow client clock with
+      // a time EARLIER than validated_at, still changes the version.
+      const state = exportGateState(
+        versioned({ u1: V, u2: V, u3: V }),
+        byId(unit("u1"), unit("u2", { updated_at: "2026-03-01T00:00:00.000Z" }), unit("u3")),
+      );
+      expect(state.enabled).toBe(false);
+    });
+
+    it("blocks a cited Unit the validator never loaded", () => {
+      const state = exportGateState(
+        versioned({ u1: V, u2: V }),
+        byId(unit("u1"), unit("u2"), unit("u3")),
+      );
+      expect(state.enabled).toBe(false);
+    });
   });
 
   it("does not block on an edit that predates validation", () => {

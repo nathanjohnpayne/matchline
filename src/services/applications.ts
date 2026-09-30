@@ -315,6 +315,14 @@ export interface AssetUndoSnapshot {
   readonly content: GeneratedAssetContent;
   readonly validation_status: ValidationStatus;
   readonly validation_flags?: readonly ValidationFlag[];
+  /**
+   * The verdict's provenance travels with the verdict. Restoring a
+   * snapshot's `passed` next to a LATER run's `validated_at` /
+   * `validated_unit_versions` would let the export gate check the old
+   * verdict against evidence versions it was never computed from.
+   */
+  readonly validated_at?: string;
+  readonly validated_unit_versions?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -370,22 +378,28 @@ export async function restoreAssetState(
   // the snapshot says they should be absent.
   const nextAssets = [...assets];
 
-  const { validation_flags: _existingFlags, ...targetWithoutFlags } = target;
-  if (snapshot.validation_flags === undefined) {
-    nextAssets[assetIndex] = {
-      ...targetWithoutFlags,
-      generated_content: snapshot.content,
-      validation_status: snapshot.validation_status,
-      // validation_flags key intentionally omitted.
-    };
-  } else {
-    nextAssets[assetIndex] = {
-      ...targetWithoutFlags,
-      generated_content: snapshot.content,
-      validation_status: snapshot.validation_status,
-      validation_flags: [...snapshot.validation_flags],
-    };
-  }
+  // The same omit-when-absent treatment applies to the verdict's
+  // provenance (`validated_at`, `validated_unit_versions`).
+  const {
+    validation_flags: _existingFlags,
+    validated_at: _existingValidatedAt,
+    validated_unit_versions: _existingVersions,
+    ...targetWithoutVerdict
+  } = target;
+  nextAssets[assetIndex] = {
+    ...targetWithoutVerdict,
+    generated_content: snapshot.content,
+    validation_status: snapshot.validation_status,
+    ...(snapshot.validation_flags === undefined
+      ? {}
+      : { validation_flags: [...snapshot.validation_flags] }),
+    ...(snapshot.validated_at === undefined
+      ? {}
+      : { validated_at: snapshot.validated_at }),
+    ...(snapshot.validated_unit_versions === undefined
+      ? {}
+      : { validated_unit_versions: { ...snapshot.validated_unit_versions } }),
+  };
 
   await updateDoc(ref(applicationId), {
     generated_assets: nextAssets,

@@ -37,7 +37,13 @@ import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
  *
  *   - no longer exists,
  *   - is not currently approved (`user_approved !== true`), or
- *   - was updated after the asset's `validated_at`.
+ *   - has changed since the validator loaded it: its `updated_at`
+ *     differs from the version recorded in the asset's
+ *     `validated_unit_versions`. Comparing versions, not times, catches
+ *     an edit made WHILE validation was running (the verdict's
+ *     `validated_at` is stamped after the evidence was read) and is
+ *     immune to client/server clock skew. Assets validated before
+ *     that field existed fall back to `updated_at > validated_at`.
  *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
@@ -90,6 +96,7 @@ function citedEvidenceProblem(
   asset: AssetRef,
   unitsById: ReadonlyMap<string, ExperienceUnit>,
 ): string | null {
+  const versions = asset.validated_unit_versions;
   const validatedAt = parseTime(asset.validated_at);
   let missing = 0;
   let unapproved = 0;
@@ -100,9 +107,14 @@ function citedEvidenceProblem(
       missing += 1;
     } else if (unit.user_approved !== true) {
       unapproved += 1;
+    } else if (versions !== undefined) {
+      // A cited Unit the validator did not load (absent key) was not
+      // evidence for this verdict either.
+      if (versions[id] !== unit.updated_at) edited += 1;
     } else {
-      // A legacy asset without `validated_at` can't be compared; the
-      // existence and approval checks above still apply to it.
+      // Legacy asset: best effort on timestamps. Without
+      // `validated_at` there is nothing to compare; the existence and
+      // approval checks above still apply.
       const updatedAt = parseTime(unit.updated_at);
       if (validatedAt !== undefined && updatedAt !== undefined && updatedAt > validatedAt) {
         edited += 1;
@@ -125,8 +137,8 @@ function citedEvidenceProblem(
   }
   if (edited > 0) {
     return (
-      `${units(edited)} this resume cites ${verb(edited, "was", "were")} edited after the last ` +
-      "validation run. Re-run validation before exporting."
+      `${units(edited)} this resume cites ${verb(edited, "has", "have")} changed since the last ` +
+      "validation run read them. Re-run validation before exporting."
     );
   }
   return null;

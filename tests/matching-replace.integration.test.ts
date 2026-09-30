@@ -37,6 +37,7 @@ import {
 import {
   MATCH_WRITES_PER_COMMIT,
   matchDocId,
+  replaceMatchesForRole,
   runMatchingPipeline,
 } from "../functions/src/matching/pipeline.ts";
 import type {
@@ -89,6 +90,7 @@ beforeEach(async () => {
     "experienceUnits",
     "jobRequirementUnits",
     "unitMatches",
+    "matchingRuns",
   ]) {
     const snap = await db().collection(col).get();
     const batch = db().batch();
@@ -843,4 +845,49 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
     expect(stored).toHaveLength(330);
     expect(stored.every((m) => m.job_requirement_unit_id.startsWith("r2-"))).toBe(true);
   });
+
+  it("an older run overlapped by a newer one stops before its orphan pass — the store holds the newer set, not the intersection", async () => {
+    // Each run treats the other's writes as orphans. Without the
+    // (owner, Role) run marker, run A's orphan pass would delete every
+    // doc run B wrote that A did not produce, after B's own orphan pass
+    // had already deleted A's extras — leaving only the pairs both runs
+    // produced. The seam starts B at exactly that point: after A's
+    // chunked writes, before A's orphan pass.
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    const units = (
+      await db().collection("experienceUnits").where("owner_uid", "==", ALICE).get()
+    ).docs.map((d) => d.data() as ExperienceUnit);
+    const reqs = (
+      await db().collection("jobRequirementUnits").where("role_id", "==", "role-1").get()
+    ).docs.map((d) => d.data() as JobRequirementUnit);
+    // Run A matches u0..u24, run B u5..u29: 500 pairs each (so both
+    // take the chunked path), 400 in common.
+    const unitsA = units.filter((u) => Number(u.id.slice(1)) < 25);
+    const unitsB = units.filter((u) => Number(u.id.slice(1)) >= 5);
+
+    let runB: readonly UnitMatch[] = [];
+    await runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => unitsA,
+      listRequirements: async () => reqs,
+      persistBatch: (c, m) =>
+        replaceMatchesForRole(c, m, {
+          afterChunkedWrites: async () => {
+            runB = await runMatchingPipeline(ctx, {
+              score: FAKE_SCORE,
+              listUnits: async () => unitsB,
+              listRequirements: async () => reqs,
+            });
+          },
+        }),
+    });
+
+    expect(runB).toHaveLength(500);
+    const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
+    const expected = new Set(runB.map((m) => m.id));
+    expect(stored.size).toBe(expected.size);
+    expect([...stored].every((id) => expected.has(id))).toBe(true);
+  });
 });
+

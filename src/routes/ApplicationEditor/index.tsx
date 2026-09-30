@@ -290,6 +290,11 @@ function ApplicationEditorInner({
             asset.validation_flags === undefined
               ? undefined
               : [...asset.validation_flags],
+          validated_at: asset.validated_at,
+          validated_unit_versions:
+            asset.validated_unit_versions === undefined
+              ? undefined
+              : { ...asset.validated_unit_versions },
         },
       };
     },

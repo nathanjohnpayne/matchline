@@ -96,6 +96,8 @@ export interface AssetRef {
   validation_flags?: ValidationFlag[];
   validation_status: ValidationStatus;
   validated_at?: ISOTimestamp;
+  /** See `src/types/crm.ts` AssetRef.validated_unit_versions. */
+  validated_unit_versions?: Record<UUID, ISOTimestamp>;
   /**
    * Generation telemetry, populated by #121's `generateResume`
    * callable from `runGenerationPipeline`'s cumulative

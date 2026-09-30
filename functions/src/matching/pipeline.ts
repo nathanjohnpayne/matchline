@@ -34,9 +34,9 @@
  * `writeRequirementsAsBatch` after Codex P1 round 4 on #19.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import type { DocumentReference } from "firebase-admin/firestore";
+import type { DocumentReference, Transaction } from "firebase-admin/firestore";
 
 import { getAdminDb } from "../firestore/admin.js";
 import type {
@@ -381,11 +381,17 @@ export function matchDocId(
   unitId: string,
   requirementId: string,
 ): string {
+  return nameUuid([ownerUid, roleId, unitId, requirementId]);
+}
+
+/**
+ * RFC 4122 version-5 UUID of `parts` under `MATCH_ID_NAMESPACE`. The
+ * name is the JSON encoding of the array, so no choice of separator
+ * can make two different tuples collide.
+ */
+function nameUuid(parts: readonly string[]): string {
   const ns = Buffer.from(MATCH_ID_NAMESPACE.replace(/-/g, ""), "hex");
-  const name = Buffer.from(
-    JSON.stringify([ownerUid, roleId, unitId, requirementId]),
-    "utf8",
-  );
+  const name = Buffer.from(JSON.stringify(parts), "utf8");
   const bytes = createHash("sha1").update(ns).update(name).digest().subarray(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
   bytes[8] = (bytes[8]! & 0x3f) | 0x80; // RFC 4122 variant
@@ -394,6 +400,29 @@ export function matchDocId(
     `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
     `${hex.slice(16, 20)}-${hex.slice(20)}`
   );
+}
+
+/**
+ * Server-only collection holding one "latest matching run" marker per
+ * (owner, Role). See `replaceMatchesForRole` § Overlapping runs.
+ */
+export const MATCHING_RUNS_COLLECTION = "matchingRuns";
+
+/** Doc id of the (owner, Role) run marker. */
+export function matchingRunDocId(ownerUid: string, roleId: string): string {
+  return nameUuid(["matching-run", ownerUid, roleId]);
+}
+
+/**
+ * Thrown inside a commit when a newer run for the same (owner, Role)
+ * has started. Caught by `replaceMatchesForRole`, which stops writing
+ * and leaves the newer run to define the persisted set.
+ */
+export class MatchingRunSuperseded extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MatchingRunSuperseded";
+  }
 }
 
 /**
@@ -447,49 +476,70 @@ function foldFlags(
  * Replace the persisted UnitMatch set for `(ownerUid, roleId)` with
  * `matches`, carrying the user's per-pair review decisions forward.
  *
- * **Shape.** Each match is written to its deterministic id
- * (`matchDocId`), so a rerun overwrites in place. Then every stored
- * match for `(owner, role)` whose id is not in the new set — a pair
- * that no longer exists, a match against a Requirement a re-parse
- * replaced, or a legacy random-id doc — is deleted. Writes and
- * deletes are chunked at `MATCH_WRITES_PER_COMMIT`, so the size of a
- * Role no longer has a ceiling. The previous version did the whole
- * delete-all-then-write-all in one transaction and threw above 450
- * ops, which a realistic Role reached on its second run.
+ * Every match is written to its pair's deterministic id
+ * (`matchDocId`), so a rerun overwrites in place; stored matches whose
+ * id is not in the new set — a pair that no longer exists, a match
+ * against a Requirement a re-parse replaced, or a legacy random-id doc
+ * — are orphans and are deleted. Empty input therefore clears the
+ * Role: a Role whose Units were all rejected must not keep showing
+ * matches against them.
  *
- * **Carry-forward is transactional per chunk.** Each write chunk runs
- * in a transaction that first reads every stored doc for the chunk's
- * pairs — the deterministic-id doc and any legacy doc for the same
- * pair — and folds their flags (`foldFlags`) into the new match. A
- * user approving or rejecting a match mid-run conflicts with that
- * transaction, which retries and picks the decision up, rather than
- * being silently overwritten with the value read at the start of the
- * run (cursor #133 r2 is why flags carry forward at all).
+ * **One atomic transaction whenever it fits.** If the writes plus the
+ * orphan deletes fit in `MATCH_WRITES_PER_COMMIT`, the whole
+ * replacement — carry-forward read, writes, orphan deletes — is one
+ * transaction, exactly as before this change: no reader ever sees a
+ * partial set, a failure publishes nothing, and a concurrent
+ * approve/reject conflicts and retries rather than being overwritten.
+ * Deterministic ids are what make this cover realistic Roles: a rerun
+ * of ~22 Units × ~15 Requirements is ~330 writes and no deletes,
+ * where the old delete-all-then-write-all shape needed ~660 ops and
+ * threw above 450 on every rerun.
  *
- * **What is no longer atomic, and why that is acceptable.** Across
- * chunks, a reader can briefly observe some pairs rescored and others
- * not yet, and orphans are removed after the writes rather than in
- * the same commit. It can never observe a UNION of old and new
- * matches for the same pair — the failure the old single transaction
- * existed to prevent — because a pair has exactly one doc. The orphan
- * pass re-queries after the writes, so two overlapping runs converge
- * on the set of whichever run finishes last.
+ * **Chunked only above that size** (a very large Role, or the first
+ * rerun of a large Role after this change, when every legacy
+ * random-id doc is an orphan). Each write chunk is a transaction that
+ * re-reads the pair's current doc and any legacy doc for the same
+ * pair, folds their flags forward (`foldFlags`), writes the new
+ * match, and deletes the legacy doc in the same commit — so a
+ * decision recorded on a legacy doc mid-run is either read by that
+ * commit or conflicts with it, never silently deleted. Orphans are
+ * then deleted in further transactions. What this path gives up is
+ * cross-chunk atomicity: while it runs, and if it fails part-way, a
+ * reader can see some pairs rescored and others not yet. It can never
+ * see a union of old and new matches for one pair, because a pair has
+ * exactly one doc, and the next successful run converges the set.
  *
- * **Empty input** still clears: no writes, and every stored match for
- * `(owner, role)` is an orphan. A Role whose Units were all rejected
- * must not keep showing matches against them.
+ * **Overlapping runs.** Each run first stamps a fresh `run_id` on the
+ * (owner, Role) marker in `matchingRuns`, and every commit — the
+ * single transaction, each chunk, each orphan delete — re-reads that
+ * marker and aborts with `MatchingRunSuperseded` if a newer run has
+ * started since. A superseded run stops writing and returns; the
+ * newest run's orphan pass removes whatever the older one had
+ * written. Without this, two overlapping chunked runs could each
+ * delete the other's writes as orphans and leave the intersection of
+ * their sets.
  *
  * **Cross-tenant safety.** The admin SDK bypasses `firestore.rules`.
  * Every query is scoped by BOTH `owner_uid` and `role_id` (role_id is
  * denormalized onto each match for exactly this), so a caller can
  * never clear another owner's matches under a shared role id; the
  * callable also enforces role ownership up front (mirrors #19). Match
- * ids include the owner and Role in their hash, and a write chunk
- * refuses to overwrite a doc stamped with a different owner or Role.
+ * ids hash the owner and Role, and a chunk refuses to overwrite a doc
+ * stamped with a different owner or Role.
  */
+/**
+ * Test seam for `replaceMatchesForRole`: lets an emulator test start a
+ * second run at the one point where overlap matters (after a chunked
+ * run's writes, before its orphan pass). Production never passes it.
+ */
+export interface ReplaceMatchesHooks {
+  readonly afterChunkedWrites?: () => Promise<void>;
+}
+
 async function replaceMatchesForRole(
   ctx: RunMatchingContext,
   matches: readonly UnitMatch[],
+  hooks: ReplaceMatchesHooks = {},
 ): Promise<readonly UnitMatch[]> {
   const { roleId, ownerUid } = ctx;
 
@@ -508,7 +558,7 @@ async function replaceMatchesForRole(
   // already stamps it; re-deriving here keeps this function correct for
   // any caller and makes a duplicate pair a loud error instead of a
   // silent last-write-wins.
-  const keyed = matches.map((m) => ({
+  const keyed: UnitMatch[] = matches.map((m) => ({
     ...m,
     id: matchDocId(ownerUid, roleId, m.experience_unit_id, m.job_requirement_unit_id),
   }));
@@ -526,83 +576,165 @@ async function replaceMatchesForRole(
     .where("owner_uid", "==", ownerUid)
     .where("role_id", "==", roleId);
 
-  // Legacy docs: stored matches for a pair whose id is NOT the pair's
-  // deterministic id (random-id docs written before this change, or
-  // duplicates). Their flags must carry forward, and they are deleted
-  // by the orphan pass. Indexed by pair so each write chunk can re-read
-  // exactly the ones it needs inside its transaction.
-  const initial = await scopedQuery.get();
-  const legacyRefsByPair = new Map<string, DocumentReference[]>();
-  for (const doc of initial.docs) {
-    const m = doc.data() as UnitMatch;
-    const key = pairKey(m.experience_unit_id, m.job_requirement_unit_id);
-    const expectedId = matchDocId(ownerUid, roleId, m.experience_unit_id, m.job_requirement_unit_id);
-    if (doc.id === expectedId) continue;
-    const refs = legacyRefsByPair.get(key) ?? [];
-    refs.push(doc.ref);
-    legacyRefsByPair.set(key, refs);
-  }
+  // Claim the (owner, Role) marker. Last writer wins, which is the
+  // point: the most recently started run is the one that may commit.
+  const runRef = db
+    .collection(MATCHING_RUNS_COLLECTION)
+    .doc(matchingRunDocId(ownerUid, roleId));
+  const runId = randomUUID();
+  await runRef.set({
+    owner_uid: ownerUid,
+    role_id: roleId,
+    run_id: runId,
+    started_at: new Date().toISOString(),
+  });
+  const assertCurrentRun = async (tx: Transaction): Promise<void> => {
+    const snap = await tx.get(runRef);
+    if ((snap.data() as { run_id?: string } | undefined)?.run_id !== runId) {
+      throw new MatchingRunSuperseded(
+        `replaceMatchesForRole: a newer matching run for role ${roleId} started; ` +
+          "stopping this one.",
+      );
+    }
+  };
 
-  const merged: UnitMatch[] = [];
-  for (let i = 0; i < keyed.length; i += MATCH_WRITES_PER_COMMIT) {
-    const chunk = keyed.slice(i, i + MATCH_WRITES_PER_COMMIT);
-    const chunkMerged = await db.runTransaction(async (tx) => {
-      const readRefs: DocumentReference[] = [];
-      for (const m of chunk) {
-        readRefs.push(collection.doc(m.id));
-        const legacy = legacyRefsByPair.get(
-          pairKey(m.experience_unit_id, m.job_requirement_unit_id),
-        );
-        if (legacy !== undefined) readRefs.push(...legacy);
-      }
-      const snaps = await tx.getAll(...readRefs);
+  try {
+    // -- Single atomic transaction, when it fits --------------------------
+    const atomic = await db.runTransaction(async (tx) => {
+      await assertCurrentRun(tx);
+      const existing = await tx.get(scopedQuery);
+      const orphans = existing.docs.filter((d) => !newIds.has(d.id));
+      if (keyed.length + orphans.length > MATCH_WRITES_PER_COMMIT) return null;
+      if (keyed.length === 0 && orphans.length === 0) return [];
 
       const flagsByPair = new Map<string, ApprovalFlags>();
-      for (const snap of snaps) {
-        if (!snap.exists) continue;
-        const stored = snap.data() as UnitMatch;
-        if (stored.owner_uid !== ownerUid || stored.role_id !== roleId) {
-          // Only reachable via a deterministic-id collision with a doc
-          // outside this (owner, role), which the owner- and
-          // Role-namespaced hash rules out. Refuse rather than
-          // overwrite another tenant's row.
-          throw new Error(
-            `replaceMatchesForRole: doc ${snap.id} is not scoped to this owner and Role; aborting.`,
-          );
-        }
+      for (const doc of existing.docs) {
+        const stored = doc.data() as UnitMatch;
         if (stored.approved_for_use || stored.user_rejected) {
           const key = pairKey(stored.experience_unit_id, stored.job_requirement_unit_id);
           flagsByPair.set(key, foldFlags(flagsByPair.get(key), stored));
         }
       }
-
-      const out: UnitMatch[] = chunk.map((m) => {
-        const prior = flagsByPair.get(
-          pairKey(m.experience_unit_id, m.job_requirement_unit_id),
-        );
-        return prior !== undefined ? { ...m, ...prior } : m;
-      });
-      for (const m of out) {
-        tx.set(collection.doc(m.id), m);
-      }
+      const out = keyed.map((m) => withPriorFlags(m, flagsByPair));
+      for (const m of out) tx.set(collection.doc(m.id), m);
+      for (const d of orphans) tx.delete(d.ref);
       return out;
     });
-    merged.push(...chunkMerged);
-  }
+    if (atomic !== null) return atomic;
 
-  // Orphan pass. Re-query AFTER the writes so the deletion reflects the
-  // store as this run leaves it, not as it found it.
-  const after = await scopedQuery.get();
-  const orphans = after.docs.filter((d) => !newIds.has(d.id));
-  for (let i = 0; i < orphans.length; i += MATCH_WRITES_PER_COMMIT) {
-    const batch = db.batch();
-    for (const d of orphans.slice(i, i + MATCH_WRITES_PER_COMMIT)) {
-      batch.delete(d.ref);
+    // -- Chunked, above the single-commit size ----------------------------
+
+    // Legacy docs: stored matches for a pair whose id is NOT the pair's
+    // deterministic id. Indexed by pair so each chunk can re-read, fold
+    // and delete exactly the ones for its own pairs.
+    const initial = await scopedQuery.get();
+    const legacyRefsByPair = new Map<string, DocumentReference[]>();
+    for (const doc of initial.docs) {
+      const m = doc.data() as UnitMatch;
+      const expectedId = matchDocId(ownerUid, roleId, m.experience_unit_id, m.job_requirement_unit_id);
+      if (doc.id === expectedId) continue;
+      const key = pairKey(m.experience_unit_id, m.job_requirement_unit_id);
+      const refs = legacyRefsByPair.get(key) ?? [];
+      refs.push(doc.ref);
+      legacyRefsByPair.set(key, refs);
     }
-    await batch.commit();
-  }
 
-  return merged;
+    // Pack chunks by commit size: one write per match plus one delete
+    // per legacy doc for its pair.
+    const chunks: UnitMatch[][] = [];
+    let current: UnitMatch[] = [];
+    let currentOps = 0;
+    for (const m of keyed) {
+      const legacy = legacyRefsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id));
+      const ops = 1 + (legacy?.length ?? 0);
+      if (current.length > 0 && currentOps + ops > MATCH_WRITES_PER_COMMIT) {
+        chunks.push(current);
+        current = [];
+        currentOps = 0;
+      }
+      current.push(m);
+      currentOps += ops;
+    }
+    if (current.length > 0) chunks.push(current);
+
+    const merged: UnitMatch[] = [];
+    for (const chunk of chunks) {
+      const out = await db.runTransaction(async (tx) => {
+        await assertCurrentRun(tx);
+        const legacyRefs: DocumentReference[] = [];
+        for (const m of chunk) {
+          legacyRefs.push(
+            ...(legacyRefsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id)) ?? []),
+          );
+        }
+        const snaps = await tx.getAll(
+          ...chunk.map((m) => collection.doc(m.id)),
+          ...legacyRefs,
+        );
+
+        const flagsByPair = new Map<string, ApprovalFlags>();
+        const liveLegacy: DocumentReference[] = [];
+        for (const snap of snaps) {
+          if (!snap.exists) continue;
+          const stored = snap.data() as UnitMatch;
+          if (stored.owner_uid !== ownerUid || stored.role_id !== roleId) {
+            // Only reachable via a deterministic-id collision with a doc
+            // outside this (owner, Role), which the owner- and
+            // Role-namespaced hash rules out. Refuse rather than
+            // overwrite another tenant's row.
+            throw new Error(
+              `replaceMatchesForRole: doc ${snap.id} is not scoped to this owner and Role; aborting.`,
+            );
+          }
+          if (!newIds.has(snap.id)) liveLegacy.push(snap.ref);
+          if (stored.approved_for_use || stored.user_rejected) {
+            const key = pairKey(stored.experience_unit_id, stored.job_requirement_unit_id);
+            flagsByPair.set(key, foldFlags(flagsByPair.get(key), stored));
+          }
+        }
+
+        const chunkOut = chunk.map((m) => withPriorFlags(m, flagsByPair));
+        for (const m of chunkOut) tx.set(collection.doc(m.id), m);
+        // The legacy doc goes in the same commit whose flags it fed.
+        for (const ref of liveLegacy) tx.delete(ref);
+        return chunkOut;
+      });
+      merged.push(...out);
+    }
+
+    await hooks.afterChunkedWrites?.();
+
+    // Orphan pass. Re-query AFTER the writes so the deletion reflects
+    // the store as this run leaves it; each commit re-checks that this
+    // is still the newest run.
+    const after = await scopedQuery.get();
+    const orphans = after.docs.filter((d) => !newIds.has(d.id));
+    for (let i = 0; i < orphans.length; i += MATCH_WRITES_PER_COMMIT) {
+      const slice = orphans.slice(i, i + MATCH_WRITES_PER_COMMIT);
+      await db.runTransaction(async (tx) => {
+        await assertCurrentRun(tx);
+        for (const d of slice) tx.delete(d.ref);
+      });
+    }
+
+    return merged;
+  } catch (err) {
+    if (err instanceof MatchingRunSuperseded) {
+      // Not a failure the caller can act on: a newer run owns the
+      // result, and its orphan pass removes anything this one wrote.
+      console.info(err.message);
+      return keyed;
+    }
+    throw err;
+  }
+}
+
+function withPriorFlags(
+  m: UnitMatch,
+  flagsByPair: ReadonlyMap<string, ApprovalFlags>,
+): UnitMatch {
+  const prior = flagsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id));
+  return prior !== undefined ? { ...m, ...prior } : m;
 }
 
 // Re-exported for tests + the callable. Default values are wired
