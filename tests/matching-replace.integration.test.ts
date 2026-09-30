@@ -36,6 +36,7 @@ import {
 } from "../functions/src/firestore/admin.ts";
 import {
   MATCH_WRITES_PER_COMMIT,
+  MatchingRunSuperseded,
   matchDocId,
   replaceMatchesForRole,
   runMatchingPipeline,
@@ -867,7 +868,8 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
     const unitsB = units.filter((u) => Number(u.id.slice(1)) >= 5);
 
     let runB: readonly UnitMatch[] = [];
-    await runMatchingPipeline(ctx, {
+    // The overlapped run reports its supersession instead of success (#501 review).
+    await expect(runMatchingPipeline(ctx, {
       score: FAKE_SCORE,
       listUnits: async () => unitsA,
       listRequirements: async () => reqs,
@@ -881,7 +883,7 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
             });
           },
         }),
-    });
+    })).rejects.toBeInstanceOf(MatchingRunSuperseded);
 
     expect(runB).toHaveLength(500);
     const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
@@ -933,7 +935,8 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
       listRequirements: async () => reqs,
     });
     releaseA();
-    await runA; // superseded: returns without committing
+    // Superseded: reports it rather than claiming success (#501 review).
+    await expect(runA).rejects.toBeInstanceOf(MatchingRunSuperseded);
 
     const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
     expect(stored).toEqual(new Set(b.map((m) => m.id)));

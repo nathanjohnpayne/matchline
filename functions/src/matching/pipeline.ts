@@ -757,10 +757,13 @@ async function replaceMatchesForRole(
     return merged;
   } catch (err) {
     if (err instanceof MatchingRunSuperseded) {
-      // Not a failure the caller can act on: a newer run owns the
-      // result, and its orphan pass removes anything this one wrote.
+      // Do NOT report success. A superseded run may already have
+      // committed some chunks, and the newer run that owns the result
+      // can still fail before it publishes a complete generation, in
+      // which case nothing converges the store (#501 review). Surface
+      // the supersession so the caller reports "not complete" and the
+      // user can re-run; the newest successful run always converges.
       console.info(err.message);
-      return keyed;
     }
     throw err;
   }

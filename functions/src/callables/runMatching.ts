@@ -15,7 +15,7 @@
 
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
-import { runMatchingPipeline, readRoleOwnerUid } from "../matching/pipeline.js";
+import { MatchingRunSuperseded, runMatchingPipeline, readRoleOwnerUid } from "../matching/pipeline.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
 import { requireOwner } from "./ownerGate.js";
 
@@ -57,7 +57,20 @@ export const runMatchingCallable = onCall(
       );
     }
 
-    const matches = await runMatchingPipeline({ ownerUid, roleId });
-    return { matches };
+    try {
+      const matches = await runMatchingPipeline({ ownerUid, roleId });
+      return { matches };
+    } catch (err) {
+      if (err instanceof MatchingRunSuperseded) {
+        // A newer run for this Role took over part-way through. It may
+        // or may not finish, so never present this run as a success.
+        throw new HttpsError(
+          "aborted",
+          "A newer matching run for this Role replaced this one before it finished. " +
+            "If the matches look incomplete, run matching again.",
+        );
+      }
+      throw err;
+    }
   },
 );

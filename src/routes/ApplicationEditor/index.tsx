@@ -485,7 +485,13 @@ function ApplicationEditorInner({
   const onSaveBulletEdit = useCallback(
     async (bulletId: string, newText: string): Promise<void> => {
       if (asset === null || applicationId === undefined) return;
-      if (mutationInFlightRef.current) return;
+      // BulletEditor treats a fulfilled promise as "saved", so a save that
+      // cannot run (another mutation or a validation re-run holds the
+      // gate) must reject with a retryable message, never resolve
+      // silently and drop the edit (#501 review).
+      if (mutationInFlightRef.current) {
+        throw new Error("Another change is still in progress. Save again in a moment.");
+      }
       mutationInFlightRef.current = true;
       // Capture pre-mutation snapshot up front; commit only on
       // a real "edited" result. no-change / empty-text / *-not-
@@ -689,8 +695,11 @@ function ApplicationEditorInner({
         await invokeValidateAsset(applicationId, asset.id);
       } catch (err) {
         console.warn("validateAsset retry failed", err);
+        // Record the failure first, then still reconcile below: the
+        // server may have persisted a verdict even though the response
+        // was lost or timed out. If the refetch shows a new verdict, the
+        // effect on the asset's validation state clears this error.
         setRevalidateError("Validation couldn't run. Try again in a moment.");
-        return;
       }
       try {
         await refetchApplication();
@@ -703,6 +712,14 @@ function ApplicationEditorInner({
       releaseBusy();
     }
   }, [applicationId, asset, refetchApplication]);
+
+  // A retry error describes one attempt. Clear it as soon as the asset's
+  // validation state moves, whichever path moved it (a later retry, the
+  // edit flow's own validation, or a reconciled verdict after a lost
+  // response), so it never sits next to an enabled Export (#501 review).
+  useEffect(() => {
+    setRevalidateError(null);
+  }, [asset?.id, asset?.validation_status, asset?.validated_at]);
 
   const onExport = useCallback(() => {
 
