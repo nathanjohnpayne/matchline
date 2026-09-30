@@ -42,25 +42,73 @@ export function parseUidList(raw: string | undefined): string[] {
   return [...new Set(raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0))];
 }
 
+/*
+ * The functions deploy reads `functions/.env.<project>` with the Firebase
+ * CLI's own dotenv parser, so this script must resolve the value the same
+ * way or the Firestore allowlist and the callable allowlist can differ.
+ * `FIREBASE_ENV_LINE_RE` and the quote/escape handling below are ported
+ * verbatim from firebase-tools `src/functions/env.ts` (`parse`, unchanged
+ * through v15.31.0): an unquoted value ends at `#` (inline comment), a
+ * single- or double-quoted value is taken whole (so `#` inside quotes is
+ * kept) and may be followed by a comment, double-quoted values unescape
+ * `\n \r \t \v \\ \' \"`, and a later assignment of the same key wins.
+ */
+const FIREBASE_ENV_LINE_RE = new RegExp(
+  "^" +
+    "\\s*" +
+    "(?:export)?" +
+    "\\s*" +
+    "([\\w./]+)" +
+    "\\s*=[\\f\\t\\v]*" +
+    "(" +
+    "\\s*'(?:\\\\'|[^'])*'|" +
+    '\\s*"(?:\\\\"|[^"])*"|' +
+    "[^#\\r\\n]*" +
+    ")?" +
+    "\\s*" +
+    "(?:#[^\\n]*)?" +
+    "$",
+  "gms",
+);
+const FIREBASE_ESCAPES: Readonly<Record<string, string>> = {
+  "\\n": "\n",
+  "\\r": "\r",
+  "\\t": "\t",
+  "\\v": "\v",
+  "\\\\": "\\",
+  "\\'": "'",
+  '\\"': '"',
+};
+
+/** Parse dotenv text exactly as the Firebase CLI does for functions env files. */
+export function parseFirebaseEnv(text: string): Record<string, string> {
+  const envs: Record<string, string> = {};
+  const data = text.replace(/\r\n?/, "\n");
+  const re = new RegExp(FIREBASE_ENV_LINE_RE.source, FIREBASE_ENV_LINE_RE.flags);
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(data)) !== null) {
+    if (match[0].length === 0) re.lastIndex++;
+    const key = match[1];
+    if (key === undefined) continue;
+    let value = (match[2] ?? "").trim();
+    const quoted = /^(["'])(.*)\1$/ms.exec(value);
+    if (quoted !== null) {
+      value = quoted[2]!;
+      if (quoted[1] === '"') {
+        value = value.replace(/\\[nrtv\\'"]/g, (seq) => FIREBASE_ESCAPES[seq]!);
+      }
+    }
+    envs[key] = value;
+  }
+  return envs;
+}
+
 /**
- * Read `MATCHLINE_OWNER_UIDS` from dotenv-format text. Supports the
- * forms the Firebase CLI writes: `KEY=value`, optionally quoted.
+ * Read `MATCHLINE_OWNER_UIDS` from dotenv-format text, resolving the value
+ * the way the Firebase CLI hands it to the callables (see above).
  */
 export function uidsFromEnvText(text: string): string[] {
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*(?:export\s+)?MATCHLINE_OWNER_UIDS\s*=\s*(.*)$/);
-    if (m === null) continue;
-    let value = m[1]!.trim();
-    if (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    ) {
-      value = value.slice(1, -1);
-    }
-    return parseUidList(value);
-  }
-  return [];
+  return parseUidList(parseFirebaseEnv(text)[OWNER_UIDS_ENV]);
 }
 
 /**

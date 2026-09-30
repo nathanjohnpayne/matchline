@@ -29,6 +29,27 @@ describe("uidsFromEnvText", () => {
   it("does not match a key that merely ends with the name", () => {
     expect(uidsFromEnvText("NOT_MATCHLINE_OWNER_UIDS=abc")).toEqual([]);
   });
+  // Parity with the Firebase CLI parser the functions deploy uses
+  // (firebase-tools src/functions/env.ts). A mismatch here would let the
+  // Firestore allowlist differ from the callable allowlist (PR #500 review).
+  it("drops an inline comment after an unquoted value", () => {
+    expect(uidsFromEnvText("MATCHLINE_OWNER_UIDS=abc # owner\n")).toEqual(["abc"]);
+    expect(uidsFromEnvText("MATCHLINE_OWNER_UIDS=abc,def#no-space\n")).toEqual(["abc", "def"]);
+  });
+  it("keeps # inside quotes and drops a comment after the closing quote", () => {
+    expect(uidsFromEnvText('MATCHLINE_OWNER_UIDS="abc # kept" # owner\n')).toEqual(["abc # kept"]);
+    expect(uidsFromEnvText("MATCHLINE_OWNER_UIDS='abc,def' # owner\n")).toEqual(["abc", "def"]);
+  });
+  it("unescapes double-quoted values only", () => {
+    expect(uidsFromEnvText('MATCHLINE_OWNER_UIDS="a\\tb"\n')).toEqual(["a\tb"]);
+    expect(uidsFromEnvText("MATCHLINE_OWNER_UIDS='a\\tb'\n")).toEqual(["a\\tb"]);
+  });
+  it("lets a later assignment win, like the Firebase CLI", () => {
+    expect(uidsFromEnvText("MATCHLINE_OWNER_UIDS=old\nMATCHLINE_OWNER_UIDS=new\n")).toEqual(["new"]);
+  });
+  it("ignores comment lines", () => {
+    expect(uidsFromEnvText("# MATCHLINE_OWNER_UIDS=nope\nMATCHLINE_OWNER_UIDS=abc\n")).toEqual(["abc"]);
+  });
 });
 
 /** Minimal in-memory stand-in for the one document the script touches. */
