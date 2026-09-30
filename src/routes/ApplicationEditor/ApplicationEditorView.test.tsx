@@ -716,7 +716,7 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("Try again in a moment.");
   });
 
-  it("does not offer re-validation when flags must be resolved first", () => {
+  it("offers re-validation after a failed run (evidence may have been repaired) but keeps Export disabled", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -726,7 +726,8 @@ describe("ApplicationEditorView", () => {
         onRevalidate={() => {}}
       />,
     );
-    expect(html).not.toContain('data-testid="revalidate-button"');
+    expect(html).toContain('data-testid="revalidate-button"');
+    expect(html).toContain('data-export-enabled="false"');
   });
 
   it("renders the export button DISABLED with a flag-count tooltip when validation_status === 'failed'", () => {

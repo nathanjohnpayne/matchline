@@ -63,8 +63,11 @@ export type ExportGateState =
        * fix (never validated, edited since, or cited evidence changed
        * since the last run). The editor then offers an explicit
        * "Re-run validation" action next to the disabled Export.
-       * False/absent when the user must act first (resolve flags,
-       * restore or re-approve cited Units).
+       * Also true for a failed run: its flags may have been resolved by
+       * repairing the cited Units, which no edit re-validates. Export
+       * stays disabled either way until a run passes. False/absent only
+       * when a cited Unit is missing or unapproved, where re-running
+       * cannot help until the user restores or re-approves it.
        */
       readonly canRevalidate?: boolean;
     };
@@ -205,6 +208,11 @@ export function exportGateState(
       return {
         enabled: false,
         disabledReason: `Resolve ${n} validation ${noun} before exporting.`,
+        // Flags can be resolved outside the resume (approving or editing
+        // the cited Units), which the edit flow never re-validates, so a
+        // retry must stay available here. Export stays blocked until a
+        // run actually passes (#501 review).
+        canRevalidate: true,
       };
     }
   }

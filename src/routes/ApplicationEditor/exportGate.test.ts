@@ -67,13 +67,12 @@ describe("exportGateState", () => {
     expect(state.disabledReason).toContain("Re-run validation");
   });
 
-  it("offers re-validation for pending and stale, not for failed", () => {
-    const pending = exportGateState(asset("pending"));
-    const stale = exportGateState(asset("stale"));
-    const failed = exportGateState(asset("failed"));
-    expect(pending.enabled === false && pending.canRevalidate).toBe(true);
-    expect(stale.enabled === false && stale.canRevalidate).toBe(true);
-    expect(failed.enabled === false && failed.canRevalidate === true).toBe(false);
+  it("offers re-validation for pending, stale and failed while keeping export blocked", () => {
+    for (const status of ["pending", "stale", "failed"] as const) {
+      const state = exportGateState(asset(status));
+      expect(state.enabled, status).toBe(false);
+      expect(state.enabled === false && state.canRevalidate, status).toBe(true);
+    }
   });
 
   it("counts unresolved flags (untraceable + specificity) when failed, ignoring traced", () => {
