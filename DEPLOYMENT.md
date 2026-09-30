@@ -733,9 +733,17 @@ printf 'MATCHLINE_OWNER_UIDS=%s\n' '<owner-uid>' > functions/.env.matchline-dev
 
 For the functions emulator, put the same line in `functions/.env.local`.
 
-**2. Firestore rules — `owners/{uid}` documents.** `firestore.rules` admits a client read or write only when `owners/{request.auth.uid}` exists. Rules cannot read function params, so this is configured separately: create a document with the owner's uid as its id (the contents are ignored; `{}` is fine) in the Firebase console, or with the admin SDK. No client can write `owners/` — not even an owner — so the allowlist can only be changed out of band.
+**2. Firestore rules — the `config/access` document.** `firestore.rules` admits a client read or write only when `request.auth.uid` is in `config/access.owner_uids`. Rules cannot read function params, so the deploy writes this document from the same value with an Admin SDK script:
 
-**Order matters.** Create `owners/<owner-uid>` **before** deploying the rules, or the owner is locked out of their own data until it exists. Removing that document revokes client access immediately, without a deploy.
+```bash
+# Reads MATCHLINE_OWNER_UIDS from functions/.env.<project>; uses Application Default Credentials.
+npx tsx functions/scripts/set-owner-allowlist.ts --project matchline-dev --dry-run   # prints the uid count
+npx tsx functions/scripts/set-owner-allowlist.ts --project matchline-dev
+```
+
+The script does a full-overwrite `set()` (never a merge) and then reads the document back, failing unless it holds exactly the configured uids. The overwrite matters. Before these rules, the previous catch-all rule let any signed-in user create a document in any collection, `config/` included. A single fixed document that the deploy replaces cannot carry anything a client pre-seeded into the new rules. For the same reason the rules trust no per-uid document: an earlier draft keyed the allowlist on `owners/{uid}`, and any such document now grants nothing. No client can read or write `config/`, not even the owner.
+
+**Order matters.** Run the script **before** deploying the rules. If `config/access` is missing or malformed, the rules admit nobody, and the owner is locked out until the script runs. Re-running the script with a different `MATCHLINE_OWNER_UIDS` changes client access immediately, without a rules deploy; the callables pick up the new value on the next functions deploy.
 
 **Close self-registration too.** The sign-in page no longer offers account creation, but that is UI, not a boundary. Also disable new email/password sign-ups in the Firebase console (Authentication → Settings → User actions → uncheck "Enable create (sign-up)", where the console offers it). Google SSO still creates an account on first sign-in; the allowlist is what makes such an account useless.
 

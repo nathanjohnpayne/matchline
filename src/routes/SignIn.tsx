@@ -17,7 +17,7 @@
  * Auth REST API, and Google SSO admits any Google account — the
  * boundary is the owner allowlist enforced by every callable
  * (`functions/src/callables/ownerGate.ts`) and by `firestore.rules`
- * (`owners/{uid}`). Email/password sign-up should also be disabled
+ * (`config/access`). Email/password sign-up should also be disabled
  * in the Firebase console (DEPLOYMENT.md § Owner allowlist).
  */
 

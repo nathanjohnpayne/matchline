@@ -2,7 +2,7 @@ rules_version = '2';
 
 // Matchline V1 is single-user. Every document must carry `owner_uid`
 // matching the authenticated user, AND that user must be on the owner
-// allowlist (`owners/{uid}`, see below). Service-layer code MUST scope
+// allowlist (`config/access.owner_uids`, see below). Service-layer code MUST scope
 // list queries via `ownerScope()` in src/services/auth.ts so the query
 // constraint matches what these rules allow. Firestore evaluates
 // list-query rules against the query constraint, not the returned
@@ -42,21 +42,32 @@ service cloud.firestore {
     // The owner allowlist (#439). V1 is single-user, but Firebase Auth
     // admits any account that can sign in — Google SSO alone accepts
     // every Google account — so "signed in" cannot be the authorization
-    // rule. A caller is an owner only if `owners/{their uid}` exists.
+    // rule. A caller is an owner only if their uid is listed in the
+    // single fixed document `config/access` (`owner_uids: [uid, ...]`).
     //
-    // That collection is managed out of band (Firebase console or the
-    // admin SDK); no client can write it — see `match /owners/{uid}`.
+    // Why ONE fixed document rather than a doc per owner: the rules this
+    // file replaces had a catch-all match that let any signed-in user
+    // create a document in any collection. A per-uid allowlist
+    // (`owners/{uid}`) would have trusted any such document written
+    // before this deploy, turning a pre-seeded entry into permanent
+    // access. `config/access` is instead written by
+    // `functions/scripts/set-owner-allowlist.ts` with a full-overwrite
+    // Admin SDK `set()` as part of the deploy, which replaces whatever
+    // a client may have put there beforehand. No client can read or
+    // write `config/` under these rules.
+    //
     // The callables enforce the same boundary independently via the
     // `MATCHLINE_OWNER_UIDS` function param
-    // (functions/src/callables/ownerGate.ts); rules cannot read
-    // function params, so the two are configured separately and each
-    // fails closed on its own. DEPLOYMENT.md § Owner allowlist.
+    // (functions/src/callables/ownerGate.ts); the script writes this
+    // document from that same value. DEPLOYMENT.md § Owner allowlist.
     //
-    // `exists()` is one billed document read per request evaluation,
-    // shared across every call in that evaluation.
+    // A missing document, or a missing / non-list `owner_uids`, admits
+    // nobody. `exists()` + `get()` of one document are billed as reads
+    // once per request evaluation, shared across every call in it.
     function isAllowlistedOwner() {
       return request.auth != null
-        && exists(/databases/$(database)/documents/owners/$(request.auth.uid));
+        && exists(/databases/$(database)/documents/config/access)
+        && request.auth.uid in get(/databases/$(database)/documents/config/access).data.get('owner_uids', []);
     }
 
     // Standard owner-scoped CRUD for collections the client owns
@@ -157,14 +168,9 @@ service cloud.firestore {
              .hasOnly(['approved_for_use', 'user_rejected']);
     }
 
-    // -- The allowlist itself ------------------------------------------
-    //
-    // Readable only by the uid it names (so a client can ask "am I an
-    // owner?"), never listable, never client-writable — a signed-in
-    // stranger must not be able to add themselves.
-    match /owners/{uid} {
-      allow get: if request.auth != null && request.auth.uid == uid;
-    }
+    // `config/*` (including the allowlist `config/access`) has no match
+    // block: clients can neither read nor write it. Only the Admin SDK,
+    // which bypasses rules, maintains it.
 
     // -- Client-owned collections: owner-scoped CRUD ---------------------
 

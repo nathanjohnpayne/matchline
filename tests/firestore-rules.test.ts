@@ -11,11 +11,12 @@
  *
  * What the rules enforce, and where it is pinned:
  *
- *   - **Owner allowlist.** Every read and write requires
- *     `owners/{auth.uid}` to exist. A signed-in stranger — any
- *     account Firebase Auth admits — gets nothing, including the
- *     ability to add themselves to the allowlist. ("rules: owner
- *     allowlist")
+ *   - **Owner allowlist.** Every read and write requires auth.uid to
+ *     be listed in the single fixed document `config/access`
+ *     (`owner_uids`). A signed-in stranger — any account Firebase
+ *     Auth admits — gets nothing, cannot read or write `config/`, and
+ *     cannot make a pre-seeded document survive the deploy script's
+ *     overwrite. ("rules: owner allowlist")
  *   - **Explicit collections, default deny.** There is no catch-all
  *     match; a collection not named in `firestore.rules` rejects
  *     every client operation. ("rules: default deny")
@@ -59,8 +60,13 @@ import {
 } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { writeOwnerAllowlist } from "../functions/scripts/set-owner-allowlist.ts";
+import {
+  getAdminDb,
+  initializeAdminAppForTests,
+} from "../functions/src/firestore/admin.ts";
 import { makeConverter } from "../src/services/firestore.ts";
 
 const OWNER_UID = "user-alice";
@@ -165,9 +171,13 @@ beforeEach(async () => {
   // (bypasses rules) to wipe every doc, including the allowlist, so
   // it is re-seeded here. STRANGER_UID is deliberately absent.
   await testEnv.clearFirestore();
-  await seedDoc("owners", OWNER_UID, {});
-  await seedDoc("owners", OTHER_UID, {});
+  await seedAllowlist([OWNER_UID, OTHER_UID]);
 });
+
+/** Write the owner allowlist the way the rules read it. */
+async function seedAllowlist(uids: readonly string[]): Promise<void> {
+  await seedDoc("config", "access", { owner_uids: [...uids] });
+}
 
 /**
  * Seed a single doc via the rules-bypass admin context so tests
@@ -358,38 +368,87 @@ for (const spec of COLLECTIONS) {
 // -- Owner allowlist (#439) -----------------------------------------------
 
 describe("rules: owner allowlist", () => {
-  it("an allowlisted owner can read their own owners/ entry", async () => {
-    await assertSucceeds(getDoc(doc(db(OWNER_UID), "owners", OWNER_UID)));
+  it("no client can read the allowlist, owner included", async () => {
+    await assertFails(getDoc(doc(db(OWNER_UID), "config", "access")));
+    await assertFails(getDoc(doc(db(STRANGER_UID), "config", "access")));
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), "config")));
   });
 
-  it("nobody can read someone else's owners/ entry", async () => {
-    await assertFails(getDoc(doc(db(OTHER_UID), "owners", OWNER_UID)));
-    await assertFails(getDoc(doc(db(STRANGER_UID), "owners", OWNER_UID)));
-  });
-
-  it("the allowlist cannot be listed", async () => {
-    await assertFails(getDocs(collectionRef(db(OWNER_UID), "owners")));
-  });
-
-  it("a signed-in stranger cannot add themselves to the allowlist", async () => {
+  it("a signed-in stranger cannot write the allowlist or add another config doc", async () => {
     // The sharpest form of the attack: if this passed, every other
     // allowlist check would be decorative.
-    await assertFails(setDoc(doc(db(STRANGER_UID), "owners", STRANGER_UID), {}));
+    await assertFails(
+      setDoc(doc(db(STRANGER_UID), "config", "access"), { owner_uids: [STRANGER_UID] }),
+    );
+    await assertFails(
+      setDoc(doc(db(STRANGER_UID), "config", "other"), { owner_uid: STRANGER_UID }),
+    );
   });
 
-  it("an allowlisted owner cannot add anyone else, or edit or remove entries", async () => {
-    await assertFails(setDoc(doc(db(OWNER_UID), "owners", STRANGER_UID), {}));
-    await assertFails(setDoc(doc(db(OWNER_UID), "owners", OWNER_UID), { note: "x" }));
-    await assertFails(deleteDoc(doc(db(OWNER_UID), "owners", OWNER_UID)));
+  it("an allowlisted owner cannot edit or delete the allowlist either", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "config", "access"), {
+        owner_uids: [OWNER_UID, STRANGER_UID],
+      }),
+    );
+    await assertFails(deleteDoc(doc(db(OWNER_UID), "config", "access")));
   });
 
-  it("removing an owner's entry revokes their access to their own data", async () => {
+  it("a legacy per-uid owners/ doc grants nothing", async () => {
+    // The first version of this allowlist trusted the mere existence of
+    // `owners/{uid}` — a path the previous catch-all rule let any
+    // signed-in user create. It must confer no access now.
+    await seedDoc("owners", STRANGER_UID, { owner_uid: STRANGER_UID });
+    await seedDoc("roles", "role-s", { owner_uid: STRANGER_UID, data: 1 });
+    await assertFails(getDoc(doc(db(STRANGER_UID), "roles", "role-s")));
+  });
+
+  it("removing a uid from owner_uids revokes access to their own data", async () => {
     await seedDoc("roles", "role-1", { owner_uid: OWNER_UID, data: 1 });
     await assertSucceeds(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+    await seedAllowlist([OTHER_UID]);
+    await assertFails(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+  });
+
+  it("a missing allowlist document admits nobody", async () => {
+    await seedDoc("roles", "role-1", { owner_uid: OWNER_UID, data: 1 });
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await deleteDoc(doc(ctx.firestore(), "owners", OWNER_UID));
+      await deleteDoc(doc(ctx.firestore(), "config", "access"));
     });
     await assertFails(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+  });
+
+  it("a malformed owner_uids (not a list) admits nobody", async () => {
+    await seedDoc("roles", "role-1", { owner_uid: OWNER_UID, data: 1 });
+    await seedDoc("config", "access", { owner_uids: OWNER_UID });
+    await assertFails(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+  });
+
+  it("the deploy script's overwrite discards a pre-seeded allowlist", async () => {
+    // Simulates the pre-deploy window: under the old catch-all rule a
+    // stranger could have created `config/access` naming themselves,
+    // with extra fields. `writeOwnerAllowlist` (the deploy step) must
+    // replace it wholesale, and the stranger must end up with nothing.
+    await seedDoc("config", "access", {
+      owner_uids: [STRANGER_UID],
+      owner_uid: STRANGER_UID,
+      extra: true,
+    });
+    await seedDoc("roles", "role-s", { owner_uid: STRANGER_UID, data: 1 });
+    await assertSucceeds(getDoc(doc(db(STRANGER_UID), "roles", "role-s")));
+
+    initializeAdminAppForTests("matchline-rules-test");
+    await writeOwnerAllowlist(getAdminDb(), [OWNER_UID]);
+
+    await assertFails(getDoc(doc(db(STRANGER_UID), "roles", "role-s")));
+    await seedDoc("roles", "role-o", { owner_uid: OWNER_UID, data: 1 });
+    await assertSucceeds(getDoc(doc(db(OWNER_UID), "roles", "role-o")));
+    let stored: Record<string, unknown> | undefined;
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      stored = (await getDoc(doc(ctx.firestore(), "config", "access"))).data();
+    });
+    expect(Object.keys(stored ?? {}).sort()).toEqual(["owner_uids", "updated_at"]);
+    expect(stored?.owner_uids).toEqual([OWNER_UID]);
   });
 });
 

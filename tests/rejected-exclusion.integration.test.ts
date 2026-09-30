@@ -78,8 +78,9 @@ beforeEach(async () => {
   // users are owners here, so the cross-tenant assertions below
   // exercise owner_uid scoping rather than the allowlist.
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), "owners", OWNER_UID), {});
-    await setDoc(doc(ctx.firestore(), "owners", OTHER_UID), {});
+    await setDoc(doc(ctx.firestore(), "config", "access"), {
+      owner_uids: [OWNER_UID, OTHER_UID],
+    });
   });
 });
 

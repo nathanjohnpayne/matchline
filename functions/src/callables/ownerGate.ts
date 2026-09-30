@@ -31,10 +31,11 @@
  * visibly (every call returns `permission-denied`) rather than
  * silently reopening the instance.
  *
- * The same uid must also exist as a document under `owners/` for
- * `firestore.rules` to admit client reads and writes; the rules cannot
- * read function params. The two are configured separately on purpose:
- * each layer fails closed on its own.
+ * The same uid must also be listed in the Firestore document
+ * `config/access` (`owner_uids`) for `firestore.rules` to admit client
+ * reads and writes; the rules cannot read function params.
+ * `functions/scripts/set-owner-allowlist.ts` writes that document from
+ * this same value. Each layer fails closed on its own.
  *
  * ## Why uid, not email
  *
