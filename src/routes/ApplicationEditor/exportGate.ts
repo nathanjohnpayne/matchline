@@ -55,7 +55,19 @@ import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
 
 export type ExportGateState =
   | { readonly enabled: true; readonly disabledReason: null }
-  | { readonly enabled: false; readonly disabledReason: string };
+  | {
+      readonly enabled: false;
+      readonly disabledReason: string;
+      /**
+       * True when re-running validation on the current content is the
+       * fix (never validated, edited since, or cited evidence changed
+       * since the last run). The editor then offers an explicit
+       * "Re-run validation" action next to the disabled Export.
+       * False/absent when the user must act first (resolve flags,
+       * restore or re-approve cited Units).
+       */
+      readonly canRevalidate?: boolean;
+    };
 
 /** Count of unresolved (i.e. non-traced) flags. */
 function unresolvedFlagCount(flags: readonly ValidationFlag[]): number {
@@ -95,7 +107,7 @@ function parseTime(iso: string | undefined): number | undefined {
 function citedEvidenceProblem(
   asset: AssetRef,
   unitsById: ReadonlyMap<string, ExperienceUnit>,
-): string | null {
+): { readonly reason: string; readonly canRevalidate: boolean } | null {
   const versions = asset.validated_unit_versions;
   const validatedAt = parseTime(asset.validated_at);
   let missing = 0;
@@ -124,22 +136,28 @@ function citedEvidenceProblem(
   const units = (n: number): string => (n === 1 ? "1 Unit" : `${n} Units`);
   const verb = (n: number, one: string, many: string): string => (n === 1 ? one : many);
   if (missing > 0) {
-    return (
-      `This resume cites ${units(missing)} that no longer ${verb(missing, "exists", "exist")}. ` +
-      "Edit or remove the bullets that cite them, then re-validate."
-    );
+    return {
+      reason:
+        `This resume cites ${units(missing)} that no longer ${verb(missing, "exists", "exist")}. ` +
+        "Edit or remove the bullets that cite them, then re-validate.",
+      canRevalidate: false,
+    };
   }
   if (unapproved > 0) {
-    return (
-      `This resume cites ${units(unapproved)} that ${verb(unapproved, "is", "are")} no longer approved. ` +
-      "Re-approve them, or edit or remove the bullets that cite them."
-    );
+    return {
+      reason:
+        `This resume cites ${units(unapproved)} that ${verb(unapproved, "is", "are")} no longer approved. ` +
+        "Re-approve them, or edit or remove the bullets that cite them.",
+      canRevalidate: false,
+    };
   }
   if (edited > 0) {
-    return (
-      `${units(edited)} this resume cites ${verb(edited, "has", "have")} changed since the last ` +
-      "validation run read them. Re-run validation before exporting."
-    );
+    return {
+      reason:
+        `${units(edited)} this resume cites ${verb(edited, "has", "have")} changed since the last ` +
+        "validation run read them. Re-run validation before exporting.",
+      canRevalidate: true,
+    };
   }
   return null;
 }
@@ -160,18 +178,24 @@ export function exportGateState(
         unitsById === undefined ? null : citedEvidenceProblem(asset, unitsById);
       return problem === null
         ? { enabled: true, disabledReason: null }
-        : { enabled: false, disabledReason: problem };
+        : {
+            enabled: false,
+            disabledReason: problem.reason,
+            canRevalidate: problem.canRevalidate,
+          };
     }
     case "pending":
       return {
         enabled: false,
         disabledReason: "Validation hasn't run on this resume yet.",
+        canRevalidate: true,
       };
     case "stale":
       return {
         enabled: false,
         disabledReason:
           "Resume edited since the last validation run. Re-run validation before exporting.",
+        canRevalidate: true,
       };
     case "failed": {
       const n = unresolvedFlagCount(asset.validation_flags ?? []);

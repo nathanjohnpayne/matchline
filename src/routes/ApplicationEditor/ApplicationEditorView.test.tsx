@@ -671,6 +671,64 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain('data-flag-count="0"');
   });
 
+  it("offers 'Re-run validation' next to a disabled Export when the resume is stale", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+      />,
+    );
+    expect(html).toContain('data-testid="revalidate-button"');
+    expect(html).toContain("Re-run validation");
+    expect(html).toContain('data-export-enabled="false"');
+  });
+
+  it("shows the in-flight label and disables the retry while validation runs", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+        revalidating
+      />,
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="revalidate-button"/);
+    expect(html).toContain("Re-running validation…");
+  });
+
+  it("surfaces a failed retry inline", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+        revalidateError="Validation couldn't run. Try again in a moment."
+      />,
+    );
+    expect(html).toContain('data-testid="revalidate-error"');
+    expect(html).toContain("Try again in a moment.");
+  });
+
+  it("does not offer re-validation when flags must be resolved first", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "failed" })}
+        units={[]}
+        onRevalidate={() => {}}
+      />,
+    );
+    expect(html).not.toContain('data-testid="revalidate-button"');
+  });
+
   it("renders the export button DISABLED with a flag-count tooltip when validation_status === 'failed'", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView

@@ -96,6 +96,8 @@ function ApplicationEditorInner({
   const [application, setApplication] = useState<Application | null>(null);
   const [units, setUnits] = useState<readonly ExperienceUnit[]>([]);
   const [error, setError] = useState<Error | null>(null);
+  const [revalidating, setRevalidating] = useState(false);
+  const [revalidateError, setRevalidateError] = useState<string | null>(null);
 
   useEffect(() => {
     if (applicationId === undefined || applicationId === "") {
@@ -668,6 +670,40 @@ function ApplicationEditorInner({
   // placeholder that logs, so a future hookup can replace this
   // single line. Disabled state is computed in the view from the
   // asset's `validation_status`.
+  // Explicit validation retry (#501 review). The export gate tells the
+  // user to re-run validation when the content was edited, was never
+  // validated, or its cited Units changed since the last run; before
+  // this action the only path to a fresh run was an unrelated content
+  // edit. Same guards as the edit flow: the shared in-flight gate so it
+  // can't interleave with a mutation, and one busy lease across the
+  // validation call + refetch so a reload can't strand a stale read.
+  const onRevalidate = useCallback(async (): Promise<void> => {
+    if (asset === null || applicationId === undefined) return;
+    if (mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
+    const releaseBusy = beginAppBusy("applicationEditor.revalidate");
+    setRevalidating(true);
+    setRevalidateError(null);
+    try {
+      try {
+        await invokeValidateAsset(applicationId, asset.id);
+      } catch (err) {
+        console.warn("validateAsset retry failed", err);
+        setRevalidateError("Validation couldn't run. Try again in a moment.");
+        return;
+      }
+      try {
+        await refetchApplication();
+      } catch (err) {
+        console.warn("refetchApplication failed after validation retry", err);
+      }
+    } finally {
+      mutationInFlightRef.current = false;
+      setRevalidating(false);
+      releaseBusy();
+    }
+  }, [applicationId, asset, refetchApplication]);
+
   const onExport = useCallback(() => {
 
     console.info("Export not yet implemented (Phase 2)", {
@@ -687,6 +723,9 @@ function ApplicationEditorInner({
         onRemoveBullet={onRemoveBullet}
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
+        onRevalidate={() => void onRevalidate()}
+        revalidating={revalidating}
+        revalidateError={revalidateError}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}

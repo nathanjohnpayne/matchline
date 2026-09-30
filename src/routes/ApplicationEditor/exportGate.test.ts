@@ -67,6 +67,15 @@ describe("exportGateState", () => {
     expect(state.disabledReason).toContain("Re-run validation");
   });
 
+  it("offers re-validation for pending and stale, not for failed", () => {
+    const pending = exportGateState(asset("pending"));
+    const stale = exportGateState(asset("stale"));
+    const failed = exportGateState(asset("failed"));
+    expect(pending.enabled === false && pending.canRevalidate).toBe(true);
+    expect(stale.enabled === false && stale.canRevalidate).toBe(true);
+    expect(failed.enabled === false && failed.canRevalidate === true).toBe(false);
+  });
+
   it("counts unresolved flags (untraceable + specificity) when failed, ignoring traced", () => {
     const state = exportGateState(
       asset("failed", [
@@ -208,6 +217,23 @@ describe("exportGateState: cited-evidence re-check", () => {
     const state = exportGateState(passedAsset(), byId(unit("u1"), unit("u2")));
     expect(state.enabled).toBe(false);
     expect(state.disabledReason).toContain("1 Unit that no longer exists");
+  });
+
+  it("offers re-validation only when re-running validation is the fix", () => {
+    const edited = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2", { updated_at: "2026-04-11T00:00:00.000Z" }), unit("u3")),
+    );
+    expect(edited.enabled === false && edited.canRevalidate).toBe(true);
+
+    const unapproved = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2", { user_approved: false }), unit("u3")),
+    );
+    expect(unapproved.enabled === false && unapproved.canRevalidate).toBe(false);
+
+    const missing = exportGateState(passedAsset(), byId(unit("u1"), unit("u3")));
+    expect(missing.enabled === false && missing.canRevalidate).toBe(false);
   });
 
   it("blocks when a cited Unit was edited after validated_at", () => {
