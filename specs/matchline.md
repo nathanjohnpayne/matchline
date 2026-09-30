@@ -109,6 +109,7 @@ Acceptance criteria:
   does not trace to an approved Unit is flagged.
 - The Application Editor blocks export while any validation flag is
   unresolved.
+- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
 - Exports are available as PDF, DOCX, and plain text.
 
 ### End-to-end acceptance

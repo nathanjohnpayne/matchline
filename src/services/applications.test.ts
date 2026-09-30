@@ -1185,6 +1185,52 @@ describe("restoreAssetState (Firestore-mocked, sub-issue #197)", () => {
     expect(written.latency_ms).toBe(1200);
   });
 
+  it("restores the verdict's provenance with the verdict (validated_at + validated_unit_versions)", async () => {
+    // The current asset carries a LATER run's provenance; restoring an
+    // older `passed` next to it would let the export gate check the
+    // old verdict against evidence it was never computed from.
+    const current = asset({
+      id: "asset-1",
+      validation_status: "stale",
+      validated_at: "2026-04-20T00:00:00.000Z",
+      validated_unit_versions: { "unit-x": "2026-04-19T00:00:00.000Z" },
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [current] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await restoreAssetState("app-1", "asset-1", {
+      ...snapshot,
+      validated_at: "2026-04-10T00:00:00.000Z",
+      validated_unit_versions: { "unit-x": "2026-04-01T00:00:00.000Z" },
+    });
+    const written = (updateDoc.mock.calls[0]?.[1] as { generated_assets: AssetRef[] })
+      .generated_assets[0];
+    expect(written.validated_at).toBe("2026-04-10T00:00:00.000Z");
+    expect(written.validated_unit_versions).toEqual({
+      "unit-x": "2026-04-01T00:00:00.000Z",
+    });
+  });
+
+  it("omits validated_at / validated_unit_versions when the snapshot predates them", async () => {
+    const current = asset({
+      id: "asset-1",
+      validated_at: "2026-04-20T00:00:00.000Z",
+      validated_unit_versions: { "unit-x": "2026-04-19T00:00:00.000Z" },
+    });
+    getDoc.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => application({ generated_assets: [current] }),
+    });
+    updateDoc.mockResolvedValueOnce(undefined);
+    await restoreAssetState("app-1", "asset-1", snapshot);
+    const written = (updateDoc.mock.calls[0]?.[1] as { generated_assets: AssetRef[] })
+      .generated_assets[0];
+    expect("validated_at" in written).toBe(false);
+    expect("validated_unit_versions" in written).toBe(false);
+  });
+
   it("does not flip an unrelated asset's state when restoring a specific asset", async () => {
     const otherAsset = asset({
       id: "asset-2",

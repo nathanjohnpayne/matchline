@@ -99,6 +99,16 @@ export interface ApplicationEditorViewProps {
    */
   readonly onExport?: () => void;
   /**
+   * Explicit "Re-run validation" action, offered next to the disabled
+   * Export button when the gate says re-validating the current content
+   * is the fix (never validated, edited since, or cited evidence changed).
+   * `revalidating` disables it while a run is in flight; `revalidateError`
+   * is shown inline when the last run failed.
+   */
+  readonly onRevalidate?: () => void;
+  readonly revalidating?: boolean;
+  readonly revalidateError?: string | null;
+  /**
    * Save handler for an inline bullet edit (#24, sub-issue #188).
    * Receives the GeneratedItem id (same shape as `onRemoveBullet`)
    * + the new text. Container runs `editBulletInAsset` +
@@ -156,6 +166,9 @@ export default function ApplicationEditorView({
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
+  onRevalidate,
+  revalidating,
+  revalidateError,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -283,6 +296,9 @@ export default function ApplicationEditorView({
         onRemoveBullet={onRemoveBullet}
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
+        onRevalidate={onRevalidate}
+        revalidating={revalidating}
+        revalidateError={revalidateError}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}
@@ -347,6 +363,9 @@ interface TwoPaneLayoutProps {
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
   readonly onExport?: () => void;
+  readonly onRevalidate?: () => void;
+  readonly revalidating?: boolean;
+  readonly revalidateError?: string | null;
   readonly onSaveBulletEdit?: (
     bulletId: string,
     newText: string,
@@ -400,6 +419,9 @@ function TwoPaneLayout({
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
+  onRevalidate,
+  revalidating,
+  revalidateError,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -454,6 +476,9 @@ function TwoPaneLayout({
         onRemoveBullet={onRemoveBullet}
         onAddSupportingUnit={onAddSupportingUnit}
         onExport={onExport}
+        onRevalidate={onRevalidate}
+        revalidating={revalidating}
+        revalidateError={revalidateError}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}
@@ -493,6 +518,9 @@ interface ResumePaneProps {
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
   readonly onExport?: () => void;
+  readonly onRevalidate?: () => void;
+  readonly revalidating?: boolean;
+  readonly revalidateError?: string | null;
   /**
    * Sub-issue #188 inline edit handler. Threaded to BulletItem;
    * when wired, the ClaimAnnotation popover's Edit button becomes
@@ -533,6 +561,9 @@ function ResumePane({
   onRemoveBullet,
   onAddSupportingUnit,
   onExport,
+  onRevalidate,
+  revalidating,
+  revalidateError,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -642,7 +673,9 @@ function ResumePane({
   // flags for summary/bullets/skills/education uniformly, so a
   // single map covers all four sections.
   const flags = flagsByBullet(asset.validation_flags);
-  const gate = exportGateState(asset);
+  // Pass the Units so a `passed` verdict is re-checked against the
+  // current state of the evidence it cites (exportGate.ts).
+  const gate = exportGateState(asset, unitsById);
   // The Remove resolution path is only valid for `bullets[]` —
   // the schema forbids removing `summary`, and removing a single
   // skill or education entry is structurally a bullet-removal too
@@ -701,7 +734,13 @@ function ResumePane({
       aria-label="Generated resume"
       data-testid="resume-pane"
     >
-      <ExportButton gate={gate} onExport={onExport} />
+      <ExportButton
+        gate={gate}
+        onExport={onExport}
+        onRevalidate={onRevalidate}
+        revalidating={revalidating}
+        revalidateError={revalidateError}
+      />
 
       <Section heading="Summary">
         {renderItem(content.summary, "summary")}
@@ -1121,9 +1160,18 @@ function AddBulletCTA({
 interface ExportButtonProps {
   readonly gate: ReturnType<typeof exportGateState>;
   readonly onExport?: () => void;
+  readonly onRevalidate?: () => void;
+  readonly revalidating?: boolean;
+  readonly revalidateError?: string | null;
 }
 
-function ExportButton({ gate, onExport }: ExportButtonProps): ReactElement {
+function ExportButton({
+  gate,
+  onExport,
+  onRevalidate,
+  revalidating = false,
+  revalidateError = null,
+}: ExportButtonProps): ReactElement {
   // Always render the button, never hide it — the user needs to see
   // the gate's reason, not just an absent control. Gate enables iff
   // BOTH the validation gate passes AND a click handler is wired —
@@ -1145,6 +1193,30 @@ function ExportButton({ gate, onExport }: ExportButtonProps): ReactElement {
         >
           {disabledReason}
         </p>
+      )}
+      {revalidateError !== null && (
+        <p
+          role="alert"
+          className="text-xs text-red-600 dark:text-red-400"
+          data-testid="revalidate-error"
+        >
+          {revalidateError}
+        </p>
+      )}
+      {!gate.enabled && gate.canRevalidate === true && onRevalidate !== undefined && (
+        <button
+          type="button"
+          disabled={revalidating}
+          onClick={revalidating ? undefined : onRevalidate}
+          data-testid="revalidate-button"
+          className={
+            revalidating
+              ? "rounded-md border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-400 cursor-wait dark:border-zinc-700 dark:text-zinc-500"
+              : "rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
+          }
+        >
+          {revalidating ? "Re-running validation…" : "Re-run validation"}
+        </button>
       )}
       <button
         type="button"

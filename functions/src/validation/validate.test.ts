@@ -10,6 +10,7 @@ import type {
 import type { Claim } from "./claimExtraction.ts";
 import type { SpecificityResult } from "./specificity.ts";
 import type { TraceabilityResult } from "./traceability.ts";
+import { unitEvidenceVersion } from "./unitEvidenceVersion.ts";
 import {
   validateAsset,
   ValidateAssetMissingContent,
@@ -491,6 +492,13 @@ describe("validateAsset orchestrator", () => {
     expect(persistedResult.flags).toHaveLength(2);
     expect(persistedResult.status).toBe("passed");
     expect(persistedResult.validated_at).toBe("2026-04-26T00:00:00.000Z");
+    // The evidence versions the verdict is about: a content
+    // fingerprint of each loaded Unit, taken BEFORE the LLM passes.
+    // The export gate recomputes them from the live Units, so an edit
+    // during validation is caught, whatever its updated_at says.
+    expect(persistedResult.validated_unit_versions).toEqual({
+      u1: unitEvidenceVersion(makeUnit("u1")),
+    });
     // Returned result === persisted result.
     expect(result).toBe(persistedResult);
   });

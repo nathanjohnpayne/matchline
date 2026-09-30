@@ -9,16 +9,17 @@
  *     → listRequirements  (Requirements under this Role)
  *     → score every (Unit × Requirement) pair via #97's pure fns
  *     → produce UnitMatch records
- *     → persistBatch      (atomic clear-and-replace by (role, owner))
+ *     → persistBatch      (replace by (role, owner): overwrite each
+ *                          pair's deterministic doc, delete orphans)
  *     → UnitMatch[]       (returned)
  *
- * Mirrors `parsing/pipeline.ts` — same DI shape, same atomic-batch
- * persist discipline, same (ownerUid, roleId) replace-key. The
- * critical invariant that drives the persistence layer is that
- * matching is **idempotent on the same inputs**: re-running matching
- * on a Role must atomically replace the prior match set, even when
- * the new run produces zero matches (the empty case still clears
- * stale rows so the Gaps view in #21 doesn't read corrupt state).
+ * Mirrors `parsing/pipeline.ts` — same DI shape, same (ownerUid,
+ * roleId) replace-key. The critical invariant that drives the
+ * persistence layer is that matching is **idempotent on the same
+ * inputs**: re-running matching on a Role must replace the prior
+ * match set — never union with it — even when the new run produces
+ * zero matches (the empty case still clears stale rows so the Gaps
+ * view in #21 doesn't read corrupt state).
  *
  * What this module does NOT do:
  *   - LLM rationale string per match (deferred to #100).
@@ -33,7 +34,9 @@
  * `writeRequirementsAsBatch` after Codex P1 round 4 on #19.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+
+import type { DocumentReference, Transaction } from "firebase-admin/firestore";
 
 import { getAdminDb } from "../firestore/admin.js";
 import type {
@@ -127,8 +130,6 @@ export interface MatchingDeps {
    * pipeline shape.
    */
   readonly generateRationale?: typeof generateRationaleFn;
-  /** Injectable for deterministic ids in tests. */
-  readonly generateId?: () => string;
   /** Injectable clock for deterministic timestamps in tests. */
   readonly now?: () => string;
   /** Injectable asOf for the recency component (deterministic tests). */
@@ -150,10 +151,21 @@ export async function runMatchingPipeline(
 ): Promise<readonly UnitMatch[]> {
   const listUnits = deps.listUnits ?? defaultListUnits;
   const listRequirements = deps.listRequirements ?? defaultListRequirements;
-  const persistBatch = deps.persistBatch ?? replaceMatchesForRole;
+  // With the default persist, claim the (owner, Role) run marker
+  // BEFORE reading any input, so the run that was INVOKED last is the
+  // one allowed to commit. Claiming at persist time instead let a slow
+  // run that read pre-edit Units finish after, and overwrite, a faster
+  // run that read the edit (Codex P1 on #501). An injected persist
+  // (tests, the eval harness) manages its own concurrency.
+  let persistBatch: NonNullable<MatchingDeps["persistBatch"]>;
+  if (deps.persistBatch !== undefined) {
+    persistBatch = deps.persistBatch;
+  } else {
+    const runId = await claimMatchingRun(ctx);
+    persistBatch = (c, m) => replaceMatchesForRole(c, m, { runId });
+  }
   const score = deps.score ?? scoreFn;
   const generateRationale = deps.generateRationale ?? generateRationaleFn;
-  const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date().toISOString());
 
   const [units, requirements] = await Promise.all([
@@ -214,7 +226,9 @@ export async function runMatchingPipeline(
         continue;
       }
       matches.push({
-        id: generateId(),
+        // Deterministic per (owner, Role, Unit, Requirement): a rerun
+        // overwrites this pair's doc in place. See `matchDocId`.
+        id: matchDocId(ctx.ownerUid, ctx.roleId, unit.id, requirement.id),
         owner_uid: ctx.ownerUid,
         experience_unit_id: unit.id,
         job_requirement_unit_id: requirement.id,
@@ -343,52 +357,234 @@ async function defaultListRequirements(
 }
 
 /**
- * Transactional clear-and-replace for UnitMatches keyed on
- * (ownerUid, roleId).
- *
- * **Concurrency: runs in a Firestore transaction.** Two
- * concurrent matching runs on the same Role must not produce
- * the union of both runs' new matches — exactly the same
- * concern as `writeRequirementsAsBatch` in the JD pipeline
- * after Codex P1 round 4 on #19. The transaction retries on
- * contention so one run sees the other's commits as part of
- * its read set and cleanly replaces.
- *
- * **Cross-tenant safety: the clear query is scoped by BOTH
- * role_id AND owner_uid.** The admin SDK bypasses
- * `firestore.rules`. Scoping by role_id alone would let a
- * caller submit another user's role_id and cause cross-tenant
- * deletion of matches. Scoping by owner_uid confines the
- * clear to docs the caller owns. The callable also enforces a
- * role-ownership precondition up front (mirrors the JD pipeline's
- * pattern from #19).
- *
- * **The clear query keys directly on `(owner_uid, role_id)`** —
- * possible because we denormalized `role_id` onto every
- * UnitMatch at persist time (see UnitMatch.role_id docstring).
- * This avoids a chunked join through Requirements with
- * Firestore's 30-value `in`-clause limit.
- *
- * V1 expected band: 10 Units × 20 Requirements = 200 matches
- * per Role. The replace flow does N deletes + N writes, so the
- * second-and-subsequent runs need 2× the per-run match count in
- * ops. Firestore's actual transaction op limit is 500; we cap
- * at 450 to leave headroom for the read query. Codex P1 on PR
- * #104 caught a prior 200-op cap that would have made the
- * second run on a 200-match Role fail (200 deletes + 200 writes
- * = 400 ops) — exactly the path users hit when they edit a Unit
- * and re-run matching.
- *
- * Exceeding 450 throws (loud failure) rather than silently
- * splitting and losing the atomic-replace property; chunked
- * transactional replace lands in #20.6 if real V1 usage hits
- * that ceiling.
+ * Namespace for `matchDocId`'s name-based UUIDs. An arbitrary fixed
+ * value: changing it re-keys every match on the next run (harmless —
+ * the orphan pass deletes the old ids and flags carry forward by
+ * pair — but pointless churn).
  */
-const FIRESTORE_TX_OP_LIMIT = 450;
+const MATCH_ID_NAMESPACE = "3b0c9d6e-5f2a-4e7b-9c1d-8a4f6e2b7d53";
+
+/**
+ * Deterministic document id for the match of one (Unit, Requirement)
+ * pair under one (owner, Role): an RFC 4122 version-5 (SHA-1,
+ * name-based) UUID.
+ *
+ * **Why deterministic.** A rerun must overwrite the pair's existing
+ * doc rather than delete it and write a new one. With random ids,
+ * every rerun cost one delete per prior match plus one write per new
+ * match — ~2N operations — which is what pushed a realistic Role
+ * (≈22 Units × ≈15 Requirements ≈ 330 matches, so ≈660 ops) past the
+ * single-transaction ceiling this module used to enforce. With stable
+ * ids a steady-state rerun is N writes and deletes only true orphans.
+ * It also keeps a match's id stable across reruns, so a client that
+ * is approving a match while matching reruns addresses the same doc.
+ *
+ * **Why a UUID rather than `${unitId}__${reqId}`.** The data model
+ * specifies UUID primary keys (`specs/matchline.md` § Data model),
+ * and hashing the owner and Role into the name makes a collision with
+ * another tenant's match impossible by construction rather than by
+ * the argument that Unit and Requirement ids happen to be unique.
+ * The name is a JSON array so no choice of separator can make two
+ * different tuples encode the same string.
+ */
+export function matchDocId(
+  ownerUid: string,
+  roleId: string,
+  unitId: string,
+  requirementId: string,
+): string {
+  return nameUuid([ownerUid, roleId, unitId, requirementId]);
+}
+
+/**
+ * RFC 4122 version-5 UUID of `parts` under `MATCH_ID_NAMESPACE`. The
+ * name is the JSON encoding of the array, so no choice of separator
+ * can make two different tuples collide.
+ */
+function nameUuid(parts: readonly string[]): string {
+  const ns = Buffer.from(MATCH_ID_NAMESPACE.replace(/-/g, ""), "hex");
+  const name = Buffer.from(JSON.stringify(parts), "utf8");
+  const bytes = createHash("sha1").update(ns).update(name).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // RFC 4122 variant
+  const hex = bytes.toString("hex");
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
+    `${hex.slice(16, 20)}-${hex.slice(20)}`
+  );
+}
+
+/**
+ * Server-only collection holding one "latest matching run" marker per
+ * (owner, Role). See `replaceMatchesForRole` § Overlapping runs.
+ *
+ * Clients must not be able to write it: a client that rewrote or
+ * deleted its marker mid-run would make the legitimate run look
+ * superseded. The explicit per-collection `firestore.rules` from #500
+ * deny every collection they do not name, this one included.
+ */
+export const MATCHING_RUNS_COLLECTION = "matchingRuns";
+
+/** Doc id of the (owner, Role) run marker. */
+export function matchingRunDocId(ownerUid: string, roleId: string): string {
+  return nameUuid(["matching-run", ownerUid, roleId]);
+}
+
+/**
+ * Thrown inside a commit when a newer run for the same (owner, Role)
+ * has started. Caught by `replaceMatchesForRole`, which stops writing
+ * and leaves the newer run to define the persisted set.
+ */
+export class MatchingRunSuperseded extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MatchingRunSuperseded";
+  }
+}
+
+/**
+ * Upper bound on writes per commit (transaction or batch). Firestore
+ * historically capped a commit at 500 writes; 400 keeps headroom
+ * under that and under the request-size limit for match docs, which
+ * carry rationale prose. Exported so tests can size fixtures past it.
+ */
+export const MATCH_WRITES_PER_COMMIT = 400;
+
+function pairKey(unitId: string, requirementId: string): string {
+  return `${unitId}::${requirementId}`;
+}
+
+type ApprovalFlags = { approved_for_use: boolean; user_rejected: boolean };
+
+/**
+ * Fold one stored match's review flags into an accumulator by
+ * precedence `rejected` > `approved` > `none`, canonicalizing so a
+ * rejection always forces `approved_for_use: false`.
+ *
+ * **Canonicalize with rejection winning.** The unified
+ * `setMatchApprovalState` setter (cursor #133 r1) makes `(true, true)`
+ * unrepresentable on the client write side, but a stale record or a
+ * manual Firestore write could leave the contradictory shape in
+ * storage. Without canonicalization it would survive carry-forward and
+ * readers would disagree: the UI's `approvalStateOf` calls it
+ * "rejected" while generation gates only on `approved_for_use === true`
+ * and would CONSUME it (cursor CHANGES_REQUESTED round 3 on #133).
+ *
+ * **Fold, don't overwrite.** More than one stored doc can describe
+ * the same pair — the pre-deterministic-id doc and the new one during
+ * the first rerun after this change, or duplicates from an older
+ * bug. Last-write-wins would let iteration order silently drop a
+ * stored rejection, the exact invariant carry-forward exists for.
+ */
+function foldFlags(
+  prev: ApprovalFlags | undefined,
+  m: Pick<UnitMatch, "approved_for_use" | "user_rejected">,
+): ApprovalFlags {
+  const rejected = (prev?.user_rejected ?? false) || m.user_rejected === true;
+  return {
+    approved_for_use: rejected
+      ? false
+      : (prev?.approved_for_use ?? false) || m.approved_for_use === true,
+    user_rejected: rejected,
+  };
+}
+
+/**
+ * Replace the persisted UnitMatch set for `(ownerUid, roleId)` with
+ * `matches`, carrying the user's per-pair review decisions forward.
+ *
+ * Every match is written to its pair's deterministic id
+ * (`matchDocId`), so a rerun overwrites in place; stored matches whose
+ * id is not in the new set — a pair that no longer exists, a match
+ * against a Requirement a re-parse replaced, or a legacy random-id doc
+ * — are orphans and are deleted. Empty input therefore clears the
+ * Role: a Role whose Units were all rejected must not keep showing
+ * matches against them.
+ *
+ * **One atomic transaction whenever it fits.** If the writes plus the
+ * orphan deletes fit in `MATCH_WRITES_PER_COMMIT`, the whole
+ * replacement — carry-forward read, writes, orphan deletes — is one
+ * transaction, exactly as before this change: no reader ever sees a
+ * partial set, a failure publishes nothing, and a concurrent
+ * approve/reject conflicts and retries rather than being overwritten.
+ * Deterministic ids are what make this cover realistic Roles: a rerun
+ * of ~22 Units × ~15 Requirements is ~330 writes and no deletes,
+ * where the old delete-all-then-write-all shape needed ~660 ops and
+ * threw above 450 on every rerun.
+ *
+ * **Chunked only above that size** (a very large Role, or the first
+ * rerun of a large Role after this change, when every legacy
+ * random-id doc is an orphan). Each write chunk is a transaction that
+ * re-reads the pair's current doc and any legacy doc for the same
+ * pair, folds their flags forward (`foldFlags`), writes the new
+ * match, and deletes the legacy doc in the same commit — so a
+ * decision recorded on a legacy doc mid-run is either read by that
+ * commit or conflicts with it, never silently deleted. Orphans are
+ * then deleted in further transactions. What this path gives up is
+ * cross-chunk atomicity: while it runs, and if it fails part-way, a
+ * reader can see some pairs rescored and others not yet. It can never
+ * see a union of old and new matches for one pair, because a pair has
+ * exactly one doc, and the next successful run converges the set.
+ *
+ * **Overlapping runs.** Each run stamps a fresh `run_id` on the
+ * (owner, Role) marker in `matchingRuns` — `runMatchingPipeline` does
+ * so before reading its inputs, so invocation order decides — and
+ * every commit — the
+ * single transaction, each chunk, each orphan delete — re-reads that
+ * marker and aborts with `MatchingRunSuperseded` if a newer run has
+ * started since. A superseded run stops writing and returns; the
+ * newest run's orphan pass removes whatever the older one had
+ * written. Without this, two overlapping chunked runs could each
+ * delete the other's writes as orphans and leave the intersection of
+ * their sets.
+ *
+ * **Cross-tenant safety.** The admin SDK bypasses `firestore.rules`.
+ * Every query is scoped by BOTH `owner_uid` and `role_id` (role_id is
+ * denormalized onto each match for exactly this), so a caller can
+ * never clear another owner's matches under a shared role id; the
+ * callable also enforces role ownership up front (mirrors #19). Match
+ * ids hash the owner and Role, and a chunk refuses to overwrite a doc
+ * stamped with a different owner or Role.
+ */
+/** Options for `replaceMatchesForRole`. */
+export interface ReplaceMatchesHooks {
+  /**
+   * The run marker this replacement commits under, claimed by
+   * `runMatchingPipeline` before it read its inputs. Omitted by direct
+   * callers, in which case the replacement claims a fresh one itself.
+   */
+  readonly runId?: string;
+  /**
+   * Test seam: lets an emulator test start a second run at the one
+   * point where overlap matters (after a chunked run's writes, before
+   * its orphan pass). Production never passes it.
+   */
+  readonly afterChunkedWrites?: () => Promise<void>;
+}
+
+/**
+ * Stamp a fresh `run_id` on the (owner, Role) marker and return it.
+ * Last writer wins, which is the point: the most recently started run
+ * is the one that may commit.
+ */
+export async function claimMatchingRun(ctx: RunMatchingContext): Promise<string> {
+  const runId = randomUUID();
+  await getAdminDb()
+    .collection(MATCHING_RUNS_COLLECTION)
+    .doc(matchingRunDocId(ctx.ownerUid, ctx.roleId))
+    .set({
+      owner_uid: ctx.ownerUid,
+      role_id: ctx.roleId,
+      run_id: runId,
+      started_at: new Date().toISOString(),
+    });
+  return runId;
+}
 
 async function replaceMatchesForRole(
   ctx: RunMatchingContext,
   matches: readonly UnitMatch[],
+  hooks: ReplaceMatchesHooks = {},
 ): Promise<readonly UnitMatch[]> {
   const { roleId, ownerUid } = ctx;
 
@@ -403,130 +599,182 @@ async function replaceMatchesForRole(
     );
   }
 
+  // Key every incoming match by its deterministic id. The pipeline
+  // already stamps it; re-deriving here keeps this function correct for
+  // any caller and makes a duplicate pair a loud error instead of a
+  // silent last-write-wins.
+  const keyed: UnitMatch[] = matches.map((m) => ({
+    ...m,
+    id: matchDocId(ownerUid, roleId, m.experience_unit_id, m.job_requirement_unit_id),
+  }));
+  const newIds = new Set(keyed.map((m) => m.id));
+  if (newIds.size !== keyed.length) {
+    throw new Error(
+      "replaceMatchesForRole: the match set contains the same (Unit, Requirement) " +
+        "pair more than once; this signals a pipeline bug; aborting.",
+    );
+  }
+
   const db = getAdminDb();
-  // Closure variable so the merged shape escapes the
-  // transaction's scope and we can return it to the caller.
-  let merged: readonly UnitMatch[] = matches;
+  const collection = db.collection(COLLECTION);
+  const scopedQuery = collection
+    .where("owner_uid", "==", ownerUid)
+    .where("role_id", "==", roleId);
 
-  await db.runTransaction(async (tx) => {
-    // Find every existing match for (owner, role). The
-    // `(owner_uid, role_id)` composite scoping is the
-    // cross-tenant safety boundary: even if an attacker were
-    // somehow to cause this code to run with another user's
-    // role_id, the `owner_uid` filter confines the clear to
-    // matches owned by the caller. The callable also enforces
-    // a role-ownership precondition up front (mirrors #19).
-    const existingQuery = db
-      .collection(COLLECTION)
-      .where("owner_uid", "==", ownerUid)
-      .where("role_id", "==", roleId);
-    const existing = await tx.get(existingQuery);
-
-    // Build a map of prior user-action flags by (Unit,
-    // Requirement) pair so we can carry them forward across
-    // the clear-and-replace. Without this, a user who
-    // approves or rejects a specific match would see their
-    // decision wiped on every rerun — a real bug cursor
-    // CHANGES_REQUESTED round 2 on PR #133 caught after my
-    // round-1 reply incorrectly cited the rejected-Unit
-    // exclusion test (#82) as covering rejected Matches
-    // (it doesn't).
-    //
-    // Carry forward BOTH flags symmetrically: if the user
-    // approved a (Unit, Requirement) pair before, the new
-    // match for the same pair stays approved; if they
-    // rejected it, the new match stays rejected.
-    //
-    // **Canonicalize on carry-forward with rejection winning.**
-    // The unified `setMatchApprovalState` setter (cursor #133
-    // r1) makes `(true, true)` unrepresentable on the WRITE
-    // side, but a stale pre-unified-setter record OR a manual
-    // Firestore write could leave the contradictory shape in
-    // storage. cursor CHANGES_REQUESTED round 3 caught the
-    // remaining gap: without canonicalization, the persisted
-    // (true, true) survives carry-forward and downstream
-    // readers disagree — UI's `approvalStateOf` calls it
-    // "rejected" (conservative default; computeGaps filters
-    // it out) while generation gates only on
-    // `approved_for_use === true` and would CONSUME it. The
-    // canonical-on-carry-forward fix makes rejection durably
-    // win at the storage layer, so the rerun heals any drift.
-    //
-    // Edge: if a previously rejected pair has NO new match
-    // (e.g. embeddings changed and the pair didn't surface),
-    // the pair simply disappears — the rejection is moot.
-    const priorFlagsByPair = new Map<
-      string,
-      { approved_for_use: boolean; user_rejected: boolean }
-    >();
-    for (const doc of existing.docs) {
-      const m = doc.data() as UnitMatch;
-      // Only carry forward if at least one flag is non-default.
-      // Defaults `false/false` means the user never touched the
-      // match; no signal to preserve.
-      if (m.approved_for_use || m.user_rejected) {
-        const key = `${m.experience_unit_id}::${m.job_requirement_unit_id}`;
-        // Canonicalize: if user_rejected is true, force
-        // approved_for_use to false. Same conservative
-        // interpretation as the read-side `approvalStateOf`
-        // (cursor #133 r1) — once the user has rejected a
-        // pair, that decision wins until they un-reject via
-        // the unified setter.
-        //
-        // Fold duplicates by precedence (`rejected` > `approved`
-        // > `none`) rather than last-write-wins. If Firestore
-        // ever returns more than one doc for the same pair, a
-        // blind `.set()` would let iteration order decide, which
-        // could silently drop a stored rejection during a
-        // rerun-triggered carry-forward — the exact invariant
-        // this loop exists to preserve.
-        const prev = priorFlagsByPair.get(key);
-        priorFlagsByPair.set(key, {
-          approved_for_use:
-            prev?.user_rejected || m.user_rejected
-              ? false
-              : (prev?.approved_for_use ?? false) || m.approved_for_use,
-          user_rejected: (prev?.user_rejected ?? false) || m.user_rejected,
-        });
-      }
-    }
-
-    // Apply prior flags onto the incoming matches BEFORE the
-    // tx writes go out. Pure spread; doesn't mutate the
-    // input array. Capture in the outer closure so we can
-    // return the merged shape to the orchestrator (cursor
-    // #133 r2: callers expect the returned matches to
-    // reflect the persisted state, including flag
-    // carry-forward).
-    const matchesWithFlags: UnitMatch[] = matches.map((m) => {
-      const key = `${m.experience_unit_id}::${m.job_requirement_unit_id}`;
-      const prior = priorFlagsByPair.get(key);
-      return prior !== undefined ? { ...m, ...prior } : m;
-    });
-    merged = matchesWithFlags;
-
-    // Short-circuit empty no-op transaction (same shape as JD
-    // pipeline's writeRequirementsAsBatch).
-    if (existing.docs.length === 0 && matches.length === 0) return;
-
-    const totalOps = existing.docs.length + matches.length;
-    if (totalOps > FIRESTORE_TX_OP_LIMIT) {
-      throw new Error(
-        `replaceMatchesForRole: ${totalOps} ops exceeds Firestore transaction limit (${FIRESTORE_TX_OP_LIMIT}). ` +
-          `Role=${roleId} has ${existing.docs.length} existing + ${matches.length} new matches. ` +
-          `Reduce Units or Requirements; chunked transactional replace lands in #20.6.`,
+  const runRef = db
+    .collection(MATCHING_RUNS_COLLECTION)
+    .doc(matchingRunDocId(ownerUid, roleId));
+  const runId = hooks.runId ?? (await claimMatchingRun(ctx));
+  const assertCurrentRun = async (tx: Transaction): Promise<void> => {
+    const snap = await tx.get(runRef);
+    if ((snap.data() as { run_id?: string } | undefined)?.run_id !== runId) {
+      throw new MatchingRunSuperseded(
+        `replaceMatchesForRole: a newer matching run for role ${roleId} started; ` +
+          "stopping this one.",
       );
     }
+  };
 
-    for (const doc of existing.docs) {
-      tx.delete(doc.ref);
-    }
-    for (const m of matchesWithFlags) {
-      tx.set(db.collection(COLLECTION).doc(m.id), m);
-    }
-  });
+  try {
+    // -- Single atomic transaction, when it fits --------------------------
+    const atomic = await db.runTransaction(async (tx) => {
+      await assertCurrentRun(tx);
+      const existing = await tx.get(scopedQuery);
+      const orphans = existing.docs.filter((d) => !newIds.has(d.id));
+      if (keyed.length + orphans.length > MATCH_WRITES_PER_COMMIT) return null;
+      if (keyed.length === 0 && orphans.length === 0) return [];
 
-  return merged;
+      const flagsByPair = new Map<string, ApprovalFlags>();
+      for (const doc of existing.docs) {
+        const stored = doc.data() as UnitMatch;
+        if (stored.approved_for_use || stored.user_rejected) {
+          const key = pairKey(stored.experience_unit_id, stored.job_requirement_unit_id);
+          flagsByPair.set(key, foldFlags(flagsByPair.get(key), stored));
+        }
+      }
+      const out = keyed.map((m) => withPriorFlags(m, flagsByPair));
+      for (const m of out) tx.set(collection.doc(m.id), m);
+      for (const d of orphans) tx.delete(d.ref);
+      return out;
+    });
+    if (atomic !== null) return atomic;
+
+    // -- Chunked, above the single-commit size ----------------------------
+
+    // Legacy docs: stored matches for a pair whose id is NOT the pair's
+    // deterministic id. Indexed by pair so each chunk can re-read, fold
+    // and delete exactly the ones for its own pairs.
+    const initial = await scopedQuery.get();
+    const legacyRefsByPair = new Map<string, DocumentReference[]>();
+    for (const doc of initial.docs) {
+      const m = doc.data() as UnitMatch;
+      const expectedId = matchDocId(ownerUid, roleId, m.experience_unit_id, m.job_requirement_unit_id);
+      if (doc.id === expectedId) continue;
+      const key = pairKey(m.experience_unit_id, m.job_requirement_unit_id);
+      const refs = legacyRefsByPair.get(key) ?? [];
+      refs.push(doc.ref);
+      legacyRefsByPair.set(key, refs);
+    }
+
+    // Pack chunks by commit size: one write per match plus one delete
+    // per legacy doc for its pair.
+    const chunks: UnitMatch[][] = [];
+    let current: UnitMatch[] = [];
+    let currentOps = 0;
+    for (const m of keyed) {
+      const legacy = legacyRefsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id));
+      const ops = 1 + (legacy?.length ?? 0);
+      if (current.length > 0 && currentOps + ops > MATCH_WRITES_PER_COMMIT) {
+        chunks.push(current);
+        current = [];
+        currentOps = 0;
+      }
+      current.push(m);
+      currentOps += ops;
+    }
+    if (current.length > 0) chunks.push(current);
+
+    const merged: UnitMatch[] = [];
+    for (const chunk of chunks) {
+      const out = await db.runTransaction(async (tx) => {
+        await assertCurrentRun(tx);
+        const legacyRefs: DocumentReference[] = [];
+        for (const m of chunk) {
+          legacyRefs.push(
+            ...(legacyRefsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id)) ?? []),
+          );
+        }
+        const snaps = await tx.getAll(
+          ...chunk.map((m) => collection.doc(m.id)),
+          ...legacyRefs,
+        );
+
+        const flagsByPair = new Map<string, ApprovalFlags>();
+        const liveLegacy: DocumentReference[] = [];
+        for (const snap of snaps) {
+          if (!snap.exists) continue;
+          const stored = snap.data() as UnitMatch;
+          if (stored.owner_uid !== ownerUid || stored.role_id !== roleId) {
+            // Only reachable via a deterministic-id collision with a doc
+            // outside this (owner, Role), which the owner- and
+            // Role-namespaced hash rules out. Refuse rather than
+            // overwrite another tenant's row.
+            throw new Error(
+              `replaceMatchesForRole: doc ${snap.id} is not scoped to this owner and Role; aborting.`,
+            );
+          }
+          if (!newIds.has(snap.id)) liveLegacy.push(snap.ref);
+          if (stored.approved_for_use || stored.user_rejected) {
+            const key = pairKey(stored.experience_unit_id, stored.job_requirement_unit_id);
+            flagsByPair.set(key, foldFlags(flagsByPair.get(key), stored));
+          }
+        }
+
+        const chunkOut = chunk.map((m) => withPriorFlags(m, flagsByPair));
+        for (const m of chunkOut) tx.set(collection.doc(m.id), m);
+        // The legacy doc goes in the same commit whose flags it fed.
+        for (const ref of liveLegacy) tx.delete(ref);
+        return chunkOut;
+      });
+      merged.push(...out);
+    }
+
+    await hooks.afterChunkedWrites?.();
+
+    // Orphan pass. Re-query AFTER the writes so the deletion reflects
+    // the store as this run leaves it; each commit re-checks that this
+    // is still the newest run.
+    const after = await scopedQuery.get();
+    const orphans = after.docs.filter((d) => !newIds.has(d.id));
+    for (let i = 0; i < orphans.length; i += MATCH_WRITES_PER_COMMIT) {
+      const slice = orphans.slice(i, i + MATCH_WRITES_PER_COMMIT);
+      await db.runTransaction(async (tx) => {
+        await assertCurrentRun(tx);
+        for (const d of slice) tx.delete(d.ref);
+      });
+    }
+
+    return merged;
+  } catch (err) {
+    if (err instanceof MatchingRunSuperseded) {
+      // Do NOT report success. A superseded run may already have
+      // committed some chunks, and the newer run that owns the result
+      // can still fail before it publishes a complete generation, in
+      // which case nothing converges the store (#501 review). Surface
+      // the supersession so the caller reports "not complete" and the
+      // user can re-run; the newest successful run always converges.
+      console.info(err.message);
+    }
+    throw err;
+  }
+}
+
+function withPriorFlags(
+  m: UnitMatch,
+  flagsByPair: ReadonlyMap<string, ApprovalFlags>,
+): UnitMatch {
+  const prior = flagsByPair.get(pairKey(m.experience_unit_id, m.job_requirement_unit_id));
+  return prior !== undefined ? { ...m, ...prior } : m;
 }
 
 // Re-exported for tests + the callable. Default values are wired
