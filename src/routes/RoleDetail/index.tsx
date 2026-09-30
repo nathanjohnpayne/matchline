@@ -414,13 +414,14 @@ export default function RoleDetail(): ReactElement {
           // round 2 Phase 4b on PR #206.
           //
           // Fire-and-forget — the matches subscription
-          // delivers the result; on failure the user re-triggers
-          // with the Matches tab's "Re-run matching" control,
-          // which did not exist when this comment first claimed
-          // it did (added for #442 after Codex P2 on PR #449). The
-          // computingMatches UX hint stays on for the
-          // duration so the user knows new matches are
-          // computing.
+          // delivers the result. A failure is surfaced through
+          // `matchingError`, the same banner the Matches tab's
+          // "Re-run matching" control uses, so the user knows the
+          // matches on screen were NOT recomputed against the new
+          // Requirements and can retry. It used to be swallowed
+          // with a console.warn, which left stale matches looking
+          // current. The computingMatches UX hint stays on for the
+          // duration so the user knows new matches are computing.
           if (isStale()) return;
           // A parse that produced NO Requirements must not trigger
           // matching. `replaceMatchesForRole` clears the Role's
@@ -447,8 +448,12 @@ export default function RoleDetail(): ReactElement {
           const releaseMatchBusy0 = beginAppBusy("roleDetail.runMatching");
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
-
-              console.warn("invokeRunMatching after re-parse failed", err);
+              if (isStale()) return;
+              setMatchingError(
+                new Error(
+                  friendlyCallableError(err, { operation: "re-running matching" }),
+                ),
+              );
             })
             .finally(() => {
               releaseMatchBusy0();
@@ -776,11 +781,21 @@ export default function RoleDetail(): ReactElement {
     const releaseMatchBusy1 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
-        // Subscription delivers the new matches on success;
-        // failures log + un-set the loading state. Phase 2
-        // surfaces a toast; deferred per #21 spec.
-
-        console.warn("invokeRunMatching failed", err);
+        // Subscription delivers the new matches on success. A
+        // failure surfaces in the same `matchingError` banner the
+        // manual re-run uses; it used to be console-only, which
+        // left an empty Matches tab with no explanation.
+        if (
+          currentRoleIdRef.current !== issuedAgainstAuto ||
+          visitTokenRef.current !== issuedTokenAuto
+        ) {
+          return;
+        }
+        setMatchingError(
+          new Error(
+            friendlyCallableError(err, { operation: "computing matches" }),
+          ),
+        );
       })
       .finally(() => {
         releaseMatchBusy1();

@@ -109,6 +109,9 @@ Acceptance criteria:
   does not trace to an approved Unit is flagged.
 - The Application Editor blocks export while any validation flag is
   unresolved.
+- A passing validation result covers the evidence as it stood when the
+  validator ran. Export is also blocked while any Unit the output cites
+  is missing, no longer approved, or edited after that run.
 - Exports are available as PDF, DOCX, and plain text.
 
 ### End-to-end acceptance

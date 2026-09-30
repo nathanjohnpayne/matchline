@@ -27,8 +27,8 @@ export { reembedExperienceUnitCallable as reembedExperienceUnit } from "./callab
 
 /**
  * Phase 1: score every approved ExperienceUnit against every
- * JobRequirementUnit under a Role; atomically replace the
- * persisted UnitMatch set. Step 3 of the core loop.
+ * JobRequirementUnit under a Role; replace the persisted
+ * UnitMatch set. Step 3 of the core loop.
  */
 export { runMatchingCallable as runMatching } from "./callables/runMatching.js";
 

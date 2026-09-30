@@ -642,7 +642,9 @@ function ResumePane({
   // flags for summary/bullets/skills/education uniformly, so a
   // single map covers all four sections.
   const flags = flagsByBullet(asset.validation_flags);
-  const gate = exportGateState(asset);
+  // Pass the Units so a `passed` verdict is re-checked against the
+  // current state of the evidence it cites (exportGate.ts).
+  const gate = exportGateState(asset, unitsById);
   // The Remove resolution path is only valid for `bullets[]` —
   // the schema forbids removing `summary`, and removing a single
   // skill or education entry is structurally a bullet-removal too

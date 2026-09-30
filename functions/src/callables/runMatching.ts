@@ -1,8 +1,8 @@
 /**
  * HTTPS callable exposing the matching pipeline. Step 3 of the
  * core loop. One call: roleId → score every approved Unit
- * against every Requirement under the Role → atomically
- * replace the persisted match set → return.
+ * against every Requirement under the Role → replace the
+ * persisted match set → return.
  *
  * Auth-required; role_id required. Same role-ownership
  * precondition as `parseJobRequirements` — the admin SDK persist

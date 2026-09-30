@@ -6,7 +6,11 @@ import type {
   UnitMatch,
 } from "../types/capability.ts";
 
-import { runMatchingPipeline, type RunMatchingContext } from "./pipeline.ts";
+import {
+  matchDocId,
+  runMatchingPipeline,
+  type RunMatchingContext,
+} from "./pipeline.ts";
 import type { ScoreResult } from "./score.ts";
 
 /**
@@ -88,6 +92,47 @@ function makeScoreResult(final_score: number): ScoreResult {
   };
 }
 
+describe("matchDocId", () => {
+  const UUID_V5 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  it("is a version-5 RFC 4122 UUID (the data model's primary-key format)", () => {
+    expect(matchDocId("user-alice", "role-1", "u1", "r1")).toMatch(UUID_V5);
+  });
+
+  it("is deterministic for the same (owner, Role, Unit, Requirement)", () => {
+    expect(matchDocId("user-alice", "role-1", "u1", "r1")).toBe(
+      matchDocId("user-alice", "role-1", "u1", "r1"),
+    );
+  });
+
+  it("differs when any one of the four inputs differs", () => {
+    const base = matchDocId("user-alice", "role-1", "u1", "r1");
+    expect(matchDocId("user-bob", "role-1", "u1", "r1")).not.toBe(base);
+    expect(matchDocId("user-alice", "role-2", "u1", "r1")).not.toBe(base);
+    expect(matchDocId("user-alice", "role-1", "u2", "r1")).not.toBe(base);
+    expect(matchDocId("user-alice", "role-1", "u1", "r2")).not.toBe(base);
+  });
+
+  it("cannot be forged by moving a separator between fields", () => {
+    // A naive `${unit}__${req}` key collides for ("a__b", "c") and
+    // ("a", "b__c"); the JSON-array name encoding does not.
+    expect(matchDocId("o", "r", "a__b", "c")).not.toBe(
+      matchDocId("o", "r", "a", "b__c"),
+    );
+  });
+
+  it("stays unique across a realistic Role (22 Units × 15 Requirements)", () => {
+    const ids = new Set<string>();
+    for (let u = 0; u < 22; u += 1) {
+      for (let r = 0; r < 15; r += 1) {
+        ids.add(matchDocId("user-alice", "role-1", `u${u}`, `r${r}`));
+      }
+    }
+    expect(ids.size).toBe(330);
+  });
+});
+
 describe("runMatchingPipeline", () => {
   it("scores every (Unit × Requirement) pair, persists, and returns the matches", async () => {
     const unit1 = makeUnit({ id: "u1" });
@@ -97,24 +142,27 @@ describe("runMatchingPipeline", () => {
 
     const score = vi.fn(() => makeScoreResult(0.8));
     const persistBatch = vi.fn(async () => {});
-    const generateId = vi
-      .fn()
-      .mockReturnValueOnce("m1")
-      .mockReturnValueOnce("m2")
-      .mockReturnValueOnce("m3")
-      .mockReturnValueOnce("m4");
 
     const result = await runMatchingPipeline(CTX, {
       listUnits: async () => [unit1, unit2],
       listRequirements: async () => [req1, req2],
       score,
       persistBatch,
-      generateId,
       now: () => "2026-04-25T00:00:00.000Z",
     });
 
     // 2 Units × 2 Requirements = 4 matches.
     expect(result).toHaveLength(4);
+    // Each match's id is the pair's deterministic id, so a rerun
+    // overwrites the same doc instead of adding one.
+    expect(result.map((m) => m.id).sort()).toEqual(
+      [
+        matchDocId("user-alice", "role-1", "u1", "r1"),
+        matchDocId("user-alice", "role-1", "u1", "r2"),
+        matchDocId("user-alice", "role-1", "u2", "r1"),
+        matchDocId("user-alice", "role-1", "u2", "r2"),
+      ].sort(),
+    );
     expect(score).toHaveBeenCalledTimes(4);
     // Each match stamped with the right keys.
     for (const m of result) {

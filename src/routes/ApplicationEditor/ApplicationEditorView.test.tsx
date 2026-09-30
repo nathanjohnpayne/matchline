@@ -713,6 +713,29 @@ describe("ApplicationEditorView", () => {
     expect(html).not.toContain("Export is not available yet.");
   });
 
+  it("renders the export button DISABLED when a passed resume cites a Unit the user has since rejected", () => {
+    // `passed` is a verdict about the evidence at validation time;
+    // the gate re-checks it against the live Units (exportGate.ts).
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application({ approved_unit_ids: ["u-rejected"] })}
+        asset={asset({
+          validation_status: "passed",
+          validation_flags: [],
+          validated_at: "2026-04-02T00:00:00.000Z",
+          generated_content: content({
+            bullets: [{ id: "b1", text: "Led a team.", source_unit_ids: ["u-rejected"] }],
+          }),
+        })}
+        units={[unit({ id: "u-rejected", user_approved: false, rejected: true })]}
+        onExport={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("no longer approved");
+  });
+
   it("export button is disabled for pending and stale states with appropriate copy", () => {
     const pending = renderToStaticMarkup(
       <ApplicationEditorView

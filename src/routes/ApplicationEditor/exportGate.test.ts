@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { ExperienceUnit } from "../../types/capability.ts";
 import type {
   AssetRef,
   ValidationFlag,
   ValidationStatus,
 } from "../../types/crm.ts";
 
-import { exportGateState } from "./exportGate.ts";
+import { citedUnitIds, exportGateState } from "./exportGate.ts";
 
 function flag(
   partial: Partial<ValidationFlag> & { id: string },
@@ -109,5 +110,168 @@ describe("exportGateState", () => {
     const a: AssetRef = { ...asset("failed"), validation_flags: undefined };
     const state = exportGateState(a);
     expect(state.disabledReason).toContain("Resolve 0 validation flags");
+  });
+});
+
+// -- `passed` re-checked against the cited Units --------------------------
+
+describe("exportGateState: cited-evidence re-check", () => {
+  const VALIDATED_AT = "2026-04-10T00:00:00.000Z";
+
+  function unit(
+    id: string,
+    partial: Partial<ExperienceUnit> = {},
+  ): ExperienceUnit {
+    return {
+      id,
+      owner_uid: "u",
+      source_type: "resume",
+      source_ref: "ref",
+      raw_text: "Led a team.",
+      normalized_summary: "Led a team.",
+      unit_type: "achievement",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "verified",
+      confidence_score: 1,
+      user_approved: true,
+      rejected: false,
+      flagged: false,
+      created_at: "2026-04-01T00:00:00.000Z",
+      updated_at: "2026-04-01T00:00:00.000Z",
+      ...partial,
+    };
+  }
+
+  /** A passed asset whose summary cites u1 and whose bullets cite u2 + u3. */
+  function passedAsset(partial: Partial<AssetRef> = {}): AssetRef {
+    return {
+      ...asset("passed"),
+      validated_at: VALIDATED_AT,
+      generated_content: {
+        summary: { id: "s", text: "Summary.", source_unit_ids: ["u1"] },
+        bullets: [
+          { id: "b1", text: "Led a team.", source_unit_ids: ["u2"] },
+          { id: "b2", text: "Shipped it.", source_unit_ids: ["u2", "u3"] },
+        ],
+        skills: [],
+        education: [{ id: "e1", text: "BSc.", source_unit_ids: [] }],
+      },
+      ...partial,
+    };
+  }
+
+  const byId = (...units: ExperienceUnit[]) =>
+    new Map(units.map((u) => [u.id, u]));
+
+  it("collects cited ids across summary, bullets, skills and education", () => {
+    expect([...citedUnitIds(passedAsset())].sort()).toEqual(["u1", "u2", "u3"]);
+  });
+
+  it("stays enabled when every cited Unit is approved and unchanged since validation", () => {
+    const state = exportGateState(passedAsset(), byId(unit("u1"), unit("u2"), unit("u3")));
+    expect(state).toEqual({ enabled: true, disabledReason: null });
+  });
+
+  it("blocks when a cited Unit was rejected after validation", () => {
+    const state = exportGateState(
+      passedAsset(),
+      byId(
+        unit("u1"),
+        unit("u2", { user_approved: false, rejected: true }),
+        unit("u3"),
+      ),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("1 Unit that is no longer approved");
+  });
+
+  it("blocks when a cited Unit is flagged or pending (anything but approved)", () => {
+    const flagged = exportGateState(
+      passedAsset(),
+      byId(unit("u1", { user_approved: false, flagged: true }), unit("u2"), unit("u3")),
+    );
+    expect(flagged.enabled).toBe(false);
+    const pending = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2"), unit("u3", { user_approved: false })),
+    );
+    expect(pending.enabled).toBe(false);
+  });
+
+  it("blocks when a cited Unit no longer exists", () => {
+    const state = exportGateState(passedAsset(), byId(unit("u1"), unit("u2")));
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("1 Unit that no longer exists");
+  });
+
+  it("blocks when a cited Unit was edited after validated_at", () => {
+    const state = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2", { updated_at: "2026-04-11T00:00:00.000Z" }), unit("u3")),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("edited after the last validation run");
+  });
+
+  it("does not block on an edit that predates validation", () => {
+    const state = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2", { updated_at: "2026-04-09T23:59:59.000Z" }), unit("u3")),
+    );
+    expect(state.enabled).toBe(true);
+  });
+
+  it("names the most severe problem and pluralizes", () => {
+    const state = exportGateState(
+      passedAsset(),
+      byId(unit("u1", { user_approved: false }), unit("u2", { user_approved: false })),
+    );
+    // u3 missing outranks u1/u2 unapproved.
+    expect(state.disabledReason).toContain("1 Unit that no longer exists");
+    const two = exportGateState(
+      passedAsset(),
+      byId(unit("u1", { user_approved: false }), unit("u2", { user_approved: false }), unit("u3")),
+    );
+    expect(two.disabledReason).toContain("2 Units that are no longer approved");
+  });
+
+  it("ignores Units that are loaded but not cited", () => {
+    const state = exportGateState(
+      passedAsset(),
+      byId(unit("u1"), unit("u2"), unit("u3"), unit("u9", { user_approved: false, rejected: true })),
+    );
+    expect(state.enabled).toBe(true);
+  });
+
+  it("skips the edit check for a legacy asset with no validated_at, but not the approval check", () => {
+    const legacy = passedAsset({ validated_at: undefined });
+    expect(
+      exportGateState(
+        legacy,
+        byId(unit("u1"), unit("u2", { updated_at: "2030-01-01T00:00:00.000Z" }), unit("u3")),
+      ).enabled,
+    ).toBe(true);
+    expect(
+      exportGateState(legacy, byId(unit("u1"), unit("u2", { user_approved: false }), unit("u3")))
+        .enabled,
+    ).toBe(false);
+  });
+
+  it("leaves non-passed states' copy unchanged when Units are supplied", () => {
+    const state = exportGateState(
+      { ...passedAsset(), validation_status: "stale" },
+      byId(unit("u1", { user_approved: false })),
+    );
+    expect(state.disabledReason).toContain("Resume edited since the last validation run");
+  });
+
+  it("keeps the status-only behavior when no Units are supplied", () => {
+    expect(exportGateState(passedAsset()).enabled).toBe(true);
   });
 });
