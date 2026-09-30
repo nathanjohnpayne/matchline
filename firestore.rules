@@ -252,11 +252,15 @@ service cloud.firestore {
     // owner.
     match /applications/{docId} {
       allow read, delete: if isOwner();
+      // `id` is tolerated only as a copy of the document id: the
+      // service layer's converter strips it on write, but a path that
+      // skipped the converter must not be locked out for it.
       allow create: if isCreatingAsOwner()
         && request.resource.data.keys().hasOnly([
           'owner_uid', 'role_id', 'stage', 'applied_at',
-          'last_activity_at', 'generated_assets', 'approved_unit_ids'
+          'last_activity_at', 'generated_assets', 'approved_unit_ids', 'id'
         ])
+        && request.resource.data.get('id', docId) == docId
         && request.resource.data.get('generated_assets', []) == [];
       allow update: if canUpdateAsOwner()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([

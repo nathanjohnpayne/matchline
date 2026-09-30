@@ -60,6 +60,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
 
+import { makeConverter } from "../src/services/firestore.ts";
+
 const OWNER_UID = "user-alice";
 const OTHER_UID = "user-bob";
 /** Signed in, but NOT on the owner allowlist. */
@@ -566,6 +568,28 @@ describe("rules: applications field limits", () => {
   it("ALLOWS the upsertApplication create shape (merge setDoc on a new id)", async () => {
     await assertSucceeds(
       setDoc(doc(db(OWNER_UID), "applications", "app-1"), shell, { merge: true }),
+    );
+  });
+
+  it("ALLOWS create through the real service converter, which strips `id`", async () => {
+    // upsertApplication writes through `typedDoc`, whose converter
+    // (makeConverter) drops `id` from the payload. Exercise that exact
+    // converter rather than asserting its behavior by hand.
+    const ref = doc(db(OWNER_UID), "applications", "app-1").withConverter(
+      makeConverter<{ id: string } & typeof shell>(),
+    );
+    await assertSucceeds(setDoc(ref, { id: "app-1", ...shell }, { merge: true }));
+  });
+
+  it("ALLOWS an `id` field that matches the document id", async () => {
+    await assertSucceeds(
+      setDoc(doc(db(OWNER_UID), "applications", "app-1"), { id: "app-1", ...shell }),
+    );
+  });
+
+  it("REJECTS an `id` field that disagrees with the document id", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "applications", "app-1"), { id: "app-2", ...shell }),
     );
   });
 
