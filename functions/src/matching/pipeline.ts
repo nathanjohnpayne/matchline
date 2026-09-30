@@ -151,7 +151,19 @@ export async function runMatchingPipeline(
 ): Promise<readonly UnitMatch[]> {
   const listUnits = deps.listUnits ?? defaultListUnits;
   const listRequirements = deps.listRequirements ?? defaultListRequirements;
-  const persistBatch = deps.persistBatch ?? replaceMatchesForRole;
+  // With the default persist, claim the (owner, Role) run marker
+  // BEFORE reading any input, so the run that was INVOKED last is the
+  // one allowed to commit. Claiming at persist time instead let a slow
+  // run that read pre-edit Units finish after, and overwrite, a faster
+  // run that read the edit (Codex P1 on #501). An injected persist
+  // (tests, the eval harness) manages its own concurrency.
+  let persistBatch: NonNullable<MatchingDeps["persistBatch"]>;
+  if (deps.persistBatch !== undefined) {
+    persistBatch = deps.persistBatch;
+  } else {
+    const runId = await claimMatchingRun(ctx);
+    persistBatch = (c, m) => replaceMatchesForRole(c, m, { runId });
+  }
   const score = deps.score ?? scoreFn;
   const generateRationale = deps.generateRationale ?? generateRationaleFn;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -405,6 +417,11 @@ function nameUuid(parts: readonly string[]): string {
 /**
  * Server-only collection holding one "latest matching run" marker per
  * (owner, Role). See `replaceMatchesForRole` § Overlapping runs.
+ *
+ * Clients must not be able to write it: a client that rewrote or
+ * deleted its marker mid-run would make the legitimate run look
+ * superseded. The explicit per-collection `firestore.rules` from #500
+ * deny every collection they do not name, this one included.
  */
 export const MATCHING_RUNS_COLLECTION = "matchingRuns";
 
@@ -509,8 +526,10 @@ function foldFlags(
  * see a union of old and new matches for one pair, because a pair has
  * exactly one doc, and the next successful run converges the set.
  *
- * **Overlapping runs.** Each run first stamps a fresh `run_id` on the
- * (owner, Role) marker in `matchingRuns`, and every commit — the
+ * **Overlapping runs.** Each run stamps a fresh `run_id` on the
+ * (owner, Role) marker in `matchingRuns` — `runMatchingPipeline` does
+ * so before reading its inputs, so invocation order decides — and
+ * every commit — the
  * single transaction, each chunk, each orphan delete — re-reads that
  * marker and aborts with `MatchingRunSuperseded` if a newer run has
  * started since. A superseded run stops writing and returns; the
@@ -527,13 +546,39 @@ function foldFlags(
  * ids hash the owner and Role, and a chunk refuses to overwrite a doc
  * stamped with a different owner or Role.
  */
-/**
- * Test seam for `replaceMatchesForRole`: lets an emulator test start a
- * second run at the one point where overlap matters (after a chunked
- * run's writes, before its orphan pass). Production never passes it.
- */
+/** Options for `replaceMatchesForRole`. */
 export interface ReplaceMatchesHooks {
+  /**
+   * The run marker this replacement commits under, claimed by
+   * `runMatchingPipeline` before it read its inputs. Omitted by direct
+   * callers, in which case the replacement claims a fresh one itself.
+   */
+  readonly runId?: string;
+  /**
+   * Test seam: lets an emulator test start a second run at the one
+   * point where overlap matters (after a chunked run's writes, before
+   * its orphan pass). Production never passes it.
+   */
   readonly afterChunkedWrites?: () => Promise<void>;
+}
+
+/**
+ * Stamp a fresh `run_id` on the (owner, Role) marker and return it.
+ * Last writer wins, which is the point: the most recently started run
+ * is the one that may commit.
+ */
+export async function claimMatchingRun(ctx: RunMatchingContext): Promise<string> {
+  const runId = randomUUID();
+  await getAdminDb()
+    .collection(MATCHING_RUNS_COLLECTION)
+    .doc(matchingRunDocId(ctx.ownerUid, ctx.roleId))
+    .set({
+      owner_uid: ctx.ownerUid,
+      role_id: ctx.roleId,
+      run_id: runId,
+      started_at: new Date().toISOString(),
+    });
+  return runId;
 }
 
 async function replaceMatchesForRole(
@@ -576,18 +621,10 @@ async function replaceMatchesForRole(
     .where("owner_uid", "==", ownerUid)
     .where("role_id", "==", roleId);
 
-  // Claim the (owner, Role) marker. Last writer wins, which is the
-  // point: the most recently started run is the one that may commit.
   const runRef = db
     .collection(MATCHING_RUNS_COLLECTION)
     .doc(matchingRunDocId(ownerUid, roleId));
-  const runId = randomUUID();
-  await runRef.set({
-    owner_uid: ownerUid,
-    role_id: roleId,
-    run_id: runId,
-    started_at: new Date().toISOString(),
-  });
+  const runId = hooks.runId ?? (await claimMatchingRun(ctx));
   const assertCurrentRun = async (tx: Transaction): Promise<void> => {
     const snap = await tx.get(runRef);
     if ((snap.data() as { run_id?: string } | undefined)?.run_id !== runId) {

@@ -889,5 +889,55 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
     expect(stored.size).toBe(expected.size);
     expect([...stored].every((id) => expected.has(id))).toBe(true);
   });
+
+  it("invocation order wins: a slow run that read its inputs first cannot overwrite a faster run invoked after it", async () => {
+    // Run A is invoked first and reads the pre-edit inputs, but is slow
+    // to get there; run B is invoked after (e.g. after a Unit edit or a
+    // re-parse) and finishes first. A must not commit its stale set over
+    // B's. The marker is claimed before inputs are read, so A — the
+    // earlier invocation — is the superseded one.
+    await seedRoleOfSize("role-1", 3, 2);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    const reqs = (
+      await db().collection("jobRequirementUnits").where("role_id", "==", "role-1").get()
+    ).docs.map((d) => d.data() as JobRequirementUnit);
+    const allUnits = (
+      await db().collection("experienceUnits").where("owner_uid", "==", ALICE).get()
+    ).docs.map((d) => d.data() as ExperienceUnit);
+    const unitsA = allUnits; // pre-edit: u0, u1, u2
+    const unitsB = allUnits.filter((u) => u.id !== "u2"); // post-edit: u2 un-approved
+
+    let releaseA!: () => void;
+    const aMayRead = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let signalAReading!: () => void;
+    const aIsReading = new Promise<void>((resolve) => {
+      signalAReading = resolve;
+    });
+
+    const runA = runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => {
+        signalAReading(); // A has claimed its marker and started reading
+        await aMayRead;
+        return unitsA;
+      },
+      listRequirements: async () => reqs,
+    });
+    await aIsReading;
+
+    const b = await runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => unitsB,
+      listRequirements: async () => reqs,
+    });
+    releaseA();
+    await runA; // superseded: returns without committing
+
+    const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
+    expect(stored).toEqual(new Set(b.map((m) => m.id)));
+    expect(stored.size).toBe(4); // 2 Units × 2 Requirements, not A's 6
+  });
 });
 
