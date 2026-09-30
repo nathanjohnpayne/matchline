@@ -1212,7 +1212,7 @@ function ExportButton({
           className={
             revalidating
               ? "rounded-md border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-400 cursor-wait dark:border-zinc-700 dark:text-zinc-500"
-              : "rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
+              : "rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
           }
         >
           {revalidating ? "Re-running validation…" : "Re-run validation"}
