@@ -469,7 +469,7 @@ V1 is single-user, and that is an authorization rule, not only a product scope. 
 
 - **Owner allowlist, two layers.** Every callable rejects a caller whose uid is not in the `MATCHLINE_OWNER_UIDS` function param with `permission-denied`, before argument parsing and before any LLM or Firestore client is built. `firestore.rules` admits a client read or write only when `owners/{uid}` exists for the caller. Each layer fails closed on its own: an empty param or a missing `owners/` document admits nobody, including the owner.
 - **No self-service.** The sign-in surface offers no account creation, and no client can write `owners/`.
-- **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and collections written only by the pipelines (`jobRequirementUnits`, `llm_calls`, and `unitMatches` creates and deletes) are closed to client writes. Server-owned fields (`experienceUnits.embedding`, Application grounding and asset creation) are not client-writable.
+- **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and pipeline-only writes (`llm_calls`, plus creates and deletes of `jobRequirementUnits` and `unitMatches`) are closed to clients; the owner may edit only a parsed Requirement's content fields and a match's approve/reject decision. Server-owned fields (`experienceUnits.embedding`, Application grounding and asset creation) are not client-writable.
 - **Bounded input.** Pasted resume and JD text is capped at 100 KB (UTF-8) per call.
 
 Configuration and deploy order: `DEPLOYMENT.md` § Owner allowlist.

@@ -282,13 +282,27 @@ service cloud.firestore {
         && isMatchUpdateApprovalOnly('unitMatches');
     }
 
-    // -- Server-only collections ------------------------------------------
+    // -- jobRequirementUnits ----------------------------------------------
     //
-    // `jobRequirementUnits` is written only by the JD parsing
-    // pipeline; the client reads it to render a Role's requirements.
+    // Created and deleted only by the JD parsing pipeline (admin SDK).
+    // The owner may edit a parsed Requirement's content inline
+    // (`specs/matchline.md` § Step 2; `upsertRequirement` in
+    // src/services/roles.ts, a merge setDoc on an existing doc), so
+    // updates are allowed but limited to the user-editable fields.
+    // Identity and provenance (`owner_uid`, `role_id`, `id`,
+    // `extracted_from`) and the server-computed `embedding` stay
+    // server-owned: an allowlist of fields, so a new pipeline-written
+    // field is protected by default.
     match /jobRequirementUnits/{docId} {
       allow read: if isOwner();
+      allow update: if canUpdateAsOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'raw_text', 'normalized_requirement', 'category', 'keywords',
+          'tools', 'domains', 'seniority_level', 'priority', 'must_have'
+        ]);
     }
+
+    // -- Server-only collections ------------------------------------------
 
     // `llm_calls` is the per-call cost ledger written by
     // functions/src/llm/cost.ts. No client surface reads it; listed

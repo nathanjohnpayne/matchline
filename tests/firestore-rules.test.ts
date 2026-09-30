@@ -25,9 +25,10 @@
  *     Both OWNER_UID and OTHER_UID are allowlisted there, so the
  *     cross-owner cases exercise owner_uid scoping rather than
  *     passing vacuously on the allowlist.
- *   - **Server-only collections** (`jobRequirementUnits`,
- *     `unitMatches` creates/deletes, `llm_calls`) reject client
- *     writes; the admin SDK bypasses rules.
+ *   - **Server-only writes** (`jobRequirementUnits` creates/deletes,
+ *     `unitMatches` creates/deletes, all of `llm_calls`) reject client
+ *     writes; the admin SDK bypasses rules. Owners may edit a parsed
+ *     Requirement's content fields only.
  *   - **Field-level limits** on `experienceUnits` (no client
  *     `embedding`), `applications` (shell-only create, fixed field
  *     set on update, no added assets) and `unitMatches` (review
@@ -137,9 +138,9 @@ const COLLECTIONS: readonly CollectionSpec[] = [
   },
   {
     name: "jobRequirementUnits",
-    seed: { role_id: "role-1", text: "SQL" },
+    seed: { role_id: "role-1", normalized_requirement: "SQL" },
     create: null,
-    update: null,
+    update: { normalized_requirement: "Advanced SQL", must_have: true },
     clientDelete: false,
   },
 ];
@@ -537,6 +538,92 @@ describe("rules: experienceUnits field limits", () => {
       updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
         something_else: true,
       }),
+    );
+  });
+});
+
+// -- jobRequirementUnits field limits ---------------------------------------
+
+describe("rules: jobRequirementUnits field limits", () => {
+  /** A Requirement as the JD parsing pipeline persists it. */
+  function parsedRequirement(ownerUid: string): Record<string, unknown> {
+    return {
+      owner_uid: ownerUid,
+      role_id: "role-1",
+      raw_text: "5+ years of SQL",
+      normalized_requirement: "SQL experience",
+      category: "skill",
+      keywords: ["sql"],
+      tools: [],
+      domains: [],
+      priority: "medium",
+      must_have: false,
+      extracted_from: "qualifications",
+      embedding: [0.1, 0.2, 0.3],
+    };
+  }
+
+  it("ALLOWS the upsertRequirement inline-edit shape (merge setDoc of the full doc, content changed)", async () => {
+    await seedDoc("jobRequirementUnits", "r-1", parsedRequirement(OWNER_UID));
+    const { embedding: _e, ...withoutEmbedding } = parsedRequirement(OWNER_UID);
+    await assertSucceeds(
+      setDoc(
+        doc(db(OWNER_UID), "jobRequirementUnits", "r-1"),
+        {
+          ...withoutEmbedding,
+          normalized_requirement: "Advanced SQL",
+          keywords: ["sql", "postgres"],
+          priority: "high",
+          must_have: true,
+          seniority_level: "senior",
+        },
+        { merge: true },
+      ),
+    );
+  });
+
+  it("REJECTS a client update to the embedding", async () => {
+    await seedDoc("jobRequirementUnits", "r-1", parsedRequirement(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "jobRequirementUnits", "r-1"), {
+        embedding: [0.9, 0.9, 0.9],
+      }),
+    );
+  });
+
+  it("REJECTS moving a Requirement to another Role or changing its provenance", async () => {
+    await seedDoc("jobRequirementUnits", "r-1", parsedRequirement(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "jobRequirementUnits", "r-1"), { role_id: "role-2" }),
+    );
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "jobRequirementUnits", "r-1"), {
+        extracted_from: "responsibilities",
+      }),
+    );
+  });
+
+  it("REJECTS an edit by a signed-in stranger or another owner", async () => {
+    await seedDoc("jobRequirementUnits", "r-1", parsedRequirement(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(STRANGER_UID), "jobRequirementUnits", "r-1"), {
+        normalized_requirement: "x",
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(db(OTHER_UID), "jobRequirementUnits", "r-1"), {
+        normalized_requirement: "x",
+      }),
+    );
+  });
+
+  it("REJECTS creating a Requirement through upsertRequirement's merge setDoc on a new id", async () => {
+    await assertFails(
+      setDoc(
+        doc(db(OWNER_UID), "jobRequirementUnits", "r-new"),
+        parsedRequirement(OWNER_UID),
+        { merge: true },
+      ),
     );
   });
 });
