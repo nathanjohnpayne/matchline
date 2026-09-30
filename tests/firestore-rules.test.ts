@@ -471,6 +471,33 @@ describe("rules: default deny", () => {
     await assertFails(getDoc(doc(db(OWNER_UID), "arbitraryCollection", "doc-1")));
   });
 
+  it("matchingRuns (the matching pipeline's run markers, #501) is closed to clients", async () => {
+    // The marker decides which matching run may commit. A client that
+    // could rewrite or delete it would make a legitimate run look
+    // superseded. It is server-only by default deny; pin that.
+    await seedDoc("matchingRuns", "run-1", {
+      owner_uid: OWNER_UID,
+      role_id: "role-1",
+      run_id: "r1",
+    });
+    await assertFails(getDoc(doc(db(OWNER_UID), "matchingRuns", "run-1")));
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "matchingRuns", "run-1"), {
+        owner_uid: OWNER_UID,
+        role_id: "role-1",
+        run_id: "forged",
+      }),
+    );
+    await assertFails(deleteDoc(doc(db(OWNER_UID), "matchingRuns", "run-1")));
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "matchingRuns", "run-2"), {
+        owner_uid: OWNER_UID,
+        role_id: "role-2",
+        run_id: "r2",
+      }),
+    );
+  });
+
   it("llm_calls is closed to clients, even for the owner's own rows", async () => {
     await seedDoc("llm_calls", "call-1", { owner_uid: OWNER_UID, cost_usd: 0.01 });
     await assertFails(getDoc(doc(db(OWNER_UID), "llm_calls", "call-1")));
