@@ -1,17 +1,22 @@
 rules_version = '2';
 
 // Matchline V1 is single-user. Every document must carry `owner_uid`
-// matching the authenticated user. The rules here enforce that invariant
-// at the data layer; service-layer code MUST scope list queries via
-// `ownerScope()` in src/services/auth.ts so the query constraint
-// matches what these rules allow. Firestore evaluates list-query rules
-// against the query constraint, not the returned documents — an
-// unscoped list query will be rejected wholesale.
+// matching the authenticated user, AND that user must be on the owner
+// allowlist (`owners/{uid}`, see below). Service-layer code MUST scope
+// list queries via `ownerScope()` in src/services/auth.ts so the query
+// constraint matches what these rules allow. Firestore evaluates
+// list-query rules against the query constraint, not the returned
+// documents — an unscoped list query will be rejected wholesale.
 //
-// This file intentionally locks everything down until owner_uid is wired
-// through the data model. Sprint 0 scaffolding does not perform live
-// reads; Sprint 1 must add owner_uid to every schema and update these
-// rules together (see plan § Phase 1 c1).
+// Every collection is matched explicitly. There is no catch-all
+// `/{collection}/{docId}` match: a path not named below is denied, so
+// a signed-in user cannot create documents in arbitrary collections
+// (#439 hardening). Adding a collection means adding a block here and
+// a row to `tests/firestore-rules.test.ts`.
+//
+// Admin-SDK writes (Cloud Functions) bypass these rules entirely. The
+// "server-only" collections below are written exclusively by the
+// functions; the rules exist to keep clients out of them.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -24,15 +29,43 @@ service cloud.firestore {
       // contention — see #92). Strictly more restrictive than
       // the prior version: null resource → false instead of
       // an evaluation error.
-      return request.auth != null
+      return isAllowlistedOwner()
         && resource != null
         && resource.data != null
         && resource.data.owner_uid == request.auth.uid;
     }
     function isCreatingAsOwner() {
-      return request.auth != null
+      return isAllowlistedOwner()
         && request.resource.data.owner_uid == request.auth.uid;
     }
+
+    // The owner allowlist (#439). V1 is single-user, but Firebase Auth
+    // admits any account that can sign in — Google SSO alone accepts
+    // every Google account — so "signed in" cannot be the authorization
+    // rule. A caller is an owner only if `owners/{their uid}` exists.
+    //
+    // That collection is managed out of band (Firebase console or the
+    // admin SDK); no client can write it — see `match /owners/{uid}`.
+    // The callables enforce the same boundary independently via the
+    // `MATCHLINE_OWNER_UIDS` function param
+    // (functions/src/callables/ownerGate.ts); rules cannot read
+    // function params, so the two are configured separately and each
+    // fails closed on its own. DEPLOYMENT.md § Owner allowlist.
+    //
+    // `exists()` is one billed document read per request evaluation,
+    // shared across every call in that evaluation.
+    function isAllowlistedOwner() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/owners/$(request.auth.uid));
+    }
+
+    // Standard owner-scoped CRUD for collections the client owns
+    // outright. `update` requires both the stored and the written
+    // owner_uid to be the caller's, so ownership cannot be handed off.
+    function canUpdateAsOwner() {
+      return isOwner() && isCreatingAsOwner();
+    }
+
     // Reject any unitMatches write that produces the
     // contradictory `(approved_for_use: true, user_rejected:
     // true)` flag pair. The unified service-layer setter
@@ -64,51 +97,36 @@ service cloud.firestore {
     // CHANGES_REQUESTED round 4 on PR #133.
     //
     // The guard runs against `request.resource.data` (the
-    // FINAL doc state after a partial update), so both
-    // `create` and `update` paths catch the violation
-    // regardless of whether the write was full or partial.
+    // FINAL doc state after a partial update), so it catches
+    // the violation whether the write was full or partial.
+    // (Only `update` reaches it now: client creates of
+    // unitMatches are closed — see `match /unitMatches`.)
     function isValidUnitMatchWrite(collection) {
       // `.get(field, default)` rather than `.field` direct
       // access — rules-engine direct access throws on missing
       // keys, which would reject every write that doesn't
-      // include both flag names (e.g. the existing generic
-      // `owner can create` test which writes only owner_uid +
-      // data). Defaulting to `false` for absent fields means
-      // the contradictory pair is the ONLY shape rejected.
+      // include both flag names. Defaulting to `false` for
+      // absent fields means the contradictory pair is the ONLY
+      // shape rejected.
       return collection != 'unitMatches'
         || !(request.resource.data.get('approved_for_use', false) == true
              && request.resource.data.get('user_rejected', false) == true);
     }
 
     // `schema_version` is the matching pipeline's attestation that
-    // it produced this row — notably that `rationale` was generated
-    // under the axis-gated rule, which is what lets `MatchCard`
-    // present the prose to the user as a claim (#444).
-    //
+    // it produced a match row — notably that `rationale` was
+    // generated under the axis-gated rule, which is what lets
+    // `MatchCard` present the prose to the user as a claim (#444).
     // A provenance marker a client can write is not a provenance
-    // marker. The admin SDK bypasses these rules, so the pipeline
-    // still stamps it freely; this closes the client path, where
-    // `upsertMatch` spreads caller fields straight into `setDoc`
-    // and an owner could otherwise pair `schema_version: 1` with
-    // arbitrary prose and have it rendered as a grounded claim.
-    // CodeRabbit on PR #450.
+    // marker, which is why clients cannot CREATE matches at all
+    // (only the matching pipeline does, via the admin SDK) and may
+    // UPDATE only their review decision (below).
     //
-    // **Create and update need different predicates**, and
-    // conflating them shipped a P1: `request.resource.data` on an
-    // update is the COMPLETE post-write document, so it carries a
-    // `schema_version` the client never touched. A blanket
-    // "must be absent" rule therefore rejected every
-    // `setMatchApprovalState` call against a pipeline-written row
-    // — which is every real match — breaking approve and reject
-    // outright. Codex P1 on PR #450, after merge.
-    //
-    // So: absent on create, unchanged on update. The client may
-    // carry the server's value forward; it may not introduce or
-    // alter one.
-    function isProvenanceAbsentOnCreate(collection) {
-      return collection != 'unitMatches'
-        || !request.resource.data.keys().hasAny(['schema_version']);
-    }
+    // History: an earlier version allowed client creates without
+    // `schema_version`, and conflating create and update predicates
+    // shipped a P1 that rejected every approve/reject on a
+    // pipeline-written row (Codex P1 on PR #450). With creates closed,
+    // only the update predicate remains.
 
     // On update, a client may change ONLY its own review
     // decision. Everything else on a match is the matching
@@ -139,16 +157,140 @@ service cloud.firestore {
              .hasOnly(['approved_for_use', 'user_rejected']);
     }
 
-    match /{collection}/{docId} {
-      allow read: if isOwner();
+    // -- The allowlist itself ------------------------------------------
+    //
+    // Readable only by the uid it names (so a client can ask "am I an
+    // owner?"), never listable, never client-writable — a signed-in
+    // stranger must not be able to add themselves.
+    match /owners/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // -- Client-owned collections: owner-scoped CRUD ---------------------
+
+    match /people/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if canUpdateAsOwner();
+    }
+
+    match /companies/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if canUpdateAsOwner();
+    }
+
+    match /interactions/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if canUpdateAsOwner();
+    }
+
+    match /roles/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if canUpdateAsOwner();
+    }
+
+    match /unitClusters/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner();
+      allow update: if canUpdateAsOwner();
+    }
+
+    // -- experienceUnits --------------------------------------------------
+    //
+    // Clients create Units (`manualInsert`) and edit them
+    // (`updateFields`, `setApproval`); extraction and re-embedding
+    // write them server-side. `embedding` is server-owned: it is what
+    // matching scores against, and it is only ever computed from the
+    // Unit's own text by the extraction / re-embed pipelines. A client
+    // may neither supply one on create nor touch it on update.
+    //
+    // Update is an allowlist of fields rather than a denylist so a new
+    // server-written field is protected by default. The list is
+    // `EditableFields` in src/services/experienceUnits.ts plus the
+    // state-machine fields `setApproval` / `updateFields` write.
+    match /experienceUnits/{docId} {
+      allow read, delete: if isOwner();
       allow create: if isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection)
-        && isProvenanceAbsentOnCreate(collection);
-      allow update: if isOwner()
-        && isCreatingAsOwner()
-        && isValidUnitMatchWrite(collection)
-        && isMatchUpdateApprovalOnly(collection);
-      allow delete: if isOwner();
+        && !request.resource.data.keys().hasAny(['embedding']);
+      allow update: if canUpdateAsOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'raw_text', 'normalized_summary', 'source_type', 'source_ref',
+          'unit_type', 'skills', 'tools', 'domains', 'seniority_signals',
+          'scope_signals', 'business_outcomes', 'metrics', 'evidence_type',
+          'confidence_score', 'date_range',
+          'user_approved', 'rejected', 'flagged', 'reembed_pending',
+          'updated_at'
+        ]);
+    }
+
+    // -- applications ------------------------------------------------------
+    //
+    // The client creates an Application shell (`upsertApplication`)
+    // and then edits the generated asset's content (edit / add /
+    // remove / reorder / undo). Generation appends assets and
+    // validation writes their status server-side.
+    //
+    // Create: only the shell's fields, and no assets — every asset is
+    // born in the generation pipeline.
+    //
+    // Update: only `generated_assets` plus the pipeline-stage fields.
+    // `approved_unit_ids` (the grounding snapshot generation reads) and
+    // everything else is fixed after create. `generated_assets` may
+    // not grow: a client edits assets the pipeline produced, it never
+    // adds one.
+    //
+    // Known limit: rules cannot iterate a list, so the per-asset
+    // `validation_status` / `validation_flags` inside
+    // `generated_assets[]` are not rule-enforced here. The client
+    // legitimately writes them — edits flip an asset to `stale`, and
+    // undo (`restoreAssetState`) restores a prior snapshot's status —
+    // so the export gate's trust in `passed` is a client-side
+    // invariant, not a security boundary, for the (single, allowlisted)
+    // owner.
+    match /applications/{docId} {
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner()
+        && request.resource.data.keys().hasOnly([
+          'owner_uid', 'role_id', 'stage', 'applied_at',
+          'last_activity_at', 'generated_assets', 'approved_unit_ids'
+        ])
+        && request.resource.data.get('generated_assets', []) == [];
+      allow update: if canUpdateAsOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'generated_assets', 'stage', 'applied_at', 'last_activity_at'
+        ])
+        && request.resource.data.get('generated_assets', []).size()
+             <= resource.data.get('generated_assets', []).size();
+    }
+
+    // -- unitMatches -------------------------------------------------------
+    //
+    // Created, replaced and deleted only by the matching pipeline
+    // (admin SDK). The client may read its matches and record its
+    // review decision on one — nothing else.
+    match /unitMatches/{docId} {
+      allow read: if isOwner();
+      allow update: if canUpdateAsOwner()
+        && isValidUnitMatchWrite('unitMatches')
+        && isMatchUpdateApprovalOnly('unitMatches');
+    }
+
+    // -- Server-only collections ------------------------------------------
+    //
+    // `jobRequirementUnits` is written only by the JD parsing
+    // pipeline; the client reads it to render a Role's requirements.
+    match /jobRequirementUnits/{docId} {
+      allow read: if isOwner();
+    }
+
+    // `llm_calls` is the per-call cost ledger written by
+    // functions/src/llm/cost.ts. No client surface reads it; listed
+    // explicitly so the denial is visible rather than implicit.
+    match /llm_calls/{docId} {
+      allow read, write: if false;
     }
   }
 }

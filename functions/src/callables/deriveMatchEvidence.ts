@@ -37,6 +37,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import { readAndDeriveEvidence } from "../matching/evidence-read.js";
 import { readRoleOwnerUid } from "../matching/pipeline.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { requireOwner } from "./ownerGate.js";
 
 interface DeriveMatchEvidenceData {
   readonly roleId?: string;
@@ -51,12 +52,9 @@ export const deriveMatchEvidenceCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.deriveMatchEvidence,
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "deriveMatchEvidence requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // Firestore read (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "deriveMatchEvidence");
 
     const data = request.data as DeriveMatchEvidenceData;
     const rawRoleId = data?.roleId;
@@ -68,7 +66,6 @@ export const deriveMatchEvidenceCallable = onCall(
     }
 
     const roleId = rawRoleId.trim();
-    const ownerUid = request.auth.uid;
 
     const roleOwnerUid = await readRoleOwnerUid(roleId);
     if (roleOwnerUid === null || roleOwnerUid !== ownerUid) {

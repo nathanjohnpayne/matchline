@@ -1,5 +1,7 @@
 /**
- * Firestore rules test suite (closes #60, final #16 sub-issue).
+ * Firestore rules test suite (closes #60, final #16 sub-issue;
+ * reworked for the owner allowlist and explicit per-collection
+ * matches in #439).
  *
  * Runs via `npm run test:rules`, which wraps the suite in
  * `firebase emulators:exec --only firestore` so the emulator boots
@@ -7,18 +9,29 @@
  * (`npm test`) — without the emulator it would fail hard and block
  * the tight feedback loop.
  *
- * The rules under test (`firestore.rules`) use a generic
- * `/{collection}/{docId}` match that enforces `owner_uid ==
- * request.auth.uid` on every read/create/update/delete. This suite
- * exercises that invariant across all 9 top-level collections
- * (the ones typed in src/types/) with a positive + negative pair:
+ * What the rules enforce, and where it is pinned:
  *
- *   - owner can read/write their own doc
- *   - cross-owner read rejected
- *   - cross-owner write rejected
- *   - create without owner_uid rejected
- *   - create with owner_uid that doesn't match auth rejected
- *   - unauth read/write rejected
+ *   - **Owner allowlist.** Every read and write requires
+ *     `owners/{auth.uid}` to exist. A signed-in stranger — any
+ *     account Firebase Auth admits — gets nothing, including the
+ *     ability to add themselves to the allowlist. ("rules: owner
+ *     allowlist")
+ *   - **Explicit collections, default deny.** There is no catch-all
+ *     match; a collection not named in `firestore.rules` rejects
+ *     every client operation. ("rules: default deny")
+ *   - **owner_uid scoping** on every collection, via the per-
+ *     collection matrix below: owner read/write, cross-owner
+ *     rejection, owner_uid takeover rejection, unauth rejection.
+ *     Both OWNER_UID and OTHER_UID are allowlisted there, so the
+ *     cross-owner cases exercise owner_uid scoping rather than
+ *     passing vacuously on the allowlist.
+ *   - **Server-only collections** (`jobRequirementUnits`,
+ *     `unitMatches` creates/deletes, `llm_calls`) reject client
+ *     writes; the admin SDK bypasses rules.
+ *   - **Field-level limits** on `experienceUnits` (no client
+ *     `embedding`), `applications` (shell-only create, fixed field
+ *     set on update, no added assets) and `unitMatches` (review
+ *     decision only).
  *
  * If a rule change weakens any of the above, the corresponding test
  * should fail — prove this locally by flipping `==` to `!=` in
@@ -31,31 +44,103 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { deleteDoc, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import {
+  collection as collectionRef,
+  deleteDoc,
+  deleteField,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
 
-/**
- * The 9 top-level Firestore collections per specs/matchline.md §
- * Data model (cross-referenced against src/types/). Kept here (not
- * imported) so the test is self-describing and survives refactors
- * of the service-layer collection constants.
- */
-const COLLECTIONS = [
-  "people",
-  "companies",
-  "roles",
-  "applications",
-  "interactions",
-  "experienceUnits",
-  "jobRequirementUnits",
-  "unitMatches",
-  "unitClusters",
-] as const;
-
 const OWNER_UID = "user-alice";
 const OTHER_UID = "user-bob";
+/** Signed in, but NOT on the owner allowlist. */
+const STRANGER_UID = "user-mallory";
+
+/**
+ * Per-collection client capabilities, mirroring `firestore.rules`.
+ * Kept here (not imported) so the test is self-describing and
+ * survives refactors of the service-layer collection constants.
+ *
+ * `create` / `update` carry a payload that is valid for that
+ * collection's field-level rules, so the matrix tests owner_uid
+ * scoping rather than tripping a field limit. `null` means the
+ * client may not perform that operation at all.
+ */
+interface CollectionSpec {
+  readonly name: string;
+  /** Extra fields a seeded doc needs for `update` to be meaningful. */
+  readonly seed: Record<string, unknown>;
+  readonly create: Record<string, unknown> | null;
+  readonly update: Record<string, unknown> | null;
+  readonly clientDelete: boolean;
+}
+
+const OWNER_CRUD = (name: string): CollectionSpec => ({
+  name,
+  seed: { data: 1 },
+  create: { data: 1 },
+  update: { data: 2 },
+  clientDelete: true,
+});
+
+const COLLECTIONS: readonly CollectionSpec[] = [
+  OWNER_CRUD("people"),
+  OWNER_CRUD("companies"),
+  OWNER_CRUD("roles"),
+  OWNER_CRUD("interactions"),
+  OWNER_CRUD("unitClusters"),
+  {
+    name: "experienceUnits",
+    seed: { normalized_summary: "Led a team.", user_approved: false },
+    create: {
+      normalized_summary: "Led a team.",
+      user_approved: false,
+      reembed_pending: true,
+    },
+    update: {
+      normalized_summary: "Led a team of five.",
+      reembed_pending: true,
+      updated_at: "2026-01-02T00:00:00.000Z",
+    },
+    clientDelete: true,
+  },
+  {
+    name: "applications",
+    seed: { role_id: "role-1", stage: "drafting", generated_assets: [] },
+    create: {
+      role_id: "role-1",
+      stage: "drafting",
+      last_activity_at: "2026-01-01T00:00:00.000Z",
+      generated_assets: [],
+      approved_unit_ids: [],
+    },
+    update: { stage: "applied", applied_at: "2026-01-02T00:00:00.000Z" },
+    clientDelete: true,
+  },
+  {
+    name: "unitMatches",
+    seed: { approved_for_use: false, user_rejected: false },
+    create: null,
+    update: { approved_for_use: true, user_rejected: false },
+    clientDelete: false,
+  },
+  {
+    name: "jobRequirementUnits",
+    seed: { role_id: "role-1", text: "SQL" },
+    create: null,
+    update: null,
+    clientDelete: false,
+  },
+];
 
 let testEnv: RulesTestEnvironment;
 
@@ -74,8 +159,11 @@ afterAll(async () => {
 
 beforeEach(async () => {
   // Fresh slate per test — `clearFirestore` uses admin privileges
-  // (bypasses rules) to wipe every doc.
+  // (bypasses rules) to wipe every doc, including the allowlist, so
+  // it is re-seeded here. STRANGER_UID is deliberately absent.
   await testEnv.clearFirestore();
+  await seedDoc("owners", OWNER_UID, {});
+  await seedDoc("owners", OTHER_UID, {});
 });
 
 /**
@@ -93,142 +181,458 @@ async function seedDoc(
   });
 }
 
-for (const collection of COLLECTIONS) {
+function db(uid: string | null) {
+  return uid === null
+    ? testEnv.unauthenticatedContext().firestore()
+    : testEnv.authenticatedContext(uid).firestore();
+}
+
+for (const spec of COLLECTIONS) {
+  const collection = spec.name;
+  const seeded = (ownerUid: string) => ({ owner_uid: ownerUid, ...spec.seed });
+
   describe(`rules: ${collection}`, () => {
     it("owner can read their own doc", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      await assertSucceeds(getDoc(doc(ctx.firestore(), collection, "doc-1")));
+      await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+      await assertSucceeds(getDoc(doc(db(OWNER_UID), collection, "doc-1")));
     });
 
-    it("owner can create a doc stamped with their uid", async () => {
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
+    it("owner can run an owner-scoped list query", async () => {
+      await seedDoc(collection, "doc-1", seeded(OWNER_UID));
       await assertSucceeds(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OWNER_UID,
-          data: 1,
-        }),
+        getDocs(
+          query(
+            collectionRef(db(OWNER_UID), collection),
+            where("owner_uid", "==", OWNER_UID),
+          ),
+        ),
       );
+    });
+
+    it("an unscoped list query is rejected", async () => {
+      await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+      await assertFails(getDocs(collectionRef(db(OWNER_UID), collection)));
     });
 
     it("cross-owner read is rejected", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.authenticatedContext(OTHER_UID);
-      await assertFails(getDoc(doc(ctx.firestore(), collection, "doc-1")));
-    });
-
-    it("cross-owner write (create someone else's doc) is rejected", async () => {
-      const ctx = testEnv.authenticatedContext(OTHER_UID);
-      await assertFails(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OWNER_UID, // Bob claims Alice's doc — must fail
-          data: 1,
-        }),
-      );
-    });
-
-    it("create without owner_uid is rejected", async () => {
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      await assertFails(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), { data: 1 }),
-      );
+      await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+      await assertFails(getDoc(doc(db(OTHER_UID), collection, "doc-1")));
     });
 
     it("unauthenticated read is rejected", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.unauthenticatedContext();
-      await assertFails(getDoc(doc(ctx.firestore(), collection, "doc-1")));
+      await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+      await assertFails(getDoc(doc(db(null), collection, "doc-1")));
     });
 
-    it("unauthenticated write is rejected", async () => {
-      const ctx = testEnv.unauthenticatedContext();
-      await assertFails(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OWNER_UID,
-          data: 1,
-        }),
-      );
+    it("a signed-in stranger cannot read a doc stamped with their own uid", async () => {
+      await seedDoc(collection, "doc-1", seeded(STRANGER_UID));
+      await assertFails(getDoc(doc(db(STRANGER_UID), collection, "doc-1")));
     });
 
-    it("update rejected if owner_uid changes under us", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      // Attempting to rewrite owner_uid to someone else must fail —
-      // this is the "take over by overwriting" attack shape.
-      await assertFails(
-        setDoc(doc(ctx.firestore(), collection, "doc-1"), {
-          owner_uid: OTHER_UID,
-          data: 2,
-        }),
-      );
-    });
+    if (spec.create !== null) {
+      const create = spec.create;
 
-    it("owner can update their own doc", async () => {
-      // `unitMatches` is deliberately narrower than the generic
-      // owner rule: a client may change only its own review
-      // decision, because every other field is the matching
-      // pipeline's output and `schema_version` attests that the
-      // pipeline produced it (#444 / Codex P1 on PR #451). So the
-      // per-collection update here uses the fields that
-      // collection actually permits; the restriction itself is
-      // pinned by the unitMatches describe block below.
-      const update =
-        collection === "unitMatches"
-          ? { approved_for_use: true, user_rejected: false }
-          : { owner_uid: OWNER_UID, data: 2 };
-      await seedDoc(collection, "doc-1", {
-        owner_uid: OWNER_UID,
-        data: 1,
-        ...(collection === "unitMatches"
-          ? { approved_for_use: false, user_rejected: false }
-          : {}),
+      it("owner can create a doc stamped with their uid", async () => {
+        await assertSucceeds(
+          setDoc(doc(db(OWNER_UID), collection, "doc-1"), {
+            owner_uid: OWNER_UID,
+            ...create,
+          }),
+        );
       });
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      await assertSucceeds(
-        collection === "unitMatches"
-          ? updateDoc(doc(ctx.firestore(), collection, "doc-1"), update)
-          : setDoc(doc(ctx.firestore(), collection, "doc-1"), update),
-      );
-    });
 
-    it("owner can delete their own doc", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      // Exercises `allow delete: if isOwner();` directly — the
-      // setDoc-as-delete shortcut in an earlier draft only
-      // exercised the update rule branch (#60 CodeRabbit review).
-      await assertSucceeds(
-        deleteDoc(doc(ctx.firestore(), collection, "doc-1")),
-      );
-    });
+      it("cross-owner write (create someone else's doc) is rejected", async () => {
+        await assertFails(
+          setDoc(doc(db(OTHER_UID), collection, "doc-1"), {
+            owner_uid: OWNER_UID, // Bob claims Alice's doc — must fail
+            ...create,
+          }),
+        );
+      });
 
-    it("cross-owner delete is rejected", async () => {
-      await seedDoc(collection, "doc-1", { owner_uid: OWNER_UID, data: 1 });
-      const ctx = testEnv.authenticatedContext(OTHER_UID);
-      await assertFails(
-        deleteDoc(doc(ctx.firestore(), collection, "doc-1")),
-      );
-    });
+      it("create without owner_uid is rejected", async () => {
+        await assertFails(setDoc(doc(db(OWNER_UID), collection, "doc-1"), create));
+      });
 
-    it("delete of nonexistent doc is rejected (regression: #92 null-guard)", async () => {
-      // The null-guard in `isOwner()` makes `resource == null`
-      // evaluate to false rather than throwing a Null value
-      // error mid-evaluation. The observable result is the
-      // same — the delete is rejected — but the failure path
-      // is now explicit denial rather than a runtime evaluation
-      // error masked as PERMISSION_DENIED. Without the guard,
-      // some emulator runs surfaced this as a failed
-      // assertSucceeds on existing-doc deletes (cross-project
-      // contention scenario). Pin the explicit-denial behavior
-      // for the missing-doc case so a future rule weakening
-      // can't quietly allow it.
-      const ctx = testEnv.authenticatedContext(OWNER_UID);
-      await assertFails(
-        deleteDoc(doc(ctx.firestore(), collection, "does-not-exist")),
-      );
-    });
+      it("unauthenticated write is rejected", async () => {
+        await assertFails(
+          setDoc(doc(db(null), collection, "doc-1"), {
+            owner_uid: OWNER_UID,
+            ...create,
+          }),
+        );
+      });
+
+      it("a signed-in stranger cannot create even a self-stamped doc", async () => {
+        await assertFails(
+          setDoc(doc(db(STRANGER_UID), collection, "doc-1"), {
+            owner_uid: STRANGER_UID,
+            ...create,
+          }),
+        );
+      });
+    } else {
+      it("client create is rejected even for the owner (server-only)", async () => {
+        await assertFails(
+          setDoc(doc(db(OWNER_UID), collection, "doc-1"), {
+            owner_uid: OWNER_UID,
+            ...spec.seed,
+          }),
+        );
+      });
+    }
+
+    if (spec.update !== null) {
+      const update = spec.update;
+
+      it("owner can update their own doc", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        await assertSucceeds(
+          updateDoc(doc(db(OWNER_UID), collection, "doc-1"), update),
+        );
+      });
+
+      it("update rejected if owner_uid changes under us", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        // Attempting to rewrite owner_uid to someone else must fail —
+        // this is the "take over by overwriting" attack shape.
+        await assertFails(
+          updateDoc(doc(db(OWNER_UID), collection, "doc-1"), {
+            ...update,
+            owner_uid: OTHER_UID,
+          }),
+        );
+      });
+
+      it("cross-owner update is rejected", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        await assertFails(
+          updateDoc(doc(db(OTHER_UID), collection, "doc-1"), update),
+        );
+      });
+    } else {
+      it("client update is rejected even for the owner (server-only)", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        await assertFails(
+          updateDoc(doc(db(OWNER_UID), collection, "doc-1"), { edited: true }),
+        );
+      });
+    }
+
+    if (spec.clientDelete) {
+      it("owner can delete their own doc", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        // Exercises the delete rule directly — the setDoc-as-delete
+        // shortcut in an earlier draft only exercised the update
+        // branch (#60 CodeRabbit review).
+        await assertSucceeds(deleteDoc(doc(db(OWNER_UID), collection, "doc-1")));
+      });
+
+      it("cross-owner delete is rejected", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        await assertFails(deleteDoc(doc(db(OTHER_UID), collection, "doc-1")));
+      });
+
+      it("delete of nonexistent doc is rejected (regression: #92 null-guard)", async () => {
+        // The null-guard in `isOwner()` makes `resource == null`
+        // evaluate to false rather than throwing a Null value
+        // error mid-evaluation. Pin the explicit-denial behavior
+        // for the missing-doc case so a future rule weakening
+        // can't quietly allow it.
+        await assertFails(
+          deleteDoc(doc(db(OWNER_UID), collection, "does-not-exist")),
+        );
+      });
+    } else {
+      it("client delete is rejected even for the owner (server-only)", async () => {
+        await seedDoc(collection, "doc-1", seeded(OWNER_UID));
+        await assertFails(deleteDoc(doc(db(OWNER_UID), collection, "doc-1")));
+      });
+    }
   });
 }
+
+// -- Owner allowlist (#439) -----------------------------------------------
+
+describe("rules: owner allowlist", () => {
+  it("an allowlisted owner can read their own owners/ entry", async () => {
+    await assertSucceeds(getDoc(doc(db(OWNER_UID), "owners", OWNER_UID)));
+  });
+
+  it("nobody can read someone else's owners/ entry", async () => {
+    await assertFails(getDoc(doc(db(OTHER_UID), "owners", OWNER_UID)));
+    await assertFails(getDoc(doc(db(STRANGER_UID), "owners", OWNER_UID)));
+  });
+
+  it("the allowlist cannot be listed", async () => {
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), "owners")));
+  });
+
+  it("a signed-in stranger cannot add themselves to the allowlist", async () => {
+    // The sharpest form of the attack: if this passed, every other
+    // allowlist check would be decorative.
+    await assertFails(setDoc(doc(db(STRANGER_UID), "owners", STRANGER_UID), {}));
+  });
+
+  it("an allowlisted owner cannot add anyone else, or edit or remove entries", async () => {
+    await assertFails(setDoc(doc(db(OWNER_UID), "owners", STRANGER_UID), {}));
+    await assertFails(setDoc(doc(db(OWNER_UID), "owners", OWNER_UID), { note: "x" }));
+    await assertFails(deleteDoc(doc(db(OWNER_UID), "owners", OWNER_UID)));
+  });
+
+  it("removing an owner's entry revokes their access to their own data", async () => {
+    await seedDoc("roles", "role-1", { owner_uid: OWNER_UID, data: 1 });
+    await assertSucceeds(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "owners", OWNER_UID));
+    });
+    await assertFails(getDoc(doc(db(OWNER_UID), "roles", "role-1")));
+  });
+});
+
+// -- Default deny (#439) --------------------------------------------------
+
+describe("rules: default deny", () => {
+  it("an allowlisted owner cannot create a doc in an unlisted collection", async () => {
+    // The former catch-all `match /{collection}/{docId}` admitted any
+    // collection name as long as owner_uid matched.
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "arbitraryCollection", "doc-1"), {
+        owner_uid: OWNER_UID,
+        data: 1,
+      }),
+    );
+  });
+
+  it("an allowlisted owner cannot read a doc in an unlisted collection", async () => {
+    await seedDoc("arbitraryCollection", "doc-1", { owner_uid: OWNER_UID });
+    await assertFails(getDoc(doc(db(OWNER_UID), "arbitraryCollection", "doc-1")));
+  });
+
+  it("llm_calls is closed to clients, even for the owner's own rows", async () => {
+    await seedDoc("llm_calls", "call-1", { owner_uid: OWNER_UID, cost_usd: 0.01 });
+    await assertFails(getDoc(doc(db(OWNER_UID), "llm_calls", "call-1")));
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "llm_calls", "call-2"), {
+        owner_uid: OWNER_UID,
+        cost_usd: 0,
+      }),
+    );
+  });
+});
+
+// -- experienceUnits field limits -----------------------------------------
+
+describe("rules: experienceUnits field limits", () => {
+  /** The shape `buildManualUnit` produces (src/services/experienceUnits-state.ts). */
+  function manualUnit(ownerUid: string): Record<string, unknown> {
+    return {
+      owner_uid: ownerUid,
+      source_type: "manual",
+      source_ref: "manual entry",
+      raw_text: "Led a team.",
+      normalized_summary: "Led a team.",
+      unit_type: "achievement",
+      skills: [],
+      tools: [],
+      domains: [],
+      seniority_signals: [],
+      scope_signals: [],
+      business_outcomes: [],
+      metrics: [],
+      evidence_type: "user_confirmed",
+      confidence_score: 1,
+      user_approved: true,
+      reembed_pending: true,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  /** A pipeline-written Unit, as extraction persists it. */
+  function extractedUnit(ownerUid: string): Record<string, unknown> {
+    return {
+      ...manualUnit(ownerUid),
+      source_type: "resume",
+      evidence_type: "verified",
+      user_approved: false,
+      rejected: false,
+      flagged: false,
+      reembed_pending: false,
+      embedding: [0.1, 0.2, 0.3],
+      date_range: { start: "2020-01" },
+    };
+  }
+
+  it("ALLOWS the manualInsert create shape", async () => {
+    await assertSucceeds(
+      setDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), manualUnit(OWNER_UID)),
+    );
+  });
+
+  it("REJECTS a client create that supplies an embedding", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        ...manualUnit(OWNER_UID),
+        embedding: [0.1, 0.2, 0.3],
+      }),
+    );
+  });
+
+  it("ALLOWS the updateFields shape, including a date_range deleteField", async () => {
+    await seedDoc("experienceUnits", "u-1", extractedUnit(OWNER_UID));
+    await assertSucceeds(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        raw_text: "Led a team of five.",
+        normalized_summary: "Led a team of five.",
+        skills: ["leadership"],
+        metrics: [{ value: 5, unit: "people" }],
+        date_range: deleteField(),
+        reembed_pending: true,
+        updated_at: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+  });
+
+  it("ALLOWS the setApproval shape", async () => {
+    await seedDoc("experienceUnits", "u-1", extractedUnit(OWNER_UID));
+    await assertSucceeds(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        user_approved: true,
+        rejected: false,
+        flagged: false,
+        updated_at: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+  });
+
+  it("REJECTS a client update that replaces the embedding", async () => {
+    await seedDoc("experienceUnits", "u-1", extractedUnit(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        embedding: [0.9, 0.9, 0.9],
+      }),
+    );
+  });
+
+  it("REJECTS a client update that removes the embedding", async () => {
+    await seedDoc("experienceUnits", "u-1", extractedUnit(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        embedding: deleteField(),
+      }),
+    );
+  });
+
+  it("REJECTS a client update to created_at or an unknown field", async () => {
+    await seedDoc("experienceUnits", "u-1", extractedUnit(OWNER_UID));
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        created_at: "1999-01-01T00:00:00.000Z",
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "experienceUnits", "u-1"), {
+        something_else: true,
+      }),
+    );
+  });
+});
+
+// -- applications field limits ----------------------------------------------
+
+describe("rules: applications field limits", () => {
+  const asset = (status: string) => ({
+    id: "asset-1",
+    kind: "resume",
+    validation_status: status,
+    generated_content: {
+      summary: { id: "s", text: "Summary.", source_unit_ids: ["u-1"] },
+      bullets: [{ id: "b1", text: "Led a team.", source_unit_ids: ["u-1"] }],
+      skills: [],
+    },
+  });
+
+  /** The Application shell `upsertApplication` writes from RoleDetail. */
+  const shell = {
+    owner_uid: OWNER_UID,
+    role_id: "role-1",
+    stage: "drafting",
+    last_activity_at: "2026-01-01T00:00:00.000Z",
+    generated_assets: [],
+    approved_unit_ids: ["u-1"],
+  };
+
+  it("ALLOWS the upsertApplication create shape (merge setDoc on a new id)", async () => {
+    await assertSucceeds(
+      setDoc(doc(db(OWNER_UID), "applications", "app-1"), shell, { merge: true }),
+    );
+  });
+
+  it("REJECTS a create that carries a pre-built asset", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        ...shell,
+        generated_assets: [asset("passed")],
+      }),
+    );
+  });
+
+  it("REJECTS a create with a field outside the shell", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        ...shell,
+        validated: true,
+      }),
+    );
+  });
+
+  it("ALLOWS the editor's generated_assets rewrite (edit / remove / reorder / undo)", async () => {
+    await seedDoc("applications", "app-1", {
+      ...shell,
+      generated_assets: [asset("passed")],
+    });
+    const edited = asset("stale");
+    edited.generated_content.bullets = [
+      { id: "b1", text: "Led a team of five.", source_unit_ids: [] },
+    ];
+    await assertSucceeds(
+      updateDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        generated_assets: [edited],
+      }),
+    );
+  });
+
+  it("REJECTS adding an asset from the client", async () => {
+    await seedDoc("applications", "app-1", {
+      ...shell,
+      generated_assets: [asset("stale")],
+    });
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        generated_assets: [asset("stale"), { ...asset("passed"), id: "asset-2" }],
+      }),
+    );
+  });
+
+  it("REJECTS rewriting approved_unit_ids after create", async () => {
+    await seedDoc("applications", "app-1", shell);
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        approved_unit_ids: ["u-1", "u-forged"],
+      }),
+    );
+  });
+
+  it("REJECTS an update to a field outside the editable set", async () => {
+    await seedDoc("applications", "app-1", shell);
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "applications", "app-1"), {
+        role_id: "role-2",
+      }),
+    );
+  });
+});
 
 // -- unitMatches contradictory-shape guard (cursor #133 r4) --------------
 
@@ -499,7 +903,12 @@ describe("rules: unitMatches contradictory-flag guard", () => {
     );
   });
 
-  it("ALLOWS create with each valid flag pair (false/false, true/false, false/true)", async () => {
+  it("REJECTS client create with every flag pair — matches are pipeline-created (#439)", async () => {
+    // Previously the three valid pairs were client-creatable. No
+    // production client path creates a match (`upsertMatch` has no
+    // caller; the matching pipeline writes via the admin SDK), so
+    // creation is now server-only. The contradictory-pair and
+    // schema_version guards remain meaningful on UPDATE, below.
     const ctx = testEnv.authenticatedContext(OWNER_UID);
     const validPairs: ReadonlyArray<{
       id: string;
@@ -511,7 +920,7 @@ describe("rules: unitMatches contradictory-flag guard", () => {
       { id: "m-rejected", approved_for_use: false, user_rejected: true },
     ];
     for (const p of validPairs) {
-      await assertSucceeds(
+      await assertFails(
         setDoc(doc(ctx.firestore(), "unitMatches", p.id), {
           owner_uid: OWNER_UID,
           approved_for_use: p.approved_for_use,
