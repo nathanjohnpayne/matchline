@@ -95,7 +95,7 @@ function RerunMatchingControl({
     <div className="space-y-1">
       {matchingIncomplete === true && !computingMatches && (
         <p
-          className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+          className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-800 dark:text-zinc-200"
           data-testid="matching-incomplete"
           role="status"
         >
