@@ -151,8 +151,11 @@ export async function runMatchingPipeline(
   deps: MatchingDeps = {},
 ): Promise<readonly UnitMatch[]> {
   // With the default persist, claim the (owner, Role) run marker
-  // BEFORE reading any input, so the run that was INVOKED last is the
-  // one allowed to commit. Claiming at persist time instead let a slow
+  // BEFORE reading any input. The claim is last-writer-wins, so the
+  // run whose claim commits last may commit; that is the run invoked
+  // last unless two invocations race to claim, and either way it is
+  // never one that read its inputs before the winner claimed. Claiming
+  // at persist time instead let a slow
   // run that read pre-edit Units finish after, and overwrite, a faster
   // run that read the edit (Codex P1 on #501). An injected persist
   // (tests, the eval harness) manages its own concurrency.
@@ -549,8 +552,9 @@ function foldFlags(
  *
  * **Overlapping runs.** Each run stamps a fresh `run_id` on the
  * (owner, Role) marker in `matchingRuns` — `runMatchingPipeline` does
- * so before reading its inputs, so invocation order decides — and
- * every commit — the
+ * so before reading its inputs, and the claim that commits last wins
+ * (the latest invocation, unless two race to claim) — and every
+ * commit — the
  * single transaction, each chunk, each orphan delete — re-reads that
  * marker and aborts with `MatchingRunSuperseded` if a newer run has
  * started since. A superseded run stops writing and returns; the
