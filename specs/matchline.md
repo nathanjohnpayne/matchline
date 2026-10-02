@@ -305,10 +305,10 @@ A run replaces the Role's whole match set. When the writes and orphan deletes fi
 
 Each (owner, Role) has one run marker in `matchingRuns`, written only by the matching pipeline and readable by its owner. Its contract (`functions/src/matching/runMarker.ts`) is:
 
-- `run_id` names the run that may commit. Each run claims a fresh one before reading its inputs, and every commit re-checks it, so the most recently invoked run wins and a superseded run stops writing and reports that it did not complete.
-- `state` is `running`, `complete` or `failed`. A run that throws marks itself `failed` if it is still the current run. A run that is killed (a crash or the callable's timeout) cannot, and stays `running`.
+- `run_id` names the run that may commit. Each run claims a fresh one before reading its inputs (last writer wins), and every commit re-checks it, so the run whose claim landed last is the one that may commit. That is the most recently invoked run unless two invocations race to claim. A superseded run stops writing and reports that it did not complete.
+- `state` is `running`, `complete` or `failed`. A run that throws tries to mark itself `failed` if it is still the current run; this is best effort, and if that write fails the marker stays `running`. A run that is killed (a crash or the callable's timeout) cannot mark anything and also stays `running`. Either way the deadline below eventually reads it as dead.
 - `partial` means the persisted set may mix runs. Every chunked commit sets it in the same transaction as its writes. Each new claim carries it forward until a run completes, so a later run that fails before writing cannot hide an earlier run's mixed set. Only the commit that completes a run clears it.
-- A Role is **incomplete** when `partial` is set and no run is plausibly still finishing: `state` is `failed`, or `state` is `running` and more than the `runMatching` callable's timeout plus a clock-skew margin has passed since `started_at`. A marker with no `state` (written before this contract) reads as complete.
+- A Role is **incomplete** when `partial` is set and no run is plausibly still finishing: `state` is `failed`, or `state` is `running` and more than the `runMatching` callable's timeout plus a clock-skew margin has passed since `started_at`, or `state` is `running` and `started_at` is absent or unparseable (nothing proves the run alive). A marker with no `state` (written before this contract) reads as complete.
 
 While a Role is incomplete and no run is in progress in the tab, the Matches tab shows a status notice next to **Re-run matching**. The notice is advisory: if the marker cannot be read, the tab shows no notice and keeps working.
 
