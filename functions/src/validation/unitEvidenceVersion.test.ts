@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { sha256Hex } from "./sha256.ts";
 import { unitEvidenceVersion, type UnitEvidenceFields } from "./unitEvidenceVersion.ts";
+import { formatUnit } from "./unitPromptText.ts";
 
 const base: UnitEvidenceFields = {
   id: "u1",
@@ -17,11 +19,13 @@ describe("unitEvidenceVersion", () => {
     expect(unitEvidenceVersion(base)).toMatch(/^ev2:[0-9a-f]{64}$/);
   });
 
-  it("distinguishes an absent metric value from NaN and ±Infinity", () => {
-    const withValue = (value: number | undefined) =>
+  it("distinguishes an absent metric value from an explicit null, NaN and ±Infinity", () => {
+    const withValue = (value: number | null | undefined) =>
       unitEvidenceVersion({ ...base, metrics: [{ claim: "Grew revenue", value, unit: "%", direction: "up" }] });
-    const versions = [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map(withValue);
-    expect(new Set(versions).size).toBe(4);
+    const versions = [undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map(
+      withValue,
+    );
+    expect(new Set(versions).size).toBe(5);
   });
 
   it("changes when any field the validator reads changes", () => {
@@ -65,5 +69,11 @@ describe("unitEvidenceVersion", () => {
     expect(unitEvidenceVersion(bare)).toBe(
       unitEvidenceVersion({ ...bare, metrics: [], seniority_signals: [], scope_signals: [] }),
     );
+  });
+});
+
+describe("unitEvidenceVersion is the hash of the traceability prompt text", () => {
+  it("equals SHA-256 of exactly what formatUnit renders, so it moves iff the validator's input moves", () => {
+    expect(unitEvidenceVersion(base)).toBe(`ev2:${sha256Hex(formatUnit(base))}`);
   });
 });
