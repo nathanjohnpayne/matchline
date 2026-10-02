@@ -81,6 +81,13 @@ export async function invokeValidateAsset(
  * The caller re-subscribes when the asset's content (and so its
  * `assetContentVersion`) changes. Read-only: `firestore.rules`
  * allows no client write.
+ *
+ * **Only server-confirmed state is delivered.** Firestore's latency
+ * compensation hands a client's own pending write to its listeners
+ * before the backend rules reject it, so a client that `setDoc`s a
+ * forged `passed` record here would see it, and the export gate would
+ * trust it, until the rejection rolls the write back. Snapshots with
+ * `hasPendingWrites` are therefore dropped (Codex P1 on #506).
  */
 export function subscribeValidationAttestation(
   applicationId: string,
@@ -98,7 +105,10 @@ export function subscribeValidationAttestation(
   );
   return onSnapshot(
     ref,
-    (snap) => callback(snap.exists() ? (snap.data() as ValidationAttestation) : null),
+    (snap) => {
+      if (snap.metadata.hasPendingWrites) return;
+      callback(snap.exists() ? (snap.data() as ValidationAttestation) : null);
+    },
     onError,
   );
 }

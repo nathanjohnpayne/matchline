@@ -286,9 +286,14 @@ function ApplicationEditorInner({
       unsub();
     };
     // `asset` is re-derived on every application refetch; the
-    // subscription depends only on its id and content version.
+    // subscription depends only on its id and content version, plus
+    // the verdict's `validated_at`. A listener that errors (a rules
+    // rollout, a transient auth failure) is ended by Firestore and
+    // never retried, so re-subscribing whenever a new verdict lands
+    // lets the attestation a successful re-run just wrote reach the
+    // gate without a reload (Codex P2 on #506).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applicationId, asset?.id, contentVersion]);
+  }, [applicationId, asset?.id, contentVersion, asset?.validated_at]);
   // A record loaded for other content (or another asset) must never
   // answer for this one, even for the render before the effect above
   // re-subscribes.
