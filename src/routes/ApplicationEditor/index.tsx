@@ -28,6 +28,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -49,7 +50,16 @@ import {
   subscribeByOwner as subscribeUnitsByOwner,
 } from "../../services/experienceUnits.ts";
 import type { ManualUnitInput } from "../../services/experienceUnits-state.ts";
-import { invokeValidateAsset } from "../../services/validation.ts";
+import {
+  invokeValidateAsset,
+  subscribeValidationAttestation,
+} from "../../services/validation.ts";
+import {
+  assetContentVersion,
+  type ValidationAttestation,
+} from "../../../functions/src/validation/attestation.ts";
+import { attestationSubscription } from "./attestationSubscription.ts";
+import type { AttestationLookup } from "./exportGate.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
 
@@ -231,6 +241,64 @@ function ApplicationEditorInner({
     application !== null
       ? selectPrimaryResumeAsset(application.generated_assets ?? [])
       : null;
+
+  // The server's attestation for the asset's CURRENT content (#502).
+  // The export gate trusts `passed` only from it, because the asset's
+  // own status sits in a client-writable list. Keyed by content, so an
+  // edit moves to a version with no record (unvalidated) and an undo
+  // back to validated content finds that content's record again.
+  const contentVersion = useMemo(
+    () =>
+      asset?.generated_content === undefined
+        ? null
+        : assetContentVersion(asset.generated_content),
+    [asset?.generated_content],
+  );
+  const subscription = attestationSubscription(
+    applicationId,
+    asset?.id,
+    contentVersion,
+    asset?.validated_at,
+  );
+  const [attestation, setAttestation] = useState<{
+    readonly key: string;
+    readonly value: ValidationAttestation | null;
+  } | null>(null);
+  useEffect(() => {
+    if (subscription === null) return;
+    const { recordKey: key } = subscription;
+    let active = true;
+    const unsub = subscribeValidationAttestation(
+      subscription.applicationId,
+      subscription.assetId,
+      subscription.contentVersion,
+      (value) => {
+        if (active) setAttestation({ key, value });
+      },
+      (err) => {
+        if (!active) return;
+        // Unconfirmed, not unknown: the gate then blocks Export and
+        // offers a re-run rather than spinning on "Checking…".
+        console.warn("subscribeValidationAttestation failed", err);
+        setAttestation({ key, value: null });
+      },
+    );
+    return () => {
+      active = false;
+      unsub();
+    };
+    // `restartKey` is the whole identity of this listener, including
+    // when to re-open it after Firestore ends it on an error
+    // (`attestationSubscription.ts`, pinned by its tests).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscription?.restartKey]);
+  // A record loaded for other content (or another asset) must never
+  // answer for this one, even for the render before the effect above
+  // re-subscribes.
+  const attestationLookup: AttestationLookup =
+    subscription !== null && attestation?.key === subscription.recordKey
+      ? attestation.value
+      : undefined;
 
   // Manual-add modal state for the "Add a supporting Unit" resolution
   // path (#24, PR 2). Opens the existing UnitReview ManualAddForm in
@@ -743,6 +811,7 @@ function ApplicationEditorInner({
         onRevalidate={() => void onRevalidate()}
         revalidating={revalidating}
         revalidateError={revalidateError}
+        attestation={attestationLookup}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}

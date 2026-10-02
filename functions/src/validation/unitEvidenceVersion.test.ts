@@ -1,34 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  fnv1a64,
-  unitEvidenceVersion,
-  type UnitEvidenceFields,
-} from "./unitEvidenceVersion.ts";
-
-/** Straightforward BigInt FNV-1a 64, the reference the limb version must match. */
-function referenceFnv1a64(text: string): string {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of new TextEncoder().encode(text)) {
-    hash ^= BigInt(byte);
-    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-describe("fnv1a64", () => {
-  it("matches the published FNV-1a 64 test vectors", () => {
-    expect(fnv1a64("")).toBe("cbf29ce484222325");
-    expect(fnv1a64("a")).toBe("af63dc4c8601ec8c");
-    expect(fnv1a64("foobar")).toBe("85944171f73967e8");
-  });
-
-  it("matches a BigInt reference on long, non-ASCII input", () => {
-    for (const text of ["Led a team — 40% ↑", "x".repeat(5000), JSON.stringify(["ab", "c"])]) {
-      expect(fnv1a64(text)).toBe(referenceFnv1a64(text));
-    }
-  });
-});
+import { sha256Hex } from "./sha256.ts";
+import { unitEvidenceVersion, type UnitEvidenceFields } from "./unitEvidenceVersion.ts";
+import { formatUnit } from "./unitPromptText.ts";
 
 const base: UnitEvidenceFields = {
   id: "u1",
@@ -42,7 +16,16 @@ const base: UnitEvidenceFields = {
 describe("unitEvidenceVersion", () => {
   it("is deterministic and prefixed with its encoding version", () => {
     expect(unitEvidenceVersion(base)).toBe(unitEvidenceVersion({ ...base }));
-    expect(unitEvidenceVersion(base)).toMatch(/^ev1:[0-9a-f]{16}$/);
+    expect(unitEvidenceVersion(base)).toMatch(/^ev2:[0-9a-f]{64}$/);
+  });
+
+  it("distinguishes an absent metric value from an explicit null, NaN and ±Infinity", () => {
+    const withValue = (value: number | null | undefined) =>
+      unitEvidenceVersion({ ...base, metrics: [{ claim: "Grew revenue", value, unit: "%", direction: "up" }] });
+    const versions = [undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map(
+      withValue,
+    );
+    expect(new Set(versions).size).toBe(5);
   });
 
   it("changes when any field the validator reads changes", () => {
@@ -86,5 +69,11 @@ describe("unitEvidenceVersion", () => {
     expect(unitEvidenceVersion(bare)).toBe(
       unitEvidenceVersion({ ...bare, metrics: [], seniority_signals: [], scope_signals: [] }),
     );
+  });
+});
+
+describe("unitEvidenceVersion is the hash of the traceability prompt text", () => {
+  it("equals SHA-256 of exactly what formatUnit renders, so it moves iff the validator's input moves", () => {
+    expect(unitEvidenceVersion(base)).toBe(`ev2:${sha256Hex(formatUnit(base))}`);
   });
 });

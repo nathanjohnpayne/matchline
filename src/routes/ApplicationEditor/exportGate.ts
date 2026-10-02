@@ -1,6 +1,10 @@
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
 import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import {
+  assetContentVersion,
+  type ValidationAttestation,
+} from "../../../functions/src/validation/attestation.ts";
 
 /**
  * Decide whether the Export button is enabled, and the tooltip text
@@ -26,6 +30,14 @@ import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvide
  * `null` asset means there's no generated resume yet — gate is
  * disabled with the empty-asset message.
  *
+ * **`passed` must be server-attested (#502).** The asset's status
+ * lives in a client-writable list, so on its own it cannot prove a
+ * validator passed this content. The gate also requires the server's
+ * attestation for the asset's current content (`AttestationLookup`,
+ * `functions/src/validation/attestation.ts`). Without one, a `passed`
+ * asset reads as unconfirmed and offers a re-run; assets validated
+ * before attestations existed need that one re-run.
+ *
  * **`passed` is re-checked against the Units it cites.** A `passed`
  * verdict is a statement about the evidence as it stood when the
  * validator ran. Nothing invalidates it when that evidence changes
@@ -40,13 +52,12 @@ import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvide
  *   - is not currently approved (`user_approved !== true`), or
  *   - has changed since the validator loaded it: its
  *     `unitEvidenceVersion` (a fingerprint of the fields the validator
- *     reads) differs from the one recorded in the asset's
+ *     reads) differs from the one recorded in the attestation's
  *     `validated_unit_versions`. Comparing content, not times, catches
  *     an edit made WHILE validation was running (the verdict's
  *     `validated_at` is stamped after the evidence was read), a write
  *     that kept `updated_at`, and is immune to client/server clock
- *     skew. Assets validated before that field existed fall back to
- *     `updated_at > validated_at`.
+ *     skew.
  *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
@@ -99,12 +110,6 @@ export function citedUnitIds(asset: AssetRef): ReadonlySet<string> {
   return ids;
 }
 
-function parseTime(iso: string | undefined): number | undefined {
-  if (iso === undefined) return undefined;
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? undefined : t;
-}
-
 /**
  * Why a `passed` asset's grounding is no longer current, or `null` if
  * it still is. Precedence: missing > not approved > edited, so the
@@ -112,10 +117,9 @@ function parseTime(iso: string | undefined): number | undefined {
  */
 function citedEvidenceProblem(
   asset: AssetRef,
+  versions: Readonly<Record<string, string>>,
   unitsById: ReadonlyMap<string, ExperienceUnit>,
 ): { readonly reason: string; readonly canRevalidate: boolean } | null {
-  const versions = asset.validated_unit_versions;
-  const validatedAt = parseTime(asset.validated_at);
   let missing = 0;
   let unapproved = 0;
   let edited = 0;
@@ -125,18 +129,10 @@ function citedEvidenceProblem(
       missing += 1;
     } else if (unit.user_approved !== true) {
       unapproved += 1;
-    } else if (versions !== undefined) {
+    } else if (versions[id] !== unitEvidenceVersion(unit)) {
       // A cited Unit the validator did not load (absent key) was not
       // evidence for this verdict either.
-      if (versions[id] !== unitEvidenceVersion(unit)) edited += 1;
-    } else {
-      // Legacy asset: best effort on timestamps. Without
-      // `validated_at` there is nothing to compare; the existence and
-      // approval checks above still apply.
-      const updatedAt = parseTime(unit.updated_at);
-      if (validatedAt !== undefined && updatedAt !== undefined && updatedAt > validatedAt) {
-        edited += 1;
-      }
+      edited += 1;
     }
   }
   const units = (n: number): string => (n === 1 ? "1 Unit" : `${n} Units`);
@@ -168,9 +164,35 @@ function citedEvidenceProblem(
   return null;
 }
 
+/**
+ * The server attestation for the asset's current content, as the
+ * editor has loaded it (#502): `undefined` while it is still being
+ * read, `null` when the server holds no verdict for this content.
+ */
+export type AttestationLookup = ValidationAttestation | null | undefined;
+
+/**
+ * The asset's `passed` is trusted only when the server attested the
+ * asset's CURRENT content as passed. The asset-level status sits in a
+ * client-writable list, so it can say `passed` for content no
+ * validator ever saw; the attestation cannot (#502).
+ */
+function attestedPassed(
+  asset: AssetRef,
+  attestation: ValidationAttestation,
+): boolean {
+  return (
+    attestation.asset_id === asset.id &&
+    attestation.status === "passed" &&
+    asset.generated_content !== undefined &&
+    attestation.content_version === assetContentVersion(asset.generated_content)
+  );
+}
+
 export function exportGateState(
   asset: AssetRef | null,
   unitsById?: ReadonlyMap<string, ExperienceUnit>,
+  attestation?: AttestationLookup,
 ): ExportGateState {
   if (asset === null) {
     return {
@@ -180,8 +202,24 @@ export function exportGateState(
   }
   switch (asset.validation_status) {
     case "passed": {
+      if (attestation === undefined) {
+        return {
+          enabled: false,
+          disabledReason: "Checking this resume's validation result…",
+        };
+      }
+      if (attestation === null || !attestedPassed(asset, attestation)) {
+        return {
+          enabled: false,
+          disabledReason:
+            "This resume's validation result couldn't be confirmed. Re-run validation before exporting.",
+          canRevalidate: true,
+        };
+      }
       const problem =
-        unitsById === undefined ? null : citedEvidenceProblem(asset, unitsById);
+        unitsById === undefined
+          ? null
+          : citedEvidenceProblem(asset, attestation.validated_unit_versions, unitsById);
       return problem === null
         ? { enabled: true, disabledReason: null }
         : {

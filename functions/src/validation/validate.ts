@@ -58,6 +58,13 @@ import {
   type TraceabilityResult,
 } from "./traceability.js";
 import { unitEvidenceVersion } from "./unitEvidenceVersion.js";
+import {
+  VALIDATIONS_SUBCOLLECTION,
+  assetContentVersion,
+  isAttestableContent,
+  validationAttestationId,
+  type ValidationAttestation,
+} from "./attestation.js";
 
 export interface ValidateAssetContext {
   readonly ownerUid: string;
@@ -134,6 +141,15 @@ export async function validateAsset(
   const now = deps.now ?? (() => new Date().toISOString());
 
   const { content } = await loadAsset(ctx);
+  // The validator skips an item whose text is not a string, but the
+  // editor still renders it, so a pass over malformed content would
+  // attest text no check ever read (#506 review). Refuse it outright:
+  // no verdict, no attestation.
+  if (!isAttestableContent(content)) {
+    throw new ValidateAssetMalformedContent(
+      `Asset ${ctx.assetId} has malformed generated_content; refusing to validate it.`,
+    );
+  }
 
   // Validate every fact-bearing piece of the asset. All four
   // section types share the same `GeneratedItem` shape (id +
@@ -505,6 +521,29 @@ async function defaultPersistFlags(
         : a,
     );
     tx.update(ref, { generated_assets: updatedAssets });
+
+    // The attestation the export gate trusts (#502): server-only, and
+    // keyed by the content it is about, in the same commit as the
+    // stale-content check above, so it can never describe content
+    // other than what this run validated.
+    if (result.status === "passed" || result.status === "failed") {
+      const contentVersion = assetContentVersion(target.generated_content);
+      const attestation: ValidationAttestation = {
+        owner_uid: ctx.ownerUid,
+        application_id: ctx.applicationId,
+        asset_id: ctx.assetId,
+        content_version: contentVersion,
+        status: result.status,
+        validated_at: result.validated_at,
+        validated_unit_versions: result.validated_unit_versions,
+      };
+      tx.set(
+        ref
+          .collection(VALIDATIONS_SUBCOLLECTION)
+          .doc(validationAttestationId(ctx.assetId, contentVersion)),
+        attestation,
+      );
+    }
   });
 }
 
@@ -521,6 +560,19 @@ export class ValidateAssetMissingContent extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ValidateAssetMissingContent";
+  }
+}
+
+/**
+ * Thrown when `generated_content` is not the shape the validator can
+ * check in full (`isAttestableContent`). Distinct from missing content
+ * so the callable can tell the user regenerating, not generating, is
+ * the fix.
+ */
+export class ValidateAssetMalformedContent extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ValidateAssetMalformedContent";
   }
 }
 

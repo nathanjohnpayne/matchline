@@ -36,7 +36,7 @@ import type { AddableSection } from "../../services/applications.ts";
 
 import BulletEditor from "./BulletEditor.tsx";
 import ClaimAnnotation from "./ClaimAnnotation.tsx";
-import { exportGateState } from "./exportGate.ts";
+import { exportGateState, type AttestationLookup } from "./exportGate.ts";
 import { flagsByBullet } from "./flagsByBullet.ts";
 
 /**
@@ -109,6 +109,12 @@ export interface ApplicationEditorViewProps {
   readonly revalidating?: boolean;
   readonly revalidateError?: string | null;
   /**
+   * The server attestation for the asset's current content, as loaded
+   * (#502). `undefined` while loading, `null` when none exists. The
+   * export gate trusts `passed` only from it (`exportGate.ts`).
+   */
+  readonly attestation?: AttestationLookup;
+  /**
    * Save handler for an inline bullet edit (#24, sub-issue #188).
    * Receives the GeneratedItem id (same shape as `onRemoveBullet`)
    * + the new text. Container runs `editBulletInAsset` +
@@ -169,6 +175,7 @@ export default function ApplicationEditorView({
   onRevalidate,
   revalidating,
   revalidateError,
+  attestation,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -299,6 +306,7 @@ export default function ApplicationEditorView({
         onRevalidate={onRevalidate}
         revalidating={revalidating}
         revalidateError={revalidateError}
+        attestation={attestation}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}
@@ -366,6 +374,12 @@ interface TwoPaneLayoutProps {
   readonly onRevalidate?: () => void;
   readonly revalidating?: boolean;
   readonly revalidateError?: string | null;
+  /**
+   * The server attestation for the asset's current content, as loaded
+   * (#502). `undefined` while loading, `null` when none exists. The
+   * export gate trusts `passed` only from it (`exportGate.ts`).
+   */
+  readonly attestation?: AttestationLookup;
   readonly onSaveBulletEdit?: (
     bulletId: string,
     newText: string,
@@ -422,6 +436,7 @@ function TwoPaneLayout({
   onRevalidate,
   revalidating,
   revalidateError,
+  attestation,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -479,6 +494,7 @@ function TwoPaneLayout({
         onRevalidate={onRevalidate}
         revalidating={revalidating}
         revalidateError={revalidateError}
+        attestation={attestation}
         onSaveBulletEdit={onSaveBulletEdit}
         onAddBullet={onAddBullet}
         onReorderBullet={onReorderBullet}
@@ -522,6 +538,12 @@ interface ResumePaneProps {
   readonly revalidating?: boolean;
   readonly revalidateError?: string | null;
   /**
+   * The server attestation for the asset's current content, as loaded
+   * (#502). `undefined` while loading, `null` when none exists. The
+   * export gate trusts `passed` only from it (`exportGate.ts`).
+   */
+  readonly attestation?: AttestationLookup;
+  /**
    * Sub-issue #188 inline edit handler. Threaded to BulletItem;
    * when wired, the ClaimAnnotation popover's Edit button becomes
    * available, and clicking it switches the row to BulletEditor.
@@ -564,6 +586,7 @@ function ResumePane({
   onRevalidate,
   revalidating,
   revalidateError,
+  attestation,
   onSaveBulletEdit,
   onAddBullet,
   onReorderBullet,
@@ -674,8 +697,10 @@ function ResumePane({
   // single map covers all four sections.
   const flags = flagsByBullet(asset.validation_flags);
   // Pass the Units so a `passed` verdict is re-checked against the
-  // current state of the evidence it cites (exportGate.ts).
-  const gate = exportGateState(asset, unitsById);
+  // current state of the evidence it cites, and the server attestation
+  // so `passed` is trusted only for content the server validated
+  // (exportGate.ts, #502).
+  const gate = exportGateState(asset, unitsById, attestation);
   // The Remove resolution path is only valid for `bullets[]` —
   // the schema forbids removing `summary`, and removing a single
   // skill or education entry is structurally a bullet-removal too

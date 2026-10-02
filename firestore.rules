@@ -248,14 +248,14 @@ service cloud.firestore {
     // not grow: a client edits assets the pipeline produced, it never
     // adds one.
     //
-    // Known limit: rules cannot iterate a list, so the per-asset
+    // Rules cannot iterate a list, so the per-asset
     // `validation_status` / `validation_flags` inside
     // `generated_assets[]` are not rule-enforced here. The client
     // legitimately writes them — edits flip an asset to `stale`, and
     // undo (`restoreAssetState`) restores a prior snapshot's status —
-    // so the export gate's trust in `passed` is a client-side
-    // invariant, not a security boundary, for the (single, allowlisted)
-    // owner.
+    // so they are display state only. The verdict the export gate
+    // trusts is the server-only attestation in the `validations`
+    // subcollection below (#502).
     match /applications/{docId} {
       allow read, delete: if isOwner();
       // `id` is tolerated only as a copy of the document id: the
@@ -274,6 +274,30 @@ service cloud.firestore {
         ])
         && request.resource.data.get('generated_assets', []).size()
              <= resource.data.get('generated_assets', []).size();
+
+      // Validation attestations (#502), written only by `validateAsset`
+      // (admin SDK; functions/src/validation/attestation.ts). Each is
+      // keyed by an asset and a fingerprint of the content it
+      // validated. The owner reads them so the export gate can trust
+      // `passed` only from a server record for the asset's current
+      // content. No client write: a client that could create one
+      // could attest its own content.
+      //
+      // A single-document read is authorized by owning the PARENT
+      // Application, not the attestation itself: the editor listens on
+      // the attestation for the asset's current content before any run
+      // has written it (unvalidated or edited content), and `isOwner()`
+      // denies a missing document. That denial would end the listener,
+      // so the record a re-run then creates would never arrive (Codex
+      // P2 on #506). A present record must also be the caller's.
+      // Queries keep the plain owner check.
+      match /validations/{attestationId} {
+        allow get: if isAllowlistedOwner()
+          && exists(/databases/$(database)/documents/applications/$(docId))
+          && get(/databases/$(database)/documents/applications/$(docId)).data.owner_uid == request.auth.uid
+          && (resource == null || resource.data.owner_uid == request.auth.uid);
+        allow list: if isOwner();
+      }
     }
 
     // -- unitMatches -------------------------------------------------------

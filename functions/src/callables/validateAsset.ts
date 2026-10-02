@@ -24,6 +24,7 @@ import {
 } from "../validation/errors.js";
 import {
   validateAsset as runValidateAsset,
+  ValidateAssetMalformedContent,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
   ValidateAssetStale,
@@ -76,6 +77,12 @@ export const validateAssetCallable = onCall(
         throw new HttpsError(
           "permission-denied",
           "Application or asset not found, or not owned by caller.",
+        );
+      }
+      if (err instanceof ValidateAssetMalformedContent) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This resume's content is malformed and can't be validated; regenerate it.",
         );
       }
       if (err instanceof ValidateAssetMissingContent) {
