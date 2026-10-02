@@ -312,6 +312,19 @@ service cloud.firestore {
         && isMatchUpdateApprovalOnly('unitMatches');
     }
 
+    // -- matchingRuns -----------------------------------------------------
+    //
+    // One run marker per (owner, Role), written only by the matching
+    // pipeline (admin SDK; functions/src/matching/runMarker.ts). The
+    // owner may read theirs so the editor can tell them a run died
+    // part-way and left the Role's matches mixed (#504). No client
+    // write: the marker decides which matching run may commit, and a
+    // client that rewrote or deleted it would make a legitimate run
+    // look superseded.
+    match /matchingRuns/{docId} {
+      allow read: if isOwner();
+    }
+
     // -- jobRequirementUnits ----------------------------------------------
     //
     // Created and deleted only by the JD parsing pipeline (admin SDK).
