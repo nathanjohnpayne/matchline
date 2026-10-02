@@ -46,6 +46,7 @@ import type {
 } from "../types/capability.js";
 
 import { generateRationale as generateRationaleFn } from "./rationale.js";
+import type { MatchingRunMarker } from "./runMarker.js";
 import {
   score as scoreFn,
   type ScoreResult,
@@ -149,21 +150,37 @@ export async function runMatchingPipeline(
   ctx: RunMatchingContext,
   deps: MatchingDeps = {},
 ): Promise<readonly UnitMatch[]> {
-  const listUnits = deps.listUnits ?? defaultListUnits;
-  const listRequirements = deps.listRequirements ?? defaultListRequirements;
   // With the default persist, claim the (owner, Role) run marker
   // BEFORE reading any input, so the run that was INVOKED last is the
   // one allowed to commit. Claiming at persist time instead let a slow
   // run that read pre-edit Units finish after, and overwrite, a faster
   // run that read the edit (Codex P1 on #501). An injected persist
   // (tests, the eval harness) manages its own concurrency.
-  let persistBatch: NonNullable<MatchingDeps["persistBatch"]>;
   if (deps.persistBatch !== undefined) {
-    persistBatch = deps.persistBatch;
-  } else {
-    const runId = await claimMatchingRun(ctx);
-    persistBatch = (c, m) => replaceMatchesForRole(c, m, { runId });
+    return runMatchingWith(ctx, deps, deps.persistBatch);
   }
+  const runId = await claimMatchingRun(ctx);
+  try {
+    return await runMatchingWith(ctx, deps, (c, m) =>
+      replaceMatchesForRole(c, m, { runId }),
+    );
+  } catch (err) {
+    // A failure before persist (scoring threw on every pair, an input
+    // read failed) writes nothing, but the marker must still stop
+    // saying "running" so the editor can tell a dead run from a live
+    // one (#504).
+    if (!(err instanceof MatchingRunSuperseded)) await markMatchingRunFailed(ctx, runId);
+    throw err;
+  }
+}
+
+async function runMatchingWith(
+  ctx: RunMatchingContext,
+  deps: MatchingDeps,
+  persistBatch: NonNullable<MatchingDeps["persistBatch"]>,
+): Promise<readonly UnitMatch[]> {
+  const listUnits = deps.listUnits ?? defaultListUnits;
+  const listRequirements = deps.listRequirements ?? defaultListRequirements;
   const score = deps.score ?? scoreFn;
   const generateRationale = deps.generateRationale ?? generateRationaleFn;
   const now = deps.now ?? (() => new Date().toISOString());
@@ -415,13 +432,14 @@ function nameUuid(parts: readonly string[]): string {
 }
 
 /**
- * Server-only collection holding one "latest matching run" marker per
- * (owner, Role). See `replaceMatchesForRole` § Overlapping runs.
+ * Server-written collection holding one "latest matching run" marker
+ * per (owner, Role). See `replaceMatchesForRole` § Overlapping runs,
+ * and `./runMarker.ts` for its fields.
  *
  * Clients must not be able to write it: a client that rewrote or
  * deleted its marker mid-run would make the legitimate run look
- * superseded. The explicit per-collection `firestore.rules` from #500
- * deny every collection they do not name, this one included.
+ * superseded. `firestore.rules` lets the owner read it (so the editor
+ * can report a run that died part-way, #504) and allows no write.
  */
 export const MATCHING_RUNS_COLLECTION = "matchingRuns";
 
@@ -525,6 +543,9 @@ function foldFlags(
  * reader can see some pairs rescored and others not yet. It can never
  * see a union of old and new matches for one pair, because a pair has
  * exactly one doc, and the next successful run converges the set.
+ * Each chunked commit marks the run marker `partial` and only a
+ * completed run clears it, so the editor can tell the user a dead run
+ * left the Role mixed and offer a re-run (#504, `./runMarker.ts`).
  *
  * **Overlapping runs.** Each run stamps a fresh `run_id` on the
  * (owner, Role) marker in `matchingRuns` — `runMatchingPipeline` does
@@ -562,23 +583,58 @@ export interface ReplaceMatchesHooks {
   readonly afterChunkedWrites?: () => Promise<void>;
 }
 
+function matchingRunRef(ctx: RunMatchingContext): DocumentReference {
+  return getAdminDb()
+    .collection(MATCHING_RUNS_COLLECTION)
+    .doc(matchingRunDocId(ctx.ownerUid, ctx.roleId));
+}
+
 /**
  * Stamp a fresh `run_id` on the (owner, Role) marker and return it.
  * Last writer wins, which is the point: the most recently started run
  * is the one that may commit.
+ *
+ * `partial` carries forward from a run that did not complete: if an
+ * earlier chunked run died part-way, the store still mixes runs until
+ * some run completes, whatever this one goes on to do (#504). Read
+ * and written in one transaction so a completion that lands between
+ * the read and the write is not undone.
  */
 export async function claimMatchingRun(ctx: RunMatchingContext): Promise<string> {
   const runId = randomUUID();
-  await getAdminDb()
-    .collection(MATCHING_RUNS_COLLECTION)
-    .doc(matchingRunDocId(ctx.ownerUid, ctx.roleId))
-    .set({
+  const ref = matchingRunRef(ctx);
+  await getAdminDb().runTransaction(async (tx) => {
+    const prior = (await tx.get(ref)).data() as MatchingRunMarker | undefined;
+    const marker: MatchingRunMarker = {
       owner_uid: ctx.ownerUid,
       role_id: ctx.roleId,
       run_id: runId,
       started_at: new Date().toISOString(),
-    });
+      state: "running",
+      partial: prior?.partial === true && (prior.state ?? "complete") !== "complete",
+    };
+    tx.set(ref, marker);
+  });
   return runId;
+}
+
+/**
+ * Record that run `runId` stopped without completing, if it is still
+ * the current run. Best effort: the caller is already failing, and a
+ * marker left at `running` reads as dead once the callable's timeout
+ * has passed, so a failure here only delays the editor's notice.
+ */
+async function markMatchingRunFailed(ctx: RunMatchingContext, runId: string): Promise<void> {
+  const ref = matchingRunRef(ctx);
+  try {
+    await getAdminDb().runTransaction(async (tx) => {
+      const current = (await tx.get(ref)).data() as MatchingRunMarker | undefined;
+      if (current?.run_id !== runId) return;
+      tx.update(ref, { state: "failed", failed_at: new Date().toISOString() });
+    });
+  } catch (err) {
+    console.warn(`markMatchingRunFailed: could not mark run ${runId} failed`, err);
+  }
 }
 
 async function replaceMatchesForRole(
@@ -621,10 +677,22 @@ async function replaceMatchesForRole(
     .where("owner_uid", "==", ownerUid)
     .where("role_id", "==", roleId);
 
-  const runRef = db
-    .collection(MATCHING_RUNS_COLLECTION)
-    .doc(matchingRunDocId(ownerUid, roleId));
+  const runRef = matchingRunRef(ctx);
   const runId = hooks.runId ?? (await claimMatchingRun(ctx));
+  // Every commit that publishes this run's result in pieces marks the
+  // Role partial in the same commit, and the commit that finishes the
+  // run clears it, so the marker can never claim a complete set the
+  // store does not hold (#504).
+  const markPartial = (tx: Transaction): void => {
+    tx.update(runRef, { partial: true });
+  };
+  const markComplete = (tx: Transaction): void => {
+    tx.update(runRef, {
+      state: "complete",
+      partial: false,
+      completed_at: new Date().toISOString(),
+    });
+  };
   const assertCurrentRun = async (tx: Transaction): Promise<void> => {
     const snap = await tx.get(runRef);
     if ((snap.data() as { run_id?: string } | undefined)?.run_id !== runId) {
@@ -642,7 +710,10 @@ async function replaceMatchesForRole(
       const existing = await tx.get(scopedQuery);
       const orphans = existing.docs.filter((d) => !newIds.has(d.id));
       if (keyed.length + orphans.length > MATCH_WRITES_PER_COMMIT) return null;
-      if (keyed.length === 0 && orphans.length === 0) return [];
+      if (keyed.length === 0 && orphans.length === 0) {
+        markComplete(tx);
+        return [];
+      }
 
       const flagsByPair = new Map<string, ApprovalFlags>();
       for (const doc of existing.docs) {
@@ -655,6 +726,7 @@ async function replaceMatchesForRole(
       const out = keyed.map((m) => withPriorFlags(m, flagsByPair));
       for (const m of out) tx.set(collection.doc(m.id), m);
       for (const d of orphans) tx.delete(d.ref);
+      markComplete(tx);
       return out;
     });
     if (atomic !== null) return atomic;
@@ -734,6 +806,7 @@ async function replaceMatchesForRole(
         for (const m of chunkOut) tx.set(collection.doc(m.id), m);
         // The legacy doc goes in the same commit whose flags it fed.
         for (const ref of liveLegacy) tx.delete(ref);
+        markPartial(tx);
         return chunkOut;
       });
       merged.push(...out);
@@ -751,8 +824,14 @@ async function replaceMatchesForRole(
       await db.runTransaction(async (tx) => {
         await assertCurrentRun(tx);
         for (const d of slice) tx.delete(d.ref);
+        markPartial(tx);
       });
     }
+
+    await db.runTransaction(async (tx) => {
+      await assertCurrentRun(tx);
+      markComplete(tx);
+    });
 
     return merged;
   } catch (err) {
@@ -764,6 +843,8 @@ async function replaceMatchesForRole(
       // the supersession so the caller reports "not complete" and the
       // user can re-run; the newest successful run always converges.
       console.info(err.message);
+    } else {
+      await markMatchingRunFailed(ctx, runId);
     }
     throw err;
   }

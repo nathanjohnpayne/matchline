@@ -58,6 +58,12 @@ export interface MatchesTabProps {
    */
   readonly onRerunMatching?: () => void;
   readonly matchingError?: Error | null;
+  /**
+   * The last matching run died part-way through a chunked
+   * replacement, so some of this Role's matches may come from an
+   * earlier run (#504, `isMatchingRunIncomplete`).
+   */
+  readonly matchingIncomplete?: boolean;
 }
 
 /**
@@ -77,14 +83,27 @@ function RerunMatchingControl({
   onRerunMatching,
   computingMatches,
   matchingError,
+  matchingIncomplete,
 }: {
   readonly onRerunMatching?: () => void;
   readonly computingMatches: boolean;
   readonly matchingError?: Error | null;
+  readonly matchingIncomplete?: boolean;
 }): ReactElement | null {
   if (onRerunMatching === undefined) return null;
   return (
     <div className="space-y-1">
+      {matchingIncomplete === true && !computingMatches && (
+        <p
+          className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+          data-testid="matching-incomplete"
+          role="status"
+        >
+          The last matching run for this Role stopped part-way, so some of
+          these matches may come from an earlier run. Re-run matching to
+          rebuild them all from the same run.
+        </p>
+      )}
       <button
         type="button"
         onClick={onRerunMatching}
@@ -130,6 +149,7 @@ export default function MatchesTab({
   computingMatches,
   onRerunMatching,
   matchingError,
+  matchingIncomplete,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -199,6 +219,7 @@ export default function MatchesTab({
         onRerunMatching={onRerunMatching}
         computingMatches={computingMatches}
         matchingError={matchingError}
+        matchingIncomplete={matchingIncomplete}
       />
       <ul className="space-y-4">
         {groups.map(({ requirement, matches }) => (

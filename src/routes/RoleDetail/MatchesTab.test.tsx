@@ -25,6 +25,7 @@ function render(props: {
   readonly onRerunMatching?: () => void;
   readonly matchingError?: Error | null;
   readonly computingMatches?: boolean;
+  readonly matchingIncomplete?: boolean;
   readonly groups?: RequirementWithMatches[];
 }): string {
   return renderToStaticMarkup(
@@ -163,6 +164,33 @@ describe("MatchesTab: the re-run matching control (#442)", () => {
       matchingError: new Error("Matching timed out."),
     });
     expect(html).toContain('role="alert"');
+  });
+
+  it("says when the last run stopped part-way and points at the re-run (#504)", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingIncomplete: true,
+    });
+    expect(html).toContain('data-testid="matching-incomplete"');
+    expect(html).toContain("stopped part-way");
+    expect(html).toContain('role="status"');
+    expect(html).toContain("rerun-matching");
+  });
+
+  it("hides the stopped-part-way notice while a run is already rebuilding the Role", () => {
+    const html = render({
+      groups: [group],
+      onRerunMatching: () => {},
+      matchingIncomplete: true,
+      computingMatches: true,
+    });
+    expect(html).not.toContain("matching-incomplete");
+  });
+
+  it("shows no stopped-part-way notice for a Role whose last run completed", () => {
+    const html = render({ groups: [group], onRerunMatching: () => {} });
+    expect(html).not.toContain("matching-incomplete");
   });
 
   it("renders nothing extra when no handler is supplied", () => {

@@ -70,6 +70,7 @@ import {
   invokeRunMatching,
   setMatchApprovalState,
   subscribeMatchesByRole,
+  subscribeMatchingRunForRole,
   type MatchApprovalState,
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
@@ -91,6 +92,14 @@ import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 import { legacyEvidenceKey } from "./evidenceKey.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
 import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
+import {
+  isMatchingRunIncomplete,
+  type MatchingRunMarker,
+} from "../../../functions/src/matching/runMarker.ts";
+import {
+  MATCHING_RUN_LIVE_MS,
+  msUntilMatchingRunPresumedDead,
+} from "./matchingRunNotice.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
@@ -148,6 +157,12 @@ export default function RoleDetail(): ReactElement {
   // always read inside async closures.
   const [computingMatches, setComputingMatches] = useState(false);
   const [matchingError, setMatchingError] = useState<Error | null>(null);
+  // The pipeline's run marker for this Role (#504): whether the last
+  // run completed, or died part-way and left the matches mixed.
+  const [matchingRun, setMatchingRun] = useState<MatchingRunMarker | null>(null);
+  // Re-read only when a live-looking run passes its deadline; see the
+  // timer effect below.
+  const [matchingRunClockMs, setMatchingRunClockMs] = useState(() => Date.now());
   // Two-state gate (cursor #134 r1):
   //   - `matchesFirstSnapshotReceived` flips on the first
   //     real Matches snapshot delivery for the current Role.
@@ -488,6 +503,49 @@ export default function RoleDetail(): ReactElement {
       })();
     },
     [role, roleId],
+  );
+
+  // The run marker is advisory: it only decides whether to show the
+  // "stopped part-way" notice. A failed read (rules not yet deployed,
+  // a transient error) hides the notice; it must never take the page
+  // down the way a failed Requirements or Matches read does.
+  useEffect(() => {
+    setMatchingRun(null);
+    if (roleId === undefined || roleId === "") return;
+    let active = true;
+    const unsub = subscribeMatchingRunForRole(
+      roleId,
+      (next) => {
+        if (active) setMatchingRun(next);
+      },
+      (err) => {
+        if (!active) return;
+        setMatchingRun(null);
+        console.warn("subscribeMatchingRunForRole failed", err);
+      },
+    );
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [roleId]);
+
+  // A run that dies mid-flight (crash, timeout) never writes again, so
+  // no snapshot announces that its `running` marker is now dead.
+  // Re-evaluate once its deadline passes.
+  useEffect(() => {
+    const now = Date.now();
+    setMatchingRunClockMs(now);
+    const wait = msUntilMatchingRunPresumedDead(matchingRun, now);
+    if (wait === null) return;
+    const timer = setTimeout(() => setMatchingRunClockMs(Date.now()), wait + 1_000);
+    return () => clearTimeout(timer);
+  }, [matchingRun]);
+
+  const matchingIncomplete = isMatchingRunIncomplete(
+    matchingRun,
+    matchingRunClockMs,
+    MATCHING_RUN_LIVE_MS,
   );
 
   useEffect(() => {
@@ -1141,6 +1199,7 @@ export default function RoleDetail(): ReactElement {
       matchEvidence={matchEvidence}
       onRerunMatching={onRerunMatching}
       matchingError={matchingError}
+      matchingIncomplete={matchingIncomplete}
       evidenceStatus={evidenceStatus}
       unitsById={unitsById}
       error={error}

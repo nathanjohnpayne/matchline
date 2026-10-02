@@ -1,5 +1,6 @@
 import {
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -17,6 +18,7 @@ import type { UnitMatch } from "../types/capability.ts";
 // it is erased before bundling. See `computeGaps.ts` for why the
 // contract lives there rather than being copied into `src/`.
 import type { MatchEvidence } from "../../functions/src/types/evidence.ts";
+import type { MatchingRunMarker } from "../../functions/src/matching/runMarker.ts";
 
 import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
@@ -97,6 +99,35 @@ export function subscribeMatchesByRole(
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => d.data())),
+    onError,
+  );
+}
+
+/**
+ * Subscribe to the matching pipeline's run marker for a Role (#504):
+ * the record of whether the last run completed, which tells the
+ * Matches tab when a run died part-way and left the Role's matches
+ * mixed. Delivers `null` when the Role has never been matched.
+ *
+ * Queried by (owner, Role) rather than read by id: the marker's id is
+ * a server-side name hash (`matchingRunDocId`) the client does not
+ * need to reproduce. Read-only; `firestore.rules` allows no client
+ * write.
+ */
+export function subscribeMatchingRunForRole(
+  roleId: string,
+  callback: (marker: MatchingRunMarker | null) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const q = query(
+    typedCollection<MatchingRunMarker & { id: string }>("matchingRuns"),
+    ...ownerScope(),
+    where("role_id", "==", roleId),
+    limit(1),
+  );
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs[0]?.data() ?? null),
     onError,
   );
 }
