@@ -53,6 +53,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   setDoc,
   updateDoc,
@@ -147,23 +148,6 @@ const COLLECTIONS: readonly CollectionSpec[] = [
     seed: { role_id: "role-1", normalized_requirement: "SQL" },
     create: null,
     update: { normalized_requirement: "Advanced SQL", must_have: true },
-    clientDelete: false,
-  },
-  {
-    // Server-only validation attestations (#502). The owner reads them;
-    // no client may write one, or it could attest its own content and
-    // enable Export for content no validator saw.
-    name: "applications/app-1/validations",
-    seed: {
-      application_id: "app-1",
-      asset_id: "asset-1",
-      content_version: "cv1-0000000000000000",
-      status: "passed",
-      validated_at: "2026-01-01T00:00:00.000Z",
-      validated_unit_versions: {},
-    },
-    create: null,
-    update: null,
     clientDelete: false,
   },
 ];
@@ -1162,5 +1146,106 @@ describe("rules: unitMatches contradictory-flag guard", () => {
         user_rejected: true,
       }),
     );
+  });
+});
+
+// -- applications/{id}/validations: server-only attestations (#502) ------
+
+describe("rules: applications/{id}/validations", () => {
+  const ATTESTATION = {
+    owner_uid: OWNER_UID,
+    application_id: "app-1",
+    asset_id: "asset-1",
+    content_version: "cv1-0000000000000000",
+    status: "passed",
+    validated_at: "2026-01-01T00:00:00.000Z",
+    validated_unit_versions: {},
+  };
+  const path = "applications/app-1/validations";
+
+  beforeEach(async () => {
+    await seedDoc("applications", "app-1", {
+      owner_uid: OWNER_UID,
+      role_id: "role-1",
+      stage: "drafting",
+      generated_assets: [],
+    });
+  });
+
+  it("owner can read an attestation under their own Application", async () => {
+    await seedDoc(path, "att-1", ATTESTATION);
+    await assertSucceeds(getDoc(doc(db(OWNER_UID), path, "att-1")));
+  });
+
+  it("owner can look up an attestation that does not exist yet (the editor's normal first read)", async () => {
+    const snap = await assertSucceeds(getDoc(doc(db(OWNER_UID), path, "missing")));
+    expect(snap.exists()).toBe(false);
+  });
+
+  it("a listener opened before the attestation exists receives it once the server writes it", async () => {
+    // Denying the missing read would end the listener, so a re-run's
+    // attestation would never reach the editor (Codex P2 on #506).
+    const seen: boolean[] = [];
+    let resolveCreated!: () => void;
+    const created = new Promise<void>((resolve) => {
+      resolveCreated = resolve;
+    });
+    let rejectErr!: (err: Error) => void;
+    const errored = new Promise<never>((_, reject) => {
+      rejectErr = reject;
+    });
+    const unsub = onSnapshot(
+      doc(db(OWNER_UID), path, "att-2"),
+      (snap) => {
+        seen.push(snap.exists());
+        if (snap.exists()) resolveCreated();
+      },
+      (err) => rejectErr(err),
+    );
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      await seedDoc(path, "att-2", ATTESTATION);
+      await Promise.race([created, errored]);
+      expect(seen[0]).toBe(false);
+      expect(seen[seen.length - 1]).toBe(true);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("another owner cannot read, or probe for, attestations under someone else's Application", async () => {
+    await seedDoc(path, "att-1", ATTESTATION);
+    await assertFails(getDoc(doc(db(OTHER_UID), path, "att-1")));
+    await assertFails(getDoc(doc(db(OTHER_UID), path, "missing")));
+  });
+
+  it("a stranger and an unauthenticated caller cannot read", async () => {
+    await seedDoc(path, "att-1", ATTESTATION);
+    await assertFails(getDoc(doc(db(STRANGER_UID), path, "att-1")));
+    await assertFails(getDoc(doc(db(null), path, "att-1")));
+  });
+
+  it("a lookup under an Application that does not exist is rejected", async () => {
+    await assertFails(getDoc(doc(db(OWNER_UID), "applications/no-such-app/validations", "x")));
+  });
+
+  it("a present attestation must also be the caller's, whoever owns the parent", async () => {
+    await seedDoc(path, "att-x", { ...ATTESTATION, owner_uid: OTHER_UID });
+    await assertFails(getDoc(doc(db(OWNER_UID), path, "att-x")));
+  });
+
+  it("owner-scoped queries are allowed; unscoped ones are not", async () => {
+    await seedDoc(path, "att-1", ATTESTATION);
+    await assertSucceeds(
+      getDocs(query(collectionRef(db(OWNER_UID), path), where("owner_uid", "==", OWNER_UID))),
+    );
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), path)));
+  });
+
+  it("no client may create, update or delete one, or it could attest its own content", async () => {
+    await assertFails(setDoc(doc(db(OWNER_UID), path, "forged"), ATTESTATION));
+    await seedDoc(path, "att-1", ATTESTATION);
+    await assertFails(updateDoc(doc(db(OWNER_UID), path, "att-1"), { status: "passed" }));
+    await assertFails(deleteDoc(doc(db(OWNER_UID), path, "att-1")));
   });
 });

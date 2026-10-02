@@ -282,8 +282,21 @@ service cloud.firestore {
       // `passed` only from a server record for the asset's current
       // content. No client write: a client that could create one
       // could attest its own content.
+      //
+      // A single-document read is authorized by owning the PARENT
+      // Application, not the attestation itself: the editor listens on
+      // the attestation for the asset's current content before any run
+      // has written it (unvalidated or edited content), and `isOwner()`
+      // denies a missing document. That denial would end the listener,
+      // so the record a re-run then creates would never arrive (Codex
+      // P2 on #506). A present record must also be the caller's.
+      // Queries keep the plain owner check.
       match /validations/{attestationId} {
-        allow read: if isOwner();
+        allow get: if isAllowlistedOwner()
+          && exists(/databases/$(database)/documents/applications/$(docId))
+          && get(/databases/$(database)/documents/applications/$(docId)).data.owner_uid == request.auth.uid
+          && (resource == null || resource.data.owner_uid == request.auth.uid);
+        allow list: if isOwner();
       }
     }
 
