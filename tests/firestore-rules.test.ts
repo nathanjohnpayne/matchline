@@ -1170,7 +1170,7 @@ describe("rules: applications/{id}/validations", () => {
     owner_uid: OWNER_UID,
     application_id: "app-1",
     asset_id: "asset-1",
-    content_version: "cv1-0000000000000000",
+    content_version: "cv2-0000000000000000000000000000000000000000000000000000000000000000",
     status: "passed",
     validated_at: "2026-01-01T00:00:00.000Z",
     validated_unit_versions: {},
@@ -1200,6 +1200,10 @@ describe("rules: applications/{id}/validations", () => {
     // Denying the missing read would end the listener, so a re-run's
     // attestation would never reach the editor (Codex P2 on #506).
     const seen: boolean[] = [];
+    let resolveMissing!: () => void;
+    const missingSeen = new Promise<void>((resolve) => {
+      resolveMissing = resolve;
+    });
     let resolveCreated!: () => void;
     const created = new Promise<void>((resolve) => {
       resolveCreated = resolve;
@@ -1213,11 +1217,14 @@ describe("rules: applications/{id}/validations", () => {
       (snap) => {
         seen.push(snap.exists());
         if (snap.exists()) resolveCreated();
+        else resolveMissing();
       },
       (err) => rejectErr(err),
     );
     try {
-      await new Promise((r) => setTimeout(r, 200));
+      // Write only after the listener has delivered the missing state,
+      // so the test cannot pass by seeing nothing but the created record.
+      await Promise.race([missingSeen, errored]);
       await seedDoc(path, "att-2", ATTESTATION);
       await Promise.race([created, errored]);
       expect(seen[0]).toBe(false);

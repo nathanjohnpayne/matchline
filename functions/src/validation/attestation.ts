@@ -27,7 +27,7 @@
  * as it does `./unitEvidenceVersion.ts`.
  */
 
-import { fnv1a64 } from "./unitEvidenceVersion.js";
+import { sha256Hex } from "./sha256.js";
 
 export const VALIDATIONS_SUBCOLLECTION = "validations";
 
@@ -70,7 +70,7 @@ function sortKeys(value: unknown): unknown {
  * Bump when the encoding changes, so a record made under the old one
  * reads as "no record for this content" rather than colliding.
  */
-const CONTENT_VERSION_PREFIX = "cv1-";
+const CONTENT_VERSION_PREFIX = "cv2-";
 
 /** The sections whose items the editor can reorder in place. */
 const REORDERABLE_SECTIONS = ["bullets", "skills", "education"] as const;
@@ -112,7 +112,7 @@ function validatedShape(content: unknown): unknown {
  * order (see `canonicalJson`).
  */
 export function assetContentVersion(content: unknown): string {
-  return CONTENT_VERSION_PREFIX + fnv1a64(canonicalJson(validatedShape(content)));
+  return CONTENT_VERSION_PREFIX + sha256Hex(canonicalJson(validatedShape(content)));
 }
 
 /** Doc id of the attestation for `assetId` at `contentVersion`. */

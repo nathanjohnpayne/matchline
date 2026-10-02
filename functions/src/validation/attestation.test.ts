@@ -34,7 +34,7 @@ describe("canonicalJson", () => {
 describe("assetContentVersion", () => {
   it("is stable for equal content and prefixed with its encoding version", () => {
     expect(assetContentVersion(CONTENT)).toBe(assetContentVersion(structuredClone(CONTENT)));
-    expect(assetContentVersion(CONTENT)).toMatch(/^cv1-[0-9a-f]{16}$/);
+    expect(assetContentVersion(CONTENT)).toMatch(/^cv2-[0-9a-f]{64}$/);
   });
 
   it("ignores item order within a section, which reorder preserves `passed` across", () => {
@@ -78,7 +78,7 @@ describe("assetContentVersion", () => {
 describe("validationAttestationId", () => {
   it("joins the asset id and content version into a valid Firestore doc id", () => {
     const id = validationAttestationId("asset-1", assetContentVersion(CONTENT));
-    expect(id).toMatch(/^asset-1__cv1-[0-9a-f]{16}$/);
+    expect(id).toMatch(/^asset-1__cv2-[0-9a-f]{64}$/);
     expect(id).not.toContain("/");
   });
 });

@@ -1,34 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  fnv1a64,
-  unitEvidenceVersion,
-  type UnitEvidenceFields,
-} from "./unitEvidenceVersion.ts";
-
-/** Straightforward BigInt FNV-1a 64, the reference the limb version must match. */
-function referenceFnv1a64(text: string): string {
-  let hash = 0xcbf29ce484222325n;
-  for (const byte of new TextEncoder().encode(text)) {
-    hash ^= BigInt(byte);
-    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-describe("fnv1a64", () => {
-  it("matches the published FNV-1a 64 test vectors", () => {
-    expect(fnv1a64("")).toBe("cbf29ce484222325");
-    expect(fnv1a64("a")).toBe("af63dc4c8601ec8c");
-    expect(fnv1a64("foobar")).toBe("85944171f73967e8");
-  });
-
-  it("matches a BigInt reference on long, non-ASCII input", () => {
-    for (const text of ["Led a team — 40% ↑", "x".repeat(5000), JSON.stringify(["ab", "c"])]) {
-      expect(fnv1a64(text)).toBe(referenceFnv1a64(text));
-    }
-  });
-});
+import { unitEvidenceVersion, type UnitEvidenceFields } from "./unitEvidenceVersion.ts";
 
 const base: UnitEvidenceFields = {
   id: "u1",
@@ -42,7 +14,7 @@ const base: UnitEvidenceFields = {
 describe("unitEvidenceVersion", () => {
   it("is deterministic and prefixed with its encoding version", () => {
     expect(unitEvidenceVersion(base)).toBe(unitEvidenceVersion({ ...base }));
-    expect(unitEvidenceVersion(base)).toMatch(/^ev1:[0-9a-f]{16}$/);
+    expect(unitEvidenceVersion(base)).toMatch(/^ev2:[0-9a-f]{64}$/);
   });
 
   it("changes when any field the validator reads changes", () => {

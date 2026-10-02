@@ -32,6 +32,8 @@
  * server and the editor compute the same value from one definition.
  */
 
+import { sha256Hex } from "./sha256.js";
+
 /** The subset of `ExperienceUnit` the validator reads. */
 export interface UnitEvidenceFields {
   readonly id: string;
@@ -51,44 +53,12 @@ export interface UnitEvidenceFields {
  * Bump when the field list or encoding changes, so a verdict recorded
  * under the old definition reads as changed rather than colliding.
  */
-const VERSION_PREFIX = "ev1:";
-
-const encoder = new TextEncoder();
-
-/**
- * FNV-1a 64-bit over UTF-8 bytes, as 16 hex digits. Computed in four
- * 16-bit limbs rather than with BigInt: the export gate runs this for
- * every cited Unit on every editor render, and BigInt arithmetic per
- * byte costs milliseconds there. The prime is 2^40 + 0x1b3, so the
- * multiply is `h * 0x1b3` plus `h << 40` (the low two limbs shifted
- * up two limbs and 8 bits). The unit test pins this against a BigInt
- * reference.
- */
-export function fnv1a64(text: string): string {
-  // Offset basis 0xcbf29ce484222325, low limb first.
-  let h0 = 0x2325;
-  let h1 = 0x8422;
-  let h2 = 0x9ce4;
-  let h3 = 0xcbf2;
-  for (const byte of encoder.encode(text)) {
-    h0 ^= byte;
-    const t0 = h0 * 0x1b3;
-    let t1 = h1 * 0x1b3;
-    let t2 = h2 * 0x1b3 + (h0 << 8);
-    const t3 = h3 * 0x1b3 + (h1 << 8);
-    t1 += t0 >>> 16;
-    t2 += t1 >>> 16;
-    h0 = t0 & 0xffff;
-    h1 = t1 & 0xffff;
-    h2 = t2 & 0xffff;
-    h3 = (t3 + (t2 >>> 16)) & 0xffff;
-  }
-  return [h3, h2, h1, h0].map((limb) => limb.toString(16).padStart(4, "0")).join("");
-}
+const VERSION_PREFIX = "ev2:";
 
 export function unitEvidenceVersion(unit: UnitEvidenceFields): string {
   // JSON, not delimiters: the encoding is lossless, so two different
-  // field sets can only collide through the hash itself.
+  // field sets can only collide through the hash itself, and SHA-256
+  // makes a crafted collision infeasible (`./sha256.ts`).
   const canonical = JSON.stringify([
     unit.id,
     unit.raw_text,
@@ -102,5 +72,5 @@ export function unitEvidenceVersion(unit: UnitEvidenceFields): string {
     unit.seniority_signals ?? [],
     unit.scope_signals ?? [],
   ]);
-  return VERSION_PREFIX + fnv1a64(canonical);
+  return VERSION_PREFIX + sha256Hex(canonical);
 }
