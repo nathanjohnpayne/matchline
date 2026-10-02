@@ -32,6 +32,7 @@
  * server and the editor compute the same value from one definition.
  */
 
+import { canonicalJson } from "./attestation.js";
 import { sha256Hex } from "./sha256.js";
 
 /** The subset of `ExperienceUnit` the validator reads. */
@@ -56,10 +57,13 @@ export interface UnitEvidenceFields {
 const VERSION_PREFIX = "ev2:";
 
 export function unitEvidenceVersion(unit: UnitEvidenceFields): string {
-  // JSON, not delimiters: the encoding is lossless, so two different
-  // field sets can only collide through the hash itself, and SHA-256
-  // makes a crafted collision infeasible (`./sha256.ts`).
-  const canonical = JSON.stringify([
+  // `canonicalJson`, not delimiters or plain `JSON.stringify`: the
+  // encoding is lossless, including for NaN and ±Infinity, which plain
+  // JSON writes as `null` and would therefore share a version with an
+  // absent metric value (Codex P2 on #506). Two different field sets
+  // can only collide through the hash itself, and SHA-256 makes a
+  // crafted collision infeasible (`./sha256.ts`).
+  const canonical = canonicalJson([
     unit.id,
     unit.raw_text,
     unit.normalized_summary,

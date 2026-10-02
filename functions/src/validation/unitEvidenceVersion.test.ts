@@ -17,6 +17,13 @@ describe("unitEvidenceVersion", () => {
     expect(unitEvidenceVersion(base)).toMatch(/^ev2:[0-9a-f]{64}$/);
   });
 
+  it("distinguishes an absent metric value from NaN and ±Infinity", () => {
+    const withValue = (value: number | undefined) =>
+      unitEvidenceVersion({ ...base, metrics: [{ claim: "Grew revenue", value, unit: "%", direction: "up" }] });
+    const versions = [undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map(withValue);
+    expect(new Set(versions).size).toBe(4);
+  });
+
   it("changes when any field the validator reads changes", () => {
     const v = unitEvidenceVersion(base);
     const edits: Partial<UnitEvidenceFields>[] = [
