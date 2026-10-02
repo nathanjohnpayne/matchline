@@ -1,0 +1,83 @@
+/**
+ * Server-owned validation attestations (#502).
+ *
+ * The verdict the export gate trusts used to live only on the asset,
+ * inside `applications.generated_assets[]`: a list the client updates
+ * and Firestore rules cannot iterate. Undo also legitimately writes a
+ * previous `passed` back, so the rules could not stop a client from
+ * writing `validation_status: "passed"` itself.
+ *
+ * `validateAsset` now also records each verdict here, in
+ * `applications/{applicationId}/validations/{attestationId}`, a
+ * subcollection the client may read and never write. The record is
+ * keyed by the asset AND a fingerprint of the exact content that was
+ * validated, so:
+ *
+ *   - the export gate trusts `passed` only from a record for the
+ *     asset's CURRENT content, which no client write can produce;
+ *   - any edit moves the content to a fingerprint with no record,
+ *     which reads as unvalidated without anyone flipping a status;
+ *   - undo needs no copied status to be trusted: restoring content
+ *     that was validated finds that content's record again.
+ *
+ * The asset-level `validation_status` / `validation_flags` stay as
+ * the editor's display state; they are no longer the attestation.
+ *
+ * Dependency-light so the app imports it across the package boundary,
+ * as it does `./unitEvidenceVersion.ts`.
+ */
+
+import { fnv1a64 } from "./unitEvidenceVersion.js";
+
+export const VALIDATIONS_SUBCOLLECTION = "validations";
+
+export interface ValidationAttestation {
+  readonly owner_uid: string;
+  readonly application_id: string;
+  readonly asset_id: string;
+  /** `assetContentVersion` of the content this verdict is about. */
+  readonly content_version: string;
+  readonly status: "passed" | "failed";
+  readonly validated_at: string;
+  /** See `AssetRef.validated_unit_versions`. */
+  readonly validated_unit_versions: Readonly<Record<string, string>>;
+}
+
+/**
+ * JSON with object keys sorted at every level, so two copies of the
+ * same content serialize identically however their keys were ordered
+ * (the server reads the asset back from Firestore; the editor holds
+ * the object it rendered). Undefined object members are dropped, as
+ * `JSON.stringify` drops them; Firestore never stores them.
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeys(value));
+}
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) {
+      out[key] = sortKeys((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Bump when the encoding changes, so a record made under the old one
+ * reads as "no record for this content" rather than colliding.
+ */
+const CONTENT_VERSION_PREFIX = "cv1-";
+
+/** Fingerprint of an asset's `generated_content`. */
+export function assetContentVersion(content: unknown): string {
+  return CONTENT_VERSION_PREFIX + fnv1a64(canonicalJson(content));
+}
+
+/** Doc id of the attestation for `assetId` at `contentVersion`. */
+export function validationAttestationId(assetId: string, contentVersion: string): string {
+  return `${assetId}__${contentVersion}`;
+}

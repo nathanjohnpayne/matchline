@@ -177,6 +177,14 @@ export interface AssetRef {
    * — the editor uses them for hover-trace UX.
    */
   validation_flags?: ValidationFlag[];
+  /**
+   * The editor's display state for the last validation run. It sits
+   * in a client-writable list (edits set `stale`, undo restores a
+   * snapshot's value), so it is NOT the attestation: the export gate
+   * trusts `passed` only from the server-only record in
+   * `applications/{id}/validations` for the asset's current content
+   * (`functions/src/validation/attestation.ts`, #502).
+   */
   validation_status: ValidationStatus;
   /** Set on validateAsset's last successful completion. */
   validated_at?: ISOTimestamp;

@@ -149,6 +149,23 @@ const COLLECTIONS: readonly CollectionSpec[] = [
     update: { normalized_requirement: "Advanced SQL", must_have: true },
     clientDelete: false,
   },
+  {
+    // Server-only validation attestations (#502). The owner reads them;
+    // no client may write one, or it could attest its own content and
+    // enable Export for content no validator saw.
+    name: "applications/app-1/validations",
+    seed: {
+      application_id: "app-1",
+      asset_id: "asset-1",
+      content_version: "cv1-0000000000000000",
+      status: "passed",
+      validated_at: "2026-01-01T00:00:00.000Z",
+      validated_unit_versions: {},
+    },
+    create: null,
+    update: null,
+    clientDelete: false,
+  },
 ];
 
 let testEnv: RulesTestEnvironment;

@@ -58,6 +58,12 @@ import {
   type TraceabilityResult,
 } from "./traceability.js";
 import { unitEvidenceVersion } from "./unitEvidenceVersion.js";
+import {
+  VALIDATIONS_SUBCOLLECTION,
+  assetContentVersion,
+  validationAttestationId,
+  type ValidationAttestation,
+} from "./attestation.js";
 
 export interface ValidateAssetContext {
   readonly ownerUid: string;
@@ -505,6 +511,29 @@ async function defaultPersistFlags(
         : a,
     );
     tx.update(ref, { generated_assets: updatedAssets });
+
+    // The attestation the export gate trusts (#502): server-only, and
+    // keyed by the content it is about, in the same commit as the
+    // stale-content check above, so it can never describe content
+    // other than what this run validated.
+    if (result.status === "passed" || result.status === "failed") {
+      const contentVersion = assetContentVersion(target.generated_content);
+      const attestation: ValidationAttestation = {
+        owner_uid: ctx.ownerUid,
+        application_id: ctx.applicationId,
+        asset_id: ctx.assetId,
+        content_version: contentVersion,
+        status: result.status,
+        validated_at: result.validated_at,
+        validated_unit_versions: result.validated_unit_versions,
+      };
+      tx.set(
+        ref
+          .collection(VALIDATIONS_SUBCOLLECTION)
+          .doc(validationAttestationId(ctx.assetId, contentVersion)),
+        attestation,
+      );
+    }
   });
 }
 
