@@ -61,6 +61,7 @@ import { unitEvidenceVersion } from "./unitEvidenceVersion.js";
 import {
   VALIDATIONS_SUBCOLLECTION,
   assetContentVersion,
+  isAttestableContent,
   validationAttestationId,
   type ValidationAttestation,
 } from "./attestation.js";
@@ -140,6 +141,15 @@ export async function validateAsset(
   const now = deps.now ?? (() => new Date().toISOString());
 
   const { content } = await loadAsset(ctx);
+  // The validator skips an item whose text is not a string, but the
+  // editor still renders it, so a pass over malformed content would
+  // attest text no check ever read (#506 review). Refuse it outright:
+  // no verdict, no attestation.
+  if (!isAttestableContent(content)) {
+    throw new ValidateAssetMalformedContent(
+      `Asset ${ctx.assetId} has malformed generated_content; refusing to validate it.`,
+    );
+  }
 
   // Validate every fact-bearing piece of the asset. All four
   // section types share the same `GeneratedItem` shape (id +
@@ -550,6 +560,19 @@ export class ValidateAssetMissingContent extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ValidateAssetMissingContent";
+  }
+}
+
+/**
+ * Thrown when `generated_content` is not the shape the validator can
+ * check in full (`isAttestableContent`). Distinct from missing content
+ * so the callable can tell the user regenerating, not generating, is
+ * the fix.
+ */
+export class ValidateAssetMalformedContent extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ValidateAssetMalformedContent";
   }
 }
 

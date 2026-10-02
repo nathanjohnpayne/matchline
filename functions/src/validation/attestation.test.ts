@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   assetContentVersion,
   canonicalJson,
+  isAttestableContent,
   validationAttestationId,
 } from "./attestation.ts";
 
@@ -24,6 +25,14 @@ describe("canonicalJson", () => {
 
   it("keeps array order, which is meaningful (bullet order)", () => {
     expect(canonicalJson({ a: [1, 2] })).not.toBe(canonicalJson({ a: [2, 1] }));
+  });
+
+  it("distinguishes non-finite numbers from null and from each other, without throwing", () => {
+    // JSON.stringify writes all three as null; Firestore can store them.
+    const encodings = [null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map((v) =>
+      canonicalJson({ a: v }),
+    );
+    expect(new Set(encodings).size).toBe(4);
   });
 
   it("drops undefined members, as Firestore never stores them", () => {
@@ -80,5 +89,31 @@ describe("validationAttestationId", () => {
     const id = validationAttestationId("asset-1", assetContentVersion(CONTENT));
     expect(id).toMatch(/^asset-1__cv2-[0-9a-f]{64}$/);
     expect(id).not.toContain("/");
+  });
+});
+
+describe("isAttestableContent", () => {
+  const item = { id: "b1", text: "Led a team.", source_unit_ids: ["u1"] };
+  const ok = { summary: { ...item, id: "s" }, bullets: [item], skills: [] };
+
+  it("accepts well-formed content, with or without education, and empty text", () => {
+    expect(isAttestableContent(ok)).toBe(true);
+    expect(isAttestableContent({ ...ok, education: [{ ...item, id: "e1" }] })).toBe(true);
+    expect(isAttestableContent({ ...ok, summary: { ...item, id: "s", text: "" } })).toBe(true);
+  });
+
+  it("rejects an item whose text the validator would skip but the editor would render", () => {
+    expect(isAttestableContent({ ...ok, bullets: [{ ...item, text: 12345 }] })).toBe(false);
+    expect(isAttestableContent({ ...ok, bullets: [{ ...item, text: null }] })).toBe(false);
+    expect(isAttestableContent({ ...ok, summary: { ...item, text: Number.NaN } })).toBe(false);
+  });
+
+  it("rejects missing sections, non-list sections, and malformed ids", () => {
+    expect(isAttestableContent(null)).toBe(false);
+    expect(isAttestableContent({ bullets: [], skills: [] })).toBe(false);
+    expect(isAttestableContent({ ...ok, skills: {} })).toBe(false);
+    expect(isAttestableContent({ ...ok, education: "x" })).toBe(false);
+    expect(isAttestableContent({ ...ok, bullets: [{ ...item, id: 7 }] })).toBe(false);
+    expect(isAttestableContent({ ...ok, bullets: [{ ...item, source_unit_ids: [1] }] })).toBe(false);
   });
 });

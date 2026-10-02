@@ -13,6 +13,7 @@ import type { TraceabilityResult } from "./traceability.ts";
 import { unitEvidenceVersion } from "./unitEvidenceVersion.ts";
 import {
   validateAsset,
+  ValidateAssetMalformedContent,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
   ValidateAssetStale,
@@ -501,6 +502,28 @@ describe("validateAsset orchestrator", () => {
     });
     // Returned result === persisted result.
     expect(result).toBe(persistedResult);
+  });
+
+  it("refuses malformed content before any check runs, so nothing is attested (#506 review)", async () => {
+    // An item whose text is not a string would be skipped by the
+    // validator yet rendered by the editor.
+    const content = makeContent([makeBullet("b1", "Real claim.", ["u1"])]);
+    const malformed = {
+      ...content,
+      bullets: [...content.bullets, { id: "b2", text: 12345, source_unit_ids: [] }],
+    } as unknown as typeof content;
+    const extractClaims = vi.fn();
+    const persistFlags = vi.fn(async () => {});
+    await expect(
+      validateAsset(CTX, {
+        loadAsset: async () => ({ asset: makeAsset(malformed), content: malformed }),
+        loadUnits: async () => [makeUnit("u1")],
+        extractClaims,
+        persistFlags,
+      }),
+    ).rejects.toBeInstanceOf(ValidateAssetMalformedContent);
+    expect(extractClaims).not.toHaveBeenCalled();
+    expect(persistFlags).not.toHaveBeenCalled();
   });
 
   it("propagates ValidateAssetNotFound from loadAsset", async () => {

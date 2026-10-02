@@ -51,7 +51,13 @@ export interface ValidationAttestation {
  * `JSON.stringify` drops them; Firestore never stores them.
  */
 export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
+  return JSON.stringify(sortKeys(value), (_key, v: unknown) =>
+    // `JSON.stringify` writes NaN and ±Infinity as `null`, so content
+    // differing only in those would share a fingerprint and therefore
+    // an attestation (#506 review). Encode them distinctly; never
+    // throw, because the editor fingerprints during render.
+    typeof v === "number" && !Number.isFinite(v) ? { $nonFiniteNumber: String(v) } : v,
+  );
 }
 
 function sortKeys(value: unknown): unknown {
@@ -113,6 +119,37 @@ function validatedShape(content: unknown): unknown {
  */
 export function assetContentVersion(content: unknown): string {
   return CONTENT_VERSION_PREFIX + sha256Hex(canonicalJson(validatedShape(content)));
+}
+
+/**
+ * True when `content` has exactly the shape the validator can check
+ * in full: a summary item and bullet / skill (and optional education)
+ * item lists, where every item carries a string `id`, a string `text`
+ * and a list of string `source_unit_ids`. The validator skips an item
+ * whose `text` is not a string, yet the editor still renders it, so
+ * malformed content must never be attested (#506 review). Fields the
+ * validator and the editor both ignore are not inspected.
+ */
+export function isAttestableContent(content: unknown): boolean {
+  if (content === null || typeof content !== "object" || Array.isArray(content)) return false;
+  const c = content as Record<string, unknown>;
+  const isItem = (item: unknown): boolean => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const i = item as Record<string, unknown>;
+    return (
+      typeof i.id === "string" &&
+      typeof i.text === "string" &&
+      Array.isArray(i.source_unit_ids) &&
+      i.source_unit_ids.every((id) => typeof id === "string")
+    );
+  };
+  const isList = (value: unknown): boolean => Array.isArray(value) && value.every(isItem);
+  return (
+    isItem(c.summary) &&
+    isList(c.bullets) &&
+    isList(c.skills) &&
+    (c.education === undefined || isList(c.education))
+  );
 }
 
 /** Doc id of the attestation for `assetId` at `contentVersion`. */
