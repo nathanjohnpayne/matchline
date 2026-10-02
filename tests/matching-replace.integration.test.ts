@@ -47,6 +47,10 @@ import type {
   UnitMatch,
 } from "../functions/src/types/capability.ts";
 import type { ScoreResult } from "../functions/src/matching/score.ts";
+import {
+  isMatchingRunIncomplete,
+  type MatchingRunMarker,
+} from "../functions/src/matching/runMarker.ts";
 
 const PROJECT_ID = "matchline-matching-replace-test";
 const ALICE = "user-alice";
@@ -890,6 +894,9 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
     const expected = new Set(runB.map((m) => m.id));
     expect(stored.size).toBe(expected.size);
     expect([...stored].every((id) => expected.has(id))).toBe(true);
+    // B inherited A's partial writes and converged them, so the Role
+    // is whole again; the superseded A must not have marked it failed.
+    expect(await runMarker("role-1")).toMatchObject({ state: "complete", partial: false });
   });
 
   it("invocation order wins: a slow run that read its inputs first cannot overwrite a faster run invoked after it", async () => {
@@ -942,5 +949,93 @@ describe("runMatchingPipeline at realistic Role sizes", () => {
     expect(stored).toEqual(new Set(b.map((m) => m.id)));
     expect(stored.size).toBe(4); // 2 Units × 2 Requirements, not A's 6
   });
-});
 
+  // -- Run marker: "stopped part-way" state (#504) ---------------------------
+
+  async function runMarker(roleId: string): Promise<MatchingRunMarker | undefined> {
+    const snap = await db()
+      .collection("matchingRuns")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", roleId)
+      .get();
+    expect(snap.size).toBeLessThanOrEqual(1);
+    return snap.docs[0]?.data() as MatchingRunMarker | undefined;
+  }
+
+  const LIVE_MS = 150_000;
+
+  it("a run that fits one commit marks the marker complete and never partial", async () => {
+    await seedRoleOfSize("role-1", 22, 15);
+    await runMatchingPipeline({ ownerUid: ALICE, roleId: "role-1" }, { score: FAKE_SCORE });
+    const marker = await runMarker("role-1");
+    expect(marker).toMatchObject({ state: "complete", partial: false });
+    expect(isMatchingRunIncomplete(marker, Date.now(), LIVE_MS)).toBe(false);
+  });
+
+  it("a chunked run that dies part-way leaves the Role marked partial and failed, until a run completes", async () => {
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+
+    // Every write chunk commits, then the run fails before its orphan
+    // pass and completion: the store holds this run's writes alongside
+    // whatever the previous run left.
+    await expect(
+      runMatchingPipeline(ctx, {
+        score: FAKE_SCORE,
+        persistBatch: (c, m) =>
+          replaceMatchesForRole(c, m, {
+            afterChunkedWrites: async () => {
+              throw new Error("instance stopped mid-run");
+            },
+          }),
+      }),
+    ).rejects.toThrow("instance stopped mid-run");
+    const failed = await runMarker("role-1");
+    expect(failed).toMatchObject({ state: "failed", partial: true });
+    expect(isMatchingRunIncomplete(failed, Date.now(), LIVE_MS)).toBe(true);
+
+    // A run that fails BEFORE writing anything leaves the store exactly
+    // as mixed as it found it, so it must carry `partial` forward.
+    const throwingScore: typeof FAKE_SCORE = () => {
+      throw new Error("score bug");
+    };
+    await expect(
+      runMatchingPipeline(ctx, { score: throwingScore }),
+    ).rejects.toThrow(/threw on every candidate pair/);
+    const stillMixed = await runMarker("role-1");
+    expect(stillMixed).toMatchObject({ state: "failed", partial: true });
+    expect(stillMixed?.run_id).not.toBe(failed?.run_id);
+
+    // A completed run converges the Role and clears the state.
+    await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    const whole = await runMarker("role-1");
+    expect(whole).toMatchObject({ state: "complete", partial: false });
+    expect(isMatchingRunIncomplete(whole, Date.now(), LIVE_MS)).toBe(false);
+    expect(await storedMatches("role-1")).toHaveLength(600);
+  });
+
+  it("a run that dies without reaching its catch reads as incomplete only once its deadline passes", async () => {
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    // Simulate a killed instance: the chunked writes commit and the
+    // marker is left exactly as they leave it (running + partial),
+    // because a crash never reaches the code that marks it failed.
+    let markerAtDeath: MatchingRunMarker | undefined;
+    await expect(
+      runMatchingPipeline(ctx, {
+        score: FAKE_SCORE,
+        persistBatch: (c, m) =>
+          replaceMatchesForRole(c, m, {
+            afterChunkedWrites: async () => {
+              markerAtDeath = await runMarker("role-1");
+              throw new Error("killed");
+            },
+          }),
+      }),
+    ).rejects.toThrow("killed");
+    expect(markerAtDeath).toMatchObject({ state: "running", partial: true });
+    const started = Date.parse(markerAtDeath!.started_at);
+    expect(isMatchingRunIncomplete(markerAtDeath, started + 1_000, LIVE_MS)).toBe(false);
+    expect(isMatchingRunIncomplete(markerAtDeath, started + LIVE_MS + 1, LIVE_MS)).toBe(true);
+  });
+});

@@ -149,6 +149,18 @@ const COLLECTIONS: readonly CollectionSpec[] = [
     update: { normalized_requirement: "Advanced SQL", must_have: true },
     clientDelete: false,
   },
+  {
+    // The matching pipeline's run markers (#501). Readable so the
+    // editor can say a dead run left the Role's matches mixed (#504);
+    // never writable, because the marker decides which run may commit
+    // and a client that rewrote it would make a legitimate run look
+    // superseded.
+    name: "matchingRuns",
+    seed: { role_id: "role-1", run_id: "r1", state: "failed", partial: true },
+    create: null,
+    update: null,
+    clientDelete: false,
+  },
 ];
 
 let testEnv: RulesTestEnvironment;
@@ -471,22 +483,24 @@ describe("rules: default deny", () => {
     await assertFails(getDoc(doc(db(OWNER_UID), "arbitraryCollection", "doc-1")));
   });
 
-  it("matchingRuns (the matching pipeline's run markers, #501) is closed to clients", async () => {
-    // The marker decides which matching run may commit. A client that
-    // could rewrite or delete it would make a legitimate run look
-    // superseded. It is server-only by default deny; pin that.
+  it("matchingRuns (the matching pipeline's run markers) is read-only to clients", async () => {
+    // Readable by its owner (#504), but no client may forge, rewrite
+    // or delete a marker: it decides which matching run may commit.
     await seedDoc("matchingRuns", "run-1", {
       owner_uid: OWNER_UID,
       role_id: "role-1",
       run_id: "r1",
     });
-    await assertFails(getDoc(doc(db(OWNER_UID), "matchingRuns", "run-1")));
+    await assertSucceeds(getDoc(doc(db(OWNER_UID), "matchingRuns", "run-1")));
     await assertFails(
       setDoc(doc(db(OWNER_UID), "matchingRuns", "run-1"), {
         owner_uid: OWNER_UID,
         role_id: "role-1",
         run_id: "forged",
       }),
+    );
+    await assertFails(
+      updateDoc(doc(db(OWNER_UID), "matchingRuns", "run-1"), { state: "complete", partial: false }),
     );
     await assertFails(deleteDoc(doc(db(OWNER_UID), "matchingRuns", "run-1")));
     await assertFails(
