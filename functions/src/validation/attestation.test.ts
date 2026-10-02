@@ -37,6 +37,33 @@ describe("assetContentVersion", () => {
     expect(assetContentVersion(CONTENT)).toMatch(/^cv1-[0-9a-f]{16}$/);
   });
 
+  it("ignores item order within a section, which reorder preserves `passed` across", () => {
+    const two = {
+      ...CONTENT,
+      bullets: [
+        { id: "b1", text: "Led a team.", source_unit_ids: ["u2"] },
+        { id: "b2", text: "Shipped it.", source_unit_ids: ["u3"] },
+      ],
+      skills: [
+        { id: "k1", text: "Go", source_unit_ids: ["u2"] },
+        { id: "k2", text: "SQL", source_unit_ids: ["u3"] },
+      ],
+    };
+    const reordered = {
+      ...two,
+      bullets: [two.bullets[1], two.bullets[0]],
+      skills: [two.skills[1], two.skills[0]],
+    };
+    expect(assetContentVersion(reordered)).toBe(assetContentVersion(two));
+  });
+
+  it("still distinguishes which section an item is in", () => {
+    const item = { id: "x1", text: "Go", source_unit_ids: ["u2"] };
+    expect(assetContentVersion({ ...CONTENT, bullets: [item], skills: [] })).not.toBe(
+      assetContentVersion({ ...CONTENT, bullets: [], skills: [item] }),
+    );
+  });
+
   it("changes with any edit to the content", () => {
     const v = assetContentVersion(CONTENT);
     expect(

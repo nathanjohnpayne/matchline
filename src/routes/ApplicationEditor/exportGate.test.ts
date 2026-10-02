@@ -240,6 +240,15 @@ describe("exportGateState: server attestation", () => {
     expect(exportGateState(edited, ALL(), attest(validated)).enabled).toBe(false);
   });
 
+  it("keeps a reordered resume attested: reorder preserves `passed` without re-validating", () => {
+    const validated = passedAsset();
+    const [b1, b2] = validated.generated_content!.bullets;
+    const reordered = passedAsset({
+      generated_content: { ...validated.generated_content!, bullets: [b2!, b1!] },
+    });
+    expect(exportGateState(reordered, ALL(), attest(validated)).enabled).toBe(true);
+  });
+
   it("blocks when the server's verdict for this content is a failure", () => {
     const a = passedAsset();
     expect(exportGateState(a, ALL(), attest(a, { status: "failed" })).enabled).toBe(false);

@@ -72,9 +72,47 @@ function sortKeys(value: unknown): unknown {
  */
 const CONTENT_VERSION_PREFIX = "cv1-";
 
-/** Fingerprint of an asset's `generated_content`. */
+/** The sections whose items the editor can reorder in place. */
+const REORDERABLE_SECTIONS = ["bullets", "skills", "education"] as const;
+
+function itemId(item: unknown): string {
+  return item !== null && typeof item === "object" && typeof (item as { id?: unknown }).id === "string"
+    ? (item as { id: string }).id
+    : "";
+}
+
+/**
+ * The content as validation sees it: each section's items ordered by
+ * id, not by position. The validator checks every item independently
+ * and keys flags by item id, so moving an item within its section
+ * cannot change the verdict, and `reorderBulletsInAsset` keeps
+ * `passed` without re-validating. A position-sensitive fingerprint
+ * would strand that verdict on every drag (Codex P2 on #506). Section
+ * membership still counts: a skill is not a bullet.
+ */
+function validatedShape(content: unknown): unknown {
+  if (content === null || typeof content !== "object" || Array.isArray(content)) return content;
+  const out: Record<string, unknown> = { ...(content as Record<string, unknown>) };
+  for (const section of REORDERABLE_SECTIONS) {
+    const items = out[section];
+    if (Array.isArray(items)) {
+      out[section] = [...items].sort((a, b) => {
+        const ia = itemId(a);
+        const ib = itemId(b);
+        return ia < ib ? -1 : ia > ib ? 1 : 0;
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Fingerprint of an asset's `generated_content`, insensitive to item
+ * order within a section (see `validatedShape`) and to object key
+ * order (see `canonicalJson`).
+ */
 export function assetContentVersion(content: unknown): string {
-  return CONTENT_VERSION_PREFIX + fnv1a64(canonicalJson(content));
+  return CONTENT_VERSION_PREFIX + fnv1a64(canonicalJson(validatedShape(content)));
 }
 
 /** Doc id of the attestation for `assetId` at `contentVersion`. */
