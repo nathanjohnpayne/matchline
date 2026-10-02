@@ -56,9 +56,9 @@ import {
 } from "../../services/validation.ts";
 import {
   assetContentVersion,
-  validationAttestationId,
   type ValidationAttestation,
 } from "../../../functions/src/validation/attestation.ts";
+import { attestationSubscription } from "./attestationSubscription.ts";
 import type { AttestationLookup } from "./exportGate.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
@@ -254,22 +254,24 @@ function ApplicationEditorInner({
         : assetContentVersion(asset.generated_content),
     [asset?.generated_content],
   );
-  const attestationKey =
-    asset !== null && contentVersion !== null
-      ? validationAttestationId(asset.id, contentVersion)
-      : null;
+  const subscription = attestationSubscription(
+    applicationId,
+    asset?.id,
+    contentVersion,
+    asset?.validated_at,
+  );
   const [attestation, setAttestation] = useState<{
     readonly key: string;
     readonly value: ValidationAttestation | null;
   } | null>(null);
   useEffect(() => {
-    if (applicationId === undefined || asset === null || contentVersion === null) return;
-    const key = validationAttestationId(asset.id, contentVersion);
+    if (subscription === null) return;
+    const { recordKey: key } = subscription;
     let active = true;
     const unsub = subscribeValidationAttestation(
-      applicationId,
-      asset.id,
-      contentVersion,
+      subscription.applicationId,
+      subscription.assetId,
+      subscription.contentVersion,
       (value) => {
         if (active) setAttestation({ key, value });
       },
@@ -285,20 +287,16 @@ function ApplicationEditorInner({
       active = false;
       unsub();
     };
-    // `asset` is re-derived on every application refetch; the
-    // subscription depends only on its id and content version, plus
-    // the verdict's `validated_at`. A listener that errors (a rules
-    // rollout, a transient auth failure) is ended by Firestore and
-    // never retried, so re-subscribing whenever a new verdict lands
-    // lets the attestation a successful re-run just wrote reach the
-    // gate without a reload (Codex P2 on #506).
+    // `restartKey` is the whole identity of this listener, including
+    // when to re-open it after Firestore ends it on an error
+    // (`attestationSubscription.ts`, pinned by its tests).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applicationId, asset?.id, contentVersion, asset?.validated_at]);
+  }, [subscription?.restartKey]);
   // A record loaded for other content (or another asset) must never
   // answer for this one, even for the render before the effect above
   // re-subscribes.
   const attestationLookup: AttestationLookup =
-    attestationKey !== null && attestation?.key === attestationKey
+    subscription !== null && attestation?.key === subscription.recordKey
       ? attestation.value
       : undefined;
 
