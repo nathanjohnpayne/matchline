@@ -373,6 +373,23 @@ fi
 E2E_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-blocked-e2e.XXXXXX")"
 # No trap here on purpose — `cleanup_tmp` (registered above) already removes
 # this directory. A second EXIT trap would drop the selector snippet's cleanup.
+# The requester counts solicited blocking reviews from the Codex review ledger
+# before every new request (#1560 slice 3). This stub reports a ledger with no
+# responses for whatever head the requester expects, so the blocking-review
+# budget never stops these cases; test_codex_review_request_trigger_only.sh
+# covers the budget itself.
+LEDGER_STUB="$E2E_WORKDIR/codex-ledger-stub.sh"
+cat >"$LEDGER_STUB" <<'LEDGER_EOF'
+#!/usr/bin/env bash
+head=""
+while [ $# -gt 0 ]; do
+  case "$1" in --expect-head) head=$2; shift 2 ;; --expect-policy) fp=$2; shift 2 ;; *) shift ;; esac
+done
+jq -nc --arg h "$head" --arg fp "${fp:-}" --arg a "${CODEX_LEDGER_STUB_AUTHOR:-nathanjohnpayne}" \
+  '{head_sha: $h, author: $a, max_blocking_reviews: 10, policy_fingerprint: $fp, responses: []}'
+LEDGER_EOF
+chmod +x "$LEDGER_STUB"
+export MERGEPATH_CODEX_LEDGER_CMD="$LEDGER_STUB"
 
 # Build a temp repo whose stubbed gh returns a bot comment after the trigger.
 # With later_verdict=true, the first post-trigger scan returns that comment and
@@ -381,7 +398,7 @@ run_request_e2e() { # comment_body [later_verdict] → prints "rc|blocked_reason
   # Keep punctuation in the ordinary fixture path so the generated stub must
   # transport it as data rather than embedding it in shell source.
   local body="$1" later_verdict="${2:-false}" dir="$E2E_WORKDIR/case $RANDOM's fixture" rc=0 start elapsed
-  mkdir -p "$dir/scripts/lib" "$dir/.github" "$dir/bin"
+  mkdir -p "$dir/scripts/lib" "$dir/scripts/workflow" "$dir/.github" "$dir/bin" "$dir/state"
   printf '%s' "$body" >"$dir/comment-body.txt"
   [ "$later_verdict" = true ] && : >"$dir/later-verdict"
   cp "$REQUEST" "$dir/scripts/codex-review-request.sh"; chmod +x "$dir/scripts/codex-review-request.sh"
@@ -389,6 +406,9 @@ run_request_e2e() { # comment_body [later_verdict] → prints "rc|blocked_reason
   cp "$ROOT/scripts/lib/gh-api-scalar.sh" "$dir/scripts/lib/gh-api-scalar.sh"   # #799, hard-sourced
   cp "$ROOT/scripts/lib/gh-api-array.sh" "$dir/scripts/lib/gh-api-array.sh"     # #1008, hard-sourced
   cp "$ROOT/scripts/lib/codex-request-evidence.sh" "$dir/scripts/lib/codex-request-evidence.sh"
+  cp "$ROOT/scripts/lib/feedback-policy-helpers.sh" "$dir/scripts/lib/feedback-policy-helpers.sh"
+  cp "$ROOT/scripts/workflow/resolve_base_policy.sh" "$dir/scripts/workflow/resolve_base_policy.sh"
+  chmod +x "$dir/scripts/workflow/resolve_base_policy.sh"
   cat >"$dir/.github/review-policy.yml" <<'EOF'
 author_identity: nathanjohnpayne
 codex:
@@ -398,6 +418,7 @@ codex:
   ack_wait_seconds: 0
   max_ack_retries: 0
 EOF
+  cp "$dir/.github/review-policy.yml" "$dir/state/base-review-policy.yml"
   cat >"$dir/scripts/gh-as-author.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -417,7 +438,11 @@ shift
 [ "${1:-}" = "--paginate" ] && shift
 endpoint=${1:-}
 case "$endpoint" in
-  repos/owner/repo/pulls/999)            printf '{"head":{"sha":"%s"}}\n' "$head" ;;
+  repos/owner/repo/pulls/999)            printf '{"head":{"sha":"%s"},"base":{"ref":"main","sha":"base-sha","repo":{"default_branch":"main"}}}\n' "$head" ;;
+  'repos/owner/repo/contents/.github/review-policy.yml?ref=base-sha')
+    case_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+    cat "$case_dir/state/base-review-policy.yml"
+    ;;
   repos/owner/repo/commits/$head)        printf '%s\n' "$t0" ;;
   repos/owner/repo/issues/999/timeline)  printf '[]\n' ;;
   repos/owner/repo/pulls/999/reviews)    printf '[]\n' ;;
