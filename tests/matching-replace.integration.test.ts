@@ -34,13 +34,23 @@ import {
   getAdminDb,
   initializeAdminAppForTests,
 } from "../functions/src/firestore/admin.ts";
-import { runMatchingPipeline } from "../functions/src/matching/pipeline.ts";
+import {
+  MATCH_WRITES_PER_COMMIT,
+  MatchingRunSuperseded,
+  matchDocId,
+  replaceMatchesForRole,
+  runMatchingPipeline,
+} from "../functions/src/matching/pipeline.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
   UnitMatch,
 } from "../functions/src/types/capability.ts";
 import type { ScoreResult } from "../functions/src/matching/score.ts";
+import {
+  isMatchingRunIncomplete,
+  type MatchingRunMarker,
+} from "../functions/src/matching/runMarker.ts";
 
 const PROJECT_ID = "matchline-matching-replace-test";
 const ALICE = "user-alice";
@@ -85,6 +95,7 @@ beforeEach(async () => {
     "experienceUnits",
     "jobRequirementUnits",
     "unitMatches",
+    "matchingRuns",
   ]) {
     const snap = await db().collection(col).get();
     const batch = db().batch();
@@ -268,30 +279,53 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
     expect(first).toHaveLength(1);
     const firstMatchId = first[0]!.id;
 
-    // Second run should produce a different id (UUIDv4) but
-    // replace the prior match doc.
+    // The pair's id is deterministic, so the second run
+    // overwrites the first run's doc in place rather than
+    // deleting it and writing a new one. (Before deterministic
+    // ids, every rerun cost a delete per prior match plus a
+    // write per new one.)
+    expect(firstMatchId).toBe(matchDocId(ALICE, "role-1", "u1", "r1"));
     const second = await runMatchingPipeline(
       { ownerUid: ALICE, roleId: "role-1" },
       { score: FAKE_SCORE },
     );
     expect(second).toHaveLength(1);
-    expect(second[0]!.id).not.toBe(firstMatchId);
+    expect(second[0]!.id).toBe(firstMatchId);
 
-    // Firestore now contains exactly the second-run match —
-    // not a union of first + second.
+    // Firestore contains exactly one match for the pair — not a
+    // union of first + second.
     const snap = await db()
       .collection("unitMatches")
       .where("owner_uid", "==", ALICE)
       .where("role_id", "==", "role-1")
       .get();
     expect(snap.docs).toHaveLength(1);
-    expect(snap.docs[0]!.id).toBe(second[0]!.id);
-    // The first run's match doc is gone.
-    const firstDocSnap = await db()
+    expect(snap.docs[0]!.id).toBe(firstMatchId);
+  });
+
+  it("a rerun deletes matches for a pair that no longer exists (orphans), and only those", async () => {
+    await seedRole("role-1", ALICE);
+    await seedUnits([makeUnit("u1", ALICE), makeUnit("u2", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+    await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+
+    // u2 is un-approved, so it drops out of the matching input.
+    await db().collection("experienceUnits").doc("u2").update({ user_approved: false });
+    const second = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(second.map((m) => m.id)).toEqual([matchDocId(ALICE, "role-1", "u1", "r1")]);
+
+    const snap = await db()
       .collection("unitMatches")
-      .doc(firstMatchId)
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", "role-1")
       .get();
-    expect(firstDocSnap.exists).toBe(false);
+    expect(snap.docs.map((d) => d.id)).toEqual([matchDocId(ALICE, "role-1", "u1", "r1")]);
   });
 
   it("empty-result re-run still wipes prior matches (Matches tab can't show stale)", async () => {
@@ -667,5 +701,341 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
       expect(m.user_rejected).toBe(false);
       expect(m.approved_for_use).toBe(false);
     }
+  });
+});
+
+// -- Realistic Role sizes -------------------------------------------------
+//
+// The previous implementation deleted every prior match and wrote
+// every new one in ONE transaction, and threw above 450 ops. A
+// realistic Role — ~22 approved Units × ~15 Requirements ≈ 330
+// matches — fit on its first run (330 ops) and failed on every rerun
+// (330 deletes + 330 writes = 660), which is exactly when users rerun:
+// after editing a Unit or re-parsing the JD. These pin the fix
+// (deterministic ids + chunked commits) at and beyond that size.
+
+describe("runMatchingPipeline at realistic Role sizes", () => {
+  async function seedRoleOfSize(
+    roleId: string,
+    unitCount: number,
+    reqCount: number,
+  ): Promise<void> {
+    await seedRole(roleId, ALICE);
+    await seedUnits(
+      Array.from({ length: unitCount }, (_, i) => makeUnit(`u${i}`, ALICE)),
+    );
+    await seedRequirements(
+      Array.from({ length: reqCount }, (_, i) =>
+        makeRequirement(`r${i}`, ALICE, roleId),
+      ),
+    );
+  }
+
+  async function storedMatches(roleId: string): Promise<UnitMatch[]> {
+    const snap = await db()
+      .collection("unitMatches")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", roleId)
+      .get();
+    return snap.docs.map((d) => ({ ...(d.data() as UnitMatch), id: d.id }));
+  }
+
+  it("22 Units × 15 Requirements: a rerun succeeds, keeps 330 docs at the same ids, and carries decisions forward", async () => {
+    await seedRoleOfSize("role-1", 22, 15);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+
+    const first = await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    expect(first).toHaveLength(330);
+
+    // The user reviews a few matches between runs.
+    const approvedId = matchDocId(ALICE, "role-1", "u0", "r0");
+    const rejectedId = matchDocId(ALICE, "role-1", "u21", "r14");
+    await db().collection("unitMatches").doc(approvedId).update({ approved_for_use: true });
+    await db().collection("unitMatches").doc(rejectedId).update({ user_rejected: true });
+
+    // Pre-fix this threw: 330 existing + 330 new = 660 > 450.
+    const second = await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    expect(second).toHaveLength(330);
+
+    const stored = await storedMatches("role-1");
+    expect(stored).toHaveLength(330);
+    expect(new Set(stored.map((m) => m.id))).toEqual(new Set(first.map((m) => m.id)));
+
+    const byId = new Map(stored.map((m) => [m.id, m]));
+    expect(byId.get(approvedId)).toMatchObject({ approved_for_use: true, user_rejected: false });
+    expect(byId.get(rejectedId)).toMatchObject({ approved_for_use: false, user_rejected: true });
+    const untouched = stored.filter((m) => m.id !== approvedId && m.id !== rejectedId);
+    expect(untouched.every((m) => !m.approved_for_use && !m.user_rejected)).toBe(true);
+  });
+
+  it("migrates a Role whose 330 matches have legacy random ids: rewrites all, deletes the legacy docs, keeps decisions", async () => {
+    // Matches written before deterministic ids have random UUIDs. The
+    // first rerun after this change must overwrite nothing it can't
+    // see, delete all 330 legacy docs, and still carry the user's
+    // decisions forward by (Unit, Requirement) pair: 330 writes + 330
+    // deletes, well past the old single-transaction ceiling.
+    await seedRoleOfSize("role-1", 22, 15);
+    const legacy: UnitMatch[] = [];
+    for (let u = 0; u < 22; u += 1) {
+      for (let r = 0; r < 15; r += 1) {
+        legacy.push(
+          makeMatch({
+            id: `legacy-u${u}-r${r}`,
+            owner_uid: ALICE,
+            role_id: "role-1",
+            experience_unit_id: `u${u}`,
+            job_requirement_unit_id: `r${r}`,
+            approved_for_use: u === 3 && r === 4,
+            user_rejected: u === 5 && r === 6,
+          }),
+        );
+      }
+    }
+    await seedMatches(legacy);
+
+    const result = await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+    expect(result).toHaveLength(330);
+
+    const stored = await storedMatches("role-1");
+    expect(stored).toHaveLength(330);
+    expect(stored.some((m) => m.id.startsWith("legacy-"))).toBe(false);
+    const byId = new Map(stored.map((m) => [m.id, m]));
+    expect(byId.get(matchDocId(ALICE, "role-1", "u3", "r4"))).toMatchObject({
+      approved_for_use: true,
+      user_rejected: false,
+    });
+    expect(byId.get(matchDocId(ALICE, "role-1", "u5", "r6"))).toMatchObject({
+      approved_for_use: false,
+      user_rejected: true,
+    });
+  });
+
+  it(`30 Units × 20 Requirements (600 matches, more than one ${MATCH_WRITES_PER_COMMIT}-write commit): first run and rerun both land every match`, async () => {
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+
+    const first = await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    expect(first).toHaveLength(600);
+    expect(await storedMatches("role-1")).toHaveLength(600);
+
+    const second = await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    expect(second).toHaveLength(600);
+    expect(await storedMatches("role-1")).toHaveLength(600);
+  });
+
+  it("a re-parse that replaces every Requirement deletes all 330 stranded matches and writes the new set", async () => {
+    await seedRoleOfSize("role-1", 22, 15);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+
+    // Re-parse: the JD pipeline replaces the Requirement set with new
+    // ids, so every prior match is now an orphan.
+    const oldReqs = await db()
+      .collection("jobRequirementUnits")
+      .where("role_id", "==", "role-1")
+      .get();
+    const batch = db().batch();
+    oldReqs.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    await seedRequirements(
+      Array.from({ length: 15 }, (_, i) => makeRequirement(`r2-${i}`, ALICE, "role-1")),
+    );
+
+    const second = await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    expect(second).toHaveLength(330);
+    const stored = await storedMatches("role-1");
+    expect(stored).toHaveLength(330);
+    expect(stored.every((m) => m.job_requirement_unit_id.startsWith("r2-"))).toBe(true);
+  });
+
+  it("an older run overlapped by a newer one stops before its orphan pass — the store holds the newer set, not the intersection", async () => {
+    // Each run treats the other's writes as orphans. Without the
+    // (owner, Role) run marker, run A's orphan pass would delete every
+    // doc run B wrote that A did not produce, after B's own orphan pass
+    // had already deleted A's extras — leaving only the pairs both runs
+    // produced. The seam starts B at exactly that point: after A's
+    // chunked writes, before A's orphan pass.
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    const units = (
+      await db().collection("experienceUnits").where("owner_uid", "==", ALICE).get()
+    ).docs.map((d) => d.data() as ExperienceUnit);
+    const reqs = (
+      await db().collection("jobRequirementUnits").where("role_id", "==", "role-1").get()
+    ).docs.map((d) => d.data() as JobRequirementUnit);
+    // Run A matches u0..u24, run B u5..u29: 500 pairs each (so both
+    // take the chunked path), 400 in common.
+    const unitsA = units.filter((u) => Number(u.id.slice(1)) < 25);
+    const unitsB = units.filter((u) => Number(u.id.slice(1)) >= 5);
+
+    let runB: readonly UnitMatch[] = [];
+    // The overlapped run reports its supersession instead of success (#501 review).
+    await expect(runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => unitsA,
+      listRequirements: async () => reqs,
+      persistBatch: (c, m) =>
+        replaceMatchesForRole(c, m, {
+          afterChunkedWrites: async () => {
+            runB = await runMatchingPipeline(ctx, {
+              score: FAKE_SCORE,
+              listUnits: async () => unitsB,
+              listRequirements: async () => reqs,
+            });
+          },
+        }),
+    })).rejects.toBeInstanceOf(MatchingRunSuperseded);
+
+    expect(runB).toHaveLength(500);
+    const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
+    const expected = new Set(runB.map((m) => m.id));
+    expect(stored.size).toBe(expected.size);
+    expect([...stored].every((id) => expected.has(id))).toBe(true);
+    // B inherited A's partial writes and converged them, so the Role
+    // is whole again; the superseded A must not have marked it failed.
+    expect(await runMarker("role-1")).toMatchObject({ state: "complete", partial: false });
+  });
+
+  it("invocation order wins: a slow run that read its inputs first cannot overwrite a faster run invoked after it", async () => {
+    // Run A is invoked first and reads the pre-edit inputs, but is slow
+    // to get there; run B is invoked after (e.g. after a Unit edit or a
+    // re-parse) and finishes first. A must not commit its stale set over
+    // B's. The marker is claimed before inputs are read, so A — the
+    // earlier invocation — is the superseded one.
+    await seedRoleOfSize("role-1", 3, 2);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    const reqs = (
+      await db().collection("jobRequirementUnits").where("role_id", "==", "role-1").get()
+    ).docs.map((d) => d.data() as JobRequirementUnit);
+    const allUnits = (
+      await db().collection("experienceUnits").where("owner_uid", "==", ALICE).get()
+    ).docs.map((d) => d.data() as ExperienceUnit);
+    const unitsA = allUnits; // pre-edit: u0, u1, u2
+    const unitsB = allUnits.filter((u) => u.id !== "u2"); // post-edit: u2 un-approved
+
+    let releaseA!: () => void;
+    const aMayRead = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let signalAReading!: () => void;
+    const aIsReading = new Promise<void>((resolve) => {
+      signalAReading = resolve;
+    });
+
+    const runA = runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => {
+        signalAReading(); // A has claimed its marker and started reading
+        await aMayRead;
+        return unitsA;
+      },
+      listRequirements: async () => reqs,
+    });
+    await aIsReading;
+
+    const b = await runMatchingPipeline(ctx, {
+      score: FAKE_SCORE,
+      listUnits: async () => unitsB,
+      listRequirements: async () => reqs,
+    });
+    releaseA();
+    // Superseded: reports it rather than claiming success (#501 review).
+    await expect(runA).rejects.toBeInstanceOf(MatchingRunSuperseded);
+
+    const stored = new Set((await storedMatches("role-1")).map((m) => m.id));
+    expect(stored).toEqual(new Set(b.map((m) => m.id)));
+    expect(stored.size).toBe(4); // 2 Units × 2 Requirements, not A's 6
+  });
+
+  // -- Run marker: "stopped part-way" state (#504) ---------------------------
+
+  async function runMarker(roleId: string): Promise<MatchingRunMarker | undefined> {
+    const snap = await db()
+      .collection("matchingRuns")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", roleId)
+      .get();
+    expect(snap.size).toBeLessThanOrEqual(1);
+    return snap.docs[0]?.data() as MatchingRunMarker | undefined;
+  }
+
+  const LIVE_MS = 150_000;
+
+  it("a run that fits one commit marks the marker complete and never partial", async () => {
+    await seedRoleOfSize("role-1", 22, 15);
+    await runMatchingPipeline({ ownerUid: ALICE, roleId: "role-1" }, { score: FAKE_SCORE });
+    const marker = await runMarker("role-1");
+    expect(marker).toMatchObject({ state: "complete", partial: false });
+    expect(isMatchingRunIncomplete(marker, Date.now(), LIVE_MS)).toBe(false);
+  });
+
+  it("a chunked run that dies part-way leaves the Role marked partial and failed, until a run completes", async () => {
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+
+    // Every write chunk commits, then the run fails before its orphan
+    // pass and completion: the store holds this run's writes alongside
+    // whatever the previous run left.
+    await expect(
+      runMatchingPipeline(ctx, {
+        score: FAKE_SCORE,
+        persistBatch: (c, m) =>
+          replaceMatchesForRole(c, m, {
+            afterChunkedWrites: async () => {
+              throw new Error("instance stopped mid-run");
+            },
+          }),
+      }),
+    ).rejects.toThrow("instance stopped mid-run");
+    const failed = await runMarker("role-1");
+    expect(failed).toMatchObject({ state: "failed", partial: true });
+    expect(isMatchingRunIncomplete(failed, Date.now(), LIVE_MS)).toBe(true);
+
+    // A run that fails BEFORE writing anything leaves the store exactly
+    // as mixed as it found it, so it must carry `partial` forward.
+    const throwingScore: typeof FAKE_SCORE = () => {
+      throw new Error("score bug");
+    };
+    await expect(
+      runMatchingPipeline(ctx, { score: throwingScore }),
+    ).rejects.toThrow(/threw on every candidate pair/);
+    const stillMixed = await runMarker("role-1");
+    expect(stillMixed).toMatchObject({ state: "failed", partial: true });
+    expect(stillMixed?.run_id).not.toBe(failed?.run_id);
+
+    // A completed run converges the Role and clears the state.
+    await runMatchingPipeline(ctx, { score: FAKE_SCORE });
+    const whole = await runMarker("role-1");
+    expect(whole).toMatchObject({ state: "complete", partial: false });
+    expect(isMatchingRunIncomplete(whole, Date.now(), LIVE_MS)).toBe(false);
+    expect(await storedMatches("role-1")).toHaveLength(600);
+  });
+
+  it("a run that dies without reaching its catch reads as incomplete only once its deadline passes", async () => {
+    await seedRoleOfSize("role-1", 30, 20);
+    const ctx = { ownerUid: ALICE, roleId: "role-1" };
+    // Simulate a killed instance: the chunked writes commit and the
+    // marker is left exactly as they leave it (running + partial),
+    // because a crash never reaches the code that marks it failed.
+    let markerAtDeath: MatchingRunMarker | undefined;
+    await expect(
+      runMatchingPipeline(ctx, {
+        score: FAKE_SCORE,
+        persistBatch: (c, m) =>
+          replaceMatchesForRole(c, m, {
+            afterChunkedWrites: async () => {
+              markerAtDeath = await runMarker("role-1");
+              throw new Error("killed");
+            },
+          }),
+      }),
+    ).rejects.toThrow("killed");
+    expect(markerAtDeath).toMatchObject({ state: "running", partial: true });
+    const started = Date.parse(markerAtDeath!.started_at);
+    expect(isMatchingRunIncomplete(markerAtDeath, started + 1_000, LIVE_MS)).toBe(false);
+    expect(isMatchingRunIncomplete(markerAtDeath, started + LIVE_MS + 1, LIVE_MS)).toBe(true);
   });
 });

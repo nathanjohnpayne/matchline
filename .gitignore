@@ -10,6 +10,10 @@ functions/lib/
 .env
 .env.local
 .env.*.local
+# Functions param values per project (e.g. MATCHLINE_OWNER_UIDS; see
+# DEPLOYMENT.md § Owner allowlist). The Firebase CLI also writes here
+# when it prompts for a missing param.
+functions/.env.*
 *.pem
 *.key
 

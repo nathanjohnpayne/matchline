@@ -1,8 +1,8 @@
 /**
  * HTTPS callable exposing the matching pipeline. Step 3 of the
  * core loop. One call: roleId → score every approved Unit
- * against every Requirement under the Role → atomically
- * replace the persisted match set → return.
+ * against every Requirement under the Role → replace the
+ * persisted match set → return.
  *
  * Auth-required; role_id required. Same role-ownership
  * precondition as `parseJobRequirements` — the admin SDK persist
@@ -15,8 +15,9 @@
 
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
-import { runMatchingPipeline, readRoleOwnerUid } from "../matching/pipeline.js";
+import { MatchingRunSuperseded, runMatchingPipeline, readRoleOwnerUid } from "../matching/pipeline.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { requireOwner } from "./ownerGate.js";
 
 interface RunMatchingData {
   readonly roleId?: string;
@@ -29,12 +30,9 @@ export const runMatchingCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.runMatching,
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "runMatching requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // Firestore read (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "runMatching");
 
     const data = request.data as RunMatchingData;
     const rawRoleId = data?.roleId;
@@ -46,7 +44,6 @@ export const runMatchingCallable = onCall(
     }
 
     const roleId = rawRoleId.trim();
-    const ownerUid = request.auth.uid;
 
     // Role-ownership precondition. Mirrors `parseJobRequirements`.
     // Collapses "not found" and "not yours" into one message so an
@@ -60,7 +57,20 @@ export const runMatchingCallable = onCall(
       );
     }
 
-    const matches = await runMatchingPipeline({ ownerUid, roleId });
-    return { matches };
+    try {
+      const matches = await runMatchingPipeline({ ownerUid, roleId });
+      return { matches };
+    } catch (err) {
+      if (err instanceof MatchingRunSuperseded) {
+        // A newer run for this Role took over part-way through. It may
+        // or may not finish, so never present this run as a success.
+        throw new HttpsError(
+          "aborted",
+          "A newer matching run for this Role replaced this one before it finished. " +
+            "If the matches look incomplete, run matching again.",
+        );
+      }
+      throw err;
+    }
   },
 );

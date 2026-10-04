@@ -20,9 +20,15 @@
  * the status back to "passed" or "failed".
  */
 
+import { doc, onSnapshot, type Unsubscribe } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 
-import { getFunctionsClient } from "../firebase.ts";
+import { getDb, getFunctionsClient } from "../firebase.ts";
+import {
+  VALIDATIONS_SUBCOLLECTION,
+  validationAttestationId,
+  type ValidationAttestation,
+} from "../../functions/src/validation/attestation.ts";
 import { callableOptions } from "./callable-timeouts.ts";
 import type { ValidationFlag, ValidationStatus } from "../types/crm.ts";
 
@@ -63,4 +69,46 @@ export async function invokeValidateAsset(
   );
   const result = await fn({ applicationId, assetId });
   return result.data;
+}
+
+/**
+ * Subscribe to the server's validation attestation for one asset at
+ * one content version (#502): `applications/{applicationId}/
+ * validations/{assetId}__{contentVersion}`, written only by
+ * `validateAsset`. Delivers `null` while the server holds no verdict
+ * for that content, and the record once a run attests it.
+ *
+ * The caller re-subscribes when the asset's content (and so its
+ * `assetContentVersion`) changes. Read-only: `firestore.rules`
+ * allows no client write.
+ *
+ * **Only server-confirmed state is delivered.** Firestore's latency
+ * compensation hands a client's own pending write to its listeners
+ * before the backend rules reject it, so a client that `setDoc`s a
+ * forged `passed` record here would see it, and the export gate would
+ * trust it, until the rejection rolls the write back. Snapshots with
+ * `hasPendingWrites` are therefore dropped (Codex P1 on #506).
+ */
+export function subscribeValidationAttestation(
+  applicationId: string,
+  assetId: string,
+  contentVersion: string,
+  callback: (attestation: ValidationAttestation | null) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const ref = doc(
+    getDb(),
+    "applications",
+    applicationId,
+    VALIDATIONS_SUBCOLLECTION,
+    validationAttestationId(assetId, contentVersion),
+  );
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.metadata.hasPendingWrites) return;
+      callback(snap.exists() ? (snap.data() as ValidationAttestation) : null);
+    },
+    onError,
+  );
 }

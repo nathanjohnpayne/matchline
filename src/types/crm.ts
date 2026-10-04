@@ -177,9 +177,27 @@ export interface AssetRef {
    * — the editor uses them for hover-trace UX.
    */
   validation_flags?: ValidationFlag[];
+  /**
+   * The editor's display state for the last validation run. It sits
+   * in a client-writable list (edits set `stale`, undo restores a
+   * snapshot's value), so it is NOT the attestation: the export gate
+   * trusts `passed` only from the server-only record in
+   * `applications/{id}/validations` for the asset's current content
+   * (`functions/src/validation/attestation.ts`, #502).
+   */
   validation_status: ValidationStatus;
   /** Set on validateAsset's last successful completion. */
   validated_at?: ISOTimestamp;
+  /**
+   * `unitEvidenceVersion` (a content fingerprint, not a timestamp) of
+   * each approved Unit the last validation run loaded as evidence,
+   * keyed by Unit id. The export gate treats a `passed` verdict as
+   * stale when a cited Unit's current fingerprint differs
+   * (`src/routes/ApplicationEditor/exportGate.ts`,
+   * `functions/src/validation/unitEvidenceVersion.ts`). Absent on
+   * assets validated before this field existed.
+   */
+  validated_unit_versions?: Record<UUID, string>;
   /**
    * Per-application LLM cost in USD, populated by
    * `generateResume` (#121). Optional because legacy/manual

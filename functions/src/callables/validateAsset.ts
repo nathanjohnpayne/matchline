@@ -24,11 +24,13 @@ import {
 } from "../validation/errors.js";
 import {
   validateAsset as runValidateAsset,
+  ValidateAssetMalformedContent,
   ValidateAssetMissingContent,
   ValidateAssetNotFound,
   ValidateAssetStale,
 } from "../validation/validate.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { requireOwner } from "./ownerGate.js";
 
 interface ValidateAssetData {
   readonly applicationId?: string;
@@ -43,12 +45,9 @@ export const validateAssetCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.validateAsset,
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "validateAsset requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // LLM or Firestore client exists (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "validateAsset");
 
     const data = request.data as ValidateAssetData;
     const rawApplicationId = data?.applicationId;
@@ -57,7 +56,7 @@ export const validateAssetCallable = onCall(
     const assetId = validateId("assetId", rawAssetId);
 
     const ctx = {
-      ownerUid: request.auth.uid,
+      ownerUid,
       applicationId,
       assetId,
     };
@@ -78,6 +77,12 @@ export const validateAssetCallable = onCall(
         throw new HttpsError(
           "permission-denied",
           "Application or asset not found, or not owned by caller.",
+        );
+      }
+      if (err instanceof ValidateAssetMalformedContent) {
+        throw new HttpsError(
+          "failed-precondition",
+          "This resume's content is malformed and can't be validated; regenerate it.",
         );
       }
       if (err instanceof ValidateAssetMissingContent) {

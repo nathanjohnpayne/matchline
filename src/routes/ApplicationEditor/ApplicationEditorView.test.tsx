@@ -9,7 +9,26 @@ import type {
   ValidationFlag,
 } from "../../types/crm.ts";
 
+import {
+  assetContentVersion,
+  type ValidationAttestation,
+} from "../../../functions/src/validation/attestation.ts";
+import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+
 import ApplicationEditorView from "./ApplicationEditorView.tsx";
+
+/** The server's passing attestation for `a`'s current content (#502). */
+function attestFor(a: AssetRef, units: readonly ExperienceUnit[] = []): ValidationAttestation {
+  return {
+    owner_uid: a.owner_uid,
+    application_id: a.application_id,
+    asset_id: a.id,
+    content_version: assetContentVersion(a.generated_content),
+    status: "passed",
+    validated_at: "2026-04-02T00:00:00.000Z",
+    validated_unit_versions: Object.fromEntries(units.map((u) => [u.id, unitEvidenceVersion(u)])),
+  };
+}
 
 /**
  * Static render of the presentational view. Same convention as
@@ -671,6 +690,65 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain('data-flag-count="0"');
   });
 
+  it("offers 'Re-run validation' next to a disabled Export when the resume is stale", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+      />,
+    );
+    expect(html).toContain('data-testid="revalidate-button"');
+    expect(html).toContain("Re-run validation");
+    expect(html).toContain('data-export-enabled="false"');
+  });
+
+  it("shows the in-flight label and disables the retry while validation runs", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+        revalidating
+      />,
+    );
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="revalidate-button"/);
+    expect(html).toContain("Re-running validation…");
+  });
+
+  it("surfaces a failed retry inline", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "stale" })}
+        units={[]}
+        onRevalidate={() => {}}
+        revalidateError="Validation couldn't run. Try again in a moment."
+      />,
+    );
+    expect(html).toContain('data-testid="revalidate-error"');
+    expect(html).toContain("Try again in a moment.");
+  });
+
+  it("offers re-validation after a failed run (evidence may have been repaired) but keeps Export disabled", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "failed" })}
+        units={[]}
+        onRevalidate={() => {}}
+      />,
+    );
+    expect(html).toContain('data-testid="revalidate-button"');
+    expect(html).toContain('data-export-enabled="false"');
+  });
+
   it("renders the export button DISABLED with a flag-count tooltip when validation_status === 'failed'", () => {
     const html = renderToStaticMarkup(
       <ApplicationEditorView
@@ -698,19 +776,63 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("Resolve 2 validation flags");
   });
 
-  it("renders the export button ENABLED when validation_status === 'passed' AND onExport is wired", () => {
+  it("renders the export button ENABLED for a server-attested pass when onExport is wired", () => {
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
         application={application()}
-        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        asset={passed}
         units={[]}
+        attestation={attestFor(passed)}
         onExport={() => undefined}
       />,
     );
     expect(html).toContain('data-export-enabled="true"');
     expect(html).not.toContain("Resolve 0 validation flags");
     expect(html).not.toContain("Export is not available yet.");
+  });
+
+  it("renders the export button DISABLED for a client-written `passed` the server never attested (#502)", () => {
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        units={[]}
+        attestation={null}
+        onExport={() => undefined}
+        onRevalidate={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("couldn");
+    expect(html).toContain('data-testid="revalidate-button"');
+  });
+
+  it("renders the export button DISABLED when a passed resume cites a Unit the user has since rejected", () => {
+    // `passed` is a verdict about the evidence at validation time;
+    // the gate re-checks it against the live Units (exportGate.ts).
+    const passed = asset({
+      validation_status: "passed",
+      validation_flags: [],
+      validated_at: "2026-04-02T00:00:00.000Z",
+      generated_content: content({
+        bullets: [{ id: "b1", text: "Led a team.", source_unit_ids: ["u-rejected"] }],
+      }),
+    });
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application({ approved_unit_ids: ["u-rejected"] })}
+        asset={passed}
+        units={[unit({ id: "u-rejected", user_approved: false, rejected: true })]}
+        attestation={attestFor(passed, [unit({ id: "u-rejected" })])}
+        onExport={() => undefined}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="false"');
+    expect(html).toContain("no longer approved");
   });
 
   it("export button is disabled for pending and stale states with appropriate copy", () => {
@@ -742,12 +864,14 @@ describe("ApplicationEditorView", () => {
     // status="passed", the button must NOT look enabled if the
     // container hasn't wired a click handler. CodeRabbit Major
     // on PR #182.
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
         application={application()}
-        asset={asset({ validation_status: "passed", validation_flags: [] })}
+        asset={passed}
         units={[]}
+        attestation={attestFor(passed)}
         // onExport intentionally omitted
       />,
     );

@@ -19,6 +19,7 @@ import { runJdParsingPipeline } from "../parsing/pipeline.js";
 import { anthropicKey } from "../llm/anthropic.js";
 import { openaiKey } from "../llm/openai.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { assertTextWithinLimit, requireOwner } from "./ownerGate.js";
 
 interface ParseJobRequirementsData {
   readonly roleId?: string;
@@ -33,12 +34,9 @@ export const parseJobRequirementsCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.parseJobRequirements,
   },
   async (request, response) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "parseJobRequirements requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // LLM or Firestore client exists (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "parseJobRequirements");
 
     const data = request.data as ParseJobRequirementsData;
     const rawText = data?.text;
@@ -62,7 +60,7 @@ export const parseJobRequirementsCallable = onCall(
     // would vanish from the UI (Codex P3 on #19).
     const roleId = rawRoleId.trim();
     const text = rawText.trim();
-    const ownerUid = request.auth.uid;
+    assertTextWithinLimit(text);
 
     // Role-ownership precondition. The admin-SDK pipeline bypasses
     // firestore.rules, so we enforce ownership here before any

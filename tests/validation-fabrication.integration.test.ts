@@ -35,6 +35,12 @@ import {
   validateAsset,
   ValidateAssetNotFound,
 } from "../functions/src/validation/validate.ts";
+import {
+  VALIDATIONS_SUBCOLLECTION,
+  assetContentVersion,
+  validationAttestationId,
+  type ValidationAttestation,
+} from "../functions/src/validation/attestation.ts";
 import type { ExperienceUnit } from "../functions/src/types/capability.ts";
 import type {
   AssetRef,
@@ -68,13 +74,26 @@ afterAll(async () => {
 const db = (): ReturnType<typeof getAdminDb> => getAdminDb();
 
 beforeEach(async () => {
+  // Recursive: each application carries a `validations` subcollection
+  // (#502) that a plain doc delete would leave behind.
   for (const col of ["applications", "experienceUnits"]) {
-    const snap = await db().collection(col).get();
-    const batch = db().batch();
-    snap.docs.forEach((d) => batch.delete(d.ref));
-    if (snap.docs.length > 0) await batch.commit();
+    await db().recursiveDelete(db().collection(col));
   }
 });
+
+/** The server attestation for an asset's current content, if any (#502). */
+async function readAttestation(
+  applicationId: string,
+  asset: AssetRef,
+): Promise<ValidationAttestation | undefined> {
+  const snap = await db()
+    .collection("applications")
+    .doc(applicationId)
+    .collection(VALIDATIONS_SUBCOLLECTION)
+    .doc(validationAttestationId(asset.id, assetContentVersion(asset.generated_content)))
+    .get();
+  return snap.data() as ValidationAttestation | undefined;
+}
 
 // -- Seed helpers -----------------------------------------------------------
 
@@ -218,6 +237,17 @@ describe("validateAsset — Firestore integration", () => {
     expect(persistedAsset!.validation_flags).toHaveLength(1);
     expect(persistedAsset!.validation_flags![0]!.status).toBe("untraceable");
     expect(persistedAsset!.validated_at).toBeDefined();
+    // The real persist path writes the evidence versions alongside the
+    // verdict (the export gate's staleness check reads them).
+    expect(persistedAsset!.validated_unit_versions).toEqual(
+      result.validated_unit_versions,
+    );
+    // A failed verdict is attested too, so the gate can never read it
+    // as a pass (#502).
+    expect(await readAttestation("app-1", persistedAsset!)).toMatchObject({
+      status: "failed",
+      asset_id: "asset-1",
+    });
   });
 
   it("CLEAN: every claim traces + is specific → status=passed, all flags traced", async () => {
@@ -268,6 +298,27 @@ describe("validateAsset — Firestore integration", () => {
       snap.data() as { generated_assets: AssetRef[] }
     ).generated_assets.find((a) => a.id === "asset-1");
     expect(persistedAsset!.validation_status).toBe("passed");
+
+    // And the server-only attestation the export gate trusts (#502),
+    // keyed by exactly this content.
+    expect(await readAttestation("app-1", persistedAsset!)).toEqual({
+      owner_uid: ALICE,
+      application_id: "app-1",
+      asset_id: "asset-1",
+      content_version: assetContentVersion(persistedAsset!.generated_content),
+      status: "passed",
+      validated_at: result.validated_at,
+      validated_unit_versions: result.validated_unit_versions,
+    });
+    // Any edit moves the content to a version with no attestation.
+    const edited: AssetRef = {
+      ...persistedAsset!,
+      generated_content: {
+        ...persistedAsset!.generated_content!,
+        bullets: [{ id: "b1", text: "Reduced playback memory 90%.", source_unit_ids: ["u1"] }],
+      },
+    };
+    expect(await readAttestation("app-1", edited)).toBeUndefined();
   });
 
   it("REPLACE-WHOLESALE: re-running validateAsset replaces the prior flag set + status", async () => {

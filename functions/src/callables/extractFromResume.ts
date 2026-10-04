@@ -20,6 +20,7 @@ import { ExtractionError } from "../extraction/errors.js";
 import { anthropicKey } from "../llm/anthropic.js";
 import { openaiKey } from "../llm/openai.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { assertTextWithinLimit, requireOwner } from "./ownerGate.js";
 
 interface ExtractFromResumeData {
   readonly text?: string;
@@ -37,12 +38,9 @@ export const extractFromResumeCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.extractFromResume,
   },
   async (request, response) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "extractFromResume requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // LLM or Firestore client exists (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "extractFromResume");
 
     const data = request.data as ExtractFromResumeData;
     const text = data?.text;
@@ -52,6 +50,7 @@ export const extractFromResumeCallable = onCall(
         "extractFromResume expects { text: string } with non-empty content.",
       );
     }
+    assertTextWithinLimit(text);
 
     try {
       // Streaming progress (#428). Emitting is unconditional and safe:
@@ -70,7 +69,7 @@ export const extractFromResumeCallable = onCall(
       // PR #436.
       const units = await runExtractionPipeline(
         text,
-        { ownerUid: request.auth.uid },
+        { ownerUid },
         {
           onProgress: (event) => {
             response?.sendChunk(event).catch(() => {});

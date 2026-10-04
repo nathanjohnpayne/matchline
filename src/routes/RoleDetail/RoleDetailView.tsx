@@ -92,6 +92,8 @@ export interface RoleDetailViewProps {
    */
   readonly onRerunMatching?: () => void;
   readonly matchingError?: Error | null;
+  /** See `MatchesTabProps.matchingIncomplete` (#504). */
+  readonly matchingIncomplete?: boolean;
   /**
    * Requirements tab parse state (#201). The container holds
    * `parseJobRequirements`-call state + the in-flight save
@@ -142,6 +144,7 @@ export default function RoleDetailView({
   computingMatches,
   onRerunMatching,
   matchingError,
+  matchingIncomplete,
   parsingStatus,
   parseProgress,
   parseStartedAt,
@@ -282,6 +285,7 @@ export default function RoleDetailView({
           <MatchesTab
             onRerunMatching={onRerunMatching}
             matchingError={matchingError}
+            matchingIncomplete={matchingIncomplete}
             groups={groups}
             gaps={gapReport.gaps}
             evidenceStatus={evidenceStatus}

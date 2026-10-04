@@ -109,6 +109,7 @@ Acceptance criteria:
   does not trace to an approved Unit is flagged.
 - The Application Editor blocks export while any validation flag is
   unresolved.
+- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
 - Exports are available as PDF, DOCX, and plain text.
 
 ### End-to-end acceptance
@@ -298,6 +299,19 @@ Non-goals:
 - Does not hide low-quality matches; they appear in the Gaps view.
 - Does not pretend to certainty; every score surfaces its reasoning.
 
+### Persisting a run, and runs that stop part-way
+
+A run replaces the Role's whole match set. When the writes and orphan deletes fit one commit (`MATCH_WRITES_PER_COMMIT`), the replacement is a single transaction, so a failed run leaves the previous set intact. Above that size it is committed in chunks, and a run that stops between chunks leaves some pairs rescored and the rest from an earlier run. The user must be told when that happens, because the Matches tab otherwise presents a mixed set as one run's result (#504).
+
+Each (owner, Role) has one run marker in `matchingRuns`, written only by the matching pipeline and readable by its owner. Its contract (`functions/src/matching/runMarker.ts`) is:
+
+- `run_id` names the run that may commit. Each run claims a fresh one before reading its inputs (last writer wins), and every commit re-checks it, so the run whose claim landed last is the one that may commit. That is the most recently invoked run unless two invocations race to claim. A superseded run stops writing and reports that it did not complete.
+- `state` is `running`, `complete` or `failed`. A run that throws tries to mark itself `failed` if it is still the current run; this is best effort, and if that write fails the marker stays `running`. A run that is killed (a crash or the callable's timeout) cannot mark anything and also stays `running`. Either way the deadline below eventually reads it as dead.
+- `partial` means the persisted set may mix runs. Every chunked commit sets it in the same transaction as its writes. Each new claim carries it forward until a run completes, so a later run that fails before writing cannot hide an earlier run's mixed set. Only the commit that completes a run clears it.
+- A Role is **incomplete** when `partial` is set and no run is plausibly still finishing: `state` is `failed`, or `state` is `running` and more than the `runMatching` callable's timeout plus a clock-skew margin has passed since `started_at`, or `state` is `running` and `started_at` is absent or unparseable (nothing proves the run alive). A marker with no `state` (written before this contract) reads as complete.
+
+While a Role is incomplete and no run is in progress in the tab, the Matches tab shows a status notice next to **Re-run matching**. The notice is advisory: if the marker cannot be read, the tab shows no notice and keeps working.
+
 ## Validation layer
 
 Before any generated output reaches the user:
@@ -310,6 +324,8 @@ Before any generated output reaches the user:
 
 The validation layer is a hard constraint. No generated output may be
 presented to the user without a completed traceability pass.
+
+The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
 
 ## AI pipeline
 
@@ -462,6 +478,17 @@ directly serving matching or generation.
 - **Capability Graph is portable.** JSON export is a V1 feature.
 - **Cost is a feature.** The per-application budget is a hard
   constraint, not a target.
+
+## Access control
+
+V1 is single-user, and that is an authorization rule, not only a product scope. Signing in to Firebase Auth is not enough; Firebase Auth admits any account that can sign in.
+
+- **Owner allowlist, two layers.** Every callable rejects a caller whose uid is not in the `MATCHLINE_OWNER_UIDS` function param with `permission-denied`, before argument parsing and before any LLM or Firestore client is built. `firestore.rules` admits a client read or write only when the caller's uid is listed in the single fixed document `config/access` (`owner_uids`), which the deploy writes with a full overwrite from the same value. Each layer fails closed on its own: an empty param, or a missing or malformed `config/access`, admits nobody, including the owner. A per-uid document grants nothing, so nothing a client wrote before these rules can become access after them.
+- **No self-service.** The sign-in surface offers no account creation, and no client can read or write `config/`.
+- **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and pipeline-only writes (`llm_calls`, plus creates and deletes of `jobRequirementUnits` and `unitMatches`) are closed to clients; the owner may edit only a parsed Requirement's content fields and a match's approve/reject decision. Server-owned fields (`experienceUnits.embedding`, Application grounding and asset creation) are not client-writable.
+- **Bounded input.** Pasted resume and JD text is capped at 100 KB (UTF-8) per call.
+
+Configuration and deploy order: `DEPLOYMENT.md` § Owner allowlist.
 
 ## Stack
 

@@ -25,6 +25,7 @@ import {
   reembedExperienceUnit,
 } from "../reembedding/reembed.js";
 import { CALLABLE_TIMEOUT_SECONDS } from "./timeouts.js";
+import { requireOwner } from "./ownerGate.js";
 
 /**
  * Request payload shape. Canonical key is `unitId` (matches the
@@ -49,12 +50,9 @@ export const reembedExperienceUnitCallable = onCall(
     timeoutSeconds: CALLABLE_TIMEOUT_SECONDS.reembedExperienceUnit,
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "reembedExperienceUnit requires a signed-in user.",
-      );
-    }
+    // Owner allowlist first — before argument parsing and before any
+    // embeddings or Firestore client exists (#439; see ./ownerGate.ts).
+    const ownerUid = requireOwner(request, "reembedExperienceUnit");
 
     const data = request.data as ReembedData;
     // Accept either `unitId` (canonical) or `unit_id` (issue-body
@@ -75,7 +73,6 @@ export const reembedExperienceUnitCallable = onCall(
     // trim here so a caller can't accidentally pass whitespace
     // that survives into a Firestore doc path.
     const unitId = rawUnitId.trim();
-    const ownerUid = request.auth.uid;
 
     try {
       const result = await reembedExperienceUnit({ ownerUid, unitId });

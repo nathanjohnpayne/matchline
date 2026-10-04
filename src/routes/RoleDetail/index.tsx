@@ -70,6 +70,7 @@ import {
   invokeRunMatching,
   setMatchApprovalState,
   subscribeMatchesByRole,
+  subscribeMatchingRunForRole,
   type MatchApprovalState,
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
@@ -91,6 +92,14 @@ import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 import { legacyEvidenceKey } from "./evidenceKey.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
 import type { MatchEvidence } from "../../../functions/src/types/evidence.ts";
+import {
+  isMatchingRunIncomplete,
+  type MatchingRunMarker,
+} from "../../../functions/src/matching/runMarker.ts";
+import {
+  MATCHING_RUN_LIVE_MS,
+  msUntilMatchingRunPresumedDead,
+} from "./matchingRunNotice.ts";
 
 export default function RoleDetail(): ReactElement {
   const { roleId } = useParams<{ roleId: string }>();
@@ -148,6 +157,12 @@ export default function RoleDetail(): ReactElement {
   // always read inside async closures.
   const [computingMatches, setComputingMatches] = useState(false);
   const [matchingError, setMatchingError] = useState<Error | null>(null);
+  // The pipeline's run marker for this Role (#504): whether the last
+  // run completed, or died part-way and left the matches mixed.
+  const [matchingRun, setMatchingRun] = useState<MatchingRunMarker | null>(null);
+  // Re-read only when a live-looking run passes its deadline; see the
+  // timer effect below.
+  const [matchingRunClockMs, setMatchingRunClockMs] = useState(() => Date.now());
   // Two-state gate (cursor #134 r1):
   //   - `matchesFirstSnapshotReceived` flips on the first
   //     real Matches snapshot delivery for the current Role.
@@ -414,13 +429,14 @@ export default function RoleDetail(): ReactElement {
           // round 2 Phase 4b on PR #206.
           //
           // Fire-and-forget — the matches subscription
-          // delivers the result; on failure the user re-triggers
-          // with the Matches tab's "Re-run matching" control,
-          // which did not exist when this comment first claimed
-          // it did (added for #442 after Codex P2 on PR #449). The
-          // computingMatches UX hint stays on for the
-          // duration so the user knows new matches are
-          // computing.
+          // delivers the result. A failure is surfaced through
+          // `matchingError`, the same banner the Matches tab's
+          // "Re-run matching" control uses, so the user knows the
+          // matches on screen were NOT recomputed against the new
+          // Requirements and can retry. It used to be swallowed
+          // with a console.warn, which left stale matches looking
+          // current. The computingMatches UX hint stays on for the
+          // duration so the user knows new matches are computing.
           if (isStale()) return;
           // A parse that produced NO Requirements must not trigger
           // matching. `replaceMatchesForRole` clears the Role's
@@ -447,8 +463,12 @@ export default function RoleDetail(): ReactElement {
           const releaseMatchBusy0 = beginAppBusy("roleDetail.runMatching");
           void invokeRunMatching(roleId)
             .catch((err: unknown) => {
-
-              console.warn("invokeRunMatching after re-parse failed", err);
+              if (isStale()) return;
+              setMatchingError(
+                new Error(
+                  friendlyCallableError(err, { operation: "re-running matching" }),
+                ),
+              );
             })
             .finally(() => {
               releaseMatchBusy0();
@@ -483,6 +503,49 @@ export default function RoleDetail(): ReactElement {
       })();
     },
     [role, roleId],
+  );
+
+  // The run marker is advisory: it only decides whether to show the
+  // "stopped part-way" notice. A failed read (rules not yet deployed,
+  // a transient error) hides the notice; it must never take the page
+  // down the way a failed Requirements or Matches read does.
+  useEffect(() => {
+    setMatchingRun(null);
+    if (roleId === undefined || roleId === "") return;
+    let active = true;
+    const unsub = subscribeMatchingRunForRole(
+      roleId,
+      (next) => {
+        if (active) setMatchingRun(next);
+      },
+      (err) => {
+        if (!active) return;
+        setMatchingRun(null);
+        console.warn("subscribeMatchingRunForRole failed", err);
+      },
+    );
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [roleId]);
+
+  // A run that dies mid-flight (crash, timeout) never writes again, so
+  // no snapshot announces that its `running` marker is now dead.
+  // Re-evaluate once its deadline passes.
+  useEffect(() => {
+    const now = Date.now();
+    setMatchingRunClockMs(now);
+    const wait = msUntilMatchingRunPresumedDead(matchingRun, now);
+    if (wait === null) return;
+    const timer = setTimeout(() => setMatchingRunClockMs(Date.now()), wait + 1_000);
+    return () => clearTimeout(timer);
+  }, [matchingRun]);
+
+  const matchingIncomplete = isMatchingRunIncomplete(
+    matchingRun,
+    matchingRunClockMs,
+    MATCHING_RUN_LIVE_MS,
   );
 
   useEffect(() => {
@@ -776,11 +839,21 @@ export default function RoleDetail(): ReactElement {
     const releaseMatchBusy1 = beginAppBusy("roleDetail.runMatching");
     void invokeRunMatching(roleId)
       .catch((err: unknown) => {
-        // Subscription delivers the new matches on success;
-        // failures log + un-set the loading state. Phase 2
-        // surfaces a toast; deferred per #21 spec.
-
-        console.warn("invokeRunMatching failed", err);
+        // Subscription delivers the new matches on success. A
+        // failure surfaces in the same `matchingError` banner the
+        // manual re-run uses; it used to be console-only, which
+        // left an empty Matches tab with no explanation.
+        if (
+          currentRoleIdRef.current !== issuedAgainstAuto ||
+          visitTokenRef.current !== issuedTokenAuto
+        ) {
+          return;
+        }
+        setMatchingError(
+          new Error(
+            friendlyCallableError(err, { operation: "computing matches" }),
+          ),
+        );
       })
       .finally(() => {
         releaseMatchBusy1();
@@ -1126,6 +1199,7 @@ export default function RoleDetail(): ReactElement {
       matchEvidence={matchEvidence}
       onRerunMatching={onRerunMatching}
       matchingError={matchingError}
+      matchingIncomplete={matchingIncomplete}
       evidenceStatus={evidenceStatus}
       unitsById={unitsById}
       error={error}
