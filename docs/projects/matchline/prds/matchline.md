@@ -3,18 +3,25 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: c55e708
+source_ref: de4b144
 project: matchline
 document_class: prd
 document_slug: matchline
 sync_direction: central-to-repo
 -->
 
+---
+tags:
+  - matchline
+  - prd
+---
 # Matchline — Product Requirements Document
 
 Version: v0.1
 Author: Nathan Payne
-Last updated: April 22, 2026
+Last updated: October 5, 2026
+
+**Status (2026-10-05):** Paused pre-launch since 2026-07-31. V1 was built through the core loop on the stack below (dev instance: `matchline-dev.web.app`) but did not ship by the July 2026 target; the result of record is 48.4% extraction and 19.1% match accuracy against the 80% bars, with p95 latency 236 s (matchline#177). Not yet built from the V1 scope below: LinkedIn and long-form context import, artifact upload, cover letters, and PDF/DOCX export. As of September 2026 the job search it was built for has resumed, so revisiting is under consideration (nathanpayne.com project page). Implementation detail: the repo's `specs/matchline.md` and `plans/matchline-implementation-plan.md`.
 
 ---
 Matchline is a Career CRM + Capability Graph + AI Application Engine.
@@ -64,7 +71,7 @@ Two things are true about the 2026 job market that weren't true three years ago.
 
 The tools that rose to the top of the last hiring cycle (Teal, Huntr, Simplify, LinkedIn Easy Apply) were built for a market where the bottleneck was application volume. The bottleneck now is signal quality in a flood of plausible noise. Matchline is built for that market: fewer applications, each one specifically grounded in your real experience, each one easy for a human reader to verify.
 
-The personal reason is that my last day at Disney is June 20, 2026. I'm running this search myself, and I want to run it with the discipline of a pipeline and the specificity of a product, not with a spreadsheet and a rotating set of resume variants. I am building the tool I need. If it generalizes later, that's a V2 conversation.
+The personal reason is that my last day at Disney was June 20, 2026. I'm running this search myself, and I want to run it with the discipline of a pipeline and the specificity of a product, not with a spreadsheet and a rotating set of resume variants. I am building the tool I need. If it generalizes later, that's a V2 conversation.
 
 ## Who V1 is for
 
@@ -121,7 +128,7 @@ V1 is a single-user tool, so traditional product metrics don't apply. Instead:
 
 ## What's in scope vs. deferred
 
-**In V1 (ship to one user by July 2026):**
+**In V1 (original target: ship to one user by July 2026; missed, see Status above):**
 - Career CRM: People, Companies, Roles, Applications, Interactions
 - Experience Units with manual review and correction
 - Multi-source career ingestion: resume paste, LinkedIn HTML, long-form prose, and artifact upload (PDF / DOCX / PPTX) into a shared extraction pipeline
@@ -144,7 +151,7 @@ V1 is a single-user tool, so traditional product metrics don't apply. Instead:
 
 I've spent ten years at Disney shipping streaming video infrastructure across device ecosystems that don't forgive imprecision—PlayStation, Xbox, Fire TV, set-top boxes, smart TVs. I've lived the reality that credibility in a technical domain comes from specific, verifiable evidence, not a polished narrative. I've also spent the last six months vibe-coding side projects that gave me the stack and the habits to build this quickly: React, TypeScript, Vite, Tailwind, and Firebase.
 
-The layoff is the forcing function. My last day is June 20, 2026. I need a tool by then that makes my search honest and efficient, and I don't want to run it the way I've watched dozens of friends run theirs. If the tool works for me, it probably works for other thoughtful senior operators in the same position. That's the V2 case. V1 is personal.
+The layoff was the forcing function. My last day was June 20, 2026, and I wanted a tool by then that would make my search honest and efficient, and I don't want to run it the way I've watched dozens of friends run theirs. If the tool works for me, it probably works for other thoughtful senior operators in the same position. That's the V2 case. V1 is personal.
 
 ---
 
@@ -617,7 +624,7 @@ The per-application cost budget is a hard constraint. If a feature blows the bud
 
 ## Stack and hosting
 
-### V1 (ship by July 2026)
+### V1 (original target: ship by July 2026)
 
 - **Frontend:** React + TypeScript + Vite + Tailwind
 - **Backend:** Firebase Functions (Node)
