@@ -11,7 +11,8 @@ V1 has exactly one user and one goal: run a disciplined senior-PM search
 end-to-end without a spreadsheet or a rotating stack of resume variants.
 See [`specs/matchline.md`](specs/matchline.md) for the authoritative
 product spec (derived from the PRD at
-`~/GitHub/docs/projects/matchline/matchline-prd.md`).
+`~/GitHub/docs/projects/matchline/prds/matchline.md`, mirrored read-only at
+[`docs/projects/matchline/prds/matchline.md`](docs/projects/matchline/prds/matchline.md)).
 
 ## For AI Agents
 

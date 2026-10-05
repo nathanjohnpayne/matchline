@@ -2,7 +2,7 @@
 
 Author: Nathan Payne (planned with Claude)
 Last updated: 2026-04-22
-PRD: [`~/GitHub/docs/projects/matchline/matchline-prd.md`](../../docs/projects/matchline/matchline-prd.md)
+PRD: [`~/GitHub/docs/projects/matchline/prds/matchline.md`](../../docs/projects/matchline/prds/matchline.md)
 Repo-local spec: [`specs/matchline.md`](../specs/matchline.md)
 
 ---

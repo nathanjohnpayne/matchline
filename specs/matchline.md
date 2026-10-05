@@ -4,7 +4,7 @@ name: Matchline V1
 status: draft
 tested: false
 reason: Spec authored before implementation; tests land per-surface starting in Sprint 1.
-derived_from: ../../docs/projects/matchline/matchline-prd.md
+derived_from: ../../docs/projects/matchline/prds/matchline.md
 ---
 
 # Matchline V1
@@ -15,7 +15,8 @@ specific job requirements, and generates tailored applications grounded
 only in user-approved evidence.
 
 The authoritative PRD lives in the `docs` sibling repo at
-`~/GitHub/docs/projects/matchline/matchline-prd.md`. This spec is the
+`~/GitHub/docs/projects/matchline/prds/matchline.md` (read-only mirror:
+`docs/projects/matchline/prds/matchline.md`). This spec is the
 repo-local derivation. On conflict, the PRD wins; file a plan entry to
 reconcile.
 
