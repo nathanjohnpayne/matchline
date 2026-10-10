@@ -226,7 +226,7 @@ Phase 4b is invoked when Phase 4a escalates to disagreement or runaway, times ou
 
 18b. If the external reviewer flags **observations** or **risks** while approving, those are converted to GitHub Issues on the repo, assigned to `nathanjohnpayne` (see [Post-Merge Issue Creation](#post-merge-issue-creation)).
 
-19b. `nathanjohnpayne` merges the PR. Done.
+19b. `nathanjohnpayne` merges the PR with the head-pinned command and under the outstanding-reviewer-disagreement rule of step 17a. Done.
 
 ### Flow Diagram
 
@@ -378,7 +378,7 @@ Note that timeout does NOT go through this escalation procedure. On a timeout (e
 
 The human resolves by one of:
 
-- **Approving the existing state** — posting an `APPROVED` review as `nathanjohnpayne` or removing the `needs-external-review` label manually. This unblocks merge under the label-gate rules in [Review Policy Configuration](#review-policy-configuration).
+- **Approving the existing state** — posting an `APPROVED` review as `nathanjohnpayne` or removing the `needs-external-review` label manually. This unblocks merge under the label-gate rules in [Review Policy Configuration](#review-policy-configuration). An outstanding non-author `CHANGES_REQUESTED` still blocks the merge (step 17a): the owner's own `APPROVED` does not release it. Release requires that reviewer to approve, dismissal of the blocking review, or an explicit owner tiebreak naming `BREAK_GLASS_REVIEW_DISAGREEMENT=<canonical-https-PR-URL>@<full-current-head-sha>`.
 - **Requesting additional changes** — typing the feedback directly in chat. The agent addresses it as normal edits. No `@codex review` loop, no round counter.
 - **Taking the PR over manually** — the human merges on behalf of the agent, or closes and reopens with a different approach, or promotes the escalation to Phase 4b manually.
 
