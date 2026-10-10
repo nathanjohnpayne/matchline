@@ -75,7 +75,8 @@ explicitly authorizes a break-glass override in chat.
 
 8. Check `.github/review-policy.yml` for the external review threshold.
    If the PR does NOT meet it (lines changed < `external_review_threshold`
-   AND no file matches `external_review_paths`), merge as nathanjohnpayne.
+   AND no file matches `external_review_paths`), merge as nathanjohnpayne
+   per REVIEW_POLICY.md step 9 (head-pinned, same rule as step 17a).
    Done.
 
 9. If the PR meets the threshold, it enters Phase 4 external review.
@@ -134,8 +135,9 @@ explicitly authorizes a break-glass override in chat.
       the merge gate (CI green + internal reviewer approved + Codex
       cleared on current HEAD). The merge gate does NOT require an
       `APPROVED` review state from the Codex bot — the app never emits
-      one. If the gate passes, merge as nathanjohnpayne with
-      `gh pr merge --squash --delete-branch`.
+      one. If the gate passes, merge as nathanjohnpayne per
+      REVIEW_POLICY.md step 17a (head-pinned merge command and the
+      outstanding-reviewer-disagreement rule).
 
    **Phase 4b — Manual CLI fallback.** Applies when Phase 4a is
    unavailable (`codex.enabled: false`, either helper script missing,
@@ -150,7 +152,7 @@ explicitly authorizes a break-glass override in chat.
    d. Wait for the external reviewer identity to post an `APPROVED` review.
    e. If the external reviewer flags observations or risks, file the
       post-merge GitHub Issues per step 11 below.
-   f. Merge as nathanjohnpayne.
+   f. Merge as nathanjohnpayne per REVIEW_POLICY.md step 19b.
 
 10. Never use `--admin` to merge unless the human explicitly authorizes it
     in chat as a break-glass exception. The hook will block it otherwise.

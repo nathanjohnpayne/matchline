@@ -155,7 +155,7 @@ Before moving past Phase 2.5, confirm all of the following:
 > **Note on automation timing:** CI workflows may apply the `needs-external-review` label automatically when a PR is opened or updated, as an early advisory based on line count and protected paths. The label blocks merge via the label-gate until external review clears. When the label is present, the agent's responsibility after internal review passes is to proceed to [Phase 4](#phase-4-external-review) — which routes the PR to Phase 4a (automated via the Codex GitHub App) or Phase 4b (manual handoff) depending on `codex.enabled` and on whether 4a converges. The label itself does NOT imply immediate human mediation; Phase 4b only posts the handoff message when the fallback path is actually taken.
 
 8. After internal review passes, the agent evaluates whether the PR meets the external review threshold (see [Review Policy Configuration](#review-policy-configuration)).
-9. If the threshold is **not** met, the agent merges the PR as `nathanjohnpayne`. Done.
+9. If the threshold is **not** met, the agent merges the PR as `nathanjohnpayne` with the same head-pinned command as step 17a (`gh pr merge <n> --squash --delete-branch --match-head-commit <full-current-head-sha>`). The outstanding-reviewer-disagreement rule in step 17a applies to every merge, including this one. Done.
 10. If the threshold **is** met, the agent proceeds to [Phase 4: External Review](#phase-4-external-review). Phase 4 itself routes the PR to Phase 4a (automated, via the Codex GitHub App) or Phase 4b (manual handoff) based on `codex.enabled` in `.github/review-policy.yml` and on whether 4a's automated loop converges. The agent does NOT post a handoff message directly from this step — Phase 4b posts its own handoff message if and when the fallback path is taken.
 
 ### Phase 4: External Review
@@ -204,7 +204,7 @@ An agent proceeds to 4a first. If 4a escalates, times out, or is disabled, the a
 
      **The merge gate must never require an `APPROVED` review state from `chatgpt-codex-connector[bot]` — the app does not emit that state.** This point is load-bearing; a merge gate that looks for Codex APPROVED will never be satisfied and the Phase 4a happy path will be unreachable.
 
-17a. On a passing merge gate, `nathanjohnpayne` merges the PR with `gh pr merge <n> --squash --delete-branch`. Never `--admin` unless the human explicitly authorizes a break-glass override in chat.
+17a. On a passing merge gate, `nathanjohnpayne` merges the PR with `gh pr merge <n> --squash --delete-branch --match-head-commit <full-current-head-sha>`. Never `--admin` unless the human explicitly authorizes a break-glass override in chat. `BREAK_GLASS_ADMIN` and `BREAK_GLASS_MERGE_STATE` do not release an outstanding non-author `CHANGES_REQUESTED`, including one on an older head or a summary-only review with no threads. The guard reads all review pages and retains each reviewer's latest opinion, ignoring `COMMENTED`, `PENDING` and `DISMISSED` records as replacing opinions. Release requires that reviewer to approve, dismissal of the blocking review itself, or a separate explicit owner tiebreak naming `BREAK_GLASS_REVIEW_DISAGREEMENT=<canonical-https-PR-URL>@<full-current-head-sha>`. This scoped variable releases only the disagreement gate and never `human-hold`. The local guard refuses deferred `--auto` or implicit native merge-queue merging, which would outlive its review snapshot; `--disable-auto` remains an attributed safety retraction and does not need a disagreement override. An immediate merge requires exactly one `--match-head-commit <full-current-head-sha>` on the merge command so GitHub rejects a head changed after the guard checked it. Nullable/deleted reviewer accounts and garbage-collected review commits are accepted: non-blocking reviews are ignored and an anonymous outstanding change request still needs dismissal or this scoped tiebreak. Review order follows the endpoint's chronological response order, not review IDs.
 
 #### Phase 4b: Manual CLI Fallback (Human Handoff)
 
@@ -226,7 +226,7 @@ Phase 4b is invoked when Phase 4a escalates to disagreement or runaway, times ou
 
 18b. If the external reviewer flags **observations** or **risks** while approving, those are converted to GitHub Issues on the repo, assigned to `nathanjohnpayne` (see [Post-Merge Issue Creation](#post-merge-issue-creation)).
 
-19b. `nathanjohnpayne` merges the PR. Done.
+19b. `nathanjohnpayne` merges the PR with the head-pinned command and under the outstanding-reviewer-disagreement rule of step 17a. Done.
 
 ### Flow Diagram
 
@@ -378,7 +378,7 @@ Note that timeout does NOT go through this escalation procedure. On a timeout (e
 
 The human resolves by one of:
 
-- **Approving the existing state** — posting an `APPROVED` review as `nathanjohnpayne` or removing the `needs-external-review` label manually. This unblocks merge under the label-gate rules in [Review Policy Configuration](#review-policy-configuration).
+- **Approving the existing state** — posting an `APPROVED` review as `nathanjohnpayne` or removing the `needs-external-review` label manually. This unblocks merge under the label-gate rules in [Review Policy Configuration](#review-policy-configuration). An outstanding non-author `CHANGES_REQUESTED` still blocks the merge (step 17a): the owner's own `APPROVED` does not release it. Release requires that reviewer to approve, dismissal of the blocking review, or an explicit owner tiebreak naming `BREAK_GLASS_REVIEW_DISAGREEMENT=<canonical-https-PR-URL>@<full-current-head-sha>`.
 - **Requesting additional changes** — typing the feedback directly in chat. The agent addresses it as normal edits. No `@codex review` loop, no round counter.
 - **Taking the PR over manually** — the human merges on behalf of the agent, or closes and reopens with a different approach, or promotes the escalation to Phase 4b manually.
 
@@ -537,7 +537,7 @@ GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" \
   gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
 
 # As author (merge, address comments, etc.):
-GH_TOKEN="$OP_PREFLIGHT_AUTHOR_PAT" gh pr merge <PR#> --merge
+GH_TOKEN="$OP_PREFLIGHT_AUTHOR_PAT" gh pr merge <PR#> --merge --match-head-commit <full-current-head-sha>
 
 # ── Fallback: inline op read (triggers biometric if session expired) ──
 
