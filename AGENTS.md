@@ -25,6 +25,8 @@ This repository uses a multi-identity AI agent code review system. The full poli
 
 ### Workflow Summary
 
+Before claiming "CI passes," confirm each required workflow actually ran and succeeded. A `SKIPPED` result means the job was not executed and is not a verification signal. For a changed job that did not run, arrange a valid run through its existing workflow events or acknowledge in the PR body that the change has not been live-tested; do not claim the skipped job passed.
+
 0. In local sessions, run credential preflight at the start of every PR session (and safely
    at the top of every subsequent tool call — re-running within the TTL
    returns cached values without a new biometric prompt):
