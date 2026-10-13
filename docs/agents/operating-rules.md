@@ -20,6 +20,12 @@ Conflict resolution:
 - If `AGENTS.md` or its sub-files are missing required sections: flag
   the gap and do not assume behavior for missing sections.
 
+## PR-body and CI verification requirements
+
+Before opening a PR, include `Authoring-Agent: <your-agent>` and a `## Self-Review` section covering correctness, regression risk, style, test coverage, and security/dependency hygiene. Use the identity-checked author path governed by [REVIEW_POLICY.md](../../REVIEW_POLICY.md#phase-1-authoring), with the session-supported transports and capable-session handback described in [Cloud Agent Environments](cloud-environments.md). Do not use bare GitHub writes. Delegating CLAUDE.md to the AGENTS.md reading order preserves these requirements.
+
+Before claiming "CI passes," confirm each required workflow actually ran and succeeded. A `SKIPPED` result means the job was not executed and is not a verification signal. For a changed job that did not run, arrange a valid run through its existing workflow events or acknowledge in the PR body that the change has not been live-tested; do not claim the skipped job passed.
+
 ## 1Password CLI authentication failures
 
 If any `op` command (`op read`, `op inject`, `op run`, `op document get`,
