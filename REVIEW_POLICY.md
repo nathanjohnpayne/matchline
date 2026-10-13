@@ -113,9 +113,9 @@ If any `op` command fails mid-session (rare — only if 1Password locks or the 1
 
 ### Phase 2: Internal Review (Self-Peer Review)
 
-4. The agent switches its Git identity to its reviewer account (e.g., `nathanpayne-claude`).
-5. The reviewer identity checks out the PR branch, reviews the diff, and posts review comments on the PR with specific, actionable feedback.
-6. The agent switches back to `nathanjohnpayne` and addresses each comment—pushing fix commits to the same branch.
+4. For GitHub API review writes, the agent selects its reviewer PAT through the identity-checked `scripts/gh-as-reviewer.sh` wrapper (e.g., `nathanpayne-claude`). Git commit identity remains `nathanjohnpayne` throughout review and authoring.
+5. The agent checks out the PR branch, reviews the diff, and posts specific, actionable review comments through that reviewer wrapper.
+6. The agent addresses each comment and pushes fix commits to the same branch as `nathanjohnpayne`; author-attributed GitHub API writes use the identity-checked `scripts/gh-as-author.sh` wrapper.
 7. Steps 4–6 repeat until the reviewer identity approves the PR with no outstanding issues.
 
 **All review rounds are captured as GitHub PR comments and commits.** The back-and-forth should read like two developers collaborating.
