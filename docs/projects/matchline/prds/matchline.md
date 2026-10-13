@@ -1,3 +1,8 @@
+---
+tags:
+  - matchline
+  - prd
+---
 <!--
 generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
@@ -10,11 +15,6 @@ document_slug: matchline
 sync_direction: central-to-repo
 -->
 
----
-tags:
-  - matchline
-  - prd
----
 # Matchline — Product Requirements Document
 
 Version: v0.1
