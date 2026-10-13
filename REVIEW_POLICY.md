@@ -472,23 +472,24 @@ The agent evaluates this after internal review passes, before merging. CI workfl
 
 ## Git Identity Switching
 
-Agents must automate identity switching so that commits and PR activity are attributed to the correct GitHub account. The mechanism depends on the agent's environment, but the result must be:
+Agents select the GitHub API or SSH transport identity for each operation while keeping Git commit attribution with the verified human author. The result must be:
 
-- Commits during authoring use `nathanjohnpayne`'s name and email.
+- All commits during authoring and review use the verified human author identity, `nathanjohnpayne`.
 - Review comments and PR reviews are posted via `nathanpayne-{agent}`'s GitHub credentials.
-- The switch is fully automated within the agent session—no human intervention required for internal review.
+- GitHub API identity selection uses the token-verified author/reviewer wrappers within the session; SSH transport identity selection follows the guidance below. Neither changes Git commit identity.
 
 ### Git commit identity (user.name / user.email)
 
-```bash
-# Switch to author identity
-git config user.name "nathanjohnpayne"
-git config user.email "nathan@nathanjohnpayne.example"
+Commit identity stays with the real human author in the machine's global Git configuration; GitHub API review writes use reviewer credentials through the identity-checked GitHub PAT wrapper. Do not switch commit identity during a review or add a repository-local identity override shared by all worktrees.
 
-# Switch to reviewer identity
-git config user.name "nathanpayne-claude"
-git config user.email "claude@nathanpayne-claude.example"
+```bash
+# Verify the identity and signing key, including where each value comes from.
+git config --show-origin --get user.name
+git config --show-origin --get user.email
+git config --show-origin --get user.signingkey
 ```
+
+Provisioning the real human identity belongs to verified machine setup outside managed checkouts. If a value is absent or wrong, stop and use the approved setup flow rather than writing placeholder identities into local or global configuration. Fixture repositories retain their test identity and signing settings through explicit `git -C` targets; the shared instruction-shape guard is delivered from Mergepath under [mergepath#1195](https://github.com/nathanjohnpayne/mergepath/issues/1195).
 
 ### SSH identity switching (push / pull)
 
