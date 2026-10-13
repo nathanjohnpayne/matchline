@@ -6,7 +6,10 @@ Read in this order before taking any action:
 2. `AGENTS.md` — load behavioral instructions (index pointing to this directory)
 3. `rules/repo_rules.md` — load binding constraints
 4. Relevant `specs/` files — understand intended behavior
-5. `.ai_context.md` — load supplemental context
+5. `DEPLOYMENT.md` — deploy process and credential setup
+6. `.ai_context.md` — load supplemental context
+
+If any required file is missing, flag the gap before proceeding.
 
 Conflict resolution:
 
