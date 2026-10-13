@@ -34,9 +34,7 @@ To add a new agent, register a GitHub account following the pattern `nathanpayne
 
 ### Reviewer PAT Quick Start
 
-When posting a PR review as a reviewer identity, always pass a PAT from 1Password
-to `gh` explicitly. Do not rely on the GitHub connector session or on the
-account shown by `gh auth status`.
+When posting a PR review, use the identity-checked `scripts/gh-as-reviewer.sh` wrapper with the running agent's registered reviewer identity after canonical credential preflight. Do not rely on the GitHub connector session or on the account shown by `gh auth status`.
 
 #### PAT lookup table
 
@@ -51,13 +49,14 @@ account shown by `gh auth status`.
 > **A 1Password item ID is not a stable identity.** On 2026-08-21 the item `o6ekjxjjl5gq6rmcneomrjahpu` was repurposed from Codex to the `nathanpayne-robot` CI account and Codex was recreated at `etak327mpz4drd4byxszfex4vm`; every row above still pointed at the old ID, so `--agent codex` silently resolved a **robot** token and posted reviews under the CI byline. Nothing in the table catches that on its own — after any PAT rotation or item edit, re-verify each row by resolving **that row's** `op://` reference into `GH_TOKEN` and checking it: `GH_TOKEN="$(op read 'op://Private/<item-id>/token')" scripts/identity-check.sh --expect-token-identity <login>`. The bare `scripts/identity-check.sh --expect-token-identity <login>` form does **not** verify a table row: it checks whatever is already in `$GH_TOKEN`. **Origin:** the robot PAT was created that day by repurposing the existing Codex 1Password item rather than minting a fresh one, so the id every doc and lookup already named silently changed identity while nothing referencing it changed — create a new item for a new identity. The map correction (mergepath#1073) landed on the hub the same day but had not reached the consumers when a Codex session hit it ~5.5h later, so treat a canonical-manifest fix as unshipped until it reaches the consumers.
 
 ```bash
-# Example: verify the Claude reviewer identity before approving a PR
-GH_TOKEN="$(op read 'op://Private/pvbq24vl2h6gl7yjclxy2hbote/token')" \
-  gh api user --jq '.login'
+# After canonical preflight for Claude, verify reviewer identity:
+GH_AS_REVIEWER_IDENTITY=nathanpayne-claude \
+  scripts/gh-as-reviewer.sh -- gh api user --jq '.login'
 # expected: nathanpayne-claude
 
-GH_TOKEN="$(op read 'op://Private/pvbq24vl2h6gl7yjclxy2hbote/token')" \
-  gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
+# Apply this PR's existing approval scope:
+GH_AS_REVIEWER_IDENTITY=nathanpayne-claude \
+  scripts/gh-as-reviewer.sh -- gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
 ```
 
 - Use the item ID from the lookup table above for your agent identity. Do not use the 1Password item title.
@@ -524,41 +523,25 @@ git remote set-url origin git@github.com:nathanjohnpayne/repo-name.git
 
 ### GitHub API authentication (gh CLI)
 
-For posting PR reviews and comments under a reviewer identity, use `gh` with an
-explicit PAT from 1Password. Do not rely on the GitHub connector session or on
-the ambient `gh` login. Refer to the [PAT lookup table](#pat-lookup-table) for
-your agent's 1Password item ID.
+Select the running agent's reviewer identity after canonical credential preflight. Read-only API calls may use the cached reviewer PAT explicitly; every reviewer or author write goes through the corresponding identity-checked wrapper. The wrappers select and verify the effective token without changing the gh keyring. Refer to the [PAT lookup table](#pat-lookup-table) for the agent's configured identity; the examples below use Claude's reviewer account.
 
 ```bash
-# ── Preferred: use preflight-cached PATs (no biometric prompts) ──
-
-# As reviewer (after running op-preflight.sh):
+# Read path after successful preflight:
 GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" gh api user --jq '.login'
-# expected: nathanpayne-claude
+# expected for Claude: nathanpayne-claude
 
-GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" \
-  gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
+# Reviewer write path; apply the existing approval scope for this PR:
+GH_AS_REVIEWER_IDENTITY=nathanpayne-claude \
+  scripts/gh-as-reviewer.sh -- gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
 
-# As author (merge, address comments, etc.):
-GH_TOKEN="$OP_PREFLIGHT_AUTHOR_PAT" gh pr merge <PR#> --merge --match-head-commit <full-current-head-sha>
-
-# ── Fallback: inline op read (triggers biometric if session expired) ──
-
-GH_TOKEN="$(op read 'op://Private/pvbq24vl2h6gl7yjclxy2hbote/token')" \
-  gh pr review <PR#> --repo <owner/repo> --approve --body "Review comment"
+# Author write path after every existing merge gate passes:
+scripts/gh-as-author.sh -- gh pr merge <PR#> --repo <owner/repo> --merge --match-head-commit <full-current-head-sha>
 ```
 
-- Use the item ID from the [PAT lookup table](#pat-lookup-table) for your agent identity. Do not use the 1Password item title.
-- If `gh auth status` shows `nathanjohnpayne`, that is fine.
-  `GH_TOKEN=...` overrides the ambient login for that command.
-- If `op whoami` says you are not signed in, still run the `op read ...`
-  command in an interactive TTY. That is what triggers the 1Password biometric
-  prompt on local machines.
-- If GitHub returns `Review Can not approve your own pull request`, the wrong
-  reviewer identity is still being used. Check the [PAT lookup table](#pat-lookup-table)
-  and verify you are using your agent's item ID, not the author identity's.
-
-> **If `op read` fails with a sign-in or biometric error here**, follow the pause-and-prompt procedure in `docs/agents/operating-rules.md` under "1Password CLI authentication failures." Do not hardcode tokens, skip review, or retry in a loop.
+- Use the registered reviewer identity for the running agent; verify it against the [PAT lookup table](#pat-lookup-table).
+- `gh auth status` is not an attribution proof. The wrappers verify the effective write identity immediately before the operation.
+- If preflight is unavailable or an authentication/signing prompt fails, stop and follow the pause-and-prompt procedure in `docs/agents/operating-rules.md` under "1Password CLI authentication failures." Do not fall back to inline credential reads, hardcoded tokens, skipped review or automatic retries.
+- If GitHub reports `Review Can not approve your own pull request`, recheck the live author, reviewer identity and existing approval scope before retrying through the wrapper.
 
 ### PAT requirements for reviewer identities
 
