@@ -34,7 +34,7 @@ To add a new agent, register a GitHub account following the pattern `nathanpayne
 
 ### Reviewer PAT Quick Start
 
-When posting a PR review, use the identity-checked `scripts/gh-as-reviewer.sh` wrapper with the running agent's registered reviewer identity after canonical credential preflight. Do not rely on the GitHub connector session or on the account shown by `gh auth status`.
+When posting a PR review, use the identity-checked `scripts/gh-as-reviewer.sh` wrapper with the running agent's registered reviewer identity after local credential preflight or approved cloud credential provisioning. Do not rely on the GitHub connector session or on the account shown by `gh auth status`.
 
 #### PAT lookup table
 
@@ -49,7 +49,7 @@ When posting a PR review, use the identity-checked `scripts/gh-as-reviewer.sh` w
 > **A 1Password item ID is not a stable identity.** On 2026-08-21 the item `o6ekjxjjl5gq6rmcneomrjahpu` was repurposed from Codex to the `nathanpayne-robot` CI account and Codex was recreated at `etak327mpz4drd4byxszfex4vm`; every row above still pointed at the old ID, so `--agent codex` silently resolved a **robot** token and posted reviews under the CI byline. Nothing in the table catches that on its own — after any PAT rotation or item edit, re-verify each row by resolving **that row's** `op://` reference into `GH_TOKEN` and checking it: `GH_TOKEN="$(op read 'op://Private/<item-id>/token')" scripts/identity-check.sh --expect-token-identity <login>`. The bare `scripts/identity-check.sh --expect-token-identity <login>` form does **not** verify a table row: it checks whatever is already in `$GH_TOKEN`. **Origin:** the robot PAT was created that day by repurposing the existing Codex 1Password item rather than minting a fresh one, so the id every doc and lookup already named silently changed identity while nothing referencing it changed — create a new item for a new identity. The map correction (mergepath#1073) landed on the hub the same day but had not reached the consumers when a Codex session hit it ~5.5h later, so treat a canonical-manifest fix as unshipped until it reaches the consumers.
 
 ```bash
-# After canonical preflight for Claude, verify reviewer identity:
+# With cached local or provisioned cloud credentials for Claude, verify reviewer identity:
 GH_AS_REVIEWER_IDENTITY=nathanpayne-claude \
   scripts/gh-as-reviewer.sh -- gh api user --jq '.login'
 # expected: nathanpayne-claude
@@ -86,8 +86,8 @@ Replace `claude` with `cursor` or `codex` depending on which agent is running. T
 | `all` | Everything (recommended) |
 
 After preflight, these environment variables are set:
-- `OP_PREFLIGHT_REVIEWER_PAT` — use with `GH_TOKEN=` for reviewer commands
-- `OP_PREFLIGHT_AUTHOR_PAT` — use with `GH_TOKEN=` for author commands
+- `OP_PREFLIGHT_REVIEWER_PAT` — use with `GH_TOKEN=` for read-only API calls; use `scripts/gh-as-reviewer.sh` for reviewer writes
+- `OP_PREFLIGHT_AUTHOR_PAT` — use with `GH_TOKEN=` for read-only API calls; use `scripts/gh-as-author.sh` for author writes
 - `GOOGLE_APPLICATION_CREDENTIALS` — used automatically by gcloud/Firebase scripts
 - `OP_PREFLIGHT_DONE=1` — flag indicating preflight has been run
 
@@ -110,7 +110,7 @@ If a 1Password authentication or signing prompt fails mid-session, stop and foll
 
 ### Phase 2: Internal Review (Self-Peer Review)
 
-4. For GitHub API review writes, the agent selects its reviewer PAT through the identity-checked `scripts/gh-as-reviewer.sh` wrapper (e.g., `nathanpayne-claude`). Git commit identity remains `nathanjohnpayne` throughout review and authoring.
+4. For GitHub API review writes, the agent selects its reviewer PAT through the identity-checked `scripts/gh-as-reviewer.sh` wrapper (e.g., `nathanpayne-claude`). Commit author identity remains `nathanjohnpayne`; Claude cloud sessions retain the approved signed committer.
 5. The agent checks out the PR branch, reviews the diff, and posts specific, actionable review comments through that reviewer wrapper.
 6. The agent addresses each comment and pushes fix commits to the same branch as `nathanjohnpayne`; author-attributed GitHub API writes use the identity-checked `scripts/gh-as-author.sh` wrapper.
 7. Steps 4–6 repeat until the reviewer identity approves the PR with no outstanding issues.
@@ -521,10 +521,10 @@ git remote set-url origin git@github.com:nathanjohnpayne/repo-name.git
 
 ### GitHub API authentication (gh CLI)
 
-Select the running agent's reviewer identity after canonical credential preflight. Read-only API calls may use the cached reviewer PAT explicitly; every reviewer or author write goes through the corresponding identity-checked wrapper. The wrappers select and verify the effective token without changing the gh keyring. Refer to the [PAT lookup table](#pat-lookup-table) for the agent's configured identity; the examples below use Claude's reviewer account.
+Select the running agent's reviewer identity using cached local or provisioned cloud credentials. Read-only API calls may use the cached reviewer PAT explicitly; every reviewer or author write goes through the corresponding identity-checked wrapper. The wrappers select and verify the effective token without changing the gh keyring. Refer to the [PAT lookup table](#pat-lookup-table) for the agent's configured identity; the examples below use Claude's reviewer account.
 
 ```bash
-# Read path after successful preflight:
+# Read path with cached local or provisioned cloud credentials:
 GH_TOKEN="$OP_PREFLIGHT_REVIEWER_PAT" gh api user --jq '.login'
 # expected for Claude: nathanpayne-claude
 
@@ -538,7 +538,7 @@ scripts/gh-as-author.sh -- gh pr merge <PR#> --repo <owner/repo> --merge --match
 
 - Use the registered reviewer identity for the running agent; verify it against the [PAT lookup table](#pat-lookup-table).
 - `gh auth status` is not an attribution proof. The wrappers verify the effective write identity immediately before the operation.
-- If preflight is unavailable or an authentication/signing prompt fails, stop and follow the pause-and-prompt procedure in `docs/agents/operating-rules.md` under "1Password CLI authentication failures." Do not fall back to inline credential reads, hardcoded tokens, skipped review or automatic retries.
+- In cloud sessions without 1Password, follow [Cloud Agent Environments](docs/agents/cloud-environments.md): use the provisioned author/reviewer PATs through the same identity-checked wrappers and do not invoke local credential preflight. If local 1Password authentication or a signing prompt fails, stop and follow the pause-and-prompt procedure in `docs/agents/operating-rules.md` under "1Password CLI authentication failures." Do not fall back to inline credential reads, hardcoded tokens, skipped review or automatic retries.
 - If GitHub reports `Review Can not approve your own pull request`, recheck the live author, reviewer identity and existing approval scope before retrying through the wrapper.
 
 ### PAT requirements for reviewer identities
