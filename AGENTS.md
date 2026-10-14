@@ -5,7 +5,7 @@ Agent instructions are organized into focused sub-files under `docs/agents/`. Re
 ## Sections
 
 1. **[Repository Overview](docs/agents/repository-overview.md)** --- Project description, tech stack, agent role
-2. **[Agent Operating Rules](docs/agents/operating-rules.md)** --- Reading order, conflict resolution
+2. **[Agent Operating Rules](docs/agents/operating-rules.md)** --- Reading order, conflict resolution, PR-body and CI verification requirements
 3. **[Code Modification Rules](docs/agents/code-modification-rules.md)** --- File creation, duplication, directory constraints
 4. **[Documentation Rules](docs/agents/documentation-rules.md)** --- When and what to update
 5. **[Testing Requirements](docs/agents/testing-requirements.md)** --- Coverage expectations, test deletion policy
