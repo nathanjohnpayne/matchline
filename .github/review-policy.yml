@@ -106,13 +106,9 @@ coderabbit:
   # instead of requiring a per-consumer bump.
   max_wait_seconds: 1245
 
-  # Maximum number of times `scripts/coderabbit-wait.sh` will parse a
-  # "Rate limit exceeded" comment, sleep the published window + 30s
-  # buffer, and post `@coderabbitai, try again.` to re-trigger.
-  # CodeRabbit does not auto-retry after its rate-limit window elapses;
-  # the wait helper does. Set to 0 to disable retries entirely (the
-  # caller will see exit code 5 / rate_limit_stalled on the first
-  # rate-limit comment). See nathanjohnpayne/mergepath#138.
+  # Canonical source for this rule: mergepath/REVIEW_POLICY.md (#2139).
+  # Deprecated compatibility field: the waiter never sleeps out a rate-limit
+  # window or posts a retry; this value no longer changes behavior.
   max_rate_limit_retries: 2
 
   # Wallclock freshness floor for the HEAD_ANCHOR in
