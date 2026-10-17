@@ -25,6 +25,8 @@ This repository uses a multi-identity AI agent code review system. The full poli
 
 ### Workflow Summary
 
+On a CodeRabbit rate-limit refusal, immediately apply [CodeRabbit rate-limit substitution](REVIEW_POLICY.md#coderabbit-rate-limit-substitution); do not wait or retry its hourly window. Under-threshold approval awaits exact-head Codex clearance under that rule.
+
 0. In local sessions, run credential preflight at the start of every PR session (and safely
    at the top of every subsequent tool call — re-running within the TTL
    returns cached values without a new biometric prompt):
@@ -43,7 +45,7 @@ This repository uses a multi-identity AI agent code review system. The full poli
 3. Address each comment and push fix commits with the human author identity. Author-attributed GitHub writes use `scripts/gh-as-author.sh`.
 4. Repeat steps 2–3 until the reviewer identity approves with no outstanding issues.
 5. If this repo has `coderabbit.enabled: true` in `.github/review-policy.yml`:
-   a. **Wait** for CodeRabbit to post its review on the current HEAD. Prefer `scripts/coderabbit-wait.sh <PR#>` over an ad-hoc poll — it anchors "cleared" on the HEAD committer date (closing the race that let auto-merge fire pre-CodeRabbit; see #136) and handles CodeRabbit's non-auto-retrying rate-limit state by parsing the published window and posting `@coderabbitai, try again.` itself (see #138). Exit codes: `0` cleared, `2` findings, `4` grace-window timeout (advisory — log and skip), `5` rate-limit stalled (alert the human, do not proceed).
+   a. **Wait** for CodeRabbit to post its review on the current HEAD. Prefer `scripts/coderabbit-wait.sh <PR#>` over an ad-hoc poll — it anchors "cleared" on the HEAD committer date (closing the race that let auto-merge fire pre-CodeRabbit; see #136) and requests Codex immediately on a rate-limit refusal without sleeping or posting a CodeRabbit retry (mergepath#2139). Exit codes: `0` cleared, `2` findings, `4` grace-window timeout (advisory — log and skip), `5` rate-limit stalled (apply the substitution rule above before approval).
    b. **Read both endpoints:** PR-level comments (`gh api repos/{owner}/{repo}/issues/{pr}/comments`) and inline diff comments (`gh api repos/{owner}/{repo}/pulls/{pr}/comments`).
    c. **Grep inline comments** for `Potential issue` or `⚠️` — these must each be explicitly addressed (fixed or dismissed with reasoning).
    d. Address other substantive findings. CodeRabbit review is advisory and does not block merge.
