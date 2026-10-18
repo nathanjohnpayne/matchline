@@ -25,34 +25,14 @@ This repository uses a multi-identity AI agent code review system. The full poli
 
 ### Workflow Summary
 
-0. In local sessions, run credential preflight at the start of every PR session (and safely
-   at the top of every subsequent tool call — re-running within the TTL
-   returns cached values without a new biometric prompt):
-   `eval "$(scripts/op-preflight.sh --agent {your-agent} --mode all)"`
-   This triggers biometric prompts once and writes a chmod-600 session
-   file at `$XDG_CACHE_HOME/mergepath/op-preflight-<agent>.env` so fresh
-   subshells can reuse the credentials (see REVIEW_POLICY.md § Phase 0).
-   In cloud sessions, use the provisioned credentials and capability probe in [Cloud Agent Environments](docs/agents/cloud-environments.md); do not invoke local 1Password preflight.
-   Use cached PATs only for read-only API calls. Route reviewer writes through
-   `GH_AS_REVIEWER_IDENTITY=nathanpayne-{your-agent} scripts/gh-as-reviewer.sh -- gh ...`
-   and author writes through `scripts/gh-as-author.sh -- gh ...`.
-   Run `scripts/op-preflight.sh --agent {your-agent} --purge` (or
-   `--purge-all`) at end of session to delete the cached PATs.
-1. Author code as nathanjohnpayne. File a PR.
-2. Select your registered reviewer credentials through `scripts/gh-as-reviewer.sh`. Review the PR and post comments; commit author identity remains nathanjohnpayne, with the approved Claude cloud committer preserved.
-3. Address each comment and push fix commits with the human author identity. Author-attributed GitHub writes use `scripts/gh-as-author.sh`.
-4. Repeat steps 2–3 until the reviewer identity approves with no outstanding issues.
-5. If this repo has `coderabbit.enabled: true` in `.github/review-policy.yml`:
-   a. **Wait** for CodeRabbit to post its review on the current HEAD. Prefer `scripts/coderabbit-wait.sh <PR#>` over an ad-hoc poll — it anchors "cleared" on the HEAD committer date (closing the race that let auto-merge fire pre-CodeRabbit; see #136) and handles CodeRabbit's non-auto-retrying rate-limit state by parsing the published window and posting `@coderabbitai, try again.` itself (see #138). Exit codes: `0` cleared, `2` findings, `4` grace-window timeout (advisory — log and skip), `5` rate-limit stalled (alert the human, do not proceed).
-   b. **Read both endpoints:** PR-level comments (`gh api repos/{owner}/{repo}/issues/{pr}/comments`) and inline diff comments (`gh api repos/{owner}/{repo}/pulls/{pr}/comments`).
-   c. **Grep inline comments** for `Potential issue` or `⚠️` — these must each be explicitly addressed (fixed or dismissed with reasoning).
-   d. Address other substantive findings. CodeRabbit review is advisory and does not block merge.
-6. Check .github/review-policy.yml for the external review threshold. If the PR does NOT meet it (lines changed < external_review_threshold AND no file matches external_review_paths), merge as nathanjohnpayne per REVIEW_POLICY.md step 9 (head-pinned command; outstanding-reviewer-disagreement rule). Done.
-7. If the PR meets the threshold, proceed to Phase 4 (see REVIEW_POLICY.md § Phase 4). Phase 4 has two legs:
-   - **Phase 4a — Automated (preferred)** when ALL of: `codex.enabled: true` in `.github/review-policy.yml`, BOTH `scripts/codex-review-request.sh` AND `scripts/codex-review-check.sh` exist on disk, AND the **ChatGPT Codex Connector GitHub App is review-ready on this repo**. "Review-ready" means installed, Code Review enabled at [chatgpt.com/codex/cloud/settings/code-review](https://chatgpt.com/codex/cloud/settings/code-review), AND a Codex environment configured at [chatgpt.com/codex/cloud/settings/environments](https://chatgpt.com/codex/cloud/settings/environments). Verify only by observation: did a recent PR in this repo receive an auto-review from `chatgpt-codex-connector[bot]`? That is the only reliable check from a reviewer PAT — `gh api repos/{owner}/{repo}/installation` requires a GitHub App JWT and returns 401 for normal tokens. Drive the Codex GitHub App review loop: post `@codex review` via the request script, address **P0/P1** findings (fix code or rebuttal reply — P2/P3 findings do NOT block clearance), loop up to `codex.max_review_rounds`. On clearance (COMMENTED review with no unaddressed P0/P1 findings on the current HEAD, OR 👍 reaction from `chatgpt-codex-connector[bot]`), run `scripts/codex-review-check.sh` to verify the merge gate and merge. On exit code 4 (timeout), drop to Phase 4b. On repeat-after-rebuttal or round > `max_review_rounds`, escalate per § Disagreements below. If any of the conditions is false (Codex App not review-ready, partial script rollout, or Codex disabled in config), fall back to Phase 4b directly rather than entering 4a and stalling.
-   - **Phase 4b — Manual CLI fallback** when 4a is unavailable or 4a fell back. Post the handoff message (see REVIEW_POLICY.md § Handoff Message Format) and wait for an external reviewer identity (e.g., nathanpayne-codex) to post an `APPROVED` review via a separate agent CLI session. Address feedback via back-and-forth.
-8. If the external reviewer flags observations or risks while approving, create a GitHub Issue for each one assigned to nathanjohnpayne with labels "post-review" and "observation" or "risk" before merging.
-9. Merge as nathanjohnpayne per REVIEW_POLICY.md step 17a (Phase 4a) or 19b (Phase 4b): head-pinned command and outstanding-reviewer-disagreement rule.
+Use [REVIEW_POLICY.md § Workflow](REVIEW_POLICY.md#workflow) for credential preflight, author/reviewer identities, review rounds and merge gates. The [agent operating rules](docs/agents/operating-rules.md) and [testing requirements](docs/agents/testing-requirements.md) cover local execution details.
+
+1. Author as `nathanjohnpayne`, file the PR through `scripts/gh-as-author.sh`, and include the required `Authoring-Agent:` and `## Self-Review` body fields.
+2. Review under a registered reviewer identity. Resolve eligible bot conversations and registered agent-reviewer conversations after that reviewer accepts the fix; stop for real-human conversations unless the human explicitly directs otherwise. Follow the policy's complete-history feedback accounting before merging.
+3. Run `scripts/coderabbit-should-invoke.sh` to select Phase 2.5. When that phase observes a CodeRabbit rate-limit or included-quota refusal, request Codex immediately; do not wait out the provider window or post a CodeRabbit retry. See [Phase 2.5](REVIEW_POLICY.md#phase-25-automated-external-review-coderabbit).
+4. A rate-limited under-threshold PR still needs exact-head Codex clearance before reviewer approval. Record the provider and full SHA in the later approval as required by [Phase 3](REVIEW_POLICY.md#phase-3-external-review-threshold-check).
+5. Use the configured threshold, protected paths and the force-on `needs-external-review` label to route [Phase 4](REVIEW_POLICY.md#phase-4-external-review). Apply the governing policy's request budgets, external-review requirements and human escalation rules.
+6. Outside an active native merge-queue rollout, merge one current, approved head as `nathanjohnpayne` through the author wrapper only after all applicable gates and review conversations clear. During an active rollout, follow the [canonical native merge-queue policy](https://github.com/nathanjohnpayne/mergepath/blob/main/REVIEW_POLICY.md#native-merge-queue-boundary-1058) and leave activation, queue actions and any direct merge to the human owner. Preserve human holds, reviewer disagreements and actual in-flight Codex review stops.
 
 ### Disagreements
 
