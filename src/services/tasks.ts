@@ -5,12 +5,14 @@
  * `due_at` and `completed` change after creation).
  */
 
+import { FirebaseError } from "firebase/app";
 import {
   doc,
   getDocs,
   query,
+  runTransaction,
   setDoc,
-  writeBatch,
+  updateDoc,
 } from "firebase/firestore";
 
 import { getDb } from "../firebase.ts";
@@ -86,18 +88,47 @@ export async function createTask(
 /**
  * Mark a task done and stamp its Application's `last_activity_at`
  * (#34: completing a follow-up is activity on the Application). One
- * batch, so the two writes land together or not at all; a task can
- * never read as done while its Application still looks stale.
+ * transaction, so the two writes land together or not at all, and the
+ * timestamp only moves forward: if newer activity was recorded since
+ * `at` was captured (another tab, a slow write), it is kept rather
+ * than overwritten with the older value (#588).
+ *
+ * A task can outlive its Application. The rules deny reading a
+ * missing Application (`isOwner()` is false without a resource, the
+ * anti-enumeration contract), so the transaction is rejected with
+ * `permission-denied`. That case falls back to completing the task
+ * alone, which the task rules allow; there is no Application left to
+ * stamp. Any other failure propagates.
  */
 export async function completeTask(
   task: Pick<Task, "id" | "application_id">,
   at: string,
 ): Promise<void> {
   const db = getDb();
-  const batch = writeBatch(db);
-  batch.update(doc(db, TASKS, task.id), { completed: true });
-  batch.update(doc(db, APPLICATIONS, task.application_id), {
-    last_activity_at: at,
-  });
-  await batch.commit();
+  const taskRef = doc(db, TASKS, task.id);
+  const appRef = doc(db, APPLICATIONS, task.application_id);
+  try {
+    await runTransaction(db, async (tx) => {
+      const app = await tx.get(appRef);
+      tx.update(taskRef, { completed: true });
+      if (app.exists() && !isNewer(app.data()["last_activity_at"], at)) {
+        tx.update(appRef, { last_activity_at: at });
+      }
+    });
+  } catch (err) {
+    if (!(err instanceof FirebaseError && err.code === "permission-denied")) {
+      throw err;
+    }
+    // Most likely the Application is gone. If the task itself is not
+    // ours either, this update is denied too and that error surfaces.
+    await updateDoc(taskRef, { completed: true });
+  }
+}
+
+/** True when `current` is a valid timestamp strictly later than `at`. */
+function isNewer(current: unknown, at: string): boolean {
+  if (typeof current !== "string") return false;
+  const c = Date.parse(current);
+  const a = Date.parse(at);
+  return !Number.isNaN(c) && !Number.isNaN(a) && c > a;
 }

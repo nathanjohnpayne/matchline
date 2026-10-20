@@ -4,6 +4,7 @@
  * `tests/tasks.integration.test.ts` and `tests/firestore-rules.test.ts`.
  */
 
+import { FirebaseError } from "firebase/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./auth.ts", () => ({
@@ -14,8 +15,13 @@ vi.mock("./auth.ts", () => ({
 vi.mock("../firebase.ts", () => ({ getDb: () => ({ name: "db" }) }));
 
 const setDoc = vi.fn();
-const batchUpdate = vi.fn();
-const batchCommit = vi.fn();
+const updateDoc = vi.fn();
+const txGet = vi.fn();
+const txUpdate = vi.fn();
+const runTransaction = vi.fn(
+  async (_db: unknown, fn: (tx: unknown) => Promise<void>) =>
+    fn({ get: txGet, update: txUpdate }),
+);
 
 vi.mock("firebase/firestore", () => ({
   doc: (_db: unknown, col: string, id: string) => ({ path: `${col}/${id}` }),
@@ -24,7 +30,9 @@ vi.mock("firebase/firestore", () => ({
   },
   query: () => undefined,
   setDoc: (...args: unknown[]) => setDoc(...args),
-  writeBatch: () => ({ update: batchUpdate, commit: batchCommit }),
+  updateDoc: (...args: unknown[]) => updateDoc(...args),
+  runTransaction: (db: unknown, fn: (tx: unknown) => Promise<void>) =>
+    runTransaction(db, fn),
 }));
 
 vi.mock("./firestore.ts", () => ({
@@ -95,22 +103,68 @@ describe("createTask", () => {
 });
 
 describe("completeTask", () => {
-  it("completes the task and stamps the Application in one batch", async () => {
-    batchCommit.mockResolvedValue(undefined);
+  const appSnap = (lastActivityAt?: string) => ({
+    exists: () => lastActivityAt !== undefined,
+    data: () => ({ last_activity_at: lastActivityAt }),
+  });
+
+  it("completes the task and stamps the Application in one transaction", async () => {
+    txGet.mockResolvedValue(appSnap("2026-10-19T00:00:00.000Z"));
     await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
-    expect(batchUpdate).toHaveBeenCalledTimes(2);
-    expect(batchUpdate).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
-    expect(batchUpdate).toHaveBeenCalledWith(
+    expect(runTransaction).toHaveBeenCalledTimes(1);
+    expect(txGet).toHaveBeenCalledWith({ path: "applications/a1" });
+    expect(txUpdate).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
+    expect(txUpdate).toHaveBeenCalledWith(
       { path: "applications/a1" },
       { last_activity_at: "2026-10-20T12:00:00.000Z" },
     );
-    expect(batchCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("propagates a failed commit", async () => {
-    batchCommit.mockRejectedValue(new Error("permission-denied"));
+  it("keeps a newer last_activity_at instead of moving it backwards (#588)", async () => {
+    txGet.mockResolvedValue(appSnap("2026-10-21T09:00:00.000Z"));
+    await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
+    expect(txUpdate).toHaveBeenCalledTimes(1);
+    expect(txUpdate).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
+  });
+
+  it("stamps when the stored timestamp is missing or unparseable", async () => {
+    txGet.mockResolvedValue(appSnap("not a date"));
+    await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
+    expect(txUpdate).toHaveBeenCalledWith(
+      { path: "applications/a1" },
+      { last_activity_at: "2026-10-20T12:00:00.000Z" },
+    );
+  });
+
+  it("completes the task without stamping when the Application is gone", async () => {
+    txGet.mockResolvedValue(appSnap(undefined));
+    await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
+    expect(txUpdate).toHaveBeenCalledTimes(1);
+    expect(txUpdate).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
+  });
+
+  it("completes the task alone when the transaction is denied (Application deleted)", async () => {
+    runTransaction.mockRejectedValueOnce(
+      new FirebaseError("permission-denied", "Missing or insufficient permissions."),
+    );
+    updateDoc.mockResolvedValueOnce(undefined);
+    await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
+    expect(updateDoc).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
+  });
+
+  it("propagates when the fallback is denied too", async () => {
+    runTransaction.mockRejectedValueOnce(new FirebaseError("permission-denied", "no"));
+    updateDoc.mockRejectedValueOnce(new FirebaseError("permission-denied", "still no"));
     await expect(
       completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z"),
-    ).rejects.toThrow("permission-denied");
+    ).rejects.toThrow("still no");
+  });
+
+  it("propagates any other transaction failure without falling back", async () => {
+    runTransaction.mockRejectedValueOnce(new Error("unavailable"));
+    await expect(
+      completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z"),
+    ).rejects.toThrow("unavailable");
+    expect(updateDoc).not.toHaveBeenCalled();
   });
 });

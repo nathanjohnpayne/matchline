@@ -22,7 +22,11 @@ import type { Application, Task, UUID } from "../../types/crm.ts";
 import type { PipelineMoveAction } from "./pipelineMoves.ts";
 import { STAGE_LABELS } from "./PipelineView.tsx";
 import type { PipelineTasks } from "./TaskSidebar.tsx";
-import { buildTaskSidebar, defaultDueAt } from "./taskSidebar.ts";
+import {
+  buildTaskSidebar,
+  defaultDueAt,
+  nextFollowUpAt,
+} from "./taskSidebar.ts";
 
 export interface PipelineTaskDeps {
   readonly createTask: (input: NewTask, now: Date) => Promise<Task>;
@@ -77,6 +81,11 @@ export function usePipelineTasks({
    * in the sidebar updates the card at once.
    */
   readonly tasks: readonly Task[];
+  /**
+   * When the next Application crosses the follow-up threshold (epoch
+   * ms), or `null`. The container re-reads its clock then (#589).
+   */
+  readonly nextFollowUpAt: number | null;
 } {
   const [tasks, setTasks] = useState<readonly Task[]>(loadedTasks ?? []);
   const [pending, setPending] = useState<ReadonlySet<UUID>>(new Set());
@@ -225,5 +234,10 @@ export function usePipelineTasks({
     tasksUnavailable: !tasksLoaded,
   };
 
-  return { view, tasks };
+  const nextFollowUp = useMemo(
+    () => nextFollowUpAt(tasks, applications, now, completing),
+    [tasks, applications, now, completing],
+  );
+
+  return { view, tasks, nextFollowUpAt: nextFollowUp };
 }

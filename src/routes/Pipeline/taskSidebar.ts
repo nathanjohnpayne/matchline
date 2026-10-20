@@ -214,3 +214,33 @@ export function nextActionByApplication(
   return next;
 }
 
+/**
+ * The next instant (epoch ms) at which an Application not yet in
+ * Follow-ups will cross the 7-day threshold, or `null` when none will
+ * (#589). Same eligibility as `buildTaskSidebar`: active stage, no
+ * open task, not suppressed. The Pipeline re-reads its clock then, so
+ * a follow-up appears when it becomes due, not at the next midnight.
+ */
+export function nextFollowUpAt(
+  tasks: readonly Task[],
+  applications: readonly Application[],
+  now: Date,
+  suppressFollowUpFor: ReadonlySet<UUID> = new Set(),
+): number | null {
+  const withOpenTask = new Set<UUID>(
+    tasks.filter((t) => !t.completed).map((t) => t.application_id),
+  );
+  let next: number | null = null;
+  for (const app of applications) {
+    if (!ACTIVE_STAGES.has(app.stage)) continue;
+    if (withOpenTask.has(app.id) || suppressFollowUpFor.has(app.id)) continue;
+    const last = toMs(app.last_activity_at);
+    if (last === null) continue;
+    // First instant at which `now - last > 7 days` holds.
+    const due = last + FOLLOW_UP_AFTER_DAYS * MS_PER_DAY + 1;
+    if (due <= now.getTime()) continue; // already a follow-up
+    if (next === null || due < next) next = due;
+  }
+  return next;
+}
+
