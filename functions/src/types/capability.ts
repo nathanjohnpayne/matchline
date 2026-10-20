@@ -38,7 +38,12 @@ export type UUID = string;
 export type ISOTimestamp = string;
 export type ISODate = string;
 
-export type UnitSourceType = "resume" | "linkedin" | "long_form" | "manual";
+export type UnitSourceType =
+  | "resume"
+  | "linkedin"
+  | "long_form"
+  | "manual"
+  | "artifact";
 
 export type UnitType =
   | "project"
@@ -75,6 +80,22 @@ export interface ExperienceUnit {
    */
   owner_uid: UUID;
   source_type: UnitSourceType;
+  /**
+   * Where the Unit came from. The format depends on `source_type`:
+   *
+   *   - `resume`: `resume:{sha256 of the source text}:{index}`, stamped
+   *     by the extraction pipeline (`functions/src/extraction/resume.ts`).
+   *   - `manual`: free text the user typed, `"manual entry"` when blank
+   *     (`src/services/experienceUnits-state.ts`).
+   *   - `artifact`: `artifact://users/{uid}/artifacts/{filename}#{section}`,
+   *     the uploaded file's Storage path plus an optional section or
+   *     page, each part percent-encoded. Build and parse it only with
+   *     `./artifactSourceRef.ts`.
+   *   - `linkedin`, `long_form`: no writer yet, so no fixed format.
+   *
+   * The Unit Review inline editor lets the user edit this field freely,
+   * so readers must treat any format as a hint, never as a guarantee.
+   */
   source_ref: string;
   raw_text: string;
   normalized_summary: string;

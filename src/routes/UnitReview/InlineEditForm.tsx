@@ -47,6 +47,7 @@ const SOURCE_TYPES: readonly UnitSourceType[] = [
   "linkedin",
   "long_form",
   "manual",
+  "artifact",
 ];
 const UNIT_TYPES: readonly UnitType[] = [
   "project",
