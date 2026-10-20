@@ -903,11 +903,18 @@ describe("rules: tasks", () => {
 
   it("REJECTS an empty title, an over-long title, extra fields, or a pre-completed task", async () => {
     const base = newTask(OWNER_UID);
+    const { created_at: _c, ...noCreatedAt } = base;
+    const { completed: _d, ...noCompleted } = base;
     for (const bad of [
       { ...base, title: "" },
       { ...base, title: "x".repeat(201) },
       { ...base, priority: "high" },
       { ...base, completed: true },
+      // Missing or mistyped required fields (Codex P2 on #585).
+      noCreatedAt,
+      noCompleted,
+      { ...base, created_at: 1760961600000 },
+      { ...base, due_at: 1760961600000 },
     ]) {
       await assertFails(setDoc(doc(db(OWNER_UID), "tasks", "t-1"), bad));
     }
@@ -921,6 +928,7 @@ describe("rules: tasks", () => {
     await assertFails(updateDoc(ref, { application_id: "app-bob" }));
     await assertFails(updateDoc(ref, { created_at: "2027-01-01T00:00:00.000Z" }));
     await assertFails(updateDoc(ref, { completed: "yes" }));
+    await assertFails(updateDoc(ref, { due_at: 1760961600000 }));
   });
 
   it("REJECTS reading, completing or deleting another owner's task", async () => {

@@ -193,11 +193,13 @@ service cloud.firestore {
     }
 
     // Follow-up tasks on Applications (#34). Owner-scoped like the
-    // rest of the CRM, plus field limits: a create must point at an
-    // Application the caller owns (so a task cannot be attached to
-    // someone else's pipeline), and an update may only edit the title,
-    // the due date or the completed flag. `application_id`,
-    // `owner_uid` and `created_at` are fixed at creation.
+    // rest of the CRM, plus field limits: a create must carry every
+    // required field with the right type (the Pipeline sorts on
+    // `created_at`, Codex P2 on #585) and point at an Application the
+    // caller owns (so a task cannot be attached to someone else's
+    // pipeline); an update may only edit the title, the due date or
+    // the completed flag. `application_id`, `owner_uid` and
+    // `created_at` are fixed at creation.
     match /tasks/{docId} {
       allow read, delete: if isOwner();
       allow create: if isCreatingAsOwner()
@@ -205,11 +207,16 @@ service cloud.firestore {
           'owner_uid', 'application_id', 'title', 'due_at', 'completed',
           'created_at', 'id'
         ])
+        && request.resource.data.keys().hasAll([
+          'owner_uid', 'application_id', 'title', 'completed', 'created_at'
+        ])
         && request.resource.data.get('id', docId) == docId
         && request.resource.data.title is string
         && request.resource.data.title.size() > 0
         && request.resource.data.title.size() <= 200
         && request.resource.data.completed == false
+        && request.resource.data.created_at is string
+        && request.resource.data.get('due_at', '') is string
         && request.resource.data.application_id is string
         && exists(/databases/$(database)/documents/applications/$(request.resource.data.application_id))
         && get(/databases/$(database)/documents/applications/$(request.resource.data.application_id)).data.owner_uid == request.auth.uid;
@@ -220,7 +227,8 @@ service cloud.firestore {
         && request.resource.data.title is string
         && request.resource.data.title.size() > 0
         && request.resource.data.title.size() <= 200
-        && request.resource.data.completed is bool;
+        && request.resource.data.completed is bool
+        && request.resource.data.get('due_at', '') is string;
     }
 
     match /roles/{docId} {

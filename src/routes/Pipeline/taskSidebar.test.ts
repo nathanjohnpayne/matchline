@@ -156,6 +156,17 @@ describe("buildTaskSidebar: tasks", () => {
     expect(ids(s.dueToday)).toEqual(["earlier", "later"]);
   });
 
+  it("tolerates a stored task without created_at instead of crashing the sort", () => {
+    const legacy = task("legacy", { due_at: local(20, 9) });
+    delete (legacy as Partial<Task>).created_at;
+    const s = buildTaskSidebar(
+      [legacy, task("normal", { due_at: local(20, 9) })],
+      [],
+      NOW,
+    );
+    expect(ids(s.dueToday).sort()).toEqual(["legacy", "normal"]);
+  });
+
   it("treats an unparseable due date as undated instead of dropping it", () => {
     const s = buildTaskSidebar([task("bad", { due_at: "not a date" })], [], NOW);
     expect(ids(s.upcoming)).toEqual(["bad"]);
@@ -171,8 +182,16 @@ describe("buildTaskSidebar: follow-ups", () => {
   });
 
   it("waits until more than 7 days have passed", () => {
+    // Exactly 7 days (day 13 noon → day 20 noon): not yet.
     const s = buildTaskSidebar([], [app("a1", "interviewing", 13)], NOW);
     expect(s.followUps).toEqual([]);
+  });
+
+  it("surfaces as soon as the span passes 7 days, not at the next whole day", () => {
+    const sevenDaysOneHour = new Date(2026, 9, 13, 11, 0, 0).toISOString();
+    const quiet = { ...app("a1", "applied", 13), last_activity_at: sevenDaysOneHour };
+    const s = buildTaskSidebar([], [quiet], NOW);
+    expect(s.followUps).toEqual([{ application: quiet, daysSilent: 7 }]);
   });
 
   it("ignores stages that are not active", () => {

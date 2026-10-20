@@ -98,7 +98,10 @@ function byDueThenCreated(a: Task, b: Task): number {
   const da = toMs(a.due_at) ?? Infinity;
   const db = toMs(b.due_at) ?? Infinity;
   if (da !== db) return da < db ? -1 : 1;
-  return a.created_at.localeCompare(b.created_at);
+  // The rules require `created_at` on create, but a document written
+  // before that rule (or by the admin SDK) may lack it; never let one
+  // bad record break the board's render.
+  return String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
 }
 
 export function buildTaskSidebar(
@@ -142,9 +145,15 @@ export function buildTaskSidebar(
     if (withOpenTask.has(app.id) || suppressFollowUpFor.has(app.id)) continue;
     const last = toMs(app.last_activity_at);
     if (last === null) continue;
-    const daysSilent = Math.floor((now.getTime() - last) / MS_PER_DAY);
-    if (daysSilent > FOLLOW_UP_AFTER_DAYS) {
-      followUps.push({ application: app, daysSilent });
+    const silentMs = now.getTime() - last;
+    // Compare the raw span: "more than 7 days" starts at 7 days and
+    // 1 ms, not at the next whole day (Codex P2 on #585). The floored
+    // count is for display only.
+    if (silentMs > FOLLOW_UP_AFTER_DAYS * MS_PER_DAY) {
+      followUps.push({
+        application: app,
+        daysSilent: Math.floor(silentMs / MS_PER_DAY),
+      });
     }
   }
   followUps.sort(
