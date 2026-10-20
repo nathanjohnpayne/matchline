@@ -105,6 +105,13 @@
     font:13px/1.35 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);
     box-sizing:border-box}
   .app *{box-sizing:border-box}
+  svg.lucide{width:14px;height:14px;vertical-align:-2.5px;flex:0 0 auto}
+  .btn svg.lucide{width:12px;height:12px;vertical-align:-2px}
+  .chip svg.lucide,.sm svg.lucide,.xs svg.lucide{width:11px;height:11px;vertical-align:-2px}
+  .rail svg.lucide{width:13px;height:13px}
+  .tabbar svg.lucide{width:18px;height:18px}
+  .hd .menu svg.lucide{width:20px;height:20px}
+  .drag svg.lucide{width:12px;height:12px;vertical-align:-1px}
   .app b{font-weight:600}
   .app .num{font-variant-numeric:tabular-nums}
   .app .dim{color:var(--dim)}.app .mut{color:var(--mut)}.app .sm{font-size:11px}.app .xs{font-size:10px}
@@ -134,7 +141,6 @@
   .tabbar{display:none;border-top:1px solid var(--line);background:var(--panel);padding:6px 4px 2px;justify-content:space-around;
     font-size:10px;color:var(--dim)}
   .tabbar span{display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 8px}
-  .tabbar span i{width:18px;height:14px;border:1.5px solid currentColor;border-radius:4px;font-style:normal}
   .tabbar .on{color:var(--ink)}
 
   /* primitives (ui-guidance § Component primitives) */
@@ -246,6 +252,9 @@
   .ph-only{display:none !important}
   .filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
   .filters .in{min-height:26px;padding:3px 8px;font-size:11px}
+  .filters .morebtn{display:none}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .rulegrid{display:grid;grid-template-columns:160px 1fr 160px auto;gap:8px;align-items:end}
   .scan-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.6fr) minmax(0,1.6fr) auto;gap:12px;align-items:start}
   .rowhead{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .tier{display:inline-flex;width:20px;height:20px;border-radius:50%;background:#18181b;color:#fff;font-size:10px;font-weight:600;align-items:center;justify-content:center}
@@ -310,9 +319,9 @@
     .filters .adv{display:none}
     .filters .morebtn{display:inline-flex}
     .filters-hidden{display:none}
+    .rulegrid{grid-template-columns:1fr 1fr}
     .auth .card{width:380px}
   }
-  .filters .morebtn{display:none}
   /* ---------- phone: ≤ 600px container ---------- */
   @container frame (max-width: 600px){
     .sbar{display:flex}
@@ -347,6 +356,8 @@
     .filters .adv{display:none}
     .filters .morebtn{display:inline-flex}
     .filters-hidden{display:none}
+    .pair{grid-template-columns:1fr}
+    .rulegrid{grid-template-columns:1fr}
     .tbl .opt{display:none}
     .auth .card{width:100%}
     .auth .center{padding:20px 16px}
@@ -370,6 +381,7 @@
 <br>· <b>Dashed outline</b> <span style="outline:1.5px dashed #5b67c7;outline-offset:2px;border-radius:3px;padding:0 3px">like this</span> inside a frame marks one element that the PRD adds and nothing has built yet — the rest of that frame is shipped behaviour.
 <br>· <b>Numbered badges</b> <i class="an">1</i> point at the annotation with that number in the legend under the screen. The legend is written once per screen and applies to all three widths.
 <br>· <b>Keyboard</b>: <span style="font:10px ui-monospace,Menlo,monospace;border:1px solid #c9c9d0;border-bottom-width:2px;border-radius:4px;padding:0 4px;background:#fff">a</span>-style keys show the shortcut the control also answers to; every mouse action in these frames is keyboard-reachable (ui-guidance rule 5).
+<br>· <b>Icons</b> are <a href="https://lucide.dev/">lucide</a>, inlined from <code>lucide-static</code> so the page stays self-contained; each carries a <code>data-lucide</code> name for <code>lucide-react</code> in the real build (ui-guidance: one icon set, minimalist by default). They appear only where they add meaning: navigation, approve / flag / reject / edit, drag handles, message direction, export, verification and warnings.
 <br>· <b>Zoom</b> (control below) scales the desktop and tablet canvases; the phone canvas is 1:1 by default. Nothing inside re-flows when you zoom — only the real width does that.</p>
 
 <p class="sub callout accent"><b>Known deltas — where this document is deliberately ahead of the app.</b> Every one is tracked so a reviewer can tell a decision from a mistake.
@@ -397,22 +409,62 @@ const chip = (t, k = '') => `<span class="chip ${k}">${t}</span>`;
 const btn = (t, k = '') => `<span class="btn ${k}">${t}</span>`;
 const kbd = k => `<span class="kbd">${k}</span>`;
 const av = i => `<span class="av">${i}</span>`;
+// lucide icons (lucide-static v0.544.0, ISC), inlined so the page stays self-contained.
+// data-lucide names the icon for lucide-react in the real build (ui-guidance: one icon set).
+const LUCIDE = {
+"arrow-down-left": "<path d=\"M17 7 7 17\"/> <path d=\"M17 17H7V7\"/>",
+"arrow-up-right": "<path d=\"M7 7h10v10\"/> <path d=\"M7 17 17 7\"/>",
+"calendar": "<path d=\"M8 2v4\"/> <path d=\"M16 2v4\"/> <rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\"/> <path d=\"M3 10h18\"/>",
+"check": "<path d=\"M20 6 9 17l-5-5\"/>",
+"chevron-down": "<path d=\"m6 9 6 6 6-6\"/>",
+"circle-check": "<circle cx=\"12\" cy=\"12\" r=\"10\"/> <path d=\"m9 12 2 2 4-4\"/>",
+"circle-dashed": "<path d=\"M10.1 2.182a10 10 0 0 1 3.8 0\"/> <path d=\"M13.9 21.818a10 10 0 0 1-3.8 0\"/> <path d=\"M17.609 3.721a10 10 0 0 1 2.69 2.7\"/> <path d=\"M2.182 13.9a10 10 0 0 1 0-3.8\"/> <path d=\"M20.279 17.609a10 10 0 0 1-2.7 2.69\"/> <path d=\"M21.818 10.1a10 10 0 0 1 0 3.8\"/> <path d=\"M3.721 6.391a10 10 0 0 1 2.7-2.69\"/> <path d=\"M6.391 20.279a10 10 0 0 1-2.69-2.7\"/>",
+"clipboard-list": "<rect width=\"8\" height=\"4\" x=\"8\" y=\"2\" rx=\"1\" ry=\"1\"/> <path d=\"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2\"/> <path d=\"M12 11h4\"/> <path d=\"M12 16h4\"/> <path d=\"M8 11h.01\"/> <path d=\"M8 16h.01\"/>",
+"command": "<path d=\"M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3\"/>",
+"copy": "<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\"/> <path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\"/>",
+"download": "<path d=\"M12 15V3\"/> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/> <path d=\"m7 10 5 5 5-5\"/>",
+"file-text": "<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/> <path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/> <path d=\"M10 9H8\"/> <path d=\"M16 13H8\"/> <path d=\"M16 17H8\"/>",
+"flag": "<path d=\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\"/>",
+"grip-vertical": "<circle cx=\"9\" cy=\"12\" r=\"1\"/> <circle cx=\"9\" cy=\"5\" r=\"1\"/> <circle cx=\"9\" cy=\"19\" r=\"1\"/> <circle cx=\"15\" cy=\"12\" r=\"1\"/> <circle cx=\"15\" cy=\"5\" r=\"1\"/> <circle cx=\"15\" cy=\"19\" r=\"1\"/>",
+"history": "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/> <path d=\"M3 3v5h5\"/> <path d=\"M12 7v5l4 2\"/>",
+"inbox": "<polyline points=\"22 12 16 12 14 15 10 15 8 12 2 12\"/> <path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"/>",
+"kanban": "<path d=\"M5 3v14\"/> <path d=\"M12 3v8\"/> <path d=\"M19 3v18\"/>",
+"library": "<path d=\"m16 6 4 14\"/> <path d=\"M12 6v14\"/> <path d=\"M8 8v12\"/> <path d=\"M4 4v16\"/>",
+"link": "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/> <path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/>",
+"list-checks": "<path d=\"M13 5h8\"/> <path d=\"M13 12h8\"/> <path d=\"M13 19h8\"/> <path d=\"m3 17 2 2 4-4\"/> <path d=\"m3 7 2 2 4-4\"/>",
+"log-out": "<path d=\"m16 17 5-5-5-5\"/> <path d=\"M21 12H9\"/> <path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"/>",
+"mail": "<path d=\"m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7\"/> <rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/>",
+"menu": "<path d=\"M4 5h16\"/> <path d=\"M4 12h16\"/> <path d=\"M4 19h16\"/>",
+"pencil": "<path d=\"M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z\"/> <path d=\"m15 5 4 4\"/>",
+"plus": "<path d=\"M5 12h14\"/> <path d=\"M12 5v14\"/>",
+"radar": "<path d=\"M19.07 4.93A10 10 0 0 0 6.99 3.34\"/> <path d=\"M4 6h.01\"/> <path d=\"M2.29 9.62A10 10 0 1 0 21.31 8.35\"/> <path d=\"M16.24 7.76A6 6 0 1 0 8.23 16.67\"/> <path d=\"M12 18h.01\"/> <path d=\"M17.99 11.66A6 6 0 0 1 15.77 16.67\"/> <circle cx=\"12\" cy=\"12\" r=\"2\"/> <path d=\"m13.41 10.59 5.66-5.66\"/>",
+"refresh-cw": "<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\"/> <path d=\"M21 3v5h-5\"/> <path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\"/> <path d=\"M8 16H3v5\"/>",
+"search": "<path d=\"m21 21-4.34-4.34\"/> <circle cx=\"11\" cy=\"11\" r=\"8\"/>",
+"send": "<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\"/> <path d=\"m21.854 2.147-10.94 10.939\"/>",
+"sparkles": "<path d=\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z\"/> <path d=\"M20 2v4\"/> <path d=\"M22 4h-4\"/> <circle cx=\"4\" cy=\"20\" r=\"2\"/>",
+"triangle-alert": "<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/> <path d=\"M12 9v4\"/> <path d=\"M12 17h.01\"/>",
+"undo-2": "<path d=\"M9 14 4 9l5-5\"/> <path d=\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\"/>",
+"upload": "<path d=\"M12 3v12\"/> <path d=\"m17 8-5-5-5 5\"/> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/>",
+"user": "<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/> <circle cx=\"12\" cy=\"7\" r=\"4\"/>",
+"x": "<path d=\"M18 6 6 18\"/> <path d=\"m6 6 12 12\"/>"
+};
+const ic = (n, cls = '') => `<svg class="lucide ${cls}" data-lucide="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n]}</svg>`;
 
 const SBAR = `<div class="sbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>`;
 const HOME = `<div class="homei"></div>`;
-const NAV_ITEMS = [['pipeline', 'Pipeline'], ['evidence', 'Evidence'], ['scan', 'Scan'], ['new', '+ New Role']];
+const NAV_ITEMS = [['pipeline', 'Pipeline', 'kanban'], ['evidence', 'Evidence', 'library'], ['scan', 'Scan', 'radar'], ['new', '+ New Role', 'plus']];
 
 function shell(active, body, opts = {}) {
   const nav = NAV_ITEMS.map(([id, label]) => {
     const nb = (id === 'evidence' || id === 'scan') ? ' nb' : '';
     return `<a class="${active === id ? 'on' : ''}${nb}">${label}</a>`;
   }).join('');
-  const tabs = NAV_ITEMS.map(([id, label]) =>
-    `<span class="${active === id ? 'on' : ''}"><i></i>${label.replace('+ ', '')}</span>`).join('');
+  const tabs = NAV_ITEMS.map(([id, label, icon]) =>
+    `<span class="${active === id ? 'on' : ''}">${ic(icon)}${label.replace('+ ', '')}</span>`).join('');
   return `<div class="app">${SBAR}
   <header class="hd"><span class="wm">match<b>|</b>line</span>
-    <nav class="nav">${nav}<span class="kbd nb">⌘K</span><a class="signout">Sign out</a></nav>
-    <span class="menu">☰</span></header>
+    <nav class="nav">${nav}<span class="kbd nb">${ic('command')}K</span><a class="signout">${ic('log-out')} Sign out</a></nav>
+    <span class="menu">${ic('menu')}</span></header>
   ${opts.banner || ''}
   <main class="main"><div class="wrap">${body}</div></main>
   ${opts.after || ''}
@@ -430,10 +482,10 @@ const UNITS = [
   { s: 'Negotiated multi-vendor CDN contracts across three providers.', sk: ['Vendor management'], tl: [], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
 ];
 const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
-  <span class="rail ${u.st === 'ok' ? 'ok' : u.st === 'flag' ? 'flag' : ''}">${u.st === 'ok' ? '✓' : u.st === 'flag' ? '⚠' : '—'}</span>
+  <span class="rail ${u.st === 'ok' ? 'ok' : u.st === 'flag' ? 'flag' : ''}">${u.st === 'ok' ? ic('check') : u.st === 'flag' ? ic('flag') : ic('circle-dashed')}</span>
   <div style="min-width:0;flex:1"><div class="clamp2 ${u.st === 'pend' ? 'mut' : ''}">${u.s}${o.an || ''}</div>
     <div class="meta">${u.sk.map(s => chip(s)).join('')}${u.tl.map(t => chip(t, 'line')).join('')}<span class="xs dim num">${u.c}% confidence</span><span class="xs dim">· ${u.src}</span></div></div>
-  <div class="acts">${btn('Approve ' + kbd('a'))}${btn('Flag ' + kbd('f'), 'ghost')}${btn('Reject ' + kbd('r'), 'ghost')}${btn('Edit ' + kbd('e'), 'ghost')}</div></div>`;
+  <div class="acts">${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}${btn(ic('pencil') + ' Edit ' + kbd('e'), 'ghost')}</div></div>`;
 
 const CANON = [
   ['L-001', 'headline', 'Senior Product Manager — video platforms and developer tools'],
@@ -491,7 +543,7 @@ function onboarding(state) {
       <div class="step"><i class="done"></i>Upload</div><div class="step"><i class="done"></i>Text extracted · 2,940 words</div><div class="step now"><i class="now"></i>Reading experience · chunk 3 of 5</div><div class="step todo"><i></i>Units committed</div>${an(3)}</div>` : ''}
     <span class="lbl">Résumé text</span>
     <div class="in ta ${extracting ? 'mut' : ''}" style="min-height:${extracting ? 220 : 300}px">${err || extracting || state === 'ready' ? '# Sam Okafor\nSenior Product Manager — video platforms\n\n## Beacon Streaming · 2019–2026\n- Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.\n- Owned device certification for 40+ partner platforms…\n\n## Cobalt Devices · 2014–2019\n- Negotiated multi-vendor CDN contracts…' : '<span class="dim">Paste your résumé — Markdown renders (# headers, **bold**, - bullet lists). We’ll structure it.</span>'}</div>
-    <div class="rowhead sm dim" style="margin-top:6px;justify-content:space-between"><span class="num">${extracting || err ? '4,812' : '0'} characters</span>${btn('Extract Units' + an(2), extracting ? 'pri off' : 'pri')}</div>
+    <div class="rowhead sm dim" style="margin-top:6px;justify-content:space-between"><span class="num">${extracting || err ? '4,812' : '0'} characters</span>${btn('Extract Units' + an(2), (extracting || state === 'idle') ? 'pri off' : 'pri')}</div>
   </div>`;
   const units = `<div><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('7 so far', 'acc') : ''}${an(4)}</div>
     ${extracting ? UNITS.slice(0, 3).map((u, i) => `<div class="unitin ${i === 0 ? 'new' : ''}"><div class="clamp2">${u.s}</div><div class="meta">${u.sk.slice(0, 2).map(s => chip(s)).join('')}<span class="xs dim num">${u.c}%</span></div></div>`).join('') + `<div class="unitin dim">…more arriving</div>`
@@ -505,12 +557,12 @@ function onboarding(state) {
 function unitReview(state) {
   const filters = `<div class="filters">
     ${chip('Approved 27', 'on')}${chip('Pending 11')}${chip('Flagged 3')}
-    <span class="adv">${chip('Skill: Video playback ×', 'acc')}${chip('Tool ▾', 'line')}${chip('Domain ▾', 'line')}${chip('Source ▾', 'line')}<span class="in sm">from 2019-01</span><span class="in sm">to</span></span>
+    <span class="adv">${chip('Skill: Video playback ×', 'acc')}${chip('Tool ' + ic('chevron-down'), 'line')}${chip('Domain ' + ic('chevron-down'), 'line')}${chip('Source ' + ic('chevron-down'), 'line')}<span class="in sm">from 2019-01</span><span class="in sm">to</span></span>
     ${btn('Filters · 2', 'morebtn')}<span class="sp"></span><span class="sm dim num">27 of 41 approved${an(1)}</span>${btn('Clear')}${an(2)}</div>`;
   if (state === 'empty') {
     return shell('evidence', `<div class="ttl">Unit Review</div><div class="dim sm" style="margin-bottom:12px">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div>
       <div class="empty" style="padding:36px 20px"><div class="h2">No Experience Units yet</div><div style="margin:4px 0 14px">Import your career, add a Unit by hand, or drop an artifact. Every path lands here for review.</div>
-      <div class="btnrow" style="justify-content:center">${btn('Import your career', 'pri')}${btn('Add Unit manually')}${btn('Upload an artifact', 'nb')}</div></div>`);
+      <div class="btnrow" style="justify-content:center">${btn(ic('file-text') + ' Import your career', 'pri')}${btn(ic('plus') + ' Add Unit manually')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`);
   }
   if (state === 'loading') {
     return shell('evidence', `<div class="ttl">Unit Review</div><div class="dim sm" style="margin-bottom:12px">Approve, correct, or reject every extracted Experience Unit.</div>
@@ -522,8 +574,8 @@ function unitReview(state) {
       <div class="sm dim">No list and no counter under an error — stale truth is worse than none.</div>`);
   }
   const bulk = `<div class="card tight" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span class="sm"><b>3 selected</b></span>${btn('Approve ' + kbd('a'))}${btn('Flag ' + kbd('f'), 'ghost')}${btn('Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim">Esc clears</span>${an(5)}</div>`;
-  const editing = `<div class="lrow sel" style="display:block"><div class="rowhead sm"><span class="cb on"></span><span class="rail flag">⚠</span><b>Editing</b><span class="dim">Tab moves between fields · Enter saves · Esc reverts</span>${an(4)}</div>
-    <div class="grid" style="grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><div style="grid-column:1/-1"><span class="lbl">Summary</span><div class="in focus">Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).</div></div>
+  const editing = `<div class="lrow sel" style="display:block"><div class="rowhead sm"><span class="cb on"></span><span class="rail flag">${ic('triangle-alert')}</span><b>Editing</b><span class="dim">Tab moves between fields · Enter saves · Esc reverts</span>${an(4)}</div>
+    <div class="pair" style="gap:8px;margin-top:8px"><div style="grid-column:1/-1"><span class="lbl">Summary</span><div class="in focus">Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).</div></div>
     <div><span class="lbl">Skills</span><div class="in">Live streaming, Team leadership</div></div><div><span class="lbl">Tools</span><div class="in">HLS, WebRTC</div></div>
     <div><span class="lbl">Metric</span><div class="in">glass-to-glass latency · &lt; 3 s</div></div><div><span class="lbl">Dates</span><div class="in">2023-03 → 2024-02</div></div></div>
     <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}<span class="sm dim">Saving re-runs this Unit’s embedding.</span></div></div>`;
@@ -536,7 +588,7 @@ function unitReview(state) {
     <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc nb')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
   const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="ttl">Unit Review</div><div class="dim sm">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    <div class="btnrow">${btn('+ Add Unit')}${btn('Upload artifact', 'nb')}<span class="kbd">?</span></div></div>
+    <div class="btnrow">${btn(ic('plus') + ' Add Unit')}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd">?</span></div></div>
     ${filters}${bulk}<div class="two">${list}${detail}</div>`;
   return shell('evidence', body);
 }
@@ -552,8 +604,8 @@ function canonical(state) {
     <div class="btnrow" style="margin-top:8px">${btn('Rebase stale views', 'nb')}</div></div>`;
   if (state === 'rules') {
     const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="ttl">Claim rules</div><div class="dim sm">Short, durable, in your own words. The validation layer enforces them alongside traceability.</div></div>${btn('+ Add rule', 'pri')}</div>
-      <div class="card tight" style="margin-bottom:10px"><div class="grid" style="grid-template-columns:160px 1fr 160px auto;gap:8px;align-items:end">
-        <div><span class="lbl">Kind</span><div class="in">never_claim ▾</div></div><div><span class="lbl">Statement</span><div class="in focus">Never quote the CDN savings figure; it was retired after the FY24 restatement.</div></div>
+      <div class="card tight" style="margin-bottom:10px"><div class="rulegrid">
+        <div><span class="lbl">Kind</span><div class="in">never_claim ${ic('chevron-down')}</div></div><div><span class="lbl">Statement</span><div class="in focus">Never quote the CDN savings figure; it was retired after the FY24 restatement.</div></div>
         <div><span class="lbl">Applies to (optional)</span><div class="in ph">employer, project…</div></div>${btn('Save', 'pri')}</div>${an(1)}</div>
       <div class="list">${RULES.map(ruleRow).join('')}</div>
       <div class="info" style="margin-top:10px">Kinds: <b>never claim</b> · <b>attribute only to</b> · <b>never imply shipped</b> · <b>retired figure</b> · <b>phrasing</b>. A rule applies to every fit brief, résumé view, cover letter, answer and prep brief; the fit brief lists what the package does not claim.${an(2)}</div>`;
@@ -564,13 +616,13 @@ function canonical(state) {
     const head = l[1] !== sec ? `<div class="lrow" style="background:#fafafa;min-height:0;padding:4px 12px"><span class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">${l[1]}</span></div>` : '';
     sec = l[1];
     const focus = i === 2 ? ' focus' : '';
-    return head + `<div class="lrow${focus}"><span class="drag">⋮⋮</span><span class="lid">${l[0]}</span><div style="flex:1;min-width:0">${i === 2 ? `<div class="in focus" style="min-height:0;padding:3px 6px">${l[2]}</div>` : l[2]}
+    return head + `<div class="lrow${focus}"><span class="drag">${ic('grip-vertical')}</span><span class="lid">${l[0]}</span><div style="flex:1;min-width:0">${i === 2 ? `<div class="in focus" style="min-height:0;padding:3px 6px">${l[2]}</div>` : l[2]}
       <div class="meta"><span class="xs dim">evidences</span>${chip('EU-14', 'acc')}${i === 3 ? chip('EU-15', 'acc') : ''}${i === 2 ? `<span class="xs amb">used in 3 views — saving bumps v14 → v15 and marks them behind</span>${an(3)}` : ''}</div></div></div>`;
   }).join('');
   const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="ttl">Canonical résumé <span class="chip line num">v14</span></div><div class="dim sm">One résumé, line-addressable. Tailored versions are views of it; rewritten lines are tracked exceptions.${an(1)}</div></div>
-    <div class="btnrow">${btn('+ Line')}${btn('Export canonical')}</div></div>
+    <div class="btnrow">${btn(ic('plus') + ' Line')}${btn(ic('download') + ' Export canonical')}</div></div>
     <div class="tabs"><span>Units</span><span class="on">Canonical résumé</span><span>Claim rules</span></div>
-    <div class="two"><div class="list section-lines">${lines}${an(2)}</div><div>${rulesPanel}</div></div>
+    <div class="two"><div class="list section-lines">${lines}${an(2)}</div><div class="ph-hide">${rulesPanel}</div></div>
     <div class="ph-only"><div class="stbar">${btn('Claim rules · 4', 'nb')}${btn('Views · 1 behind', 'nb')}</div></div>`;
   return shell('evidence', body);
 }
@@ -583,12 +635,12 @@ function roleNew(state) {
     ${lead ? `<div class="info">Draft restored from this browser. Cancel discards it; creating the Role clears it.${an(4)}</div>` : ''}
     ${errS ? `<div class="alert" role="alert">Title is required.${an(5)}</div>` : ''}
     <div class="field"><span class="lbl">Title <span class="req">*</span></span><div class="in ${errS ? 'focus ph' : ''}">${errS ? 'Senior Software Engineer' : lead ? 'Group Product Manager' : 'Senior Product Manager, Video Platform'}</div></div>
-    <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px"><div class="field"><span class="lbl">Company</span><div class="in">${lead ? 'Harbor Analytics' : 'Northwind Media'}</div></div>
+    <div class="pair"><div class="field"><span class="lbl">Company</span><div class="in">${lead ? 'Harbor Analytics' : 'Northwind Media'}</div></div>
       <div class="field"><span class="lbl">Posting URL</span><div class="in ${lead ? 'ph' : ''}">${lead ? 'https://' : 'https://careers.northwind.example/jobs/4821'}</div></div>
       <div class="field"><span class="lbl">Location</span><div class="in">${lead ? 'Remote (US)' : 'San Francisco, CA'}</div></div>
-      <div class="field"><span class="lbl">Remote policy</span><div class="in">${lead ? 'Remote ▾' : 'Hybrid ▾'}</div></div>
+      <div class="field"><span class="lbl">Remote policy</span><div class="in">${lead ? 'Remote' : 'Hybrid'} ${ic('chevron-down')}</div></div>
       <div class="field"><span class="lbl">Comp range (as posted)</span><div class="in ${lead ? 'ph' : ''}">${lead ? '$ – $' : '$190,000 – $240,000'}</div></div>
-      <div class="field"><span class="lbl">Source</span><div class="in">${lead ? 'Referral · Morgan T.' : 'Employer board'} ▾</div></div></div>
+      <div class="field"><span class="lbl">Source</span><div class="in">${lead ? 'Referral · Morgan T.' : 'Employer board'} ${ic('chevron-down')}</div></div></div>
     <div class="field"><span class="lbl">Job description</span><div class="in ta ${lead ? 'ph' : ''}" style="min-height:${lead ? 90 : 170}px">${lead ? 'No JD yet. Save the Role as a lead and paste the JD on its detail page when it arrives.' + an(3) : 'Northwind Media is hiring a Senior Product Manager for its video platform. You will own playback quality across web, mobile and living-room devices…\n\nWhat you’ll do\n- Lead the roadmap for playback and device certification\n- Partner with 20+ device OEMs\n\nWhat we look for\n- 7+ years in product management, 3+ in video\n- Experience with ad-supported streaming (must have)'}</div></div>
     <div class="btnrow" style="justify-content:flex-end">${btn('Cancel', 'ghost')}${btn(lead ? 'Save as lead' : 'Create Role' + an(1), 'pri')}</div>
     <div class="sm dim" style="margin-top:6px;text-align:right">${lead ? 'Lands on Role detail with “No JD yet”.' : 'Creates the Role, then parses the JD into Requirement Units and starts matching.' + an(2)}</div></div>`;
@@ -601,7 +653,7 @@ function roleHeader(opts = {}) {
     <div style="min-width:0"><div class="dim sm">${noJd ? 'Harbor Analytics · Remote (US)' : 'Northwind Media · San Francisco (hybrid) · careers.northwind.example'}</div>
       <div class="ttl">${noJd ? 'Group Product Manager' : 'Senior Product Manager, Video Platform'}</div>
       <div class="meta">${chip(noJd ? 'Saved' : 'Interviewing', 'ink')}<span class="sm dim num">${noJd ? '2' : '6'} days in stage</span>${noJd ? '' : chip('$190–240k as posted', 'line')}${chip(noJd ? 'referral · Morgan T.' : 'applied Oct 9', 'line')}</div></div>
-    <div class="btnrow">${btn('Update stage ▾')}${btn(noJd ? 'Paste JD' : 'Generate ▾', 'pri')}${btn('Export ▾', noJd ? 'off' : '')}</div></div>
+    <div class="btnrow">${btn('Update stage ' + ic('chevron-down'))}${btn(noJd ? 'Paste JD' : ic('sparkles') + ' Generate ' + ic('chevron-down'), 'pri')}${btn(ic('download') + ' Export ' + ic('chevron-down'), noJd ? 'off' : '')}</div></div>
     <div class="where nb"><div class="card tight"><div class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">Where things stand</div>
       <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 23. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
       <div class="card tight"><div class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">Next action</div>
@@ -624,13 +676,13 @@ function roleDetail(state) {
       <div class="list"><div class="lrow"><div style="flex:1"><div class="sm dim">“Lead the roadmap for playback and device certification”</div><div>Owned both at Beacon: one player across three platforms, 40+ certified partners.</div><div class="meta">${chip('L-010', 'acc')}${chip('L-011', 'acc')}${chip('EU-14', 'line')}${chip('EU-15', 'line')}</div></div></div>
         <div class="lrow"><div style="flex:1"><div class="sm dim">“Partner with 20+ device OEMs”</div><div>Partner program from zero to six OEMs, then certification across 40+ platforms.</div><div class="meta">${chip('L-021', 'acc')}${chip('L-011', 'acc')}</div></div></div></div>
       <div class="h3">Where you are exposed${an(5)}</div>
-      <div class="list"><div class="lrow"><span class="rail flag">⚠</span><div style="flex:1"><div class="sm dim">“Experience with ad-supported streaming (must have)”</div><div><b>Gap.</b> No owned ads work. Handling: lead with the live pipeline’s ad-insertion integration; do not claim ads ownership.</div></div></div></div>
+      <div class="list"><div class="lrow"><span class="rail flag">${ic('triangle-alert')}</span><div style="flex:1"><div class="sm dim">“Experience with ad-supported streaming (must have)”</div><div><b>Gap.</b> No owned ads work. Handling: lead with the live pipeline’s ad-insertion integration; do not claim ads ownership.</div></div></div></div>
       <div class="h3">Positioning &amp; level</div><div class="card tight">Platform PM who owns the device edge of playback. Apply at Senior; the posting’s scope reads Staff — raise leveling after the hiring-manager round, not before.</div>
       </div>
       <div><div class="card" style="margin-bottom:12px"><b>Homework</b><div class="task"><span class="cb on"></span><span>Read Northwind’s Q3 platform post</span></div><div class="task"><span class="cb"></span><span>Check which player SDK they ship on tvOS</span></div></div>
         <div class="card" style="margin-bottom:12px"><b>Questions to ask</b><div class="task">How is certification staffed today?</div><div class="task">Is ads-tech owned by this role or by a sibling PM?</div></div>
         <div class="card" style="border-color:#fecaca"><b>What this package does not claim</b>${an(6)}<div class="task">Ads-tech ownership</div><div class="task">The CDN savings figure <span class="chip red">§ retired</span></div><div class="task">The recommendations engine as shipped <span class="chip red">§ beta</span></div></div>
-        <div class="btnrow" style="margin-top:12px">${btn('Edit brief')}${btn('Regenerate', 'ghost')}${btn('Build package →', 'pri')}</div></div></div>`;
+        <div class="btnrow" style="margin-top:12px">${btn('Edit brief')}${btn('Regenerate', 'ghost')}${btn('Build package ' + ic('arrow-up-right'), 'pri')}</div></div></div>`;
     return shell('pipeline', body);
   }
   if (state === 'reqs') {
@@ -649,24 +701,24 @@ function roleDetail(state) {
       <div class="warn">Built from canonical <b>v12</b>; canonical is now <b>v14</b> — 2 lines changed (L-010, L-012). ${btn('Rebase to v14')} ${btn('Keep v12', 'ghost')}${an(4)}</div>
       <div class="two"><div class="list section-lines">
         <div class="lrow" style="background:#fafafa;min-height:0"><span class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">headline · summary</span></div>
-        <div class="lrow"><span class="drag">⋮⋮</span><span class="lid">L-001</span><div style="flex:1">Senior Product Manager — video platforms and developer tools</div></div>
-        <div class="lrow exc"><span class="drag">⋮⋮</span><span class="lid">L-002′</span><div style="flex:1">Twelve years shipping playback and device-partner products for ad-supported and subscription services.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s two models</span>${an(5)}</div></div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-001</span><div style="flex:1">Senior Product Manager — video platforms and developer tools</div></div>
+        <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Twelve years shipping playback and device-partner products for ad-supported and subscription services.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s two models</span>${an(5)}</div></div></div>
         <div class="lrow" style="background:#fafafa;min-height:0"><span class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">Beacon Streaming · 2019–2026</span></div>
-        <div class="lrow"><span class="drag">⋮⋮</span><span class="lid">L-011</span><div style="flex:1">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</div></div>
-        <div class="lrow"><span class="drag">⋮⋮</span><span class="lid">L-010</span><div style="flex:1">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
-        <div class="lrow dimmed"><span class="drag">⋮⋮</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}</div></div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
+        <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}</div></div></div>
         <div class="lrow" style="min-height:0">${btn('+ Pick canonical lines', 'ghost')}</div></div>
-      <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">✓</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">✓</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">✓</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">⚠</span>Stale against canonical v14 (warning, not blocking)</div></div>
-        <div class="card" style="margin-bottom:10px"><b>Export</b><div class="btnrow" style="margin-top:6px">${btn('PDF', 'pri')}${btn('DOCX')}${btn('Plain text')}</div><div class="sm dim" style="margin-top:6px">Enabled: this view passes traceability and the claim rules. Export records the canonical version it was cut from.</div></div>
+      <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">${ic('check')}</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">${ic('check')}</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">${ic('check')}</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>Stale against canonical v14 (warning, not blocking)</div></div>
+        <div class="card" style="margin-bottom:10px"><b>Export</b><div class="btnrow" style="margin-top:6px">${btn(ic('download') + ' PDF', 'pri')}${btn('DOCX')}${btn('Plain text')}</div><div class="sm dim" style="margin-top:6px">Enabled: this view passes traceability and the claim rules. Export records the canonical version it was cut from.</div></div>
         <div class="card"><b>Referral note</b> · to Morgan T.<div class="sm dim" style="margin-top:4px">Drafted from the fit brief; logs to Correspondence when you mark it sent.</div></div></div></div>`;
     return shell('pipeline', body);
   }
   if (state === 'process') {
     const body = roleHeader() + roleTabs('Process') + `<div class="two"><div>
-      <div class="rowhead" style="margin-bottom:6px"><b>Rounds</b>${chip('3', 'line')}<span class="sp"></span>${btn('+ Add round')}</div>
+      <div class="rowhead" style="margin-bottom:6px"><b>Rounds</b>${chip('3', 'line')}<span class="sp"></span>${btn(ic('plus') + ' Add round')}</div>
       <div class="list rounds">
-        <div class="lrow"><span class="rail ok">✓</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Recruiter screen</b>${av('PN')}<span class="sm dim">Priya N. · Oct 14 · 30 min</span>${chip('warm', 'grn')}</div><div class="meta">${chip('prep brief ✓', 'line')}${chip('debrief ✓ · from transcript', 'line')}${chip('thank-you sent', 'line')}</div><div class="sm dim clamp2" style="margin-top:4px">Debrief: comp band confirmed as posted; HM cares most about device partners; ads question did not come up.</div></div><div class="acts">${btn('Open', 'ghost')}</div></div>
-        <div class="lrow focus"><span class="rail" style="color:var(--acc)">●</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Hiring manager</b>${av('DK')}<span class="sm dim">Dan K. · Thu Oct 23 · 45 min</span>${chip('next', 'acc')}</div><div class="meta">${chip('prep brief · draft', 'amb')}${chip('runbook', 'line')}${chip('flashcards · 12', 'line')}</div><div class="sm" style="margin-top:4px">Prep brief opens from the fit brief and the recruiter debrief; it inherits every claim rule.${an(3)}</div></div><div class="acts">${btn('Finish prep', 'pri')}</div></div>
+        <div class="lrow"><span class="rail ok">${ic('circle-check')}</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Recruiter screen</b>${av('PN')}<span class="sm dim">Priya N. · Oct 14 · 30 min</span>${chip('warm', 'grn')}</div><div class="meta">${chip('prep brief ✓', 'line')}${chip('debrief ✓ · from transcript', 'line')}${chip('thank-you sent', 'line')}</div><div class="sm dim clamp2" style="margin-top:4px">Debrief: comp band confirmed as posted; HM cares most about device partners; ads question did not come up.</div></div><div class="acts">${btn('Open', 'ghost')}</div></div>
+        <div class="lrow focus"><span class="rail" style="color:var(--acc)">${ic('calendar')}</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Hiring manager</b>${av('DK')}<span class="sm dim">Dan K. · Thu Oct 23 · 45 min</span>${chip('next', 'acc')}</div><div class="meta">${chip('prep brief · draft', 'amb')}${chip('runbook', 'line')}${chip('flashcards · 12', 'line')}</div><div class="sm" style="margin-top:4px">Prep brief opens from the fit brief and the recruiter debrief; it inherits every claim rule.${an(3)}</div></div><div class="acts">${btn('Finish prep', 'pri')}</div></div>
         <div class="lrow dimmed"><span class="rail">—</span><div style="flex:1"><div class="rowhead"><b>Panel</b><span class="sm dim">not scheduled</span></div><div class="meta">${chip('prep opens when scheduled', 'line')}</div></div></div></div>
       <div class="h3">Scorecard${an(4)}</div>
       <table class="tbl"><tr><th>Round</th><th>Signal</th><th class="opt">What they probed</th><th class="opt">What to carry forward</th></tr>
@@ -680,13 +732,13 @@ function roleDetail(state) {
   const body = roleHeader() + roleTabs('Correspondence') + `<div class="two"><div>
     <div class="card" style="border-color:#c7cdf0;margin-bottom:12px"><div class="rowhead"><b>Drafts</b>${chip('1', 'acc')}</div>
       <div class="task" style="align-items:flex-start"><div><div><b>Thank-you note → Dan K.</b> <span class="sm dim">drafted from the Oct 23 debrief</span></div><div class="verb" style="margin-top:6px">Dan — thanks for the time today. The certification backlog you described maps closely to what I ran at Beacon; happy to share the test-plan template I mentioned.</div>
-      <div class="btnrow" style="margin-top:6px">${btn('Copy')}${btn('Mark sent', 'pri')}${btn('Discard', 'ghost')}<span class="sm dim">Matchline never sends. You send; it logs verbatim.${an(3)}</span></div></div></div></div>
+      <div class="btnrow" style="margin-top:6px">${btn(ic('copy') + ' Copy')}${btn(ic('send') + ' Mark sent', 'pri')}${btn('Discard', 'ghost')}<span class="sm dim">Matchline never sends. You send; it logs verbatim.${an(3)}</span></div></div></div></div>
     <div class="rowhead" style="margin-bottom:6px"><b>Log</b>${chip('5 messages', 'line')}<span class="sp"></span>${btn('+ Log a message')}</div>
     <div class="list">
-      <div class="lrow"><span class="rail">←</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>Priya N.</b><span class="dim">Oct 15 · received · “Next steps”</span></div><div class="verb" style="margin-top:4px">Great chatting yesterday! Dan would like to meet next week — I’ll send times. Comp is as posted ($190–240k) plus equity.</div></div></div>
-      <div class="lrow"><span class="rail">→</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>to Priya N.</b><span class="dim">Oct 15 · sent</span>${an(4)}</div><div class="verb" style="margin-top:4px">Thanks Priya — Thursday or Friday afternoon both work. Looking forward to meeting Dan.</div></div></div>
-      <div class="lrow"><span class="rail">→</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('MT')}<b>to Morgan T.</b><span class="dim">Oct 8 · sent · referral note</span></div><div class="sm dim">Collapsed · 6 lines ▾</div></div></div>
-      <div class="lrow"><span class="rail">→</span><div style="flex:1;min-width:0"><div class="rowhead sm"><b>Application submitted</b><span class="dim">Oct 9 · careers.northwind.example</span></div><div class="sm dim">Package v1 · résumé view (canonical v12) · 3 answers · attached verbatim ▾</div></div></div></div></div>
+      <div class="lrow"><span class="rail">${ic('arrow-down-left')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>Priya N.</b><span class="dim">Oct 15 · received · “Next steps”</span></div><div class="verb" style="margin-top:4px">Great chatting yesterday! Dan would like to meet next week — I’ll send times. Comp is as posted ($190–240k) plus equity.</div></div></div>
+      <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>to Priya N.</b><span class="dim">Oct 15 · sent</span>${an(4)}</div><div class="verb" style="margin-top:4px">Thanks Priya — Thursday or Friday afternoon both work. Looking forward to meeting Dan.</div></div></div>
+      <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('MT')}<b>to Morgan T.</b><span class="dim">Oct 8 · sent · referral note</span></div><div class="sm dim">Collapsed · 6 lines ▾</div></div></div>
+      <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm"><b>Application submitted</b><span class="dim">Oct 9 · careers.northwind.example</span></div><div class="sm dim">Package v1 · résumé view (canonical v12) · 3 answers · attached verbatim ▾</div></div></div></div></div>
     <div><div class="card"><b>On the record</b>${an(5)}<div class="sm dim" style="margin:4px 0 8px">What has already been said to this company. Prep briefs and drafts check against it so later messages stay consistent.</div>
       <div class="task">Comp: accepted band as posted (Oct 15)</div><div class="task">Availability: 2 weeks’ notice (Oct 14 screen)</div><div class="task">Start: not discussed</div></div></div></div>`;
   return shell('pipeline', body);
@@ -696,15 +748,15 @@ function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="bar ind" style="margin-bottom:12px"><i></i></div><div class="sm dim" role="status">Loading Application…</div><div class="ed" style="margin-top:12px"><div class="card" style="min-height:260px"></div><div class="card" style="min-height:260px"></div></div>`);
   if (state === 'empty') return shell('pipeline', `<div class="rowhead" style="justify-content:space-between"><div><div class="dim sm">Northwind Media · Senior Product Manager, Video Platform</div><div class="ttl">Application editor</div></div>${btn('Export', 'off')}</div>
     <div class="empty" style="margin-top:14px;padding:36px 20px"><div class="h2">No résumé generated yet</div><div style="margin:4px 0 14px">Generation needs at least one approved match. This Role has <b class="num">9</b>, so you can generate now; the result lands here with every claim traced.${an(6)}</div>${btn('Generate résumé view', 'pri')}</div>`);
-  const left = `<div><div class="rowhead" style="margin-bottom:6px"><b>Generated output</b>${chip('résumé view · canonical v14', 'line')}<span class="sp"></span>${btn('Undo edit ' + kbd('⌘Z'), 'ghost')}</div>
+  const left = `<div><div class="rowhead" style="margin-bottom:6px"><b>Generated output</b>${chip('résumé view · canonical v14', 'line')}<span class="sp"></span>${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>
     <div class="card" style="position:relative;line-height:1.6">
       <div class="h2">Senior Product Manager — video platforms and developer tools</div>
       <div class="h3">Beacon Streaming · 2019–2026</div>
       <div>• <span class="u hover">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.</span>${an(1)}</div>
       <div>• <span class="u">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</span></div>
       <div>• <span class="u amb">Drove significant improvements to streaming reliability.</span>${an(3)}</div>
-      <div>• <span class="u rule">Saved $1.2M a year by renegotiating CDN contracts across three providers.</span>${an(4)}</div>
-      <div class="pop" style="right:12px;top:118px"><div class="h2">Claim rule hit</div><div class="sm">§ never claim · “Never quote the CDN savings figure; it was retired after the FY24 restatement.”</div><div class="hr"></div><div class="sm"><b>Resolve</b></div><div class="task">Edit the claim ${kbd('e')}</div><div class="task">Remove this bullet</div><div class="task">Add a supporting Unit</div><div class="task dim">Edit the rule (Evidence → Claim rules)</div></div>
+      <div>• <span class="u rule nb">Saved $1.2M a year by renegotiating CDN contracts across three providers.</span>${an(4)}</div>
+      <div class="pop nb" style="right:12px;top:118px"><div class="h2">Claim rule hit</div><div class="sm">§ never claim · “Never quote the CDN savings figure; it was retired after the FY24 restatement.”</div><div class="hr"></div><div class="sm"><b>Resolve</b></div><div class="task">Edit the claim ${kbd('e')}</div><div class="task">Remove this bullet</div><div class="task">Add a supporting Unit</div><div class="task dim">Edit the rule (Evidence → Claim rules)</div></div>
       <div class="h3">Cobalt Devices · 2014–2019</div>
       <div>• <span class="u red">Shipped the recommendations engine to 2M households.</span>${an(2)}</div>
       <div>• <span class="u">Launched the first set-top partner program; 6 OEMs in year one.</span></div>
@@ -712,8 +764,8 @@ function editor(state) {
   const right = `<div class="evid"><div class="rowhead" style="margin-bottom:6px"><b>Approved evidence</b>${chip('9 Units', 'line')}${chip('4 rules', 'line nb')}</div>
     <div class="list">${unitRow(UNITS[0], 0, { cls: 'sel' }).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow(UNITS[1], 1).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow(UNITS[4], 4).replace('<div class="acts">', '<div class="acts" style="display:none">')}</div>
     <div class="sm dim" style="margin:6px 0 10px">Hover a claim on the left: its source Unit lights up here. Click a Unit: every claim it grounds highlights on the left.${an(5)}</div>
-    <div class="card" style="border-color:#fecaca"><div class="rowhead"><b>Export blocked</b>${chip('3 flags', 'red')}</div><div class="task"><span class="rail" style="color:var(--red)">●</span>1 traceability failure</div><div class="task"><span class="rail" style="color:var(--red)">§</span>1 claim-rule hit</div><div class="task"><span class="rail flag">●</span>1 specificity warning</div>
-      <div class="btnrow" style="margin-top:8px;position:relative">${btn('Export', 'pri off')}${btn('Re-run validation')}<span class="tip" style="left:0;top:-30px">Resolve 3 flags to export${an(6)}</span></div></div></div>`;
+    <div class="card" style="border-color:#fecaca"><div class="rowhead"><b>Export blocked</b>${chip('3 flags', 'red')}</div><div class="task"><span class="rail" style="color:var(--red)">●</span>1 traceability failure</div><div class="task nb"><span class="rail" style="color:var(--red)">§</span>1 claim-rule hit</div><div class="task"><span class="rail flag">●</span>1 specificity warning</div>
+      <div class="btnrow" style="margin-top:8px;position:relative">${btn(ic('download') + ' Export', 'pri off')}${btn(ic('refresh-cw') + ' Re-run validation')}<span class="tip" style="left:0;top:-30px">Resolve 3 flags to export${an(6)}</span></div></div></div>`;
   const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="dim sm">Northwind Media · Senior Product Manager, Video Platform</div><div class="ttl">Application editor</div></div><span class="sm dim">Autosaved 12 s ago</span></div>
     <div class="seg phseg"><span class="on">Output · 3 flags</span><span>Evidence · 9</span></div>
     <div class="ed">${left}${right}</div>`;
@@ -734,10 +786,10 @@ function pipeline(state) {
   const col = ([s, n], i) => `<section class="col ${state === 'ready' && s === 'Interviewing' ? 'over' : ''}"><div class="colh"><span class="stage">${s}</span><span class="num">${state === 'ready' ? n : 0}</span>${state === 'ready' && s === 'Interviewing' ? an(3) : ''}</div>
     ${state === 'ready' && cards[s] ? cards[s] : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`;
   const side = `<aside class="side"><div class="sidewrap">
-    <div class="card tight nb"><div class="rowhead sm"><b>Due today</b>${chip('2', 'red')}${an(5)}</div><div class="task over"><span class="cb"></span><span>Prep brief for Dan K. · Northwind</span><span class="due">today</span></div><div class="task over"><span class="cb"></span><span>Ask Morgan for the JD · Harbor</span><span class="due">yesterday</span></div></div>
+    <div class="card tight nb"><div class="rowhead sm">${ic('list-checks')}<b>Due today</b>${chip('2', 'red')}${an(5)}</div><div class="task over"><span class="cb"></span><span>Prep brief for Dan K. · Northwind</span><span class="due">today</span></div><div class="task over"><span class="cb"></span><span>Ask Morgan for the JD · Harbor</span><span class="due">yesterday</span></div></div>
     <div class="card tight nb"><div class="rowhead sm"><b>Upcoming</b>${chip('3')}</div><div class="task"><span class="cb"></span><span>Finish cover letter · Lumen</span><span class="due">Wed</span></div><div class="task"><span class="cb"></span><span>Thank-you to Dan K.</span><span class="due">Fri</span></div><div class="task"><span class="cb"></span><span>Panel prep · Tidewater</span><span class="due">Oct 27</span></div></div>
-    <div class="card tight nb"><div class="rowhead sm"><b>Follow-ups</b>${chip('1', 'amb')}${an(6)}</div><div class="task"><span>Orbit Video · Applied, quiet 8 days</span><span class="due">${btn('+ task', 'ghost')}</span></div></div></div></aside>`;
-  const head = `<div class="rowhead" style="justify-content:space-between;margin-bottom:10px"><div><div class="ttl">Pipeline</div><div class="dim sm">${state === 'ready' ? '<span class="num">9</span> applications · overdue next actions sort first' : 'Kanban by stage. Each card opens its Role.'}</div></div><div class="btnrow">${btn('+ New Role', 'pri')}<span class="sm dim lbltxt">${kbd('←')} ${kbd('→')} move a focused card one stage${state === 'ready' ? an(4) : ''}</span></div></div>`;
+    <div class="card tight nb"><div class="rowhead sm">${ic('history')}<b>Follow-ups</b>${chip('1', 'amb')}${an(6)}</div><div class="task"><span>Orbit Video · Applied, quiet 8 days</span><span class="due">${btn('+ task', 'ghost')}</span></div></div></div></aside>`;
+  const head = `<div class="rowhead" style="justify-content:space-between;margin-bottom:10px"><div><div class="ttl">Pipeline</div><div class="dim sm">${state === 'ready' ? '<span class="num">9</span> applications · overdue next actions sort first' : 'Kanban by stage. Each card opens its Role.'}</div></div><div class="btnrow">${btn(ic('plus') + ' New Role', 'pri')}<span class="sm dim lbltxt">${kbd('←')} ${kbd('→')} move a focused card one stage${state === 'ready' ? an(4) : ''}</span></div></div>`;
   let body;
   if (state === 'loading') body = head + `<div class="bar ind" style="margin-bottom:10px"><i></i></div><div class="sm dim">Loading pipeline…</div><div class="cols" style="margin-top:10px">${STAGES.map(([s]) => `<section class="col"><div class="colh"><span class="stage">${s}</span></div><div class="kc" style="height:56px;opacity:.4"></div></section>`).join('')}</div>`;
   else if (state === 'error') body = head + `<div class="alert" role="alert">Couldn’t load the Pipeline: Firestore unavailable. The board below is from the last successful read; moves are disabled until it reconnects. ${btn('Retry')}</div><div class="warn">Some Roles and Companies failed to load — cards show “Unknown company” / “Role unavailable” rather than guessing.</div>
@@ -751,9 +803,9 @@ function pipeline(state) {
 function scan(state) {
   const row = (tier, co, title, verified, comp, up, exp, ref, k = '') => `<div class="lrow ${k}" style="display:block"><div class="scan-row">
     <div><div class="rowhead"><span class="tier ${tier === 2 ? 't2' : tier === 3 ? 't3' : ''}">${tier}</span><b>${co}</b>${ref ? chip('referral needed', 'amb') : ''}</div><div class="sm">${title}</div>
-      <div class="meta"><span class="xs ${verified ? 'grn' : 'amb'}">${verified ? '✓ verified on the employer board · Oct 19' : '⚠ not found on the employer board — aggregator only'}</span>${comp ? chip(comp + ' as posted', 'line') : chip('comp not posted', 'line')}</div></div>
+      <div class="meta"><span class="xs ${verified ? 'grn' : 'amb'}">${verified ? ic('circle-check') + ' verified on the employer board · Oct 19' : ic('triangle-alert') + ' not found on the employer board — aggregator only'}</span>${comp ? chip(comp + ' as posted', 'line') : chip('comp not posted', 'line')}</div></div>
     <dl class="lines"><dt>Lines up</dt><dd>${up}</dd></dl><dl class="lines"><dt>Exposed</dt><dd>${exp}</dd></dl>
-    <div class="act btnrow">${btn('Turn into Role', 'pri')}${btn('Dismiss', 'ghost')}</div></div></div>`;
+    <div class="act btnrow">${btn(ic('plus') + ' Turn into Role', 'pri')}${btn(ic('x') + ' Dismiss', 'ghost')}</div></div></div>`;
   if (state === 'first') {
     return shell('scan', `<div class="ttl">Weekly scan</div><div class="dim sm" style="margin-bottom:12px">Every week, Matchline checks the employer boards you name, verifies each role on the employer’s own posting, and tiers it against your approved evidence. Nothing is scraped from aggregators.</div>
       <div class="empty" style="padding:30px 20px"><div class="h2">No boards named yet</div><div style="margin:4px 0 14px">Add the careers pages you would check by hand. The first run starts right away; later runs land every Monday.${an(5)}</div>
@@ -766,9 +818,9 @@ function scan(state) {
       <div class="warn">Harbor Analytics’ board returned 403 twice. Its roles from last week stay “still open” with a verification note instead of being closed.${an(6)}</div>
       <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Northwind Media', 'Senior Product Manager, Video Platform', true, '$190–240k', 'Playback, device certification', 'Ads-tech', false, 'dimmed')}</div>`);
   }
-  const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="ttl">Weekly scan</div><div class="dim sm">Week of Oct 20 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 27</div></div><div class="btnrow">${btn('Boards · 14')}${btn('Run now', 'pri')}</div></div>
+  const body = `<div class="rowhead" style="justify-content:space-between;margin-bottom:8px"><div><div class="ttl">Weekly scan</div><div class="dim sm">Week of Oct 20 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 27</div></div><div class="btnrow">${btn(ic('link') + ' Boards · 14')}${btn(ic('radar') + ' Run now', 'pri')}</div></div>
     <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Saved Role is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
-    <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ▾', 'line')}${chip('Remote ▾', 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
+    <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ' + ic('chevron-down'), 'line')}${chip('Remote ' + ic('chevron-down'), 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
     <div class="h3">Tier 1 — apply this week${an(2)}</div>
     <div class="list">${row(1, 'Lumen Labs', 'Staff Product Manager, Developer Tools · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner program (L-021), AI workflows (EU-18)', 'No developer-tools title on record; two years short on the seniority line', false)}
       ${row(1, 'Orbit Video', 'Senior PM, Streaming Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true)}</div>
@@ -792,7 +844,7 @@ function system(state) {
   if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Role not found, or not owned by you.${an(3)}</div><div class="btnrow" style="margin-top:10px">${btn('Back to Pipeline')}</div>`);
   // command palette
   const body = `<div class="ttl">Pipeline</div><div class="dim sm">9 applications</div><div class="cols" style="margin-top:10px;opacity:.35">${['Saved', 'Drafting', 'Applied'].map(s => `<section class="col"><div class="colh"><span class="stage">${s}</span></div><div class="kc" style="height:56px"></div></section>`).join('')}</div>
-    <div class="cmdk card"><div class="in focus">north</div><div class="list" style="margin-top:8px;border:0">
+    <div class="cmdk card"><div class="in focus">${ic('search')} north</div><div class="list" style="margin-top:8px;border:0">
       <div class="lrow sel" style="min-height:0"><span class="rail">↗</span><div style="flex:1"><b>Northwind Media</b> · Senior Product Manager, Video Platform<div class="sm dim">Role · Interviewing</div></div><span class="kbd">↵</span></div>
       <div class="lrow" style="min-height:0"><span class="rail">+</span><div style="flex:1">New Role “north…”</div></div>
       <div class="lrow" style="min-height:0"><span class="rail">§</span><div style="flex:1">Add claim rule</div></div>
