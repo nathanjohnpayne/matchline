@@ -14,7 +14,8 @@
  *
  * Muted text stays at or above 4.5:1 contrast on its background in
  * both themes (accessibility baseline): zinc-500/600 on light,
- * zinc-400 on dark. zinc-400 on white is about 2.5:1 (CodeRabbit on
+ * zinc-400 on dark. zinc-400 on white is about 2.5:1, and zinc-500 on
+ * a zinc-100 chip is about 4.4:1, so chips use zinc-600 (CodeRabbit on
  * PR #576).
  */
 
@@ -106,7 +107,7 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
       <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs leading-snug text-zinc-500 dark:text-zinc-400">
         {card.daysInStage !== null && (
           <span
-            className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 tabular-nums dark:bg-zinc-800"
+            className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
             data-testid="pipeline-card-days"
             title={daysLabel(card.daysInStage)}
             aria-label={daysLabel(card.daysInStage)}
@@ -119,7 +120,7 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
             null until then, so nothing renders here. */}
         {card.nextAction !== null && (
           <span
-            className="min-w-0 truncate rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800"
+            className="min-w-0 truncate rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
             data-testid="pipeline-card-next-action"
           >
             {card.nextAction}
@@ -208,7 +209,7 @@ export default function PipelineView({
 
       {status === "loading" && (
         <p
-          className="text-sm text-zinc-500"
+          className="text-sm text-zinc-500 dark:text-zinc-400"
           data-testid="pipeline-loading"
           role="status"
           aria-live="polite"

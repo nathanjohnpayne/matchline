@@ -206,6 +206,22 @@ describe("PipelineView", () => {
     }
   });
 
+  it("gives chips on zinc-100 a text color that clears 4.5:1 in both themes", () => {
+    // CodeRabbit on PR #576: inherited zinc-500 on a zinc-100 chip is
+    // about 4.4:1. Chips set their own zinc-600 / dark zinc-400.
+    const html = render({ columns: board({ applied: [card({ daysInStage: 3 })] }) });
+    const chip = html.match(/<span[^>]*data-testid="pipeline-card-days"[^>]*>/)?.[0] ?? "";
+    expect(chip).toMatch(/(?<![:\w-])text-zinc-600(?![\w-])/);
+    expect(chip).toContain("dark:text-zinc-400");
+  });
+
+  it("gives the loading line a dark-theme color", () => {
+    // CodeRabbit on PR #576: zinc-500 on zinc-950 is about 4.1:1.
+    const html = render({ status: "loading", columns: [] });
+    const line = html.match(/<p[^>]*data-testid="pipeline-loading"[^>]*>/)?.[0] ?? "";
+    expect(line).toContain("dark:text-zinc-400");
+  });
+
   it("stacks vertically below md and sits side by side from md", () => {
     const html = render();
     const boardTag = html.match(/<div[^>]*data-testid="pipeline-board"[^>]*>/)?.[0] ?? "";
