@@ -22,6 +22,7 @@ import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
 import type { Application, Role } from "../../types/crm.ts";
 
 import ApplicationsTab, {
+  type ApplicationsTabProps,
   type ApplicationsTabStatus,
 } from "./ApplicationsTab.tsx";
 import MatchesTab from "./MatchesTab.tsx";
@@ -121,6 +122,9 @@ export interface RoleDetailViewProps {
   readonly generationStatus: ApplicationsTabStatus;
   readonly generationError: Error | null;
   readonly onGenerate: () => void;
+  /** Add a follow-up task to an Application (#34). */
+  readonly onAddTask?: ApplicationsTabProps["onAddTask"];
+  readonly defaultDueAtFor?: ApplicationsTabProps["defaultDueAtFor"];
 }
 
 /**
@@ -168,6 +172,8 @@ export default function RoleDetailView({
   generationStatus,
   generationError,
   onGenerate,
+  onAddTask,
+  defaultDueAtFor,
 }: RoleDetailViewProps): ReactElement {
   // CodeRabbit Nit on PR #133: both derivations depend only on
   // `requirements` + `matches`; memoize so unrelated re-renders
@@ -313,6 +319,8 @@ export default function RoleDetailView({
             status={generationStatus}
             error={generationError}
             onGenerate={onGenerate}
+            {...(onAddTask !== undefined && { onAddTask })}
+            {...(defaultDueAtFor !== undefined && { defaultDueAtFor })}
           />
         )}
       </div>

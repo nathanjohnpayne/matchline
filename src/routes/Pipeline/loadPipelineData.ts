@@ -15,6 +15,7 @@ import type {
   Interaction,
   Person,
   Role,
+  Task,
 } from "../../types/crm.ts";
 
 export interface PipelineReaders {
@@ -23,6 +24,8 @@ export interface PipelineReaders {
   readonly listCompanies: () => Promise<Company[]>;
   readonly listInteractions: () => Promise<Interaction[]>;
   readonly listPeople: () => Promise<Person[]>;
+  /** Follow-up tasks (#34). */
+  readonly listTasks: () => Promise<Task[]>;
 }
 
 export interface PipelineData {
@@ -31,6 +34,13 @@ export interface PipelineData {
   readonly companies: readonly Company[];
   readonly interactions: readonly Interaction[];
   readonly people: readonly Person[];
+  readonly tasks: readonly Task[];
+  /**
+   * False when the tasks read failed. An empty `tasks` then means
+   * "unknown", not "none", and Follow-ups must not be offered: every
+   * quiet Application would look task-free and invite duplicates.
+   */
+  readonly tasksLoaded: boolean;
   /** True when any enrichment reader failed and its data is missing. */
   readonly partial: boolean;
 }
@@ -50,6 +60,7 @@ export async function loadPipelineData(
     readers.listCompanies(),
     readers.listInteractions(),
     readers.listPeople(),
+    readers.listTasks(),
   ]);
   let applications: Application[];
   try {
@@ -58,7 +69,7 @@ export async function loadPipelineData(
     throw err instanceof Error ? err : new Error(String(err));
   }
   const enrichment = await enrichmentRead;
-  const [roles, companies, interactions, people] = enrichment;
+  const [roles, companies, interactions, people, tasks] = enrichment;
   for (const r of enrichment) {
     if (r.status === "rejected") {
       console.error("Pipeline: an enrichment read failed:", r.reason);
@@ -72,6 +83,8 @@ export async function loadPipelineData(
     companies: valueOr(companies),
     interactions: valueOr(interactions),
     people: valueOr(people),
+    tasks: valueOr(tasks),
+    tasksLoaded: tasks.status === "fulfilled",
     partial: enrichment.some((r) => r.status === "rejected"),
   };
 }

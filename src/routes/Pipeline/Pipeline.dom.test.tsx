@@ -69,7 +69,10 @@ function deps(
     listCompanies: () => Promise.resolve(COMPANIES),
     listInteractions: () => Promise.resolve([]),
     listPeople: () => Promise.resolve([]),
+    listTasks: () => Promise.resolve([]),
     moveApplicationToStage: move,
+    createTask: () => Promise.reject(new Error("createTask not expected")),
+    completeTask: () => Promise.reject(new Error("completeTask not expected")),
     now: () => NOW,
   };
 }

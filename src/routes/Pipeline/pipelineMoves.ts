@@ -30,7 +30,20 @@ export type PipelineMoveAction =
       readonly at: string;
     }
   | { readonly type: "confirm"; readonly id: UUID }
-  | { readonly type: "fail"; readonly id: UUID };
+  | { readonly type: "fail"; readonly id: UUID }
+  | {
+      /**
+       * Activity recorded elsewhere (a completed task, #34) moved
+       * `last_activity_at`, and that write has already landed. While a
+       * move of the card is in flight the touch is merged into the
+       * stored pre-move snapshot too, so a later rollback restores the
+       * persisted timestamp instead of the stale one (Codex P2 on
+       * #585). Timestamps only move forward.
+       */
+      readonly type: "touched";
+      readonly id: UUID;
+      readonly at: string;
+    };
 
 export const EMPTY_MOVE_STATE: PipelineMoveState = {
   applications: [],
@@ -100,6 +113,29 @@ export function pipelineMoveReducer(
     case "confirm":
       if (!state.pending.has(action.id)) return state;
       return { ...state, pending: withoutPending(state.pending, action.id) };
+    case "touched": {
+      if (!state.applications.some((a) => a.id === action.id)) return state;
+      const later = (current: string): string =>
+        Date.parse(action.at) > Date.parse(current) ? action.at : current;
+      const before = state.pending.get(action.id);
+      let pending = state.pending;
+      if (before !== undefined) {
+        const next = new Map(state.pending);
+        next.set(action.id, {
+          ...before,
+          last_activity_at: later(before.last_activity_at),
+        });
+        pending = next;
+      }
+      return {
+        applications: state.applications.map((a) =>
+          a.id === action.id
+            ? { ...a, last_activity_at: later(a.last_activity_at) }
+            : a,
+        ),
+        pending,
+      };
+    }
     case "fail": {
       const before = state.pending.get(action.id);
       if (before === undefined) return state;

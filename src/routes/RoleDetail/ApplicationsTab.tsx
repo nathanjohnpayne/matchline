@@ -35,7 +35,9 @@
  * `upsertApplication` + `invokeGenerateResume` wiring.
  */
 
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
+
+import TaskQuickAdd from "../../components/TaskQuickAdd.tsx";
 
 import type { Application, ApplicationStage } from "../../types/crm.ts";
 
@@ -63,6 +65,83 @@ export interface ApplicationsTabProps {
    * THEN navigates to `/applications/:newAppId` on success.
    */
   readonly onGenerate: () => void;
+  /**
+   * Add a follow-up task to an Application (#34). Optional so the
+   * tab still renders without tasks; the `+ task` control is absent
+   * when it is.
+   */
+  readonly onAddTask?: (
+    applicationId: string,
+    title: string,
+    dueAt: string | undefined,
+  ) => Promise<void>;
+  /** Pre-filled due date for an Application's new task (#34). */
+  readonly defaultDueAtFor?: (application: Application) => string | undefined;
+}
+
+/**
+ * Per-row `+ task` control (#34): opens the shared inline quick-add
+ * and confirms in place once the task is saved.
+ */
+function RowTaskAdd({
+  application,
+  onAddTask,
+  defaultDueAt,
+}: {
+  readonly application: Application;
+  readonly onAddTask: NonNullable<ApplicationsTabProps["onAddTask"]>;
+  readonly defaultDueAt: string | undefined;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [added, setAdded] = useState(false);
+  // Locked while a save is in flight: closing and reopening the form
+  // mid-save would start a second submission and a duplicate task.
+  const [saving, setSaving] = useState(false);
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setOpen((v) => !v);
+            setAdded(false);
+          }}
+          disabled={saving}
+          aria-expanded={open}
+          data-action="applications-add-task"
+          data-application-id={application.id}
+          className="rounded px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
+        >
+          + task
+        </button>
+        <span
+          role="status"
+          aria-live="polite"
+          data-testid="applications-task-added"
+          className="text-xs text-zinc-600 dark:text-zinc-400"
+        >
+          {added ? "Task added. It shows on the Pipeline." : ""}
+        </span>
+      </div>
+      {open && (
+        <TaskQuickAdd
+          label={`application ${application.id}`}
+          defaultDueAt={defaultDueAt}
+          onSubmit={async (title, dueAt) => {
+            setSaving(true);
+            try {
+              await onAddTask(application.id, title, dueAt);
+              setOpen(false);
+              setAdded(true);
+            } finally {
+              setSaving(false);
+            }
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 /**
@@ -113,6 +192,8 @@ export default function ApplicationsTab({
   status,
   error,
   onGenerate,
+  onAddTask,
+  defaultDueAtFor,
 }: ApplicationsTabProps): ReactElement {
   const generating = status === "generating";
   const hasApplications = applications.length > 0;
@@ -208,8 +289,9 @@ export default function ApplicationsTab({
                 key={app.id}
                 data-testid="applications-tab-row"
                 data-application-id={app.id}
-                className="flex items-center justify-between rounded border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                className="space-y-1.5 rounded border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
               >
+                <div className="flex items-center justify-between">
                 <div className="min-w-0 flex-1 space-y-0.5">
                   <div className="flex items-center gap-2">
                     <span
@@ -250,6 +332,14 @@ export default function ApplicationsTab({
                 >
                   Open
                 </a>
+                </div>
+                {onAddTask !== undefined && (
+                  <RowTaskAdd
+                    application={app}
+                    onAddTask={onAddTask}
+                    defaultDueAt={defaultDueAtFor?.(app)}
+                  />
+                )}
               </li>
             );
           })}

@@ -132,4 +132,41 @@ describe("pipelineMoveReducer", () => {
     expect(next.applications.map((a) => a.id)).toEqual(["a9"]);
     expect(next.pending.size).toBe(0);
   });
+
+  it("touched updates last_activity_at only", () => {
+    const state = loaded(app("a1", "applied"));
+    const touched = pipelineMoveReducer(state, { type: "touched", id: "a1", at: AT });
+    expect(touched.applications[0]).toMatchObject({ stage: "applied", last_activity_at: AT });
+    expect(pipelineMoveReducer(state, { type: "touched", id: "nope", at: AT })).toBe(state);
+  });
+
+  it("a touch during a pending move survives that move's rollback", () => {
+    const state = loaded(app("a1", "applied"));
+    const moving = pipelineMoveReducer(state, {
+      type: "move",
+      id: "a1",
+      stage: "offer",
+      at: "2026-10-20T02:00:00.000Z",
+    });
+    const completedAt = "2026-10-20T03:00:00.000Z";
+    const touched = pipelineMoveReducer(moving, { type: "touched", id: "a1", at: completedAt });
+    expect(touched.applications[0]).toMatchObject({ stage: "offer", last_activity_at: completedAt });
+
+    const rolledBack = pipelineMoveReducer(touched, { type: "fail", id: "a1" });
+    expect(rolledBack.applications[0]).toMatchObject({
+      stage: "applied",
+      last_activity_at: completedAt,
+    });
+  });
+
+  it("never moves last_activity_at backwards", () => {
+    const state = loaded(app("a1", "applied"));
+    const newer = pipelineMoveReducer(state, { type: "touched", id: "a1", at: AT });
+    const older = pipelineMoveReducer(newer, {
+      type: "touched",
+      id: "a1",
+      at: "2026-09-01T00:00:00.000Z",
+    });
+    expect(older.applications[0]?.last_activity_at).toBe(AT);
+  });
 });
