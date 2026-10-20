@@ -8,7 +8,7 @@ import { useCurrentUser } from "./lib/auth.tsx";
 import { clearAllFormDrafts } from "./lib/formDraft.ts";
 import ApplicationEditor from "./routes/ApplicationEditor/index.tsx";
 import Onboarding from "./routes/Onboarding.tsx";
-import Pipeline from "./routes/Pipeline.tsx";
+import Pipeline from "./routes/Pipeline/index.tsx";
 import RoleDetail from "./routes/RoleDetail/index.tsx";
 import RoleNew from "./routes/RoleNew.tsx";
 import SignIn from "./routes/SignIn.tsx";
