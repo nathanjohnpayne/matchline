@@ -15,9 +15,11 @@
   shrunken desktop. Frames are scaled with transform (the zoom control at the top
   changes the scale); the layout inside is computed at the real width.
 
-  Sources: docs/projects/matchline/prds/matchline.md (v0.2 "job-search dossier"
-  revision, Oct 2026), src/routes/** (shipped behaviour), BRAND.md,
-  docs/design/ui-guidance.md, specs/matchline.md. Sample data is invented.
+  Sources: the PRD's v0.2 "job-search dossier" revision (Oct 2026), which lives
+  in the owner's private docs repository and is NOT in this tree -- the mirror at
+  docs/projects/matchline/prds/matchline.md is still v0.1; src/routes/** (shipped
+  behaviour), BRAND.md, docs/design/ui-guidance.md, specs/matchline.md. Sample
+  data is invented.
 -->
 <style>
   /* ---------- page chrome (document, not app UI) ---------- */
@@ -407,7 +409,7 @@
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
 <p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844, drawn with the iOS status bar, Dynamic Island and home indicator) canvas; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
-<p class="sub">Sources, in the order they win: the PRD's <b>v0.2 "job-search dossier" revision</b> (October 2026; where it conflicts with the V1 interface section, the revision wins), what is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
+<p class="sub">Sources, in the order they win: the PRD's <b>v0.2 "job-search dossier" revision</b> (October 2026; where it conflicts with the V1 interface section, the revision wins — it lives in the owner's private docs repository and is not in this tree; the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1, so a <code>PRD v0.2</code> chip cannot be checked against a file here), what is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
 <br>· <b>Chips above a frame</b> name the width and whether the frame is <span class="fchip shipped" style="vertical-align:middle">shipped</span> (matches the built route), <span class="fchip prd" style="vertical-align:middle">PRD v0.2</span> (proposed, not yet built) or a <span class="fchip state" style="vertical-align:middle">state</span> (empty / loading / error / validation variant of a screen).
@@ -720,7 +722,7 @@ function roleDetail(state) {
   }
   if (state === 'reqs') {
     const reqs = [['must', 'Experience with ad-supported streaming', 'gap'], ['must', 'Lead the roadmap for playback and device certification', '2 matches'], ['must', '7+ years in product management, 3+ in video', '1 match'], ['nice', 'Partner with 20+ device OEMs', '2 matches'], ['nice', 'Familiarity with low-latency live', '1 match'], ['nice', 'Experience shipping developer SDKs', 'unverifiable']];
-    const body = roleHeader() + roleTabs('Requirements & matches') + `<div class="warn">Computing matches… 4 of 6 requirements scored. The list fills in as the run lands.${an(3)}</div>
+    const body = roleHeader() + roleTabs('Requirements & matches') + `<div class="warn">Computing matches…${an(3)}</div>
       <div class="split"><div><div class="rowhead" style="margin-bottom:6px"><b>Requirements</b>${chip('6', 'line')}<span class="sp"></span>${btn('Edit JD', 'ghost')}${btn('Re-run matching', 'ghost')}</div>
         <div class="list">${reqs.map((r, i) => `<div class="lrow ${i === 1 ? 'sel' : ''}" style="min-height:0"><span class="rail">${r[0] === 'must' ? '!' : '·'}</span><div style="flex:1;min-width:0"><div>${r[1]}</div><div class="meta">${chip(r[0] === 'must' ? 'must have' : 'nice to have', r[0] === 'must' ? 'ink' : '')}${r[2] === 'gap' ? chip('gap', 'amb') + (i === 0 ? an(4) : '') : r[2] === 'unverifiable' ? chip('unverifiable', 'line') + an(6) : chip(r[2], 'line')}</div></div></div>`).join('')}</div>
         <div class="card tight" style="margin-top:10px;border-color:#fde68a"><b>Gaps</b> · 1 unmet must-have, 1 unverifiable, 0 stranded. You can still generate; the fit brief will list the gap under “exposed”.</div></div>
@@ -827,7 +829,7 @@ function pipeline(state) {
   if (state === 'loading') body = head + `<div class="sm dim" role="status">Loading pipeline…</div>`;
   else if (state === 'error') body = head + `<p class="alert" role="alert">Couldn’t load your applications: Firestore unavailable.</p>`;
   else if (state === 'partial') body = head + `<div class="warn" role="status">Some details couldn’t be loaded, so a few cards show placeholders. Reload to try again.</div>
-    <div class="cols">${STAGES.map(([s, n]) => `<section class="col"><div class="colh"><span class="stage">${s}</span><span class="num">${n}</span></div>${n ? card('Unknown company', 'Role unavailable', 4, '', '', '') : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`).join('')}</div>`;
+    <div class="cols">${STAGES.map(([s, n]) => `<section class="col"><div class="colh"><span class="stage">${s}</span><span class="num">${n}</span></div>${n ? Array.from({ length: n }, () => card('Unknown company', 'Role unavailable', 4, '', '', '')).join('') : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`).join('')}</div>`;
   else body = head +
     `<div class="boardwrap"><div style="flex:1;min-width:0"><div class="cols">${STAGES.map(col).join('')}${state === 'ready' ? an(1) : ''}</div></div>${state === 'ready' ? side : ''}</div>`;
   return shell('pipeline', body, { width: 'w7' });
