@@ -392,6 +392,44 @@ describe("returning to the page (#34)", () => {
   });
 });
 
+describe("card next action (#512)", () => {
+  const chip = (id: string): string | null =>
+    card(id).querySelector('[data-testid="pipeline-card-next-action"]')?.textContent ?? null;
+
+  it("shows the earliest-due open task, then the next one once it is completed", async () => {
+    await renderBoard(
+      deps({
+        tasks: [
+          task("later", { due_at: localDay(25), title: "Send portfolio" }),
+          task("soon", { due_at: localDay(20), title: "Email Dana" }),
+        ],
+      }),
+    );
+    expect(chip("a1")).toBe("Email Dana");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Email Dana/ }));
+    expect(chip("a1")).toBe("Send portfolio");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Send portfolio/ }));
+    await waitFor(() => expect(chip("a1")).toBeNull());
+  });
+
+  it("renders no chip for an Application without tasks", async () => {
+    await renderBoard(deps());
+    expect(chip("a1")).toBeNull();
+  });
+
+  it("shows a task added from the card as its next action", async () => {
+    await renderBoard(deps());
+    fireEvent.click(screen.getByRole("button", { name: "Add task for Acme: Staff PM" }));
+    fireEvent.change(screen.getByTestId("task-quick-add-title"), {
+      target: { value: "Prep questions" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+    await waitFor(() => expect(chip("a1")).toBe("Prep questions"));
+  });
+});
+
 describe("follow-ups (#34)", () => {
   it("surfaces an Applied application quiet for 8 days and turns it into a task due today", async () => {
     const d = deps({ applications: [app("a1", "applied", 12)] });

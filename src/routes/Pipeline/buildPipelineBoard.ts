@@ -20,8 +20,11 @@ import type {
   Interaction,
   Person,
   Role,
+  Task,
   UUID,
 } from "../../types/crm.ts";
+
+import { nextActionByApplication } from "./taskSidebar.ts";
 
 /** Board column order: `ApplicationStage` in its declared order. */
 export const PIPELINE_STAGES: readonly ApplicationStage[] = [
@@ -60,8 +63,9 @@ export interface PipelineCard {
    */
   readonly keyContact: PipelineKeyContact | null;
   /**
-   * Reserved for the first open task, filled by #32's next-action
-   * sub-issue once #34's task model exists. Always `null` for now.
+   * Title of the Application's first open task (#512): earliest
+   * `due_at`, undated tasks after dated ones, ties by `created_at`.
+   * `null` when it has no open task.
    */
   readonly nextAction: string | null;
 }
@@ -77,6 +81,8 @@ export interface PipelineBoardInputs {
   readonly companies: readonly Company[];
   readonly interactions: readonly Interaction[];
   readonly people: readonly Person[];
+  /** The owner's tasks (#34); optional so callers without tasks still build. */
+  readonly tasks?: readonly Task[];
   readonly now: Date;
 }
 
@@ -125,6 +131,7 @@ export function buildPipelineBoard(
   const companiesById = new Map(inputs.companies.map((c) => [c.id, c]));
   const peopleById = new Map(inputs.people.map((p) => [p.id, p]));
   const latest = latestInteractionByApplication(inputs.interactions);
+  const nextActions = nextActionByApplication(inputs.tasks ?? []);
 
   const byStage = new Map<ApplicationStage, PipelineCard[]>(
     PIPELINE_STAGES.map((s) => [s, []]),
@@ -157,7 +164,7 @@ export function buildPipelineBoard(
       daysInStage: daysInStage(app.last_activity_at, inputs.now),
       keyContact:
         person === undefined ? null : { personId: person.id, name: person.name },
-      nextAction: null,
+      nextAction: nextActions.get(app.id)?.title ?? null,
     });
   }
 

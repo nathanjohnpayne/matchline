@@ -68,7 +68,16 @@ export function usePipelineTasks({
   readonly dispatch: (action: PipelineMoveAction) => void;
   /** Advance the board clock after recorded activity. */
   readonly onActivity: (at: Date) => void;
-}): PipelineTasks {
+}): {
+  /** Props for the sidebar and the card quick-add. */
+  readonly view: PipelineTasks;
+  /**
+   * The live task list, optimistic completions included. The board
+   * reads each card's Next action from it (#512), so completing a task
+   * in the sidebar updates the card at once.
+   */
+  readonly tasks: readonly Task[];
+} {
   const [tasks, setTasks] = useState<readonly Task[]>(loadedTasks ?? []);
   const [pending, setPending] = useState<ReadonlySet<UUID>>(new Set());
   const [adding, setAdding] = useState<ReadonlySet<UUID>>(new Set());
@@ -193,7 +202,7 @@ export function usePipelineTasks({
     pending: pending.has(task.id),
   });
 
-  return {
+  const view: PipelineTasks = {
     dueToday: sidebar.dueToday.map(toItem),
     upcoming: sidebar.upcoming.map(toItem),
     // Without the task list, "no open task" cannot be known.
@@ -215,4 +224,6 @@ export function usePipelineTasks({
     onDismissError: () => setError(null),
     tasksUnavailable: !tasksLoaded,
   };
+
+  return { view, tasks };
 }

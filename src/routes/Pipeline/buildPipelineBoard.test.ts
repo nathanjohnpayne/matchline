@@ -330,4 +330,41 @@ describe("buildPipelineBoard", () => {
     ]);
     expect(cards.at(-1)?.daysInStage).toBeNull();
   });
+
+  it("fills each card's next action from its first open task (#512)", () => {
+    const board = buildPipelineBoard(
+      inputs({
+        applications: [app("a1", "applied"), app("a2", "applied")],
+        tasks: [
+          {
+            id: "t-late",
+            owner_uid: "u",
+            application_id: "a1",
+            title: "Send portfolio",
+            due_at: "2026-10-25T12:00:00.000Z",
+            completed: false,
+            created_at: "2026-10-01T00:00:00.000Z",
+          },
+          {
+            id: "t-soon",
+            owner_uid: "u",
+            application_id: "a1",
+            title: "Email Dana",
+            due_at: "2026-10-21T12:00:00.000Z",
+            completed: false,
+            created_at: "2026-10-02T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const cards = cardsIn(board, "applied");
+    expect(cards.find((c) => c.applicationId === "a1")?.nextAction).toBe("Email Dana");
+    expect(cards.find((c) => c.applicationId === "a2")?.nextAction).toBeNull();
+  });
+
+  it("leaves next action null when no tasks are passed", () => {
+    const [card] = cardsIn(buildPipelineBoard(inputs({ applications: [app("a1", "saved")] })), "saved");
+    expect(card?.nextAction).toBeNull();
+  });
 });
+
