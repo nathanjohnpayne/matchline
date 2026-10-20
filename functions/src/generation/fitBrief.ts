@@ -81,6 +81,7 @@ export interface FitBriefResult {
 
 const MAX_ATTEMPTS = 3;
 const MAX_OUTPUT_TOKENS = 8192;
+const TOOL_DESCRIPTION = "Record the fit brief for this role.";
 const TOOL_NAME = "record_fit_brief";
 
 const SCHEMA_REMINDER =
@@ -130,7 +131,7 @@ export async function generateFitBrief(
           tools: [
             {
               name: TOOL_NAME,
-              description: "Record the fit brief for this role.",
+              description: TOOL_DESCRIPTION,
               input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
             },
           ],
@@ -232,8 +233,10 @@ export async function generateFitBrief(
 
 /**
  * Identifies everything the generator sends apart from the model and the
- * inputs: system prompt, few-shot, tool name, tool schema, retry reminders
- * and the user-message template (built for a fixed canary input). The
+ * inputs: system prompt, few-shot, tool name and description, base output
+ * budget, tool schema, retry reminders and the user-message template
+ * (built for a fixed canary input). The model profile's adjustments to the
+ * budget and effort follow from the model, which is recorded separately. The
  * prompt version label alone misses code-side template changes, so evals
  * record this too (Codex P2, #581).
  */
@@ -250,6 +253,8 @@ export function fitBriefRequestFingerprint(): string {
       JSON.stringify([
         prompt.system,
         TOOL_NAME,
+        TOOL_DESCRIPTION,
+        MAX_OUTPUT_TOKENS,
         zodToToolSchema(FitBriefResponseV1Schema),
         SCHEMA_REMINDER,
         NO_TOOL_REMINDER,

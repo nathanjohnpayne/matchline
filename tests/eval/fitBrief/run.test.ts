@@ -1,4 +1,5 @@
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +20,7 @@ import {
   prepareOutDir,
   runFitBriefEval,
   extractionConfigLabel,
+  parseFrozenUnits,
   renderUnitEvidence,
   UNITS_FORMAT_FINGERPRINT,
   writePrivateFile,
@@ -248,6 +250,45 @@ describe("runFitBriefEval", () => {
     }
   });
 
+  it("saves the exact Units a units-mode run used, and records their hash (Codex P2, #581)", async () => {
+    const d = deps({ extractionConfig: "claude-haiku-4-5, prompt extraction/resume.v3" });
+    await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units" }, d);
+    const saved = JSON.parse(d.files.get("/private/out/units.json")!);
+    expect(saved).toEqual({
+      resume_sha256: createHash("sha256").update(CORPUS.resumeText).digest("hex"),
+      extraction: "claude-haiku-4-5, prompt extraction/resume.v3",
+      units: [{ raw_text: "Owned the checkout API used by four storefront teams." }],
+    });
+    const artifact = JSON.parse([...d.files].find(([k]) => k !== "/private/out/units.json")![1]);
+    expect(artifact.config).toMatchObject({ unitsSource: "extracted", unitsSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+  });
+
+  it("reuses frozen Units without extracting, under the extraction pin that made them (Codex P2, #581)", async () => {
+    const d = deps({ extractionConfig: "current-pin" });
+    const frozen = parseFrozenUnits(
+      JSON.stringify({
+        resume_sha256: createHash("sha256").update(CORPUS.resumeText).digest("hex"),
+        extraction: "old-pin",
+        units: [{ raw_text: "Owned the checkout API used by four storefront teams.", date_range: { start: "2021-03" } }],
+      }),
+      CORPUS.resumeText,
+    );
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", frozenUnits: frozen }, d);
+    expect(d.extractUnits).not.toHaveBeenCalled();
+    expect(out.report).toContain("extraction old-pin");
+    const artifact = JSON.parse([...d.files].find(([k]) => k !== "/private/out/units.json")![1]);
+    expect(artifact.config).toMatchObject({ unitsSource: "frozen", extraction: "old-pin" });
+    expect(JSON.parse(vi.mocked(d.generate).mock.calls[0]![0].resumeText)).toEqual([
+      { text: "Owned the checkout API used by four storefront teams.", dates_from_extraction: "2021-03 to present" },
+    ]);
+  });
+
+  it("refuses frozen Units extracted from a different résumé", () => {
+    const text = JSON.stringify({ resume_sha256: "0".repeat(64), extraction: "pin", units: [] });
+    expect(() => parseFrozenUnits(text, CORPUS.resumeText)).toThrow(/different résumé/);
+    expect(() => parseFrozenUnits(JSON.stringify({ extraction: "pin", units: [] }), CORPUS.resumeText)).toThrow(/Invalid/);
+  });
+
   it("in units mode, the generator reads Units but the gates keep the canonical sources (Codex P1, #581)", async () => {
     const withInventory: FitBriefCorpus = { ...CORPUS, inventoryText: "Tools: Looker" };
     const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });
@@ -460,6 +501,12 @@ describe("parseArgs", () => {
     expect(() => parseArgs([...base, "--split", "dev", "--split=test"], now)).toThrow(/more than once/);
     // A flag's value is consumed, not mistaken for a positional word.
     expect(parseArgs([...base, "--split", "test", "--samples=2"], now)).toMatchObject({ split: "test", samples: 2 });
+  });
+
+  it("accepts --units-from only with --evidence units", () => {
+    const base = ["--model", "claude-sonnet-5-5", "--max-usd", "10"];
+    expect(() => parseArgs([...base, "--units-from", "/tmp/u.json"], now)).toThrow(/needs --evidence units/);
+    expect(parseArgs([...base, "--evidence", "units", "--units-from", "/tmp/u.json"], now).unitsFrom).toBe("/tmp/u.json");
   });
 
   it("rejects a value on --dry-run instead of silently running a paid job (Codex P2, #581)", () => {

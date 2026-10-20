@@ -69,6 +69,7 @@ export type JudgeResult = z.infer<typeof JudgeResultSchema>;
 
 const TOOL_NAME = "record_judgement";
 const MAX_OUTPUT_TOKENS = 8192;
+const TOOL_DESCRIPTION = "Record the judgement of the generated fit brief.";
 const MAX_ATTEMPTS = 3;
 
 export const JUDGE_SYSTEM = `You grade a generated fit brief against a reference fit brief the candidate wrote and approved. A fit brief tells a candidate whether and how to pursue one role: strengths tied to job-description clauses, exposures, positioning, and what not to claim.
@@ -134,15 +135,24 @@ const FINGERPRINT_CANARY: JudgeInput = {
 };
 
 /**
- * Identifies the whole judge request: system prompt, tool name, the exact
- * tool schema sent, and the user message built for a fixed canary input,
+ * Identifies the whole judge request: system prompt, tool name and
+ * description, base output budget, the exact tool schema sent, and the user message built for a fixed canary input,
  * so any change to the template or the brief's serialization changes it
  * (Codex P2 ×2, #581). The judge is eval-only and unversioned, so this is
  * a content hash rather than a hand-bumped version. The model and effort
  * are recorded separately.
  */
 export const JUDGE_PROMPT_FINGERPRINT = `judge sha256:${createHash("sha256")
-  .update(JSON.stringify([JUDGE_SYSTEM, TOOL_NAME, JUDGE_TOOL_SCHEMA, judgeUserContent(FINGERPRINT_CANARY)]))
+  .update(
+    JSON.stringify([
+      JUDGE_SYSTEM,
+      TOOL_NAME,
+      TOOL_DESCRIPTION,
+      MAX_OUTPUT_TOKENS,
+      JUDGE_TOOL_SCHEMA,
+      judgeUserContent(FINGERPRINT_CANARY),
+    ]),
+  )
   .digest("hex")
   .slice(0, 12)}`;
 
@@ -180,7 +190,7 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
         tools: [
           {
             name: TOOL_NAME,
-            description: "Record the judgement of the generated fit brief.",
+            description: TOOL_DESCRIPTION,
             // Root and functions/ resolve separate zod installs, so convert with
             // this file's own zod rather than functions' zodToToolSchema.
             input_schema: JUDGE_TOOL_SCHEMA,

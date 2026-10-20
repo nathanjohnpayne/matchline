@@ -24,11 +24,23 @@
  * --out, which must be outside this repository.
  */
 
-import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { z } from "zod";
 
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 
@@ -67,7 +79,51 @@ export interface FitBriefEvalOptions {
   readonly maxUsd: number;
   readonly outDir: string;
   readonly runId: string;
+  /**
+   * Units mode: reuse Units saved by an earlier run (its `units.json`)
+   * instead of extracting again, so comparison runs see the same evidence.
+   */
+  readonly frozenUnits?: FrozenUnits;
 }
+
+/**
+ * The Units a units-mode run used, saved as `units.json` in its output
+ * directory. Extraction is stochastic, so runs compared against each other
+ * should share one extraction: pass this file back with --units-from
+ * (Codex P2, #581).
+ */
+export interface FrozenUnits {
+  readonly resume_sha256: string;
+  readonly extraction: string;
+  readonly units: readonly UnitEvidence[];
+}
+
+const FrozenUnitsSchema = z
+  .object({
+    resume_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    extraction: z.string().min(1),
+    units: z.array(
+      z
+        .object({
+          raw_text: z.string().min(1),
+          date_range: z.object({ start: z.string().min(1), end: z.string().min(1).optional() }).strict().optional(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+/** Parse a saved `units.json`, refusing one made from a different résumé. */
+export function parseFrozenUnits(text: string, resumeText: string): FrozenUnits {
+  const parsed = FrozenUnitsSchema.safeParse(JSON.parse(text));
+  if (!parsed.success) throw new Error(`Invalid --units-from file: ${parsed.error.message}`);
+  if (parsed.data.resume_sha256 !== sha256Hex(resumeText)) {
+    throw new Error("--units-from was extracted from a different résumé than the corpus holds.");
+  }
+  return parsed.data;
+}
+
+const sha256Hex = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 /**
  * Throws `BudgetReachedError` once the run's spend bound is reached. Each
@@ -120,7 +176,17 @@ export function writePrivateFile(path: string, data: string): void {
   let renamed = false;
   try {
     try {
-      writeSync(fd, data);
+      // writeSync may write fewer bytes than asked (a size limit, a nearly
+      // full disk); loop so a short write can never publish a truncated
+      // artifact (Codex P2, #581). A zero-byte write would loop forever, so
+      // it fails instead.
+      const bytes = Buffer.from(data, "utf8");
+      let offset = 0;
+      while (offset < bytes.length) {
+        const written = writeSync(fd, bytes, offset, bytes.length - offset);
+        if (written <= 0) throw new Error(`Short write to ${tmp}`);
+        offset += written;
+      }
     } finally {
       closeSync(fd);
     }
@@ -244,6 +310,9 @@ export async function runFitBriefEval(
   // Everything that decides what a run measured. It heads the report and
   // is persisted in every sample artifact, so runs on different prompts or
   // pins are never read as comparable (Codex P2, #581).
+  // A frozen extraction is reported as the pin that produced it, not
+  // the current one.
+  const extractionLabel = options.frozenUnits?.extraction ?? deps.extractionConfig ?? "unrecorded";
   const runConfig = {
     model: options.model,
     ...(generatorEffort !== undefined && { effort: generatorEffort }),
@@ -254,12 +323,17 @@ export async function runFitBriefEval(
     judgePrompt: JUDGE_PROMPT_FINGERPRINT,
     evidenceMode: options.evidence,
     ...(options.evidence === "units" && {
-      extraction: deps.extractionConfig ?? "unrecorded",
+      extraction: extractionLabel,
       unitsFormat: UNITS_FORMAT_FINGERPRINT,
+      unitsSource: options.frozenUnits ? "frozen" : "extracted",
     }),
   };
+  // Set once the Units are known: a hash of exactly what the generator
+  // read, so two runs can be checked for identical evidence.
+  let unitsSha256: string | undefined;
+  const config = () => ({ ...runConfig, ...(unitsSha256 !== undefined && { unitsSha256 }) });
   const report = (rows: readonly { split: string; score: BriefScore | null }[]) =>
-    formatAggregate(aggregate(rows), { ...runConfig, spentUsd, maxUsd: options.maxUsd, incomplete });
+    formatAggregate(aggregate(rows), { ...config(), spentUsd, maxUsd: options.maxUsd, incomplete });
 
   // A bound already reached (for example --max-usd 0) must stop before
   // the first paid call, including units-mode extraction (Codex P2, #581).
@@ -275,15 +349,31 @@ export async function runFitBriefEval(
   const sources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
   let generatorEvidence = corpus.resumeText;
   if (options.evidence === "units") {
-    let units: UnitEvidence[];
-    try {
-      units = await deps.extractUnits(corpus.resumeText, record, guard);
-    } catch (err) {
-      if (!(err instanceof BudgetReachedError) && !overBudget()) throw err;
-      incomplete = true;
-      return { report: report([]), spentUsd, incomplete, rows: [] };
+    let units: readonly UnitEvidence[];
+    if (options.frozenUnits) {
+      if (options.frozenUnits.resume_sha256 !== sha256Hex(corpus.resumeText)) {
+        throw new Error("Frozen Units were extracted from a different résumé than the corpus holds.");
+      }
+      units = options.frozenUnits.units;
+    } else {
+      try {
+        units = await deps.extractUnits(corpus.resumeText, record, guard);
+      } catch (err) {
+        if (!(err instanceof BudgetReachedError) && !overBudget()) throw err;
+        incomplete = true;
+        return { report: report([]), spentUsd, incomplete, rows: [] };
+      }
     }
     generatorEvidence = renderUnitEvidence(units);
+    unitsSha256 = sha256Hex(generatorEvidence);
+    // Persist the exact Units so the run can be audited and its extraction
+    // reused by later comparison runs via --units-from (Codex P2, #581).
+    const frozen: FrozenUnits = {
+      resume_sha256: sha256Hex(corpus.resumeText),
+      extraction: extractionLabel,
+      units,
+    };
+    writeFile(join(options.outDir, "units.json"), JSON.stringify(frozen, null, 2));
   }
 
   const rows: { split: string; score: BriefScore | null }[] = [];
@@ -320,7 +410,7 @@ export async function runFitBriefEval(
           writeFile(
             file,
             JSON.stringify(
-              { pair: pair.id, split: pair.split, sample, config: runConfig, brief: generated.brief, unjudged: "spend bound reached" },
+              { pair: pair.id, split: pair.split, sample, config: config(), brief: generated.brief, unjudged: "spend bound reached" },
               null,
               2,
             ),
@@ -347,7 +437,7 @@ export async function runFitBriefEval(
         writeFile(
           file,
           JSON.stringify(
-            { pair: pair.id, split: pair.split, sample, config: runConfig, brief: generated.brief, evidence, judgement, score },
+            { pair: pair.id, split: pair.split, sample, config: config(), brief: generated.brief, evidence, judgement, score },
             null,
             2,
           ),
@@ -365,7 +455,7 @@ export async function runFitBriefEval(
               pair: pair.id,
               split: pair.split,
               sample,
-              config: runConfig,
+              config: config(),
               // Keep a paid-for brief when only the judge failed.
               ...(generated !== undefined && { brief: generated.brief }),
               error: err instanceof Error ? err.message : String(err),
@@ -403,13 +493,16 @@ function flag(argv: readonly string[], name: string): string | undefined {
 
 const KNOWN_FLAGS = new Set([
   "--model", "--effort", "--judge-model", "--judge-effort", "--evidence",
-  "--split", "--samples", "--max-usd", "--out", "--dry-run",
+  "--split", "--samples", "--max-usd", "--out", "--units-from", "--dry-run",
 ]);
 
 /** Boolean flags take no value; `--dry-run=true` is rejected, not silently ignored (Codex P2, #581). */
 const BOOLEAN_FLAGS = new Set(["--dry-run"]);
 
-export function parseArgs(argv: readonly string[], now: Date = new Date()): FitBriefEvalOptions & { dryRun: boolean } {
+export function parseArgs(
+  argv: readonly string[],
+  now: Date = new Date(),
+): FitBriefEvalOptions & { dryRun: boolean; unitsFrom?: string } {
   // Walk every token: each must be a known flag, followed by its value
   // unless it is boolean or written --name=value. Anything else, such as a
   // positional word or a single-dash typo like `-split test`, is rejected
@@ -456,6 +549,8 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
   if (!dryRun && maxUsdRaw === undefined) throw new Error("--max-usd is required for a paid run");
   const maxUsd = Number(maxUsdRaw ?? "0");
   if (!Number.isFinite(maxUsd) || maxUsd < 0) throw new Error("--max-usd must be a non-negative number");
+  const unitsFrom = flag(argv, "--units-from");
+  if (unitsFrom !== undefined && evidence !== "units") throw new Error("--units-from needs --evidence units");
   const runId = `fit-brief-${now.toISOString().replace(/[:.]/g, "-")}`;
   return {
     model,
@@ -469,6 +564,7 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
     outDir: flag(argv, "--out") ?? join(homedir(), ".matchline", "eval-private", "fit-brief", runId),
     runId,
     dryRun,
+    ...(unitsFrom !== undefined && { unitsFrom }),
   };
 }
 
@@ -538,20 +634,25 @@ async function main(): Promise<number> {
   const corpus = loadCorpus(corpusDir);
   assertOutsideRepo(options.outDir, "--out");
   preflight(options);
+  let frozenUnits: FrozenUnits | undefined;
+  if (options.unitsFrom !== undefined) {
+    assertOutsideRepo(options.unitsFrom, "--units-from");
+    frozenUnits = parseFrozenUnits(readFileSync(options.unitsFrom, "utf8"), corpus.resumeText);
+  }
   const pairs = selectPairs(corpus, options.split);
   const calls = pairs.length * options.samples;
   console.log(
     `${calls} brief(s): ${pairs.length} ${options.split} pair(s) × ${options.samples} sample(s); ` +
       `generator ${options.model}${effortLabel(resolvedEffort(options.model, options.effort))}, ` +
       `judge ${options.judgeModel}${effortLabel(resolvedEffort(options.judgeModel, options.judgeEffort))}, ` +
-      `evidence ${options.evidence}. ` +
+      `evidence ${options.evidence}${frozenUnits ? " (frozen Units)" : ""}. ` +
       `Output: ${options.outDir}`,
   );
   if (options.dryRun) return 0;
 
   prepareOutDir(options.outDir);
   const client: Anthropic = anthropicForCli();
-  const outcome = await runFitBriefEval(corpus, options, {
+  const outcome = await runFitBriefEval(corpus, { ...options, ...(frozenUnits && { frozenUnits }) }, {
     generate: (input, record, guard) =>
       generateFitBrief(input, {
         model: options.model,
