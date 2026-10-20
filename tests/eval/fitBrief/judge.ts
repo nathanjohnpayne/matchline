@@ -81,23 +81,12 @@ Return your judgement via the \`${TOOL_NAME}\` tool.
 
 Be strict and literal. Do not reward length.`;
 
+/**
+ * The generated brief as JSON, so field and list boundaries survive
+ * newlines, quotes and delimiters inside values (Codex P2, #581).
+ */
 function renderGenerated(brief: FitBriefResponseV1): string {
-  const list = (xs: readonly string[]) => xs.map((x) => `- ${x}`).join("\n") || "(none)";
-  return [
-    `Bottom line: ${brief.bottom_line}`,
-    "Strengths:",
-    ...brief.strengths.map(
-      (s) => `- [${s.jd_clause}] ${s.argument}\n  Evidence: ${s.evidence.map((e) => `"${e}"`).join("; ")}`,
-    ),
-    "Exposures:",
-    ...brief.exposures.map((e) => `- [${e.jd_clause}] ${e.gap} Handling: ${e.handling}`),
-    `Positioning: ${brief.positioning}`,
-    ...(brief.level_strategy ? [`Level strategy: ${brief.level_strategy}`] : []),
-    `Homework:\n${list(brief.homework)}`,
-    `Questions to ask:\n${list(brief.questions_to_ask)}`,
-    `Does not claim:\n${list(brief.does_not_claim)}`,
-    `Verdict: ${brief.verdict}`,
-  ].join("\n");
+  return JSON.stringify(brief, null, 2);
 }
 
 export interface JudgeInput {
@@ -131,7 +120,7 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
   const content = [
     `Job description:\n\n${input.jdText}`,
     `REFERENCE brief (written and approved by the candidate):\n\n${input.referenceText}`,
-    `GENERATED brief:\n\n${renderGenerated(input.generated)}`,
+    `GENERATED brief (JSON):\n\n${renderGenerated(input.generated)}`,
     `Candidate sources:\n\n${input.sourcesText}`,
     `Claim rules:\n\n${input.claimRulesText ?? "(none)"}`,
   ].join("\n\n---\n\n");

@@ -60,6 +60,19 @@ describe("judgeBrief", () => {
     expect(body.messages[0]!.content).toContain("Reference brief");
   });
 
+  it("sends the generated brief as JSON so delimiters inside fields stay unambiguous (Codex P2, #581)", async () => {
+    const c = client(reply(JUDGEMENT));
+    const generated = {
+      ...INPUT.generated,
+      strengths: [{ jd_clause: "c", evidence: ['Shipped "v2"; Handling: x', "Line one\nline two"], argument: "a" }],
+    };
+    await judgeBrief({ ...INPUT, generated }, { client: c, model: "claude-opus-5-5", record: vi.fn<typeof RecordUsage>(async () => 0) });
+    const body = vi.mocked(c.messages.create).mock.calls[0]![0] as { messages: { content: string }[] };
+    const content = body.messages[0]!.content;
+    const json = content.slice(content.indexOf("GENERATED brief (JSON):\n\n") + "GENERATED brief (JSON):\n\n".length, content.indexOf("\n\n---\n\nCandidate sources:"));
+    expect(JSON.parse(json)).toEqual(generated);
+  });
+
   it("retries a malformed judgement", async () => {
     const c = client(reply({ nope: true }), reply(JUDGEMENT));
     await expect(

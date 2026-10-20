@@ -51,8 +51,9 @@ export interface EvidenceCheck {
 const DATE_ANNOTATION = /\s*\[\d{4}(?:-\d{2}){0,2}–(?:\d{4}(?:-\d{2}){0,2}|present)\]\s*$/u;
 
 /**
- * A quote is supported when it appears in the canonical sources as
- * written. A quote ending in a date annotation is also supported when the
+ * A quote is supported when it appears, as written, inside a single
+ * evidence unit of the canonical sources (see `evidenceUnits`), so two
+ * adjacent bullets cannot be stitched into one quote (Codex P1, #581). A quote ending in a date annotation is also supported when the
  * whole annotated quote appears in `annotatedEvidence` (the Unit lines
  * the generator was given) and the text before the annotation appears in
  * the sources. So the dates must be the Unit's real dates, and an invented
@@ -64,19 +65,51 @@ export function checkEvidence(
   sources: readonly string[],
   options: { readonly annotatedEvidence?: string } = {},
 ): EvidenceCheck {
-  const haystack = sources.map(normalizeForMatch).join("\n");
-  const annotated =
-    options.annotatedEvidence === undefined ? undefined : normalizeForMatch(options.annotatedEvidence);
+  const units = sources.flatMap(evidenceUnits);
+  const annotatedUnits =
+    options.annotatedEvidence === undefined ? undefined : evidenceUnits(options.annotatedEvidence);
+  const inSomeUnit = (pool: readonly string[], quote: string): boolean => {
+    const needle = normalizeForMatch(quote);
+    return pool.some((unit) => containsAtWordBoundaries(unit, needle));
+  };
   const quotes = brief.strengths.flatMap((s) => s.evidence);
   const supported = (q: string): boolean => {
-    if (containsAtWordBoundaries(haystack, normalizeForMatch(q))) return true;
-    if (annotated === undefined || !DATE_ANNOTATION.test(q)) return false;
-    return (
-      containsAtWordBoundaries(annotated, normalizeForMatch(q)) &&
-      containsAtWordBoundaries(haystack, normalizeForMatch(q.replace(DATE_ANNOTATION, "")))
-    );
+    if (inSomeUnit(units, q)) return true;
+    if (annotatedUnits === undefined || !DATE_ANNOTATION.test(q)) return false;
+    return inSomeUnit(annotatedUnits, q) && inSomeUnit(units, q.replace(DATE_ANNOTATION, ""));
   };
   return { total: quotes.length, unsupported: quotes.filter((q) => !supported(q)) };
+}
+
+const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/u;
+const HEADING = /^\s*#{1,6}\s/u;
+
+/**
+ * Split a source into the spans a quote may come from: each list item
+ * (with any indented continuation lines), each heading, and each
+ * paragraph. A blank line, a heading or a new list item ends a span.
+ * Returned normalized for matching.
+ */
+export function evidenceUnits(text: string): string[] {
+  const units: string[] = [];
+  let current: string[] = [];
+  const flush = (): void => {
+    if (current.length > 0) units.push(normalizeForMatch(current.join("\n")));
+    current = [];
+  };
+  for (const line of text.split(/\r?\n/u)) {
+    if (line.trim() === "") {
+      flush();
+    } else if (HEADING.test(line)) {
+      flush();
+      units.push(normalizeForMatch(line.replace(/^\s*#{1,6}\s+/u, "")));
+    } else {
+      if (LIST_ITEM.test(line)) flush();
+      current.push(line.replace(LIST_ITEM, ""));
+    }
+  }
+  flush();
+  return units.filter((u) => u.length > 0);
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

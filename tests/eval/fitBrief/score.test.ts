@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { FitBriefResponseV1 } from "../../../functions/src/prompts/generation/fitBrief.v1.schema.ts";
 
 import type { JudgeResult } from "./judge.ts";
-import { aggregate, checkEvidence, formatAggregate, normalizeForMatch, scoreBrief } from "./score.ts";
+import { aggregate, checkEvidence, evidenceUnits, formatAggregate, normalizeForMatch, scoreBrief } from "./score.ts";
 
 const brief = (evidence: string[], verdict: FitBriefResponseV1["verdict"] = "apply"): FitBriefResponseV1 => ({
   bottom_line: "b",
@@ -75,6 +75,23 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(checkEvidence(brief(["led"]), ["Controlled the rollout."]).unsupported).toEqual(["led"]);
     expect(checkEvidence(brief(["led"]), ["I led the rollout."]).unsupported).toEqual([]);
     expect(checkEvidence(brief(["$18.1M (approved)"]), ["Secured $18.1M (approved) in capital."]).unsupported).toEqual([]);
+  });
+
+  it("refuses a quote stitched across adjacent bullets, paragraphs or a heading (Codex P1, #581)", () => {
+    const resume = "## Acme\n- Owned checkout API.\n- Saved $5M elsewhere.\n\nRan the platform team.\n\nGrew revenue.";
+    const unsupported = (q: string) => checkEvidence(brief([q]), [resume]).unsupported;
+    expect(unsupported("Owned checkout API. Saved $5M elsewhere.")).toHaveLength(1);
+    expect(unsupported("Ran the platform team. Grew revenue.")).toHaveLength(1);
+    expect(unsupported("Acme Owned checkout API.")).toHaveLength(1);
+    expect(unsupported("Saved $5M elsewhere.")).toEqual([]);
+    // Two sources never join into one span either.
+    expect(checkEvidence(brief(["Owned checkout API. Grew revenue."]), ["- Owned checkout API.", "Grew revenue."]).unsupported).toHaveLength(1);
+  });
+
+  it("still matches a quote across a hard-wrapped continuation line of one bullet", () => {
+    const resume = "- Owned the checkout API across\n  three regions.\n1. Led the PCI migration.";
+    expect(checkEvidence(brief(["Owned the checkout API across three regions."]), [resume]).unsupported).toEqual([]);
+    expect(evidenceUnits(resume)).toEqual(["owned the checkout api across three regions.", "led the pci migration."]);
   });
 
   it("does not accept a paraphrase", () => {
