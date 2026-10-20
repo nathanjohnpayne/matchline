@@ -170,6 +170,11 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
     if (response.stop_reason === "refusal") {
       throw new Error('The judge declined the request (stop_reason: "refusal").');
     }
+    // A retry at the same budget truncates the same way, and the caller
+    // cannot recheck --max-usd between these attempts (Codex P1, #581).
+    if (response.stop_reason === "max_tokens") {
+      throw new Error(`The judge was truncated at its ${request.max_tokens}-token output budget.`);
+    }
     const toolUse = response.content.find(
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
     );

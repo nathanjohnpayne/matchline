@@ -67,6 +67,14 @@ describe("judgeBrief", () => {
     ).resolves.toEqual(JUDGEMENT);
   });
 
+  it("stops on truncation instead of retrying at the same budget (Codex P1, #581)", async () => {
+    const c = client(reply(JUDGEMENT, { stop_reason: "max_tokens" }), reply(JUDGEMENT));
+    await expect(
+      judgeBrief(INPUT, { client: c, model: "claude-opus-5-5", record: vi.fn<typeof RecordUsage>(async () => 0) }),
+    ).rejects.toThrow(/truncated/);
+    expect(vi.mocked(c.messages.create)).toHaveBeenCalledTimes(1);
+  });
+
   it("throws on a refusal rather than scoring nothing", async () => {
     const c = client(reply(JUDGEMENT, { content: [], stop_reason: "refusal" }));
     await expect(
