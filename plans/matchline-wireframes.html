@@ -698,7 +698,7 @@ function roleNew(state) {
     <div class="field"><span class="lbl">Job description${opt}${an(2)}</span><div class="in ta ${lead ? 'ph' : ''}" style="min-height:${lead ? 90 : 170}px">${lead ? 'Paste the full JD as plain text, or add it later from the Role page.' + an(3) : 'Northwind Media is hiring a Senior Product Manager for its video platform. You will own playback quality across web, mobile and living-room devices…\n\nWhat you’ll do\n- Lead the roadmap for playback and device certification\n- Partner with 20+ device OEMs\n\nWhat we look for\n- 7+ years in product management, 3+ in video\n- Experience with ad-supported streaming (must have)'}</div></div>
     <div class="pair"><div class="field"><span class="lbl">URL${opt}</span><div class="in ${lead ? 'ph' : ''}">${lead ? 'https://…' : 'https://careers.northwind.example/jobs/4821'}</div></div>
       <div class="field"><span class="lbl">Location${opt}</span><div class="in ${lead ? '' : ''}">${lead ? 'Remote (US)' : 'San Francisco, CA'}</div></div>
-      <div class="field"><span class="lbl">Remote policy${opt}</span><div class="in">${lead ? 'Remote' : 'Hybrid'} ${ic('chevron-down')}</div></div>
+      <div class="field"><span class="lbl">Remote policy${opt}</span><div class="in">${lead ? 'remote' : 'hybrid'} ${ic('chevron-down')}</div></div>
       <div class="field"><span class="lbl">Comp range${opt}</span><div class="in ${lead ? 'ph' : ''}">${lead ? '$200k–$280k' : '$190,000 – $240,000'}</div></div>
       <div class="field nb"><span class="lbl">Company</span><div class="in">${lead ? 'Harbor Analytics' : 'Northwind Media'}</div></div>
       <div class="field nb"><span class="lbl">Source</span><div class="in">${lead ? 'Referral · Morgan T.' : 'Employer board'} ${ic('chevron-down')}</div></div></div>
@@ -735,17 +735,17 @@ const matchCard = (u, vals, st, tip) => {
   <div class="btnrow" style="margin-top:6px">${st === 'approved' ? btn(ic('check') + ' Approved ✓', 'pri') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`;
 };
 function roleShipped(state) {
-  const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: role_4d2c18</div>
+  const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: 4d2c18a7-9b3e-4f52-8c1d-0a6e5b2f7d31</div>
     <div class="tabs" role="tablist"><span class="${state === 'nojd' ? 'on' : ''}">Requirements</span><span class="${state === 'matches' ? 'on' : ''}">Matches</span><span>Applications</span></div>`;
   if (state === 'nojd') {
     return shell('pipeline', head + `<div class="field"><span class="lbl">JD source <span class="dim">(paste JD text first)</span></span><div class="in ta ph" style="min-height:220px">Paste the full JD as plain text. Headers and bullet points are fine.</div></div>
       <div class="btnrow">${btn('Parse JD', 'pri off')}</div>
       <div class="sm dim" style="margin-top:10px">No JD yet. Paste it above to parse requirements.${an(1)}</div>`);
   }
-  const gaps = `<div class="card" style="border-color:#fde68a;margin-bottom:10px"><b>Gaps · 1 unmet must-have requirement</b>${an(2)}<div class="sm dim" style="margin:2px 0 6px">No Experience Unit qualifies for these. Consider adding context to your Capability Graph before generating.</div><div class="task">Experience with ad-supported streaming ${chip('must-have', 'ink')}</div></div>
-    <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task">7+ years in product management, 3+ in video ${chip('must-have', 'ink')}</div></div>
+  const gaps = `<div class="card" style="border-color:#fde68a;margin-bottom:10px"><b>Gaps · 1 unmet must-have requirement</b>${an(2)}<div class="sm dim" style="margin:2px 0 6px">No Experience Unit qualifies for these. Consider adding context to your Capability Graph before generating.</div><div class="task">Experience with ad-supported streaming</div></div>
+    <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task">7+ years in product management, 3+ in video</div></div>
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-running matching…', 'off')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
-  const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • ' + chip('must-have', 'ink') : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
+  const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • <span style="color:var(--amb);font-weight:500">must-have</span>' : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
   const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
     + group(REQS[1], matchCard(UNITS[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true) + matchCard(UNITS[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved') + an(4))
     + group(REQS[2], matchCard(UNITS[2], [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], 'none'))
@@ -839,7 +839,7 @@ function roleDetail(state) {
 
 function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="sm dim" role="status">Loading Application…</div>`);
-  if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: app_7f3a91</div></div></div>
+  if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="ed"><div><div class="empty" style="padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div></div>
     <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
     <div class="list">${[UNITS[0], UNITS[1], { ...UNITS[4], st: 'ok' }].map(u => `<div class="lrow" style="min-height:0"><div class="grow clamp2">${u.s}</div></div>`).join('')}</div></div></div></div>`);
@@ -861,7 +861,7 @@ function editor(state) {
     <div class="list">${srcRow(UNITS[0], true)}${srcRow(UNITS[1])}${srcRow({ ...UNITS[4], st: 'ok' })}</div>
     <div class="sm dim" style="margin-top:6px">Highlighted: the source of the claim under the pointer.${an(5)}</div>
     <div class="meta" style="margin-top:8px">${chip('4 claim rules', 'line nb')}</div></div></div>`;
-  const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: app_7f3a91</div></div></div>
+  const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="seg phseg nb"><span class="on">Output · 2 flags</span><span>Evidence · 9</span></div>
     <div class="ed">${left}${right}</div>
     <div style="margin-top:12px">${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>`;
@@ -871,7 +871,7 @@ function editor(state) {
 function pipeline(state) {
   const STAGES = [['Saved', 2], ['Drafting', 1], ['Applied', 2], ['Interviewing', 2], ['Offer', 0], ['Rejected', 1], ['Withdrawn', 1]];
   const EMPTY = { Saved: 'No applications in Saved. Roles you’re tracking but haven’t started on sit here.', Drafting: 'No applications in Drafting. This is where a resume is being tailored before you send it.', Applied: 'No applications in Applied. Sent applications wait here until you hear back.', Interviewing: 'No applications in Interviewing. This is where live processes land when you hear back.', Offer: 'No applications in Offer. Offers land here.', Rejected: 'No applications in Rejected. Closed-out applications are kept here for the record.', Withdrawn: 'No applications in Withdrawn. Applications you pull out of end up here.' };
-  const card = (co, title, d, next, round, who, k = '') => `<div class="kc ${k}"><div class="ellip ${co === 'Unknown company' ? 'ph-it' : ''}"><b>${co}</b></div><div class="ellip dim sm ${title === 'Role unavailable' ? 'ph-it' : ''}">${title}</div><div class="meta">${chip(d + 'd')}${next ? chip(next, 'nb') : ''}${round ? chip(round, 'acc nb') : ''}${who ? av(who) : ''}</div></div>`;
+  const card = (co, title, d, next, round, who, k = '') => `<div class="kc ${k}"><div class="ellip ${co === 'Unknown company' ? 'ph-it' : ''}"><b>${co}</b></div><div class="ellip dim sm ${title === 'Role unavailable' ? 'ph-it' : ''}">${title}</div><div class="meta">${chip(d + 'd').replace('<span class="chip "', `<span class="chip " title="${d} days in stage"`)}${next ? chip(next, 'nb') : ''}${round ? chip(round, 'acc nb') : ''}${who ? av(who) : ''}</div></div>`;
   const cards = {
     Saved: card('Harbor Analytics', 'Group Product Manager', 2, 'Ask for the JD', '', 'MT') + card('Pike & Co', 'PM, AI Workflows', 9, '', '', ''),
     Drafting: card('Lumen Labs', 'Staff Product Manager, Developer Tools', 3, 'Finish cover letter', '', ''),
