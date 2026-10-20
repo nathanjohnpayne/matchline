@@ -92,6 +92,8 @@ describe("generateFitBrief", () => {
     expect(result.brief.verdict).toBe("apply");
     const second = vi.mocked(c.messages.create).mock.calls[1]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
     expect(String(second.system)).toMatch(/failed schema validation/);
+    // The model is told which field failed (CodeRabbit, #581).
+    expect(String(second.system)).toMatch(/Validation errors:[\s\S]*verdict/);
   });
 
   it("asks Sonnet 5.5 for the tool with tool_choice auto and an effort", async () => {
@@ -134,6 +136,37 @@ describe("generateFitBrief", () => {
     }).catch((e: unknown) => e);
     expect((err as FitBriefError).message).toMatch(/truncated/);
     expect(vi.mocked(c.messages.create)).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-retryable API error (CodeRabbit, #581)", async () => {
+    const create = vi.fn(async () => {
+      throw Object.assign(new Error("invalid_request_error"), { status: 400 });
+    });
+    const err = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: { messages: { create } } as unknown as Anthropic,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      sleep: async () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FitBriefError);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a rate limit", async () => {
+    let calls = 0;
+    const create = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error("rate_limit"), { status: 429 });
+      return message(BRIEF);
+    });
+    const result = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: { messages: { create } } as unknown as Anthropic,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      sleep: async () => {},
+    });
+    expect(result.brief.verdict).toBe("apply");
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("fails after three attempts without a tool call", async () => {

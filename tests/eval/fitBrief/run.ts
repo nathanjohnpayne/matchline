@@ -122,7 +122,8 @@ export async function runFitBriefEval(
   options: FitBriefEvalOptions,
   deps: FitBriefEvalDeps,
 ): Promise<FitBriefEvalOutcome> {
-  const writeFile = deps.writeFile ?? ((p: string, d: string) => writeFileSync(p, d));
+  // Owner-only: these files hold the private corpus's briefs and quotes.
+  const writeFile = deps.writeFile ?? ((p: string, d: string) => writeFileSync(p, d, { mode: 0o600 }));
   let spentUsd = 0;
   const record = async (usage: UsageRecord): Promise<number> => {
     try {
@@ -174,9 +175,13 @@ export async function runFitBriefEval(
         break;
       }
       index += 1;
-      const file = join(options.outDir, `${String(index).padStart(3, "0")}-${pair.id}-s${sample}.json`);
+      // The manifest already restricts ids, but this entry point is exported;
+      // never let an id shape the path (CodeRabbit on #581).
+      const safeId = pair.id.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_");
+      const file = join(options.outDir, `${String(index).padStart(3, "0")}-${safeId}-s${sample}.json`);
+      let generated: FitBriefResult | undefined;
       try {
-        const generated = await deps.generate(
+        generated = await deps.generate(
           {
             jdText: pair.jdText,
             resumeText: evidenceText,
@@ -224,7 +229,14 @@ export async function runFitBriefEval(
         writeFile(
           file,
           JSON.stringify(
-            { pair: pair.id, split: pair.split, sample, error: err instanceof Error ? err.message : String(err) },
+            {
+              pair: pair.id,
+              split: pair.split,
+              sample,
+              // Keep a paid-for brief when only the judge failed.
+              ...(generated !== undefined && { brief: generated.brief }),
+              error: err instanceof Error ? err.message : String(err),
+            },
             null,
             2,
           ),
@@ -317,7 +329,7 @@ async function main(): Promise<number> {
   );
   if (options.dryRun) return 0;
 
-  mkdirSync(options.outDir, { recursive: true });
+  mkdirSync(options.outDir, { recursive: true, mode: 0o700 });
   const client: Anthropic = anthropicForCli();
   const outcome = await runFitBriefEval(corpus, options, {
     generate: (input, record) =>

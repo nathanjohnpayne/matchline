@@ -47,6 +47,12 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(result.unsupported).toEqual(["Ran a twelve-team platform."]);
   });
 
+  it("matches at word boundaries, so a short quote is not found inside a longer word (CodeRabbit, #581)", () => {
+    expect(checkEvidence(brief(["led"]), ["Controlled the rollout."]).unsupported).toEqual(["led"]);
+    expect(checkEvidence(brief(["led"]), ["I led the rollout."]).unsupported).toEqual([]);
+    expect(checkEvidence(brief(["$18.1M (approved)"]), ["Secured $18.1M (approved) in capital."]).unsupported).toEqual([]);
+  });
+
   it("does not accept a paraphrase", () => {
     expect(checkEvidence(brief(["Ran the checkout API."]), ["Owned the checkout API."]).unsupported).toHaveLength(1);
   });

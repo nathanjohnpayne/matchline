@@ -1,3 +1,7 @@
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { UsageRecord } from "../../../functions/src/llm/cost.ts";
@@ -145,6 +149,43 @@ describe("runFitBriefEval", () => {
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, model: "claude-sonnet-5-5" }, deps());
     expect(out.report).toContain("claude-sonnet-5-5 (effort high)");
     expect(out.report).toContain("judge claude-opus-5-5 (effort high)");
+  });
+
+  it("keeps the paid-for brief when only the judge fails (CodeRabbit, #581)", async () => {
+    const d = deps({
+      judge: vi.fn(async () => {
+        throw new Error("judge refused");
+      }),
+    });
+    await runFitBriefEval(CORPUS, OPTIONS, d);
+    const first = JSON.parse([...d.files.values()][0]!);
+    expect(first.error).toBe("judge refused");
+    expect(first.brief.verdict).toBe("apply");
+  });
+
+  it("never lets a pair id shape the output path (CodeRabbit, #581)", async () => {
+    const d = deps();
+    const hostile: FitBriefCorpus = {
+      ...CORPUS,
+      pairs: [{ ...CORPUS.pairs[0]!, id: "../../../../etc/x" }],
+    };
+    await runFitBriefEval(hostile, OPTIONS, d);
+    const [path] = [...d.files.keys()];
+    expect(path!.startsWith("/private/out/")).toBe(true);
+    expect(path!.slice("/private/out/".length)).not.toContain("/");
+  });
+
+  it("writes owner-only files by default (CodeRabbit, #581)", async () => {
+    const out = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
+    try {
+      const { writeFile: _ignored, ...noWriter } = deps();
+      await runFitBriefEval(CORPUS, { ...OPTIONS, outDir: out }, noWriter);
+      const files = readdirSync(out);
+      expect(files.length).toBe(2);
+      for (const f of files) expect(statSync(join(out, f)).mode & 0o077).toBe(0);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
   });
 
   it("counts a failed brief and keeps going", async () => {

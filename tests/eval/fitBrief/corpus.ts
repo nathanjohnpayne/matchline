@@ -28,7 +28,7 @@
  */
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -80,6 +80,24 @@ export interface FitBriefCorpus {
   readonly pairs: readonly CorpusPair[];
 }
 
+/**
+ * True when `rel` (from path.relative) stays at or below its base. Checks
+ * the first segment, so `..cache` is inside and `../x` is not (CodeRabbit
+ * on #581: a bare `startsWith("..")` treated `<repo>/..out` as outside).
+ */
+function isWithin(rel: string): boolean {
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+/**
+ * Case-fold on the platforms whose default file systems are
+ * case-insensitive, so `~/code/MatchLine` cannot pass for a path outside
+ * `~/code/matchline` (CodeRabbit on #581).
+ */
+function comparable(path: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
+}
+
 /** This repository's root, derived from this file's location. */
 export function repoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -98,7 +116,8 @@ function realpathOrAncestor(path: string): string {
     tail.unshift(current.slice(parent.length + 1));
     current = parent;
   }
-  return join(realpathSync(current), ...tail);
+  // `.native` returns the on-disk letter case where the platform has one.
+  return join(realpathSync.native(current), ...tail);
 }
 
 /**
@@ -107,10 +126,8 @@ function realpathOrAncestor(path: string): string {
  */
 export function assertOutsideRepo(path: string, label: string, root: string = repoRoot()): void {
   const target = realpathOrAncestor(path);
-  const rootReal = realpathSync(root);
-  const rel = relative(rootReal, target);
-  const inside = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  if (inside) {
+  const rootReal = realpathSync.native(root);
+  if (isWithin(relative(comparable(rootReal), comparable(target)))) {
     throw new Error(
       `${label} resolves inside this repository (${target}). This repository is public; ` +
         `the fit-brief corpus and everything generated from it must stay outside it.`,
@@ -120,8 +137,8 @@ export function assertOutsideRepo(path: string, label: string, root: string = re
 
 function readInside(dir: string, rel: string, label: string): string {
   const full = resolve(dir, rel);
-  const relToDir = relative(realpathSync(dir), realpathOrAncestor(full));
-  if (relToDir.startsWith("..") || isAbsolute(relToDir)) {
+  const relToDir = relative(comparable(realpathSync.native(dir)), comparable(realpathOrAncestor(full)));
+  if (!isWithin(relToDir)) {
     throw new Error(`${label} (${rel}) points outside the corpus directory.`);
   }
   if (!existsSync(full)) throw new Error(`${label} not found: ${rel}`);

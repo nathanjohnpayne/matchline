@@ -113,7 +113,7 @@ export async function generateFitBrief(
     const previous = failures.at(-1);
     const reminder =
       previous?.kind === "schema_error"
-        ? SCHEMA_REMINDER
+        ? `${SCHEMA_REMINDER}\n\nValidation errors:\n${previous.message.slice(0, 2000)}`
         : previous?.kind === "no_tool_use"
           ? NO_TOOL_REMINDER
           : "";
@@ -146,6 +146,8 @@ export async function generateFitBrief(
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
       });
+      // A 4xx other than 408/409/429 fails the same way on retry.
+      if (!isRetryable(err)) break;
       if (attempt < MAX_ATTEMPTS - 1) await sleep(transportBackoffMs(attempt, err));
       continue;
     }
@@ -225,6 +227,13 @@ export async function generateFitBrief(
         : `Fit brief failed after ${failures.length} attempts. See .failures for per-attempt detail.`,
     failures,
   );
+}
+
+/** Connection failures and 408/409/429/5xx are worth retrying; other statuses are not. */
+function isRetryable(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status !== "number") return true;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
 function buildUserContent(fewShot: string, input: FitBriefInput): string {

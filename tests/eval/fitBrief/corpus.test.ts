@@ -82,6 +82,12 @@ describe("loadCorpus", () => {
     expect(() => loadCorpus(dir)).toThrow(/Invalid/);
   });
 
+  it("accepts a corpus file whose name starts with '..' (it is inside the corpus)", () => {
+    write("..notes.md", "Never claim PCI certification.");
+    manifest({ ...GOOD, claimRules: "..notes.md" });
+    expect(loadCorpus(dir).claimRulesText).toContain("PCI");
+  });
+
   it("reports a missing file by its manifest label", () => {
     manifest({ ...GOOD, pairs: [{ ...GOOD.pairs[0], jd: "a/missing.md" }] });
     expect(() => loadCorpus(dir)).toThrow(/pair role-a jd not found/);
@@ -96,6 +102,22 @@ describe("assertOutsideRepo", () => {
   it("accepts an output directory that does not exist yet, outside the repo", () => {
     expect(() => assertOutsideRepo(join(dir, "out", "run-1"), "--out")).not.toThrow();
   });
+
+  it("refuses a path inside the repo whose first segment merely starts with '..' (CodeRabbit, #581)", () => {
+    expect(() => assertOutsideRepo(join(repoRoot(), "..fit-brief-out", "run-1"), "--out")).toThrow(
+      /inside this repository/,
+    );
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "refuses a repo path that differs only in letter case on a case-insensitive volume (CodeRabbit, #581)",
+    () => {
+      const root = repoRoot();
+      const variant = root.toUpperCase();
+      expect(variant).not.toBe(root);
+      expect(() => assertOutsideRepo(join(variant, "out"), "--out", root)).toThrow(/inside this repository/);
+    },
+  );
 
   it("refuses an output directory inside the repo, even one that does not exist yet", () => {
     expect(() => assertOutsideRepo(join(repoRoot(), "tests", "eval", ".private-out"), "--out")).toThrow(

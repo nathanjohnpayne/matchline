@@ -49,8 +49,19 @@ export function checkEvidence(
   const quotes = brief.strengths.flatMap((s) => s.evidence);
   return {
     total: quotes.length,
-    unsupported: quotes.filter((q) => !haystack.includes(normalizeForMatch(q))),
+    unsupported: quotes.filter((q) => !containsAtWordBoundaries(haystack, normalizeForMatch(q))),
   };
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Substring match anchored at word boundaries, so a short quote such as
+ * "led" is not found inside "controlled" (CodeRabbit on #581).
+ */
+function containsAtWordBoundaries(haystack: string, needle: string): boolean {
+  if (needle.length === 0) return false;
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(needle)}(?=$|[^\\p{L}\\p{N}_])`, "u").test(haystack);
 }
 
 export interface BriefScore {
