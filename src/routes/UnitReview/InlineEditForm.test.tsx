@@ -118,6 +118,23 @@ describe("InlineEditForm", () => {
     expect(html).toContain('data-edit-state="editing"');
   });
 
+  it("offers the artifact source type and selects it for an artifact Unit (#518)", () => {
+    const u = unit({
+      id: "a",
+      source_type: "artifact",
+      source_ref: "artifact://users/u/artifacts/deck.pptx#slide-4",
+    });
+    const html = render(draftOf(u), "editing");
+
+    expect(html).toContain(
+      '<option value="artifact" selected="">artifact</option>',
+    );
+    expect(html).toContain('<option value="resume">resume</option>');
+    expect(html).toContain(
+      'value="artifact://users/u/artifacts/deck.pptx#slide-4"',
+    );
+  });
+
   it("renders the Save button as 'Save' in editing mode", () => {
     const html = render(draftOf(unit({ id: "x" })), "editing");
     expect(html).toContain('data-action="save"');
