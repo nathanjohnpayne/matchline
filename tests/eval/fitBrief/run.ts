@@ -79,11 +79,8 @@ type RecordUsageFn = (u: UsageRecord) => Promise<number>;
 export interface FitBriefEvalDeps {
   readonly generate: (input: FitBriefInput, record: RecordUsageFn, guard: BudgetGuard) => Promise<FitBriefResult>;
   readonly judge: (args: Parameters<typeof judgeBrief>[0], record: RecordUsageFn, guard: BudgetGuard) => Promise<JudgeResult>;
-  /**
-   * Only called for --evidence units. Returns one evidence line per Unit:
-   * its verbatim text plus its date range, so tenure stays visible.
-   */
-  readonly extractUnits: (resumeText: string, record: RecordUsageFn, guard: BudgetGuard) => Promise<string[]>;
+  /** Only called for --evidence units. Returns each Unit's verbatim text and date range. */
+  readonly extractUnits: (resumeText: string, record: RecordUsageFn, guard: BudgetGuard) => Promise<UnitEvidence[]>;
   readonly writeFile?: (path: string, data: string) => void;
 }
 
@@ -255,15 +252,15 @@ export async function runFitBriefEval(
   const sources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
   let generatorEvidence = corpus.resumeText;
   if (options.evidence === "units") {
-    let lines: string[];
+    let units: UnitEvidence[];
     try {
-      lines = await deps.extractUnits(corpus.resumeText, record, guard);
+      units = await deps.extractUnits(corpus.resumeText, record, guard);
     } catch (err) {
       if (!(err instanceof BudgetReachedError) && !overBudget()) throw err;
       incomplete = true;
       return { report: report([]), spentUsd, incomplete, rows: [] };
     }
-    generatorEvidence = lines.map((l) => `- ${l}`).join("\n");
+    generatorEvidence = renderUnitEvidence(units);
   }
 
   const rows: { split: string; score: BriefScore | null }[] = [];
@@ -321,7 +318,6 @@ export async function runFitBriefEval(
         const evidence = checkEvidence(
           generated.brief,
           sources,
-          options.evidence === "units" ? { annotatedEvidence: generatorEvidence } : {},
         );
         const score = scoreBrief({ evidence, judge: judgement, generatedVerdict: generated.brief.verdict });
         rows.push({ split: pair.split, score });
@@ -443,14 +439,31 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
   };
 }
 
+export interface UnitEvidence {
+  readonly raw_text: string;
+  readonly date_range?: { readonly start: string; readonly end?: string };
+}
+
 /**
- * One evidence line per Unit: its verbatim text plus its date range.
- * Dates can live only in `date_range`, and a brief judges tenure (Codex
- * P2 on #581). Other structured fields are omitted on purpose: units mode
- * tests the Units' text and dates, not the full record.
+ * Units mode's evidence for the generator: each Unit's verbatim text as a
+ * bullet, grouped under a heading naming the dates extraction assigned.
+ * Dates can live only in `date_range` and a brief judges tenure (Codex P2
+ * on #581), but they are the extraction model's output, not résumé text,
+ * so they sit in group headings rather than on the quotable lines. The
+ * evidence gate then only ever certifies verbatim résumé text, and dates
+ * a brief asserts are checked by the judge against the canonical résumé
+ * (Codex P1 ×2 on #581). Other structured fields are omitted on purpose:
+ * units mode tests the Units' text and dates, not the full record.
  */
-export function unitEvidenceLine(u: { raw_text: string; date_range?: { start: string; end?: string } }): string {
-  return u.date_range ? `${u.raw_text} [${u.date_range.start}–${u.date_range.end ?? "present"}]` : u.raw_text;
+export function renderUnitEvidence(units: readonly UnitEvidence[]): string {
+  const groups = new Map<string, string[]>();
+  for (const u of units) {
+    const label = u.date_range
+      ? `Dates (from extraction): ${u.date_range.start} to ${u.date_range.end ?? "present"}`
+      : "Dates (from extraction): none";
+    groups.set(label, [...(groups.get(label) ?? []), `- ${u.raw_text}`]);
+  }
+  return [...groups].map(([label, lines]) => [`## ${label}`, ...lines].join("\n")).join("\n\n");
 }
 
 function effortLabel(effort: Effort | undefined): string {
@@ -501,7 +514,7 @@ async function main(): Promise<number> {
           { ownerUid: "eval-fit-brief" },
           { client: guardClient(client, guard), record },
         )
-      ).map(unitEvidenceLine),
+      ).map((u) => ({ raw_text: u.raw_text, ...(u.date_range && { date_range: u.date_range }) })),
   });
   console.log(outcome.report);
   // Nonzero when the run stopped early or any sample could not be

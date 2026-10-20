@@ -45,92 +45,23 @@ export interface EvidenceCheck {
 }
 
 /**
- * Units mode annotates each Unit with its date range (`[2021-03–present]`).
- * The annotation is metadata, not résumé text. Captures the start year and
- * the end year (or `present`).
- */
-const DATE_ANNOTATION = /\s*\[(\d{4})(?:-\d{2}){0,2}–(\d{4}|present)(?:-\d{2}){0,2}\]\s*$/u;
-
-/**
  * A quote is supported when it appears, as written, inside a single
  * evidence unit of the canonical sources (see `evidenceUnits`), so two
  * adjacent bullets cannot be stitched into one quote (Codex P1, #581).
- *
- * A quote ending in a date annotation is supported only when all three
- * hold: the whole annotated quote appears in `annotatedEvidence` (the Unit
- * lines the generator was given); the text before the annotation appears
- * in a canonical source; and that same heading section of the source
- * states the annotated year range (see `headingSections`). The extraction
- * model's dates are never their own authority, so a hallucinated or
- * misassigned `date_range` fails the gate (Codex P1, #581). Years are
- * compared, not months.
+ * Only verbatim résumé or inventory text passes: units mode keeps the
+ * extraction's dates out of the quotable lines (see `renderUnitEvidence`
+ * in run.ts), so a quote carrying a date the résumé line does not hold
+ * fails here, and any date a brief asserts is left to the judge's
+ * claim gate against the canonical sources.
  */
-export function checkEvidence(
-  brief: FitBriefResponseV1,
-  sources: readonly string[],
-  options: { readonly annotatedEvidence?: string } = {},
-): EvidenceCheck {
-  const sections = sources.flatMap(headingSections);
-  const units = sections.flatMap((s) => s.units);
-  const annotatedUnits =
-    options.annotatedEvidence === undefined ? undefined : evidenceUnits(options.annotatedEvidence);
-  const inSomeUnit = (pool: readonly string[], quote: string): boolean => {
-    const needle = normalizeForMatch(quote);
-    return pool.some((unit) => containsAtWordBoundaries(unit, needle));
-  };
+export function checkEvidence(brief: FitBriefResponseV1, sources: readonly string[]): EvidenceCheck {
+  const units = sources.flatMap(evidenceUnits);
   const quotes = brief.strengths.flatMap((s) => s.evidence);
   const supported = (q: string): boolean => {
-    if (inSomeUnit(units, q)) return true;
-    const annotation = DATE_ANNOTATION.exec(q);
-    if (annotatedUnits === undefined || annotation === null) return false;
-    if (!inSomeUnit(annotatedUnits, q)) return false;
-    const text = q.replace(DATE_ANNOTATION, "");
-    const range = statedYearRange(annotation[1]!, annotation[2]!);
-    return sections.some((s) => inSomeUnit(s.units, text) && range.test(s.context));
+    const needle = normalizeForMatch(q);
+    return units.some((unit) => containsAtWordBoundaries(unit, needle));
   };
   return { total: quotes.length, unsupported: quotes.filter((q) => !supported(q)) };
-}
-
-/** A year range as a résumé writes it: `2021–2024`, `Mar 2021 - Present`, `2019 to 2025`. */
-function statedYearRange(start: string, end: string): RegExp {
-  const endPattern = end === "present" ? "(?:present|current|now)" : end;
-  return new RegExp(
-    `(?<!\\d)${start}(?!\\d)[^\\d\\n]{0,16}?(?:[-–—]|\\bto\\b)[^\\d\\n]{0,16}?(?<!\\d)${endPattern}(?![\\d\\p{L}])`,
-    "iu",
-  );
-}
-
-export interface HeadingSection {
-  /** Normalized evidence units under this heading, up to the next heading. */
-  readonly units: readonly string[];
-  /** Raw text of this section plus each enclosing heading's own lines. */
-  readonly context: string;
-}
-
-/**
- * Split a source at Markdown headings. A section's context is its own
- * lines plus the lines directly under each enclosing heading, so a date
- * line written under a role heading (or under its company heading) covers
- * the bullets beneath it, and nothing else. Text before the first heading
- * is a section of its own and is never anyone's ancestor.
- */
-export function headingSections(text: string): HeadingSection[] {
-  const blocks: { level: number; lines: string[] }[] = [{ level: 0, lines: [] }];
-  for (const line of text.split(/\r?\n/u)) {
-    const heading = /^\s*(#{1,6})\s/u.exec(line);
-    if (heading) blocks.push({ level: heading[1]!.length, lines: [line] });
-    else blocks[blocks.length - 1]!.lines.push(line);
-  }
-  const stack: { level: number; lines: string[] }[] = [];
-  return blocks.map((block) => {
-    if (block.level > 0) {
-      while (stack.length > 0 && stack[stack.length - 1]!.level >= block.level) stack.pop();
-    }
-    const own = block.lines.join("\n");
-    const context = [...stack.map((b) => b.lines.join("\n")), own].join("\n");
-    if (block.level > 0) stack.push(block);
-    return { units: evidenceUnits(own), context };
-  });
 }
 
 const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/u;

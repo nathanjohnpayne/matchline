@@ -18,7 +18,7 @@ import {
   preflight,
   prepareOutDir,
   runFitBriefEval,
-  unitEvidenceLine,
+  renderUnitEvidence,
   writePrivateFile,
   type FitBriefEvalDeps,
   type FitBriefEvalOptions,
@@ -88,7 +88,7 @@ function deps(over: Partial<FitBriefEvalDeps> = {}): FitBriefEvalDeps & { files:
       await record(usage("fit_brief_judge"));
       return JUDGEMENT;
     }),
-    extractUnits: vi.fn(async () => ["Owned the checkout API used by four storefront teams."]),
+    extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by four storefront teams." }]),
     writeFile: (p, d) => void files.set(p, d),
     ...over,
   };
@@ -234,10 +234,10 @@ describe("runFitBriefEval", () => {
 
   it("in units mode, the generator reads Units but the gates keep the canonical sources (Codex P1, #581)", async () => {
     const withInventory: FitBriefCorpus = { ...CORPUS, inventoryText: "Tools: Looker" };
-    const d = deps({ extractUnits: vi.fn(async () => ["Owned the checkout API used by twelve teams."]) });
+    const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });
     await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, d);
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
-    expect(gen.resumeText).toBe("- Owned the checkout API used by twelve teams.");
+    expect(gen.resumeText).toBe("## Dates (from extraction): none\n- Owned the checkout API used by twelve teams.");
     // The inventory reaches the generator in both modes.
     expect(gen.inventoryText).toBe("Tools: Looker");
     // The judge grounds on the résumé and inventory, not the extracted Units.
@@ -275,7 +275,7 @@ describe("runFitBriefEval", () => {
           guard();
           await record(usage("extraction"));
         }
-        return ["unreachable"];
+        return [{ raw_text: "unreachable" }];
       }),
     });
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", maxUsd: 0.5 }, d);
@@ -359,13 +359,22 @@ describe("guardClient", () => {
   });
 });
 
-describe("unitEvidenceLine", () => {
-  it("keeps a Unit's dates alongside its text (Codex P2, #581)", () => {
-    expect(unitEvidenceLine({ raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } })).toBe(
-      "Led X. [2021-03–2024-06]",
+describe("renderUnitEvidence", () => {
+  it("keeps each Unit's dates visible but off its quotable line (Codex P2 and P1, #581)", () => {
+    expect(
+      renderUnitEvidence([
+        { raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } },
+        { raw_text: "Led Y.", date_range: { start: "2024-07" } },
+        { raw_text: "Led W.", date_range: { start: "2021-03", end: "2024-06" } },
+        { raw_text: "Led Z." },
+      ]),
+    ).toBe(
+      [
+        "## Dates (from extraction): 2021-03 to 2024-06\n- Led X.\n- Led W.",
+        "## Dates (from extraction): 2024-07 to present\n- Led Y.",
+        "## Dates (from extraction): none\n- Led Z.",
+      ].join("\n\n"),
     );
-    expect(unitEvidenceLine({ raw_text: "Led Y.", date_range: { start: "2024-07" } })).toBe("Led Y. [2024-07–present]");
-    expect(unitEvidenceLine({ raw_text: "Led Z." })).toBe("Led Z.");
   });
 });
 
