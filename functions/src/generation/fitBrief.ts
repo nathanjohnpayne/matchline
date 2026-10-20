@@ -22,7 +22,7 @@ import {
   safeRecordUsage,
 } from "../llm/cost.js";
 import { toolCallRequest, type Effort } from "../llm/modelProfile.js";
-import { sleep as defaultSleep, transportBackoffMs } from "../llm/retry.js";
+import { isRetryableApiError, sleep as defaultSleep, transportBackoffMs } from "../llm/retry.js";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import {
@@ -147,7 +147,7 @@ export async function generateFitBrief(
         message: err instanceof Error ? err.message : String(err),
       });
       // A 4xx other than 408/409/429 fails the same way on retry.
-      if (!isRetryable(err)) break;
+      if (!isRetryableApiError(err)) break;
       if (attempt < MAX_ATTEMPTS - 1) await sleep(transportBackoffMs(attempt, err));
       continue;
     }
@@ -227,30 +227,6 @@ export async function generateFitBrief(
         : `Fit brief failed after ${failures.length} attempts. See .failures for per-attempt detail.`,
     failures,
   );
-}
-
-/**
- * Connection failures and 408/409/429/5xx are worth retrying; other
- * statuses are not. A 429 that reports the organization's spend limit
- * (`enforced_spend_limit_reached`) is not a rate limit: access stays
- * paused, so it is not retried either (CodeRabbit on #581).
- */
-function isRetryable(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null)?.status;
-  if (typeof status !== "number") return true;
-  if (status === 429 && mentionsSpendLimit(err)) return false;
-  return status === 408 || status === 409 || status === 429 || status >= 500;
-}
-
-function mentionsSpendLimit(err: unknown): boolean {
-  const body = (err as { error?: unknown } | null)?.error;
-  let text = err instanceof Error ? err.message : "";
-  try {
-    text += JSON.stringify(body ?? "");
-  } catch {
-    // An unserializable body cannot carry the code; the message still can.
-  }
-  return text.includes("enforced_spend_limit_reached");
 }
 
 function buildUserContent(fewShot: string, input: FitBriefInput): string {

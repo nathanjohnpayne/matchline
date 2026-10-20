@@ -47,11 +47,21 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(result.unsupported).toEqual(["Ran a twelve-team platform."]);
   });
 
-  it("checks a units-mode quote without its date annotation (Codex review, #581)", () => {
+  it("accepts a units-mode date annotation only when it is the Unit's real one (Codex P2, #581)", () => {
+    const units = "- Owned the checkout API. [2021-03–present]";
+    const quote = "Owned the checkout API. [2021-03–present]";
     expect(
-      checkEvidence(brief(["Owned the checkout API. [2021-03–present]"]), ["- Owned the checkout API."]).unsupported,
+      checkEvidence(brief([quote]), ["- Owned the checkout API."], { annotatedEvidence: units }).unsupported,
     ).toEqual([]);
-    // Only a trailing date annotation is stripped, never real text.
+    // An altered or invented date range fails, even with real text before it.
+    expect(
+      checkEvidence(brief(["Owned the checkout API. [2018-01–present]"]), ["- Owned the checkout API."], {
+        annotatedEvidence: units,
+      }).unsupported,
+    ).toHaveLength(1);
+    // Outside units mode there are no annotations to accept.
+    expect(checkEvidence(brief([quote]), ["- Owned the checkout API."]).unsupported).toHaveLength(1);
+    // Real text is never stripped.
     expect(checkEvidence(brief(["Owned the [new] API."]), ["Owned the API."]).unsupported).toHaveLength(1);
   });
 

@@ -23,6 +23,11 @@ import { z } from "zod";
 import { anthropicUsageFields, recordUsage, safeRecordUsage } from "../../../functions/src/llm/cost.ts";
 import { toolCallRequest, type Effort } from "../../../functions/src/llm/modelProfile.ts";
 import {
+  isRetryableApiError,
+  sleep as defaultSleep,
+  transportBackoffMs,
+} from "../../../functions/src/llm/retry.ts";
+import {
   FIT_BRIEF_VERDICTS,
   type FitBriefResponseV1,
 } from "../../../functions/src/prompts/generation/fitBrief.v1.schema.ts";
@@ -110,10 +115,13 @@ export interface JudgeDeps {
   readonly effort?: Effort;
   readonly record?: typeof recordUsage;
   readonly runId?: string;
+  /** Backoff between transient-failure retries; injectable for tests. */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<JudgeResult> {
   const record = deps.record ?? recordUsage;
+  const sleep = deps.sleep ?? ((ms: number) => defaultSleep(ms));
   const request = toolCallRequest({
     model: deps.model,
     toolName: TOOL_NAME,
@@ -131,7 +139,9 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
   let lastError = "";
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const start = Date.now();
-    const response = await deps.client.messages.create(
+    let response: Awaited<ReturnType<typeof deps.client.messages.create>>;
+    try {
+      response = await deps.client.messages.create(
       {
         model: deps.model,
         max_tokens: request.max_tokens,
@@ -152,6 +162,15 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
       },
       request.requestOptions,
     );
+    } catch (err) {
+      // A transient failure (connection, 408/409/429, 5xx) retries with
+      // backoff instead of discarding the already-paid generation; a budget
+      // stop, a spend-limit 429 or another 4xx stays terminal (Codex P2, #581).
+      if (!isRetryableApiError(err) || attempt === MAX_ATTEMPTS - 1) throw err;
+      lastError = err instanceof Error ? err.message : String(err);
+      await sleep(transportBackoffMs(attempt, err));
+      continue;
+    }
     await safeRecordUsage(
       record,
       () => ({

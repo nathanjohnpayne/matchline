@@ -24,7 +24,7 @@
  * --out, which must be outside this repository.
  */
 
-import { closeSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -131,6 +131,16 @@ export function writePrivateFile(path: string, data: string): void {
       }
     }
   }
+}
+
+/**
+ * Create the output directory owner-only, and tighten it if it already
+ * exists: `mode` applies only to directories mkdir creates, a reused --out
+ * keeps its old permissions, and filenames carry pair ids (Codex P2, #581).
+ */
+export function prepareOutDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
 }
 
 /** Wrap a client so every `messages.create` checks the budget first. */
@@ -308,7 +318,11 @@ export async function runFitBriefEval(
           record,
           guard,
         );
-        const evidence = checkEvidence(generated.brief, sources);
+        const evidence = checkEvidence(
+          generated.brief,
+          sources,
+          options.evidence === "units" ? { annotatedEvidence: generatorEvidence } : {},
+        );
         const score = scoreBrief({ evidence, judge: judgement, generatedVerdict: generated.brief.verdict });
         rows.push({ split: pair.split, score });
         writeFile(
@@ -461,7 +475,7 @@ async function main(): Promise<number> {
   );
   if (options.dryRun) return 0;
 
-  mkdirSync(options.outDir, { recursive: true, mode: 0o700 });
+  prepareOutDir(options.outDir);
   const client: Anthropic = anthropicForCli();
   const outcome = await runFitBriefEval(corpus, options, {
     generate: (input, record, guard) =>

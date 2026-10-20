@@ -16,6 +16,7 @@ import {
   guardClient,
   parseArgs,
   preflight,
+  prepareOutDir,
   runFitBriefEval,
   unitEvidenceLine,
   writePrivateFile,
@@ -303,6 +304,22 @@ describe("writePrivateFile", () => {
       expect(readFileSync(out, "utf8")).toBe("private");
       expect(statSync(out).mode & 0o077).toBe(0);
       expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("prepareOutDir", () => {
+  it("tightens an existing world-readable output directory (Codex P2, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
+    try {
+      chmodSync(dir, 0o755);
+      prepareOutDir(dir);
+      expect(statSync(dir).mode & 0o077).toBe(0);
+      const fresh = join(dir, "run-1");
+      prepareOutDir(fresh);
+      expect(statSync(fresh).mode & 0o077).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

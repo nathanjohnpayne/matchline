@@ -46,22 +46,37 @@ export interface EvidenceCheck {
 
 /**
  * Units mode annotates each Unit with its date range (`[2021-03–present]`).
- * The annotation is metadata, not résumé text, so a quote that carries it
- * is checked without it (Codex review of #581).
+ * The annotation is metadata, not résumé text.
  */
 const DATE_ANNOTATION = /\s*\[\d{4}(?:-\d{2}){0,2}–(?:\d{4}(?:-\d{2}){0,2}|present)\]\s*$/u;
 
+/**
+ * A quote is supported when it appears in the canonical sources as
+ * written. A quote ending in a date annotation is also supported when the
+ * whole annotated quote appears in `annotatedEvidence` (the Unit lines
+ * the generator was given) and the text before the annotation appears in
+ * the sources. So the dates must be the Unit's real dates, and an invented
+ * or altered date range fails (Codex P2 on #581: stripping any trailing
+ * annotation let an invented tenure through the gate).
+ */
 export function checkEvidence(
   brief: FitBriefResponseV1,
   sources: readonly string[],
+  options: { readonly annotatedEvidence?: string } = {},
 ): EvidenceCheck {
   const haystack = sources.map(normalizeForMatch).join("\n");
+  const annotated =
+    options.annotatedEvidence === undefined ? undefined : normalizeForMatch(options.annotatedEvidence);
   const quotes = brief.strengths.flatMap((s) => s.evidence);
-  const stripAnnotation = (q: string) => q.replace(DATE_ANNOTATION, "");
-  return {
-    total: quotes.length,
-    unsupported: quotes.filter((q) => !containsAtWordBoundaries(haystack, normalizeForMatch(stripAnnotation(q)))),
+  const supported = (q: string): boolean => {
+    if (containsAtWordBoundaries(haystack, normalizeForMatch(q))) return true;
+    if (annotated === undefined || !DATE_ANNOTATION.test(q)) return false;
+    return (
+      containsAtWordBoundaries(annotated, normalizeForMatch(q)) &&
+      containsAtWordBoundaries(haystack, normalizeForMatch(q.replace(DATE_ANNOTATION, "")))
+    );
   };
+  return { total: quotes.length, unsupported: quotes.filter((q) => !supported(q)) };
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

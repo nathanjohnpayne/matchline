@@ -67,6 +67,45 @@ describe("judgeBrief", () => {
     ).resolves.toEqual(JUDGEMENT);
   });
 
+  it("retries a transient transport failure instead of discarding the paid generation (Codex P2, #581)", async () => {
+    let calls = 0;
+    const c = {
+      messages: {
+        create: vi.fn(async () => {
+          calls += 1;
+          if (calls === 1) throw Object.assign(new Error("overloaded"), { status: 529 });
+          return reply(JUDGEMENT);
+        }),
+      },
+    } as unknown as Anthropic;
+    await expect(
+      judgeBrief(INPUT, {
+        client: c,
+        model: "claude-opus-5-5",
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        sleep: async () => {},
+      }),
+    ).resolves.toEqual(JUDGEMENT);
+    expect(c.messages.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a budget stop or a permanent 4xx terminal", async () => {
+    for (const status of [402, 400]) {
+      const create = vi.fn(async () => {
+        throw Object.assign(new Error(`status ${status}`), { status });
+      });
+      await expect(
+        judgeBrief(INPUT, {
+          client: { messages: { create } } as unknown as Anthropic,
+          model: "claude-opus-5-5",
+          record: vi.fn<typeof RecordUsage>(async () => 0),
+          sleep: async () => {},
+        }),
+      ).rejects.toThrow(`status ${status}`);
+      expect(create).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("stops on truncation instead of retrying at the same budget (Codex P1, #581)", async () => {
     const c = client(reply(JUDGEMENT, { stop_reason: "max_tokens" }), reply(JUDGEMENT));
     await expect(
