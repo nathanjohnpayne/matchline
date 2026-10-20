@@ -100,6 +100,9 @@ describe("parseArtifactSourceRef", () => {
     ["unencoded space", "artifact://users/u1/artifacts/a b.pdf"],
     ["unencoded fragment hash", "artifact://users/u1/artifacts/a.pdf#p#2"],
     ["non-canonical lowercase escape", "artifact://users/u1/artifacts/a%2fb.pdf"],
+    ["raw lone surrogate in uid", "artifact://users/u\uD800/artifacts/a.pdf"],
+    ["raw lone surrogate in filename", "artifact://users/u1/artifacts/a\uDC00.pdf"],
+    ["raw lone surrogate in section", "artifact://users/u1/artifacts/a.pdf#p\uD83D"],
   ])("returns null for a malformed artifact ref (%s)", (_label, ref) => {
     expect(parseArtifactSourceRef(ref)).toBeNull();
   });

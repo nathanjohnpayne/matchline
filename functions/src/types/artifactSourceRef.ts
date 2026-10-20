@@ -103,11 +103,13 @@ export function parseArtifactSourceRef(
  * `a b.pdf` and `a%20b.pdf` would both parse to the same filename.
  */
 function decodeStrict(encoded: string): string | null {
-  let decoded: string;
+  // Both calls sit inside the guard: `decodeURIComponent` throws on a
+  // malformed escape, and `encodeURIComponent` throws on a raw lone
+  // surrogate, which decoding passes through unchanged.
   try {
-    decoded = decodeURIComponent(encoded);
+    const decoded = decodeURIComponent(encoded);
+    return encodeURIComponent(decoded) === encoded ? decoded : null;
   } catch {
     return null;
   }
-  return encodeURIComponent(decoded) === encoded ? decoded : null;
 }
