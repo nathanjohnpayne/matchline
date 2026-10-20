@@ -307,6 +307,51 @@ describe("completing a task (#34)", () => {
   });
 });
 
+describe("pending completion and the clock (#34)", () => {
+  it("does not offer a follow-up while that application's task completion is in flight", async () => {
+    let finish: () => void = () => {};
+    const d = deps({
+      applications: [app("a1", "applied", 1)],
+      tasks: [task("t1", { due_at: localDay(20), title: "Send thank-you" })],
+      completeTask: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    await renderBoard(d);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Send thank-you/ }));
+    expect(within(section("pipeline-follow-ups")).queryByText("Add task")).toBeNull();
+
+    await act(async () => finish());
+    // The completion touched the Application, so it is not quiet.
+    expect(within(section("pipeline-follow-ups")).queryByText("Add task")).toBeNull();
+  });
+
+  it("rolls tasks into Due today at local midnight while the page stays open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let clock = new Date(2026, 9, 20, 23, 59, 0);
+      await renderBoard(
+        deps({
+          now: () => clock,
+          tasks: [task("t1", { due_at: localDay(21), title: "Call Dana" })],
+        }),
+      );
+      expect(within(section("pipeline-tasks-upcoming")).getByText("Call Dana")).toBeTruthy();
+
+      clock = new Date(2026, 9, 21, 0, 0, 2);
+      await act(async () => {
+        vi.advanceTimersByTime(62_000);
+      });
+      expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("follow-ups (#34)", () => {
   it("surfaces an Applied application quiet for 8 days and turns it into a task due today", async () => {
     const d = deps({ applications: [app("a1", "applied", 12)] });

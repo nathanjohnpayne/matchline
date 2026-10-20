@@ -6,6 +6,7 @@ import {
   buildTaskSidebar,
   defaultDueAt,
   endOfLocalDay,
+  msUntilNextLocalDay,
 } from "./taskSidebar.ts";
 
 // Local-time construction keeps every test independent of the
@@ -47,6 +48,13 @@ const ids = (tasks: readonly Task[]): string[] => tasks.map((t) => t.id);
 describe("endOfLocalDay", () => {
   it("is the last millisecond of the local calendar day", () => {
     expect(endOfLocalDay(NOW)).toBe(new Date(2026, 9, 21, 0, 0, 0).getTime() - 1);
+  });
+});
+
+describe("msUntilNextLocalDay", () => {
+  it("counts down to local midnight", () => {
+    expect(msUntilNextLocalDay(new Date(2026, 9, 20, 23, 59, 0))).toBe(60_000);
+    expect(msUntilNextLocalDay(new Date(2026, 9, 20, 12, 0, 0))).toBe(12 * 3_600_000);
   });
 });
 
@@ -166,6 +174,16 @@ describe("buildTaskSidebar: follow-ups", () => {
       NOW,
     );
     expect(s.followUps).toEqual([]);
+  });
+
+  it("keeps suppressed applications (completion in flight) out of Follow-ups", () => {
+    const s = buildTaskSidebar(
+      [task("done", { application_id: "a1", completed: true })],
+      [app("a1", "applied", 1), app("a2", "applied", 1)],
+      NOW,
+      new Set(["a1"]),
+    );
+    expect(s.followUps.map((f) => f.application.id)).toEqual(["a2"]);
   });
 
   it("drops an application once it has an open task, but not a completed one", () => {

@@ -105,6 +105,13 @@ export function buildTaskSidebar(
   tasks: readonly Task[],
   applications: readonly Application[],
   now: Date,
+  /**
+   * Applications to keep out of Follow-ups regardless, e.g. one whose
+   * task completion is still being written: the optimistic
+   * `completed: true` would otherwise make it look task-free (and
+   * still quiet) until the write lands, inviting a duplicate.
+   */
+  suppressFollowUpFor: ReadonlySet<UUID> = new Set(),
 ): TaskSidebar {
   const endOfToday = endOfLocalDay(now);
   // Whole calendar days: a task due on the 7th day ahead is Upcoming
@@ -132,7 +139,7 @@ export function buildTaskSidebar(
   const followUps: FollowUp[] = [];
   for (const app of applications) {
     if (!ACTIVE_STAGES.has(app.stage)) continue;
-    if (withOpenTask.has(app.id)) continue;
+    if (withOpenTask.has(app.id) || suppressFollowUpFor.has(app.id)) continue;
     const last = toMs(app.last_activity_at);
     if (last === null) continue;
     const daysSilent = Math.floor((now.getTime() - last) / MS_PER_DAY);
@@ -155,3 +162,14 @@ export function buildTaskSidebar(
     followUps,
   };
 }
+
+/**
+ * Milliseconds from `now` until the start of the next local calendar
+ * day. The Pipeline re-reads its clock then, so tasks roll from
+ * Upcoming into Due today (and follow-ups appear) at midnight while
+ * the page stays open.
+ */
+export function msUntilNextLocalDay(now: Date): number {
+  return endOfLocalDay(now) + 1 - now.getTime();
+}
+

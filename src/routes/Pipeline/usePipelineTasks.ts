@@ -83,9 +83,17 @@ export function usePipelineTasks({
     setTasks(loadedTasks ?? []);
   }
 
+  // Applications whose task completion is still being written stay
+  // out of Follow-ups until it settles (Codex P2 on #585).
+  const completing = useMemo(() => {
+    const ids = new Set<UUID>();
+    for (const t of tasks) if (pending.has(t.id)) ids.add(t.application_id);
+    return ids;
+  }, [tasks, pending]);
+
   const sidebar = useMemo(
-    () => buildTaskSidebar(tasks, applications, now),
-    [tasks, applications, now],
+    () => buildTaskSidebar(tasks, applications, now, completing),
+    [tasks, applications, now, completing],
   );
 
   const create = useCallback(

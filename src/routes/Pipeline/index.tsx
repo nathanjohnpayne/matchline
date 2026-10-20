@@ -44,6 +44,7 @@ import { completeTask, createTask, listTasks } from "../../services/tasks.ts";
 import type { ApplicationStage, UUID } from "../../types/crm.ts";
 
 import { buildPipelineBoard } from "./buildPipelineBoard.ts";
+import { msUntilNextLocalDay } from "./taskSidebar.ts";
 import {
   loadPipelineData,
   type PipelineData,
@@ -122,6 +123,21 @@ export default function Pipeline({
       cancelled = true;
     };
   }, [deps]);
+
+  // Re-read the clock at the next local midnight, so tasks roll from
+  // Upcoming into Due today, days in stage tick over and new
+  // follow-ups appear while the page stays open (Codex P2 on #585).
+  // Re-armed whenever the clock is re-read for any other reason.
+  useEffect(() => {
+    if (status !== "ready") return;
+    const timer = setTimeout(
+      () => setNow(deps.now()),
+      // A second past midnight, so the new reading is safely inside
+      // the new day.
+      msUntilNextLocalDay(deps.now()) + 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [status, now, deps]);
 
   const columns = useMemo(
     () =>
