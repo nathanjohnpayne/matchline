@@ -8,6 +8,7 @@ import {
   endOfLocalDay,
   isSameLocalDay,
   msUntilNextLocalDay,
+  nextActionByApplication,
 } from "./taskSidebar.ts";
 
 // Local-time construction keeps every test independent of the
@@ -235,3 +236,50 @@ describe("buildTaskSidebar: follow-ups", () => {
     expect(s.followUps.map((f) => f.application.id)).toEqual(["c", "a", "b"]);
   });
 });
+
+describe("nextActionByApplication (#512)", () => {
+  it("is empty with no tasks or only completed ones", () => {
+    expect(nextActionByApplication([]).size).toBe(0);
+    expect(nextActionByApplication([task("done", { completed: true })]).size).toBe(0);
+  });
+
+  it("picks the earliest-due open task, ignoring completed ones", () => {
+    const next = nextActionByApplication([
+      task("later", { due_at: local(25) }),
+      task("done-earliest", { due_at: local(21), completed: true }),
+      task("soon", { due_at: local(22) }),
+    ]);
+    expect(next.get("a1")?.id).toBe("soon");
+  });
+
+  it("puts undated tasks after dated ones", () => {
+    const next = nextActionByApplication([
+      task("undated", { created_at: local(1) }),
+      task("dated", { due_at: local(30), created_at: local(9) }),
+    ]);
+    expect(next.get("a1")?.id).toBe("dated");
+  });
+
+  it("breaks ties (same due date, or both undated) by created_at", () => {
+    const sameDue = nextActionByApplication([
+      task("newer", { due_at: local(22), created_at: local(5) }),
+      task("older", { due_at: local(22), created_at: local(3) }),
+    ]);
+    expect(sameDue.get("a1")?.id).toBe("older");
+    const undated = nextActionByApplication([
+      task("u-newer", { created_at: local(6) }),
+      task("u-older", { created_at: local(2) }),
+    ]);
+    expect(undated.get("a1")?.id).toBe("u-older");
+  });
+
+  it("selects per Application", () => {
+    const next = nextActionByApplication([
+      task("a1-task", { application_id: "a1", due_at: local(25) }),
+      task("a2-task", { application_id: "a2", due_at: local(21) }),
+    ]);
+    expect(next.get("a1")?.id).toBe("a1-task");
+    expect(next.get("a2")?.id).toBe("a2-task");
+  });
+});
+

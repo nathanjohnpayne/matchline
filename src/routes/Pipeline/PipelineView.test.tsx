@@ -149,6 +149,18 @@ describe("PipelineView", () => {
     expect(withContact).toMatch(/data-testid="pipeline-card-contact"[^>]*>DR</);
   });
 
+  it("renders the next action as a truncating chip in the metadata row (#512)", () => {
+    const long = "Follow up with the hiring manager about the take-home exercise timeline";
+    const html = render({ columns: board({ applied: [card({ nextAction: long })] }) });
+    const chip = html.match(/<span[^>]*data-testid="pipeline-card-next-action"[^>]*>/)?.[0] ?? "";
+    expect(chip).toContain("truncate");
+    expect(chip).toContain("min-w-0");
+    expect(chip).toContain(`aria-label="Next action: ${long}"`);
+    // The metadata row never wraps, so the card stays at three lines.
+    const row = html.match(/<div class="mt-1 flex[^"]*"/)?.[0] ?? "";
+    expect(row).not.toContain("flex-wrap");
+  });
+
   it("renders nothing in the next-action slot while it is null", () => {
     const html = render({ columns: board({ applied: [card()] }) });
     expect(html).not.toContain('data-testid="pipeline-card-next-action"');

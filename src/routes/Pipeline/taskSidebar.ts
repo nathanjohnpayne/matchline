@@ -94,7 +94,12 @@ export interface TaskSidebar {
   readonly followUps: readonly FollowUp[];
 }
 
-function byDueThenCreated(a: Task, b: Task): number {
+/**
+ * Task order shared by the sidebar sections and the card's Next action
+ * (#512): due date ascending, undated tasks after dated ones, ties by
+ * creation time.
+ */
+export function compareTasksByDue(a: Task, b: Task): number {
   const da = toMs(a.due_at) ?? Infinity;
   const db = toMs(b.due_at) ?? Infinity;
   if (da !== db) return da < db ? -1 : 1;
@@ -163,10 +168,10 @@ export function buildTaskSidebar(
   );
 
   return {
-    dueToday: dueToday.sort(byDueThenCreated),
+    dueToday: dueToday.sort(compareTasksByDue),
     upcoming: [
-      ...upcomingDated.sort(byDueThenCreated),
-      ...undated.sort(byDueThenCreated),
+      ...upcomingDated.sort(compareTasksByDue),
+      ...undated.sort(compareTasksByDue),
     ],
     followUps,
   };
@@ -189,5 +194,23 @@ export function isSameLocalDay(a: Date, b: Date): boolean {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+/**
+ * Each Application's next action (#512): its first open task in
+ * `compareTasksByDue` order. Applications with no open task are absent.
+ */
+export function nextActionByApplication(
+  tasks: readonly Task[],
+): ReadonlyMap<UUID, Task> {
+  const next = new Map<UUID, Task>();
+  for (const task of tasks) {
+    if (task.completed) continue;
+    const current = next.get(task.application_id);
+    if (current === undefined || compareTasksByDue(task, current) < 0) {
+      next.set(task.application_id, task);
+    }
+  }
+  return next;
 }
 

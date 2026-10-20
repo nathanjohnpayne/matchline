@@ -212,13 +212,16 @@ function Card({
             {card.daysInStage}d
           </span>
         )}
-        {/* Next-action chip slot: filled by #32's next-action
-            sub-issue once #34's tasks exist. `nextAction` is always
-            null until then, so nothing renders here. */}
+        {/* Next action (#512): the first open task's title. It
+            truncates inside the metadata row (`min-w-0 truncate` in a
+            non-wrapping flex row), so a long title never adds a
+            fourth line; the full text is in the tooltip and label. */}
         {card.nextAction !== null && (
           <span
             className="min-w-0 truncate rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
             data-testid="pipeline-card-next-action"
+            title={`Next: ${card.nextAction}`}
+            aria-label={`Next action: ${card.nextAction}`}
           >
             {card.nextAction}
           </span>

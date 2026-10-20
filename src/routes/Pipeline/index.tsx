@@ -155,6 +155,36 @@ export default function Pipeline({
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [status, now, deps]);
 
+  /**
+   * "Acme: Staff PM" for an Application, with the board's fallbacks.
+   * Read from the data directly (not from the built columns) because
+   * the columns depend on the tasks, which need these labels.
+   */
+  const describe = useMemo(() => {
+    const rolesById = new Map((data?.roles ?? []).map((r) => [r.id, r]));
+    const companiesById = new Map((data?.companies ?? []).map((c) => [c.id, c]));
+    const appsById = new Map(moveState.applications.map((a) => [a.id, a]));
+    return (id: UUID): string => {
+      const app = appsById.get(id);
+      if (app === undefined) return "Application";
+      const role = rolesById.get(app.role_id);
+      const company = role === undefined ? undefined : companiesById.get(role.company_id);
+      return `${company?.name ?? "Unknown company"}: ${role?.title ?? "Role unavailable"}`;
+    };
+  }, [data, moveState.applications]);
+
+  const { view: tasks, tasks: liveTasks } = usePipelineTasks({
+    deps,
+    loadedTasks: data?.tasks ?? null,
+    // Before the first load there is nothing to withhold.
+    tasksLoaded: data?.tasksLoaded ?? true,
+    applications: moveState.applications,
+    labelFor: describe,
+    now,
+    dispatch,
+    onActivity: setNow,
+  });
+
   const columns = useMemo(
     () =>
       data === null
@@ -162,23 +192,10 @@ export default function Pipeline({
         : buildPipelineBoard({
             ...data,
             applications: moveState.applications,
+            tasks: liveTasks,
             now,
           }),
-    [data, moveState.applications, now],
-  );
-
-  /** "Acme: Staff PM" for announcements, with the board's own fallbacks. */
-  const describe = useCallback(
-    (id: UUID): string => {
-      for (const column of columns) {
-        const card = column.cards.find((c) => c.applicationId === id);
-        if (card !== undefined) {
-          return `${card.companyName ?? "Unknown company"}: ${card.roleTitle ?? "Role unavailable"}`;
-        }
-      }
-      return "Application";
-    },
-    [columns],
+    [data, moveState.applications, liveTasks, now],
   );
 
   const onMove = useCallback(
@@ -217,18 +234,6 @@ export default function Pipeline({
     },
     [deps, describe, moveState],
   );
-
-  const tasks = usePipelineTasks({
-    deps,
-    loadedTasks: data?.tasks ?? null,
-    // Before the first load there is nothing to withhold.
-    tasksLoaded: data?.tasksLoaded ?? true,
-    applications: moveState.applications,
-    labelFor: describe,
-    now,
-    dispatch,
-    onActivity: setNow,
-  });
 
   const moves: PipelineMoves = {
     onMove,
