@@ -83,12 +83,15 @@ export function checkEvidence(
 
 const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/u;
 const HEADING = /^\s*#{1,6}\s/u;
+const INDENTED = /^[ \t]+\S/u;
 
 /**
- * Split a source into the spans a quote may come from: each list item
- * (with any indented continuation lines), each heading, and each
- * paragraph. A blank line, a heading or a new list item ends a span.
- * Returned normalized for matching.
+ * Split a source into the spans a quote may come from. A list item keeps
+ * only its indented continuation lines; every other line is its own span,
+ * so an unindented line after a bullet, or the next line of a hard-wrapped
+ * paragraph, never joins the line before it (Codex P1 ×2, #581). That
+ * fails closed: a quote spanning two plain lines is rejected rather than
+ * a stitched quote accepted. Returned normalized for matching.
  */
 export function evidenceUnits(text: string): string[] {
   const units: string[] = [];
@@ -97,15 +100,26 @@ export function evidenceUnits(text: string): string[] {
     if (current.length > 0) units.push(normalizeForMatch(current.join("\n")));
     current = [];
   };
+  let inListItem = false;
   for (const line of text.split(/\r?\n/u)) {
     if (line.trim() === "") {
       flush();
+      inListItem = false;
     } else if (HEADING.test(line)) {
       flush();
+      inListItem = false;
       units.push(normalizeForMatch(line.replace(/^\s*#{1,6}\s+/u, "")));
-    } else {
-      if (LIST_ITEM.test(line)) flush();
+    } else if (LIST_ITEM.test(line)) {
+      flush();
+      inListItem = true;
       current.push(line.replace(LIST_ITEM, ""));
+    } else if (inListItem && INDENTED.test(line)) {
+      current.push(line);
+    } else {
+      flush();
+      inListItem = false;
+      current.push(line);
+      flush();
     }
   }
   flush();

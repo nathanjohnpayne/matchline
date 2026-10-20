@@ -88,6 +88,13 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(checkEvidence(brief(["Owned checkout API. Grew revenue."]), ["- Owned checkout API.", "Grew revenue."]).unsupported).toHaveLength(1);
   });
 
+  it("never joins an unindented line to the bullet or line before it (Codex P1, #581)", () => {
+    const unsupported = (q: string, src: string) => checkEvidence(brief([q]), [src]).unsupported;
+    expect(unsupported("Owned checkout API. Saved $5M elsewhere.", "- Owned checkout API.\nSaved $5M elsewhere.")).toHaveLength(1);
+    expect(unsupported("Owned checkout API. Saved $5M elsewhere.", "Owned checkout API.\nSaved $5M elsewhere.")).toHaveLength(1);
+    expect(unsupported("Saved $5M elsewhere.", "- Owned checkout API.\nSaved $5M elsewhere.")).toEqual([]);
+  });
+
   it("still matches a quote across a hard-wrapped continuation line of one bullet", () => {
     const resume = "- Owned the checkout API across\n  three regions.\n1. Led the PCI migration.";
     expect(checkEvidence(brief(["Owned the checkout API across three regions."]), [resume]).unsupported).toEqual([]);
