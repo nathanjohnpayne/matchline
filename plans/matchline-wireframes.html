@@ -670,7 +670,7 @@ function roleHeader(opts = {}) {
     <div style="min-width:0"><div class="dim sm">${noJd ? 'Harbor Analytics · Remote (US)' : 'Northwind Media · San Francisco (hybrid) · careers.northwind.example'}</div>
       <div class="ttl">${noJd ? 'Group Product Manager' : 'Senior Product Manager, Video Platform'}</div>
       <div class="meta">${chip(noJd ? 'Saved' : 'Interviewing', 'ink')}<span class="sm dim num">${noJd ? '2' : '6'} days in stage</span>${noJd ? '' : chip('$190–240k as posted', 'line')}${chip(noJd ? 'referral · Morgan T.' : 'applied Oct 9', 'line')}</div></div>
-    <div class="btnrow">${btn('Update stage ' + ic('chevron-down'))}${btn(noJd ? 'Paste JD' : ic('sparkles') + ' Generate ' + ic('chevron-down'), 'pri')}${btn(ic('download') + ' Export ' + ic('chevron-down'), noJd ? 'off' : '')}</div></div>
+    <div class="btnrow">${btn('Update stage ' + ic('chevron-down'))}${btn(noJd ? 'Paste JD' : 'Generate ' + ic('chevron-down'), 'pri')}${btn('Export ' + ic('chevron-down'), noJd ? 'off' : '')}</div></div>
     <div class="where nb"><div class="card tight"><div class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">Where things stand</div>
       <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 23. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
       <div class="card tight"><div class="xs dim" style="text-transform:uppercase;letter-spacing:.06em">Next action</div>
@@ -699,7 +699,7 @@ function roleDetail(state) {
       <div><div class="card" style="margin-bottom:12px"><b>Homework</b><div class="task"><span class="cb on"></span><span>Read Northwind’s Q3 platform post</span></div><div class="task"><span class="cb"></span><span>Check which player SDK they ship on tvOS</span></div></div>
         <div class="card" style="margin-bottom:12px"><b>Questions to ask</b><div class="task">How is certification staffed today?</div><div class="task">Is ads-tech owned by this role or by a sibling PM?</div></div>
         <div class="card" style="border-color:#fecaca"><b>What this package does not claim</b>${an(6)}<div class="task">Ads-tech ownership</div><div class="task">The CDN savings figure <span class="chip red">§ retired</span></div><div class="task">The recommendations engine as shipped <span class="chip red">§ beta</span></div></div>
-        <div class="btnrow" style="margin-top:12px">${btn('Edit brief')}${btn('Regenerate', 'ghost')}${btn('Build package ' + ic('arrow-up-right'), 'pri')}</div></div></div>`;
+        <div class="btnrow" style="margin-top:12px">${btn(ic('pencil') + ' Edit brief')}${btn(ic('refresh-cw') + ' Regenerate', 'ghost')}${btn(ic('arrow-up-right') + ' Build package', 'pri')}</div></div></div>`;
     return shell('pipeline', body);
   }
   if (state === 'reqs') {
@@ -726,7 +726,7 @@ function roleDetail(state) {
         <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}</div></div></div>
         <div class="lrow" style="min-height:0">${btn('+ Pick canonical lines', 'ghost')}</div></div>
       <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">${ic('check')}</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">${ic('check')}</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">${ic('check')}</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>Stale against canonical v14 (warning, not blocking)</div></div>
-        <div class="card" style="margin-bottom:10px"><b>Export</b><div class="btnrow" style="margin-top:6px">${btn(ic('download') + ' PDF', 'pri')}${btn('DOCX')}${btn('Plain text')}</div><div class="sm dim" style="margin-top:6px">Enabled: this view passes traceability and the claim rules. Export records the canonical version it was cut from.</div></div>
+        <div class="card" style="margin-bottom:10px"><b>Export</b><div class="btnrow" style="margin-top:6px">${btn(ic('download') + ' PDF', 'pri')}${btn(ic('download') + ' DOCX')}${btn(ic('download') + ' Plain text')}</div><div class="sm dim" style="margin-top:6px">Enabled: this view passes traceability and the claim rules. Export records the canonical version it was cut from.</div></div>
         <div class="card"><b>Referral note</b> · to Morgan T.<div class="sm dim" style="margin-top:4px">Drafted from the fit brief; logs to Correspondence when you mark it sent.</div></div></div></div>`;
     return shell('pipeline', body);
   }
@@ -749,7 +749,7 @@ function roleDetail(state) {
   const body = roleHeader() + roleTabs('Correspondence') + `<div class="two"><div>
     <div class="card" style="border-color:#c7cdf0;margin-bottom:12px"><div class="rowhead"><b>Drafts</b>${chip('1', 'acc')}</div>
       <div class="task" style="align-items:flex-start"><div><div><b>Thank-you note → Dan K.</b> <span class="sm dim">drafted from the Oct 23 debrief</span></div><div class="verb" style="margin-top:6px">Dan — thanks for the time today. The certification backlog you described maps closely to what I ran at Beacon; happy to share the test-plan template I mentioned.</div>
-      <div class="btnrow" style="margin-top:6px">${btn(ic('copy') + ' Copy')}${btn(ic('send') + ' Mark sent', 'pri')}${btn('Discard', 'ghost')}<span class="sm dim">Matchline never sends. You send; it logs verbatim.${an(3)}</span></div></div></div></div>
+      <div class="btnrow" style="margin-top:6px">${btn(ic('copy') + ' Copy')}${btn(ic('send') + ' Mark sent', 'pri')}${btn(ic('x') + ' Discard', 'ghost')}<span class="sm dim">Matchline never sends. You send; it logs verbatim.${an(3)}</span></div></div></div></div>
     <div class="rowhead" style="margin-bottom:6px"><b>Log</b>${chip('5 messages', 'line')}<span class="sp"></span>${btn('+ Log a message')}</div>
     <div class="list">
       <div class="lrow"><span class="rail">${ic('arrow-down-left')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>Priya N.</b><span class="dim">Oct 15 · received · “Next steps”</span></div><div class="verb" style="margin-top:4px">Great chatting yesterday! Dan would like to meet next week — I’ll send times. Comp is as posted ($190–240k) plus equity.</div></div></div>
