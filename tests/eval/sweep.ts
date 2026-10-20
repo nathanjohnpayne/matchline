@@ -39,14 +39,23 @@
  */
 
 import {
+  clearEffortOverrides,
   clearModelOverrides,
+  effortFor,
   isStage,
   modelFor,
+  setEffortOverrides,
   setModelOverrides,
   STAGES,
   type ModelConfig,
   type Stage,
 } from "../../functions/src/llm/config.ts";
+import {
+  EFFORTS,
+  isEffort,
+  profileFor,
+  type Effort,
+} from "../../functions/src/llm/modelProfile.ts";
 import { rateFor } from "../../functions/src/llm/rates.ts";
 import {
   clearPromptVersionOverrides,
@@ -102,6 +111,11 @@ export interface SweepVariant {
   readonly models?: Partial<Record<Stage, ModelConfig>>;
   /** Prompt-version overrides, e.g. `{ "extraction/resume": "v2" }`. */
   readonly promptVersions?: Readonly<Record<string, string>>;
+  /**
+   * Per-stage `output_config.effort` overrides (#495). Unlisted stages
+   * send their model's profile default (`llm/modelProfile.ts`).
+   */
+  readonly efforts?: Partial<Record<Stage, Effort>>;
   /** Where tokens come from. Recorded so the table shows it. */
   readonly tokenSource?: string;
 }
@@ -111,6 +125,8 @@ export interface VariantResult {
   readonly tokenSource: string;
   readonly models: Partial<Record<Stage, ModelConfig>>;
   readonly promptVersions: Readonly<Record<string, string>>;
+  /** Effort each stage actually sent; a stage whose model takes none is absent. */
+  readonly efforts: Partial<Record<Stage, Effort>>;
   /** Mean across the corpus, in [0, 1]. Null when no cell succeeded. */
   readonly extractionAccuracy: number | null;
   readonly matchAccuracy: number | null;
@@ -294,6 +310,66 @@ function effectiveModels(): Partial<Record<Stage, ModelConfig>> {
 }
 
 /**
+ * The effort each sweepable stage actually sends right now: the
+ * override if one is installed, else the model profile's default.
+ * Stages whose model accepts no effort are left out. Must be called
+ * while the overrides are installed, like `effectiveModels`.
+ */
+function effectiveEfforts(): Partial<Record<Stage, Effort>> {
+  const out: Partial<Record<Stage, Effort>> = {};
+  for (const stage of SWEEPABLE_STAGES) {
+    const effort = effortFor(stage) ?? profileFor(modelFor(stage).model).defaultEffort;
+    if (effort !== undefined) out[stage] = effort;
+  }
+  return out;
+}
+
+/**
+ * Refuse, before any spend, a variant whose model has no request
+ * profile or whose effort that model does not accept. Without this
+ * the first such cell would throw mid-run, after earlier variants had
+ * already spent their corpus.
+ */
+export function assertVariantsCallable(variants: readonly SweepVariant[]): void {
+  const problems: string[] = [];
+  for (const variant of variants) {
+    // Codex P1 on #579: the subscription-CLI adapters drop
+    // `output_config`, so an effort clause there would run the CLI's own
+    // effort while the row is labelled with the requested one.
+    const tokenSource = variant.tokenSource ?? "api";
+    if (tokenSource !== "api" && Object.keys(variant.efforts ?? {}).length > 0) {
+      problems.push(
+        `${variant.label}: effort clauses need --token-source api; ` +
+          `${tokenSource} does not forward output_config.effort`,
+      );
+    }
+    for (const stage of SWEEPABLE_STAGES) {
+      const model = variant.models?.[stage]?.model ?? modelFor(stage).model;
+      let accepted: readonly Effort[];
+      try {
+        accepted = profileFor(model).efforts;
+      } catch {
+        problems.push(`${variant.label}: no request profile for ${model} (${stage})`);
+        continue;
+      }
+      const effort = variant.efforts?.[stage];
+      if (effort !== undefined && !accepted.includes(effort)) {
+        problems.push(
+          `${variant.label}: ${model} does not accept effort ${effort} (${stage}); ` +
+            (accepted.length === 0 ? "it takes no effort setting" : `supported: ${accepted.join(", ")}`),
+        );
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `sweep: refusing to start.\n  ${problems.join("\n  ")}\n` +
+        `Register the model in functions/src/llm/modelProfile.ts, or drop the effort clause.`,
+    );
+  }
+}
+
+/**
  * The prompt version each sweepable key actually resolves to right
  * now. `resolvePromptVersion` is the loader's own lookup — the
  * docstring there calls out this exact use — so the report cannot
@@ -342,6 +418,7 @@ export async function runVariant(
     }
   }
   setModelOverrides(variant.models ?? {});
+  setEffortOverrides(variant.efforts ?? {});
   // Variant overrides win on conflict; the command-wide ones survive
   // for keys the variant does not name.
   const effectivePromptVersions = {
@@ -369,6 +446,9 @@ export async function runVariant(
       {
         ...variant,
         models: effectiveModels(),
+        // Only the metered API sends `output_config.effort`; a CLI row
+        // records none rather than a profile default it never sent.
+        efforts: (variant.tokenSource ?? "api") === "api" ? effectiveEfforts() : {},
         promptVersions: {
           ...effectivePromptVersions,
           ...resolvedPromptVersions(),
@@ -378,6 +458,7 @@ export async function runVariant(
     );
   } finally {
     clearModelOverrides();
+    clearEffortOverrides();
     clearPromptVersionOverrides();
   }
 }
@@ -406,6 +487,7 @@ export function rollUpVariant(
     tokenSource: variant.tokenSource ?? "api",
     models: variant.models ?? {},
     promptVersions: variant.promptVersions ?? {},
+    efforts: variant.efforts ?? {},
     extractionAccuracy: flows === 0 ? null : ext.reduce((a, b) => a + b, 0) / flows,
     matchAccuracy: flows === 0 ? null : mat.reduce((a, b) => a + b, 0) / flows,
     modeledCostUsd,
@@ -561,7 +643,10 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
   for (const r of sorted) {
     const models =
       Object.entries(r.models)
-        .map(([stage, cfg]) => `${stage}=${cfg?.model ?? "?"}`)
+        .map(([stage, cfg]) => {
+          const effort = r.efforts[stage as Stage];
+          return `${stage}=${cfg?.model ?? "?"}${effort !== undefined ? ` (effort ${effort})` : ""}`;
+        })
         .join("<br>") || "(defaults)";
     const prompts =
       Object.entries(r.promptVersions)
@@ -675,6 +760,7 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
   const body = spec.slice(sep + 1);
   const models: Partial<Record<Stage, ModelConfig>> = {};
   const promptVersions: Record<string, string> = {};
+  const efforts: Partial<Record<Stage, Effort>> = {};
 
   for (const clause of body.split(",")) {
     const eq = clause.indexOf("=");
@@ -772,14 +858,42 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
         );
       }
       promptVersions[promptKey] = value;
+    } else if (key.startsWith("effort.")) {
+      // Same silent-mislabel guards as `model.`: a typo'd or unexercised
+      // stage would appear in the table while changing nothing.
+      const stageRaw = key.slice("effort.".length);
+      if (!isStage(stageRaw)) {
+        throw new Error(
+          `--variant: unknown stage ${JSON.stringify(stageRaw)} in ${JSON.stringify(key)}. ` +
+            `Valid stages: ${STAGES.join(", ")}.`,
+        );
+      }
+      if (!SWEEPABLE_STAGES.includes(stageRaw)) {
+        throw new Error(
+          `--variant: stage ${JSON.stringify(stageRaw)} is not exercised by the eval ` +
+            `corpus. Sweepable stages: ${SWEEPABLE_STAGES.join(", ")}.`,
+        );
+      }
+      if (!isEffort(value)) {
+        throw new Error(
+          `--variant: effort must be one of ${EFFORTS.join(", ")} (got ${JSON.stringify(value)}).`,
+        );
+      }
+      efforts[stageRaw] = value;
     } else {
       throw new Error(
-        `--variant key must start with 'model.' or 'prompt.' (got ${JSON.stringify(key)})`,
+        `--variant key must start with 'model.', 'prompt.' or 'effort.' (got ${JSON.stringify(key)})`,
       );
     }
   }
 
-  return { label, models, promptVersions, tokenSource };
+  return {
+    label,
+    models,
+    promptVersions,
+    ...(Object.keys(efforts).length > 0 && { efforts }),
+    tokenSource,
+  };
 }
 
 /** Collect every `--variant` / `--variant=` occurrence from argv. */
@@ -828,6 +942,7 @@ export async function runSweep(
   options: RunVariantOptions = {},
 ): Promise<{ results: readonly VariantResult[]; report: string }> {
   assertModelsPriced(variants);
+  assertVariantsCallable(variants);
   assertPromptsExist(variants, options.basePromptVersions ?? {});
   assertPromptSchemasCompatible(variants, options.basePromptVersions ?? {});
   const results: VariantResult[] = [];

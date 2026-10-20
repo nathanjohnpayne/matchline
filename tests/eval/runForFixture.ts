@@ -28,7 +28,7 @@ import { createHash } from "node:crypto";
 
 import { extractFromResume } from "../../functions/src/extraction/resume.ts";
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
-import { EMBEDDING_MODEL, modelFor } from "../../functions/src/llm/config.ts";
+import { EMBEDDING_MODEL, effortFor, modelFor, type Stage } from "../../functions/src/llm/config.ts";
 import {
   priceUsage,
   type UsageRecord,
@@ -444,7 +444,7 @@ async function runForFixtureInner(
   const extractedUnits = await runStage(
     tally,
     cache,
-    cacheDiscriminators,
+    withEffort(cacheDiscriminators, "extraction"),
     {
       stage: "extraction",
       provider: extractionModel.provider,
@@ -515,7 +515,7 @@ async function runForFixtureInner(
   const parsedRequirements = await runStage(
     tally,
     cache,
-    cacheDiscriminators,
+    withEffort(cacheDiscriminators, "requirement_parsing"),
     {
       stage: "requirement_parsing",
       provider: parsingModel.provider,
@@ -615,4 +615,18 @@ async function runForFixtureInner(
     ok: true,
     error: null,
   };
+}
+
+/**
+ * A stage's cache discriminators plus its effort override, when one is
+ * set (#495). An effort changes the output, so it must be part of the
+ * key; leaving it out when unset keeps every pre-existing cache entry
+ * valid.
+ */
+export function withEffort(
+  base: Readonly<Record<string, string | number>> | undefined,
+  stage: Stage,
+): Readonly<Record<string, string | number>> | undefined {
+  const effort = effortFor(stage);
+  return effort === undefined ? base : { ...base, effort };
 }

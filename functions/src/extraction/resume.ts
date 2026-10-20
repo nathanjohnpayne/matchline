@@ -25,7 +25,8 @@ import { randomUUID, createHash } from "node:crypto";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
-import { modelFor } from "../llm/config.js";
+import { effortFor, modelFor } from "../llm/config.js";
+import { toolCallRequest } from "../llm/modelProfile.js";
 import {
   anthropicUsageFields,
   promptVersionLabel,
@@ -34,6 +35,7 @@ import {
 } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { logger } from "firebase-functions";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   ExtractionResponseV1Schema,
@@ -132,6 +134,14 @@ export async function extractFromResume(
   }
 
   const toolSchema = zodToToolSchema(ExtractionResponseV1Schema);
+  // Model-specific request shape: tool choice, output budget, effort and
+  // timeout (#495). Unchanged for the current pins; see llm/modelProfile.ts.
+  const request = toolCallRequest({
+    model,
+    toolName: TOOL_NAME,
+    baseMaxTokens: MAX_OUTPUT_TOKENS,
+    effort: effortFor("extraction"),
+  });
 
   const failures: ExtractionAttemptFailure[] = [];
 
@@ -151,7 +161,7 @@ export async function extractFromResume(
     }
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
-    const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
+    const systemWithReminder = prompt.system + request.systemSuffix + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = `${prompt.userFewShot}\n\nResume to extract:\n\n${text}`;
 
     let response: Anthropic.Messages.Message;
@@ -161,7 +171,7 @@ export async function extractFromResume(
       // includes Stream<RawMessageStreamEvent>).
       response = await client.messages.create({
         model,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: request.max_tokens,
         system: systemWithReminder,
         tools: [
           {
@@ -172,10 +182,11 @@ export async function extractFromResume(
             input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
           },
         ],
-        tool_choice: { type: "tool", name: TOOL_NAME },
+        tool_choice: request.tool_choice,
+        ...(request.output_config !== undefined && { output_config: request.output_config }),
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, request.requestOptions);
     } catch (err) {
       failures.push({
         attempt,
@@ -215,7 +226,8 @@ export async function extractFromResume(
         ...anthropicUsageFields(response),
         promptVersion: promptVersionLabel(prompt),
         attempt,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: request.max_tokens,
+        ...(request.effort !== undefined && { effort: request.effort }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
       }),
@@ -230,13 +242,27 @@ export async function extractFromResume(
     // schema error. Retries can't fix the truncation — bumping
     // MAX_OUTPUT_TOKENS is the only fix — but we still record all
     // 3 attempts so the cost accounting is honest.
+    // A safety classifier declined the request (5.5 models report
+    // `stop_reason: "refusal"`). Resending the same input declines the
+    // same way, so stop here instead of spending the retry budget.
+    if (response.stop_reason === "refusal") {
+      failures.push({
+        attempt,
+        kind: "refusal",
+        message:
+          `Anthropic declined the request (stop_reason: "refusal"` +
+          `${response.stop_details?.category ? `, category: ${response.stop_details.category}` : ""}).`,
+      });
+      break;
+    }
+
     if (response.stop_reason === "max_tokens") {
       failures.push({
         attempt,
         kind: "max_tokens_exceeded",
         message:
           `Anthropic returned stop_reason: "max_tokens" — the model hit the ` +
-          `${MAX_OUTPUT_TOKENS}-token output budget mid-tool-call and the ` +
+          `${request.max_tokens}-token output budget mid-tool-call and the ` +
           `tool_use.input was truncated. Retries cannot recover; raise ` +
           `MAX_OUTPUT_TOKENS in extraction/resume.ts.`,
       });
@@ -277,9 +303,19 @@ export async function extractFromResume(
   // Not a retry-budget exhaustion when we stopped because the
   // caller disconnected — logging it as one would misattribute
   // a deliberate stop as a failure (#436).
-  if (!abortedBeforeAttempt) logRetryExhaustion("extraction.resume", model, failures);
+  // A refusal stops after one attempt, so it is neither a retry-budget
+  // exhaustion nor "Extraction failed after 3 attempts" (CodeRabbit on #579). Log it
+  // as what it is, without request content, and say so to the caller.
+  const refusal = failures.at(-1)?.kind === "refusal" ? failures.at(-1) : undefined;
+  if (refusal) {
+    logger.warn("extraction.resume: model declined the request", { model, detail: refusal.message });
+  } else if (!abortedBeforeAttempt) {
+    logRetryExhaustion("extraction.resume", model, failures);
+  }
   throw new ExtractionError(
-    `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
+    refusal
+      ? `Extraction was declined by the model (stop_reason: "refusal"). See .failures for detail.`
+      : `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
 }

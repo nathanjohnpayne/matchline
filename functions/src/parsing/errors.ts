@@ -8,6 +8,8 @@ export interface JdParsingAttemptFailure {
   readonly attempt: number;
   readonly kind:
     | "no_tool_use"
+    /** A safety classifier declined the request (`stop_reason: "refusal"`); not retried. */
+    | "refusal"
     | "schema_error"
     | "transport_error"
     /**

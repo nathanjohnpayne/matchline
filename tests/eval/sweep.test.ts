@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearEffortOverrides,
   clearModelOverrides,
   getModelOverrides,
   modelFor,
@@ -31,6 +32,7 @@ import type { RunForFixtureResult } from "./runForFixture.ts";
 import {
   assertModelsPriced,
   assertPromptSchemasCompatible,
+  assertVariantsCallable,
   assertPromptsExist,
   formatSweepReport,
   paretoFrontier,
@@ -46,6 +48,7 @@ import {
 
 afterEach(() => {
   clearModelOverrides();
+  clearEffortOverrides();
   clearPromptVersionOverrides();
   vi.restoreAllMocks();
 });
@@ -78,6 +81,7 @@ function variantResult(overrides: Partial<VariantResult> = {}): VariantResult {
     tokenSource: "api",
     models: {},
     promptVersions: {},
+    efforts: {},
     extractionAccuracy: 0.5,
     matchAccuracy: 0.5,
     modeledCostUsd: 1,
@@ -925,5 +929,95 @@ describe("formatSweepReport", () => {
     expect(row(full, "full")).toContain("| 100 |");
     // The whole point: the two rows must be distinguishable.
     expect(row(smoke, "smoke")).not.toBe(row(full, "full"));
+  });
+});
+
+describe("effort variants (#495)", () => {
+  it("parses effort.<stage>=<level> alongside a model", () => {
+    const v = parseVariantFlag(
+      "s55-low:model.extraction=claude-sonnet-5-5,effort.extraction=low",
+      "api",
+    );
+    expect(v.efforts).toEqual({ extraction: "low" });
+    expect(v.models?.extraction?.model).toBe("claude-sonnet-5-5");
+  });
+
+  it("omits efforts when the variant names none", () => {
+    expect(parseVariantFlag("plain:model.extraction=claude-haiku-5-5", "api").efforts).toBeUndefined();
+  });
+
+  it("rejects an unknown level, a typo'd stage and an unexercised stage", () => {
+    expect(() => parseVariantFlag("x:effort.extraction=extreme", "api")).toThrow(/effort must be one of/);
+    expect(() => parseVariantFlag("x:effort.extracton=low", "api")).toThrow(/unknown stage/);
+    expect(() => parseVariantFlag("x:effort.generation=low", "api")).toThrow(/not exercised/);
+  });
+
+  it("refuses, before any spend, an effort the stage's model does not accept", () => {
+    // Extraction defaults to Sonnet 4.6, which takes no effort setting.
+    const v = parseVariantFlag("x:effort.extraction=low", "api");
+    expect(() => assertVariantsCallable([v])).toThrow(/does not accept effort low \(extraction\)/);
+  });
+
+  it("refuses a model with no request profile", () => {
+    const v: SweepVariant = {
+      label: "x",
+      models: { extraction: { provider: "anthropic", model: "claude-unprofiled" } },
+    };
+    expect(() => assertVariantsCallable([v])).toThrow(/no request profile for claude-unprofiled/);
+  });
+
+  it("refuses an effort clause on a subscription-CLI token source (Codex P1, #579)", () => {
+    const v = parseVariantFlag(
+      "cli-low:model.extraction=claude-sonnet-5-5,effort.extraction=low",
+      "claude-cli",
+    );
+    expect(() => assertVariantsCallable([v])).toThrow(/effort clauses need --token-source api/);
+  });
+
+  it("records no effort for a CLI row, since the CLI never sends one", async () => {
+    const result = await runVariant(
+      parseVariantFlag("cli:model.extraction=claude-sonnet-5-5", "claude-cli"),
+      { runCorpus: async () => [fixtureResult()] },
+    );
+    expect(result.efforts).toEqual({});
+  });
+
+  it("accepts a 5.5 model with an effort", () => {
+    const v = parseVariantFlag("ok:model.extraction=claude-opus-5-5,effort.extraction=high", "api");
+    expect(() => assertVariantsCallable([v])).not.toThrow();
+  });
+
+  it("records the effort a variant sent and shows it in the report", () => {
+    const rolled = rollUpVariant(
+      { label: "v", efforts: { extraction: "low" } },
+      [fixtureResult()],
+    );
+    expect(rolled.efforts).toEqual({ extraction: "low" });
+    const out = formatSweepReport([
+      variantResult({
+        label: "v",
+        models: { extraction: { provider: "anthropic", model: "claude-sonnet-5-5" } },
+        efforts: { extraction: "low" },
+      }),
+    ]);
+    expect(out).toContain("extraction=claude-sonnet-5-5 (effort low)");
+  });
+
+  it("runVariant installs the effort for the run and clears it afterwards", async () => {
+    const { effortFor } = await import("../../functions/src/llm/config.ts");
+    let seen: string | undefined;
+    const result = await runVariant(
+      parseVariantFlag("v:model.extraction=claude-sonnet-5-5,effort.extraction=low", "api"),
+      {
+        runCorpus: async () => {
+          seen = effortFor("extraction");
+          return [fixtureResult()];
+        },
+      },
+    );
+    expect(seen).toBe("low");
+    expect(effortFor("extraction")).toBeUndefined();
+    // The report records what was sent, defaults included.
+    expect(result.efforts.extraction).toBe("low");
   });
 });

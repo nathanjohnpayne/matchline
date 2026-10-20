@@ -85,6 +85,9 @@ export interface UsageRecord extends TokenCounts {
   /** `max_tokens` the request was sent with. */
   readonly maxTokens?: number;
 
+  /** `output_config.effort` the request was sent with, when any. */
+  readonly effort?: string;
+
   /** Eval-harness run that made the call, when there is one. */
   readonly runId?: string;
 
