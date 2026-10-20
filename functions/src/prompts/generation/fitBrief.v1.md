@@ -36,16 +36,16 @@ Job description:
 "Senior Product Manager, Payments Platform. Own the roadmap for the internal payments platform used by twelve product teams. Requirements: 6+ years of product management; experience with platform products other teams build on; PCI or financial-compliance experience; strong written communication."
 
 Résumé:
-"Jordan Lee — Product Manager, 2019–2025, Brightcart
+"Jordan Lee — Product Manager, 2021–2025, Brightcart
 - Owned the checkout API used by four storefront teams; cut integration time from six weeks to two.
 - Led the migration of card storage to a tokenization vendor ahead of a PCI DSS audit.
-Associate Product Manager, 2017–2019, Brightcart
+Associate Product Manager, 2019–2021, Brightcart
 - Shipped the returns flow for the mobile app."
 
 Example output (tool call):
 
 {
-  "bottom_line": "This is a strong platform fit with one hard question. Your checkout API work is the job described from the other side, and the PCI migration answers the compliance clause directly. The six-year minimum is the risk: your titled PM years are 2019–2025, so lead with the platform scope, not the tenure.",
+  "bottom_line": "This is a strong platform fit with one hard question. Your checkout API work is the job described from the other side, and the PCI migration answers the compliance clause directly. The six-year minimum is the risk: your titled PM years are 2021–2025, four years, so lead with the platform scope, not the tenure.",
   "strengths": [
     {
       "jd_clause": "experience with platform products other teams build on",
@@ -61,7 +61,7 @@ Example output (tool call):
   "exposures": [
     {
       "jd_clause": "6+ years of product management",
-      "gap": "Titled PM experience runs 2019–2025; the APM years before that may not count.",
+      "gap": "Titled PM experience runs 2021–2025, four years; the APM years before that may not count toward six.",
       "handling": "Don't restate titles. Let the platform scope carry the case, and ask a referrer to speak to level."
     },
     {

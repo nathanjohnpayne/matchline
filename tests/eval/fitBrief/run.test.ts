@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -194,6 +194,13 @@ describe("runFitBriefEval", () => {
       const files = readdirSync(out);
       expect(files.length).toBe(2);
       for (const f of files) expect(statSync(join(out, f)).mode & 0o077).toBe(0);
+
+      // A file left from an earlier run with looser permissions is tightened (Codex P2, #581).
+      const reused = join(out, files[0]!);
+      writeFileSync(reused, "old");
+      chmodSync(reused, 0o644);
+      await runFitBriefEval(CORPUS, { ...OPTIONS, outDir: out }, noWriter);
+      expect(statSync(reused).mode & 0o077).toBe(0);
     } finally {
       rmSync(out, { recursive: true, force: true });
     }

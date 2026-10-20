@@ -24,7 +24,7 @@
  * --out, which must be outside this repository.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -166,7 +166,14 @@ export async function runFitBriefEval(
   deps: FitBriefEvalDeps,
 ): Promise<FitBriefEvalOutcome> {
   // Owner-only: these files hold the private corpus's briefs and quotes.
-  const writeFile = deps.writeFile ?? ((p: string, d: string) => writeFileSync(p, d, { mode: 0o600 }));
+  // `mode` applies only when a file is created, so a file reused from an
+  // earlier run is chmod-ed too (Codex P2, #581).
+  const writeFile =
+    deps.writeFile ??
+    ((p: string, d: string) => {
+      writeFileSync(p, d, { mode: 0o600 });
+      chmodSync(p, 0o600);
+    });
   let spentUsd = 0;
   const record = async (usage: UsageRecord): Promise<number> => {
     try {
@@ -451,7 +458,10 @@ async function main(): Promise<number> {
       ).map(unitEvidenceLine),
   });
   console.log(outcome.report);
-  return outcome.incomplete ? 1 : 0;
+  // Nonzero when the run stopped early or any sample could not be
+  // evaluated (an invalid key, a judge failing every request), so
+  // automation never reads failures as a pass (Codex P2, #581).
+  return outcome.incomplete || outcome.rows.some((r) => r.score === null) ? 1 : 0;
 }
 
 const isScriptEntry = process.argv[1] === fileURLToPath(import.meta.url);
