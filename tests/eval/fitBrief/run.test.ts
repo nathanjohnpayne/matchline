@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -302,6 +302,21 @@ describe("writePrivateFile", () => {
       expect(lstatSync(out).isSymbolicLink()).toBe(false);
       expect(readFileSync(out, "utf8")).toBe("private");
       expect(statSync(out).mode & 0o077).toBe(0);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("writePrivateFile cleanup", () => {
+  it("removes the temp file when the rename fails (CodeRabbit, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-wpf-"));
+    try {
+      // A directory at the destination makes the rename fail.
+      const dest = join(dir, "001-a-s0.json");
+      mkdirSync(join(dest, "inner"), { recursive: true });
+      expect(() => writePrivateFile(dest, "private")).toThrow();
       expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

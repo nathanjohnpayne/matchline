@@ -111,15 +111,26 @@ export class BudgetReachedError extends Error {
 export function writePrivateFile(path: string, data: string): void {
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
+  let renamed = false;
   try {
-    writeSync(fd, data);
-  } catch (err) {
-    closeSync(fd);
-    unlinkSync(tmp);
-    throw err;
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+    renamed = true;
+  } finally {
+    // A failed write, close or rename must not leave the private brief
+    // behind in a temp file (CodeRabbit on #581).
+    if (!renamed) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // Already gone; nothing to clean up.
+      }
+    }
   }
-  closeSync(fd);
-  renameSync(tmp, path);
 }
 
 /** Wrap a client so every `messages.create` checks the budget first. */
