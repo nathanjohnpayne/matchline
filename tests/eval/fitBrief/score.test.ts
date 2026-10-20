@@ -48,21 +48,51 @@ describe("normalizeForMatch / checkEvidence", () => {
   });
 
   it("accepts a units-mode date annotation only when it is the Unit's real one (Codex P2, #581)", () => {
+    const resume = "### Acme — PM\n**Acme · 2021–Present**\n- Owned the checkout API.";
     const units = "- Owned the checkout API. [2021-03–present]";
     const quote = "Owned the checkout API. [2021-03–present]";
-    expect(
-      checkEvidence(brief([quote]), ["- Owned the checkout API."], { annotatedEvidence: units }).unsupported,
-    ).toEqual([]);
+    expect(checkEvidence(brief([quote]), [resume], { annotatedEvidence: units }).unsupported).toEqual([]);
     // An altered or invented date range fails, even with real text before it.
     expect(
-      checkEvidence(brief(["Owned the checkout API. [2018-01–present]"]), ["- Owned the checkout API."], {
-        annotatedEvidence: units,
-      }).unsupported,
+      checkEvidence(brief(["Owned the checkout API. [2018-01–present]"]), [resume], { annotatedEvidence: units })
+        .unsupported,
     ).toHaveLength(1);
     // Outside units mode there are no annotations to accept.
-    expect(checkEvidence(brief([quote]), ["- Owned the checkout API."]).unsupported).toHaveLength(1);
+    expect(checkEvidence(brief([quote]), [resume]).unsupported).toHaveLength(1);
     // Real text is never stripped.
     expect(checkEvidence(brief(["Owned the [new] API."]), ["Owned the API."]).unsupported).toHaveLength(1);
+  });
+
+  it("grounds an annotation in the résumé section the quote comes from, not in the extraction (Codex P1, #581)", () => {
+    const resume = [
+      "## Experience",
+      "### Acme — PM",
+      "**Acme · Mar 2021 – Jan 2024**",
+      "- Owned the checkout API.",
+      "### Beta — APM",
+      "**Beta · 2016 to 2018**",
+      "- Led the PCI migration.",
+    ].join("\n");
+    const check = (quote: string, units: string) =>
+      checkEvidence(brief([quote]), [resume], { annotatedEvidence: units }).unsupported;
+    // The extraction's dates match the role's own date line.
+    expect(check("Owned the checkout API. [2021-03–2024-01]", "- Owned the checkout API. [2021-03–2024-01]")).toEqual([]);
+    expect(check("Led the PCI migration. [2016–2018]", "- Led the PCI migration. [2016–2018]")).toEqual([]);
+    // A misassigned range (another role's dates) fails even though the extraction says so.
+    expect(check("Owned the checkout API. [2016-01–2018-01]", "- Owned the checkout API. [2016-01–2018-01]")).toHaveLength(1);
+    // A hallucinated range that appears nowhere fails.
+    expect(check("Led the PCI migration. [2015–2019]", "- Led the PCI migration. [2015–2019]")).toHaveLength(1);
+    // "present" needs the résumé to say so.
+    expect(check("Owned the checkout API. [2021-03–present]", "- Owned the checkout API. [2021-03–present]")).toHaveLength(1);
+  });
+
+  it("covers a role's bullets with a date line under its enclosing company heading", () => {
+    const resume = "### Acme\n**2019–2025**\n#### Senior PM\n- Owned the checkout API.\n### Beta\n- Led the PCI migration.";
+    const check = (quote: string) =>
+      checkEvidence(brief([quote]), [resume], { annotatedEvidence: `- ${quote}` }).unsupported;
+    expect(check("Owned the checkout API. [2019–2025]")).toEqual([]);
+    // A sibling heading's dates do not leak into Beta.
+    expect(check("Led the PCI migration. [2019–2025]")).toHaveLength(1);
   });
 
   it("strips single-character emphasis but leaves underscores inside words alone (Codex P2, #581)", () => {

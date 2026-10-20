@@ -202,7 +202,7 @@ npm run eval:fit-brief -- --model claude-opus-5-5 --evidence units --split test 
 
 Each brief is scored on:
 
-- **Evidence gate (deterministic).** Every evidence quote must appear in the résumé or inventory. Formatting and case are ignored; wording is not.
+- **Evidence gate (deterministic).** Every evidence quote must appear within a single bullet, heading or line of the résumé or inventory, so adjacent claims cannot be stitched into one quote. Formatting and case are ignored; wording is not. In units mode a quote may end with its Unit's date annotation, which passes only when the same heading section of the résumé states that year range.
 - **Claim gate (model-graded).** The judge (default `claude-opus-5-5`, effort `high`) lists statements about the candidate that the sources don't support, and claim-rule violations. A brief passes the gates only with none of these and no unsupported evidence.
 - **Coverage (model-graded).** Recall: the reference's strengths and exposures that the brief covers, with half credit for partial coverage. Precision: the brief's points that match the reference.
 - **Verdict agreement** with the reference.
