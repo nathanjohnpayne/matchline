@@ -15,11 +15,13 @@
   shrunken desktop. Frames are scaled with transform (the zoom control at the top
   changes the scale); the layout inside is computed at the real width.
 
-  Sources: the PRD's v0.2 "job-search dossier" revision (Oct 2026), which lives
-  in the owner's private docs repository and is NOT in this tree -- the mirror at
-  docs/projects/matchline/prds/matchline.md is still v0.1; src/routes/** (shipped
-  behaviour), BRAND.md, docs/design/ui-guidance.md, specs/matchline.md. Sample
-  data is invented.
+  Sources: specs/matchline.md (the repository's authoritative product spec),
+  src/routes/** (shipped behaviour), BRAND.md, docs/design/ui-guidance.md, and
+  -- for the frames chipped "PRD v0.2" only -- the PRD's draft "job-search
+  dossier" revision (Oct 2026), which lives in the owner's private docs
+  repository and is NOT in this tree; the mirror at
+  docs/projects/matchline/prds/matchline.md is still v0.1. PRD v0.2 frames are
+  proposals, not specification claims. Sample data is invented.
 -->
 <style>
   /* ---------- page chrome (document, not app UI) ---------- */
@@ -430,7 +432,7 @@
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
 <p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844) canvas — drawn as a macOS window, an iPad and an iPhone respectively, with the device chrome outside the canvas so the container width stays exact; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
-<p class="sub">Sources, in the order they win: the PRD's <b>v0.2 "job-search dossier" revision</b> (October 2026; where it conflicts with the V1 interface section, the revision wins — it lives in the owner's private docs repository and is not in this tree; the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1, so a <code>PRD v0.2</code> chip cannot be checked against a file here), what is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
+<p class="sub">Sources: <code>specs/matchline.md</code> remains the repository's authoritative product spec, and every frame chipped <b>shipped</b> is checked against it and the routes. Frames chipped <b>PRD v0.2</b> draw the PRD's draft <b>"job-search dossier" revision</b> (October 2026) as <i>proposals</i>: that draft lives in the owner's private docs repository and is not in this tree — the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1 — so nothing here treats it as a winning source; a PRD v0.2 frame becomes a specification claim only once the revision is mirrored and the spec updated. What is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
 <br>· <b>Chips above a frame</b> name the width and whether the frame is <span class="fchip shipped" style="vertical-align:middle">shipped</span> (matches the built route), <span class="fchip prd" style="vertical-align:middle">PRD v0.2</span> (proposed, not yet built) or a <span class="fchip state" style="vertical-align:middle">state</span> (empty / loading / error / validation variant of a screen).
@@ -539,6 +541,27 @@ const UNITS = [
   { s: 'Negotiated multi-vendor CDN contracts across three providers.', ut: 'technical_decision', sk: ['Vendor management'], tl: [], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
 ];
 const UNIT_STATE = { ok: ['Approved', 'ink'], pend: ['Pending', ''], flag: ['Flagged', 'amb'] };
+// eighteen more approved Units, so the ready list carries the 20 the counter reports plus 1 flagged and 2 pending
+const MORE_APPROVED = [
+  ['Negotiated multi-vendor CDN contracts across three providers.', 'technical_decision', 'resume · Cobalt Devices', 79],
+  ['Defined the device-partner certification scorecard adopted by 40+ OEMs.', 'ownership', 'resume · Beacon Streaming', 90],
+  ['Cut playback error rate 45% by leading the ABR ladder redesign.', 'achievement', 'resume · Beacon Streaming', 87],
+  ['Launched the tvOS and Roku apps within one quarter of the web player rewrite.', 'project', 'resume · Beacon Streaming', 85],
+  ['Owned the partner API roadmap used by six OEM integrations.', 'ownership', 'long_form · 2023 retro', 83],
+  ['Built the on-call runbook that halved incident response time.', 'achievement', 'manual', 78],
+  ['Migrated off a legacy CDN contract without a playback regression.', 'project', 'resume · Cobalt Devices', 82],
+  ['Ran the quarterly roadmap review with engineering, design and support leads.', 'leadership', 'long_form · 2023 retro', 76],
+  ['Shipped closed captions and audio description across all playback surfaces.', 'project', 'resume · Beacon Streaming', 89],
+  ['Introduced playback QoE dashboards used by three product teams.', 'achievement', 'resume · Beacon Streaming', 84],
+  ['Led the vendor selection for a DRM provider across two platforms.', 'technical_decision', 'resume · Beacon Streaming', 80],
+  ['Defined the partner onboarding checklist that cut integration time 30%.', 'ownership', 'manual', 77],
+  ['Coordinated the set-top launch with five hardware partners.', 'project', 'resume · Cobalt Devices', 81],
+  ['Owned the playback section of the company engineering roadmap.', 'ownership', 'resume · Beacon Streaming', 86],
+  ['Mentored two associate PMs who now own playback features.', 'leadership', 'long_form · 2024 retro', 74],
+  ['Wrote the device-certification RFC adopted as the partner standard.', 'technical_decision', 'resume · Beacon Streaming', 88],
+  ['Reduced startup buffering on living-room devices by 22%.', 'achievement', 'resume · Beacon Streaming', 85],
+  ['Launched a partner developer portal with API docs and sample apps.', 'project', 'manual', 79],
+].map(([s, ut, src, c]) => ({ s, ut, src, c, sk: [], tl: [], st: 'ok' }));
 // the nine approved Units that ground the sample Application (UnitsPane renders every one)
 const SRC_UNITS = [UNITS[0].s, UNITS[1].s, 'Negotiated multi-vendor CDN contracts across three providers.', 'Defined the device-partner certification scorecard adopted by 40+ OEMs.', 'Cut playback error rate 45% by leading the ABR ladder redesign.', 'Launched the tvOS and Roku apps within one quarter of the web player rewrite.', 'Owned the partner API roadmap used by six OEM integrations.', 'Built the on-call runbook that halved incident response time.', 'Migrated off a legacy CDN contract without a playback regression.'];
 const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
@@ -577,8 +600,8 @@ function signin(state) {
     <div class="card">
       ${btn('<b>G</b> Continue with Google' + an(1), 'block')}
       <div class="or">or</div>
-      <div class="field"><span class="lbl">Email</span><div class="in ${state === 'error' ? '' : 'ph'}">${state === 'error' ? 'sam@example.com' : 'you@example.com'}</div></div>
-      <div class="field"><span class="lbl">Password</span><div class="in ${state === 'error' ? '' : 'ph'}">${state === 'error' ? '••••••••' : 'password'}</div></div>
+      <div class="field"><span class="lbl">Email</span><div class="in">${state === 'error' ? 'sam@example.com' : ''}</div></div>
+      <div class="field"><span class="lbl">Password</span><div class="in">${state === 'error' ? '••••••••' : ''}</div></div>
       ${state === 'error' ? `<div class="alert">Email or password didn’t match. Try again.${an(4)}</div>` : ''}
       ${btn('Sign in' + an(2) + an(3), state === 'error' ? 'pri block' : 'pri block off')}
     </div>
@@ -615,7 +638,7 @@ function onboarding(state) {
 function unitReview(state, extra = {}) {
   const ready = state === 'ready' || state === 'empty';
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('27 approved — onboarding complete', 'ink') + an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
+    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('20 approved — onboarding complete', 'ink') + an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
   const pill = (t, on) => `<span class="pill ${on ? 'on' : ''}" style="${on ? 'background:#18181b;color:#fafafa' : 'background:transparent;border:1px solid var(--line)'}">${t}</span>`;
   const fpanel = (skills, tools, domains) => `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${state === 'ready' ? an(2) : ''}</div>
     <div class="frow"><span class="flbl">Skills</span>${skills.length ? skills.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No skills in the corpus yet.</span>'}</div>
@@ -640,7 +663,7 @@ function unitReview(state, extra = {}) {
     <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">high ${ic('chevron-down')}</span>${btn('Remove', 'ghost')}</div>
     <div class="btnrow" style="margin-top:4px">${btn(ic('plus') + ' Add metric', 'ghost')}</div>
     <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}</div></div>`;
-  const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}</div>`;
+  const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}${MORE_APPROVED.map((u, i) => unitRow(u, 10 + i, { bulk: true })).join('')}</div>`;
   const detail = `<div class="detail-pane card nb"><div class="rowhead"><b>Unit detail</b><span class="sp"></span>${btn(ic('x'), 'ghost')}</div>
     <div class="h3">Normalized summary</div><div>${UNITS[0].s}</div>
     <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (iOS/tvOS/web) — cut app startup time by 38% across 12M MAU.</div>
@@ -668,9 +691,9 @@ function canonical(state) {
     const body = `<div class="pagehead"><div><div class="ttl">Claim rules</div><div class="sub">Short, durable, in your own words. Every package is checked against them.</div></div>${btn(ic('plus') + ' Add rule', 'pri')}</div>
       <div class="card tight" style="margin-bottom:10px"><div class="rulegrid">
         <div><span class="lbl">Kind</span><div class="in">never_claim ${ic('chevron-down')}</div></div><div><span class="lbl">Statement</span><div class="in focus">Never quote the CDN savings figure; it was retired after the FY24 restatement.</div></div>
-        <div><span class="lbl">Applies to (optional)</span><div class="in ph">employer, project…</div></div>${btn('Save', 'pri')}</div>${an(1)}</div>
+        <div><span class="lbl">Applies to (optional)</span><div class="in ph">employer, project…</div></div>${btn('Save', 'pri')}</div>${an(6)}</div>
       <div class="list">${RULES.map(ruleRow).join('')}</div>
-      <div class="info" style="margin-top:10px">Kinds: <b>never claim</b> · <b>attribute only to</b> · <b>never imply shipped</b> · <b>retired figure</b> · <b>phrasing</b>. A rule applies to every fit brief, résumé view, cover letter, answer and prep brief; the fit brief lists what the package does not claim.${an(2)}</div>`;
+      <div class="info" style="margin-top:10px">Kinds: <b>never claim</b> · <b>attribute only to</b> · <b>never imply shipped</b> · <b>retired figure</b> · <b>phrasing</b>. A rule applies to every fit brief, résumé view, cover letter, answer and prep brief; the fit brief lists what the package does not claim.${an(7)}</div>`;
     return shell('evidence', body, { width: 'w5' });
   }
   let sec = '';
@@ -742,7 +765,11 @@ const matchCard = (u, vals, st, tip, na = [], why = '', evidence = '') => {
 };
 function roleShipped(state) {
   const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: 4d2c18a7-9b3e-4f52-8c1d-0a6e5b2f7d31</div>
-    <div class="tabs" role="tablist"><span class="${state === 'nojd' ? 'on' : ''}">Requirements</span><span class="${state === 'matches' ? 'on' : ''}">Matches</span><span>Applications</span></div>`;
+    <div class="tabs" role="tablist"><span class="${state === 'nojd' ? 'on' : ''}">Requirements</span><span class="${state === 'matches' ? 'on' : ''}">Matches</span><span class="${state === 'applications' ? 'on' : ''}">Applications</span></div>`;
+  if (state === 'applications') {
+    return shell('pipeline', head + `<div class="sm dim" style="margin-bottom:8px">Generate a resume from your approved matches under this Role.${an(5)}</div><div class="btnrow" style="margin-bottom:14px">${btn('Generate resume', 'pri')}</div>
+      <div class="list"><div class="lrow"><div class="grow"><div class="rowhead">${chip('applied', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-09T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
+  }
   if (state === 'nojd') {
     return shell('pipeline', head + `<div class="field"><span class="lbl">JD source <span class="dim">(paste JD text first)</span></span><div class="in ta ph" style="min-height:220px">Paste the full JD as plain text. Headers and bullet points are fine.</div></div>
       <div class="btnrow">${btn('Parse JD', 'pri off')}</div>
@@ -801,7 +828,7 @@ function roleDetail(state) {
       <div class="two"><div class="list section-lines">
         <div class="lrow secrow"><span class="eyebrow">headline · summary</span></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-001</span><div style="flex:1">Senior Product Manager — video platforms and developer tools</div></div>
-        <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Twelve years shipping playback and device-partner products for ad-supported and subscription services.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s two models</span>${an(5)}</div></div></div>
+        <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Twelve years shipping playback and device-partner products for subscription streaming services at consumer scale.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s platform scope</span>${an(5)}</div></div></div>
         <div class="lrow secrow"><span class="eyebrow">Beacon Streaming · 2019–2026</span></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</div></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
@@ -830,9 +857,9 @@ function roleDetail(state) {
   // correspondence
   const body = roleHeader() + roleTabs('Correspondence') + `<div class="two"><div>
     <div class="card" style="border-color:#c7cdf0;margin-bottom:12px"><div class="rowhead"><b>Drafts</b>${chip('1', 'acc')}</div>
-      <div class="task" style="align-items:flex-start"><div><div><b>Thank-you note to Dan K.</b> <span class="sm dim">drafted from the Oct 23 debrief</span></div><div class="verb" style="margin-top:6px">Dan — thanks for the time today. The certification backlog you described maps closely to what I ran at Beacon; happy to share the test-plan template I mentioned.</div>
+      <div class="task" style="align-items:flex-start"><div><div><b>Note to Morgan T.</b> <span class="sm dim">drafted from the Oct 14 recruiter-screen debrief</span></div><div class="verb" style="margin-top:6px">Morgan — quick update: the recruiter screen went well and the hiring-manager round with Dan K. is Thursday. Anything I should know about how Dan runs these?</div>
       <div class="btnrow" style="margin-top:6px">${btn(ic('copy') + ' Copy')}${btn(ic('send') + ' Mark sent', 'pri')}${btn(ic('x') + ' Discard', 'ghost')}<span class="sm dim">You send it; Matchline logs it verbatim.${an(3)}</span></div></div></div></div>
-    <div class="rowhead" style="margin-bottom:6px"><b>Log</b>${chip('5 messages', 'line')}<span class="sp"></span>${btn(ic('plus') + ' Log a message')}</div>
+    <div class="rowhead" style="margin-bottom:6px"><b>Log</b>${chip('4 messages', 'line')}<span class="sp"></span>${btn(ic('plus') + ' Log a message')}</div>
     <div class="list">
       <div class="lrow"><span class="rail">${ic('arrow-down-left')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>Priya N.</b><span class="dim">Oct 15 · received · “Next steps”</span></div><div class="verb" style="margin-top:4px">Great chatting yesterday! Dan would like to meet next week — I’ll send times. Comp is as posted ($190–240k) plus equity.</div></div></div>
       <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>to Priya N.</b><span class="dim">Oct 15 · sent</span>${an(4)}</div><div class="verb" style="margin-top:4px">Thanks Priya — Thursday or Friday afternoon both work. Looking forward to meeting Dan.</div></div></div>
@@ -916,7 +943,7 @@ function scan(state) {
   if (state === 'running') {
     return shell('scan', `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Run in progress · started 09:02</div></div>${btn(ic('x') + ' Cancel', 'ghost')}</div>
       <div class="card" style="margin:12px 0"><div class="rowhead sm"><b>Checking 14 boards</b><span class="dim num">9 done · 2 new roles so far</span></div><div class="bar" style="margin:6px 0"><i style="width:64%"></i></div>
-        <div class="step"><i class="done"></i>Northwind Media · 3 roles · 1 new</div><div class="step"><i class="done"></i>Lumen Labs · 0 roles</div><div class="step now"><i class="now"></i>Orbit Video · fetching</div><div class="step todo"><i></i>Quill Systems</div><div class="step todo"><i></i>… 4 more</div></div>
+        <div class="step"><i class="done"></i>Northwind Media · 3 roles · 1 new</div><div class="step"><i class="done"></i>Lumen Labs · 0 roles</div><div class="step now"><i class="now"></i>Orbit Video · fetching</div><div class="step todo"><i></i>Quill Systems</div><div class="step todo"><i></i>… 3 more</div></div>
       <div class="warn">Harbor Analytics’ board returned 403 twice. Last week’s roles stay open with a verification note.${an(6)}</div>
       <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Northwind Media', 'Senior Product Manager, Video Platform', true, '$190–240k', 'Playback, device certification', 'Ads-tech', false, 'dimmed')}</div>`);
   }
@@ -988,7 +1015,7 @@ const GROUPS = [
       '<b>Bulk selection (proposed)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with a / f / r shortcuts. Reject asks once because rejected Units leave matching.',
       '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
-        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: the action cluster moves under the one-line summary. The bulk bar sticks to the top of the scrolling list.' } },
+        { id: 'ready', label: '23 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'All 23 non-rejected Units (20 approved, 1 flagged, 2 pending) plus the proposed detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: the action cluster moves under the one-line summary. The bulk bar sticks to the top of the scrolling list.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'A genuinely empty snapshot is still a ready state: “+ Add Unit”, the “0 of 20 approved” counter and the Filters panel (“No skills in the corpus yet.”) render above EmptyState’s copy and its one action; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no Add Unit, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count or Add Unit beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
@@ -997,7 +1024,9 @@ const GROUPS = [
       '<b>Lines render as rows, grouped by section</b>, with the id in the gutter and the evidenced Units as chips. Drag handle reorders within a section; click to edit in place.',
       '<b>Editing a line that views use</b> says so before you save: the version bumps and those views are marked behind. Stale is a property, not a report.',
       '<b>Claim rules are always visible while editing</b> — the panel does not collapse on desktop or tablet; on the phone it becomes a sticky bottom button that opens a sheet.',
-      '<b>Tailored views list</b>: each view is a selection and order of canonical line ids pinned to a version, with tracked exceptions. Views behind the current version are listed first, in red, with a rebase action.'],
+      '<b>Tailored views list</b>: each view is a selection and order of canonical line ids pinned to a version, with tracked exceptions. Views behind the current version are listed first, in red, with a rebase action.',
+      '<b>Adding a rule (rules state)</b> is an inline form — kind, the statement in the user’s words, an optional applies-to — saved in place.',
+      '<b>Rule kinds</b>: never claim · attribute only to · never imply shipped · retired figure · phrasing. Every artifact is checked against them and the fit brief lists what the package does not claim.'],
       states: [
         { id: 'editor', label: 'editing L-010', kind: 'prd', cap: { desk: 'Editor left, claim rules and tailored views right. The tabs (Units · Canonical résumé · Claim rules) are the Evidence section’s sub-navigation.', tab: 'Rules and views move under the editor at full width; still always on the page.', ph: 'Editor is the screen; rules and views are a sticky two-button bar at the bottom that opens a sheet.' } },
         { id: 'rules', label: 'claim rules · adding one', kind: 'prd', cap: { desk: 'The full list with an inline add form (kind, statement, applies-to). Short, user-written, no prose.', tab: 'Add form wraps to two rows.', ph: 'Add form stacks; rows wrap the kind chip under the statement.' } }] }] },
@@ -1023,16 +1052,18 @@ const GROUPS = [
         { id: 'reqs', label: 'Requirements & matches · split view', kind: 'prd', cap: { desk: 'ui-guidance § Role Detail’s split view: requirements left with gap and unverifiable chips inline, candidates for the selected requirement right. The shipped tab is the grouped list drawn under “Role detail — as shipped”.', tab: 'Split view stacks: requirements first, then candidates for the selected one.', ph: 'Score moves to the right edge of the first line; action buttons wrap under the evidence.' } },
         { id: 'package', label: 'Package · résumé view behind canonical', kind: 'prd', cap: { desk: 'Sub-navigation across the four artifacts; the résumé view is a selection of canonical lines with one tracked exception; validation and export to the right.', tab: 'Validation and export move under the lines.', ph: 'Sub-navigation scrolls; each line row wraps its chips. Export buttons stay reachable at the bottom.' } },
         { id: 'process', label: 'Process · rounds, scorecard, leveling', kind: 'prd', cap: { desk: 'Rounds as rows with prep / debrief / signal chips; scorecard table; org map and leveling brief at right.', tab: 'Org map and leveling drop under the scorecard.', ph: 'Scorecard hides its two prose columns and keeps round + signal; rows wrap.' } },
-        { id: 'correspondence', label: 'Correspondence · verbatim log + one draft', kind: 'prd', cap: { desk: 'Drafts on top in the accent border; the log below in order with direction, person, date and the verbatim body; “on the record” summary right.', tab: 'On-the-record card drops under the log.', ph: 'Verbatim blocks wrap; collapsed entries stay collapsed; the draft’s buttons wrap to a second line.' } },
+        { id: 'correspondence', label: 'Correspondence · verbatim log + one draft', kind: 'prd', cap: { desk: 'A pre-interview draft on top in the accent border (the hiring-manager round is still ahead); the log below in order with direction, person, date and the verbatim body; “on the record” summary right.', tab: 'On-the-record card drops under the log.', ph: 'Verbatim blocks wrap; collapsed entries stay collapsed; the draft’s buttons wrap to a second line.' } },
         { id: 'nojd', label: 'saved without a JD', kind: 'prd', cap: { desk: 'The dossier header in the lead state (Saved, referral source); the default tab asks for the JD. The shipped no-JD state is the Requirements tab, drawn under “Role detail — as shipped”.', tab: 'Unchanged.', ph: 'Unchanged; the JD textarea is full width.' } }] },
     { id: 'rolev1', title: 'Role detail — as shipped', fn: roleShipped, legend: [
       '<b>Requirements tab without a JD</b> (<code>RequirementsTab.tsx</code>): the JD source editor with its placeholder, Parse JD disabled until text is pasted, and the state line “No JD yet. Paste it above to parse requirements.” Save JD appears once the draft is dirty; Re-parse asks for an inline confirmation when requirements already exist.',
       '<b>Gaps first</b> (<code>GapsView.tsx</code>): unmet must-haves in amber with the shipped explanation, then unverified must-haves (a match exists but its evidence could not be checked); each row carries the requirement’s category and priority. With no gaps the panel says “✓ Every must-have requirement has a qualifying match.”',
       '<b>Re-run matching</b> with its explanation sits above the list; while a run is in flight the status line reads “Computing matches…” and the control is disabled and relabelled “Re-running matching…” so runs cannot overlap.',
+      '<b>Applications tab</b> (<code>ApplicationsTab.tsx</code>): the generation line (“Generate a resume from your approved matches under this Role.”, or “Approve at least one match first.” with the button disabled), the Generate resume button, then existing Applications newest-activity first — stage badge, id, asset count, last activity, Open. With none: “No Applications yet. Click Generate resume to create the first.”',
       '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge (<code>MatchScoreBadge.tsx</code>: the 0–100 scale with one decimal; the seven-axis breakdown from <code>scoreBreakdown.ts</code> — Semantic 0.30, Skill 0.20, Domain 0.15, Tool 0.10, Seniority 0.10, Scope 0.10, Recency 0.05 — and the Unit confidence multiplier only in its hover / focus tooltip, shown on the first card, whose rows multiply to the badge’s number; an axis the engine did not evaluate reads “not evaluated” and its neutral placeholder contribution is disclosed separately), the “Why:” rationale, the “Evidence:” surface string, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
-        { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } }] }] },
+        { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } },
+        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The row wraps its Open button under the metadata.' } }] }] },
   { id: 'editor', title: 'Application editor — output and evidence', sub: 'Where generated output becomes something you send. Shipped (<code>src/routes/ApplicationEditor/</code>): two panes, <code>ClaimAnnotation</code> underlines with a popover, inline edit with autosave and undo, add / remove / reorder bullets, the export gate on the server attestation (#502), re-run validation. Drawn and marked not built: claim-rule hits as a third flag kind.', screens: [
     { id: 'editor', title: 'Application editor', fn: editor, legend: [
       '<b>Traced claim</b>: a 1 px low-opacity underline. Hovering it highlights its source Unit on the right; the hovered claim gets the accent wash.',
