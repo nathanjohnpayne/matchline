@@ -7,7 +7,7 @@ import { incompleteJudgement, judgeBrief, judgeRequestFingerprint, judgeUserCont
 
 const JUDGEMENT: JudgeResult = {
   reference_points: [{ kind: "strength", jd_clause: "c", point: "p", coverage: "partial" }],
-  generated_points: [{ kind: "exposure", point: "g", matches_reference: false }],
+  generated_points: [{ kind: "strength", point: "g", matches_reference: false }],
   unsupported_candidate_claims: [{ quote: "Ran a twelve-team platform.", reason: "not in sources" }],
   claim_rule_violations: [],
   reference_verdict: "hold",
@@ -81,7 +81,7 @@ describe("judgeBrief", () => {
     expect(judgeUserContent(INPUT)).toContain("GENERATED brief (JSON):");
   });
 
-  it("retries a judgement that lists no generated points for a brief that has some (Codex P2, #581)", async () => {
+  it("retries a judgement whose generated points do not match the brief one-to-one (Codex P2 ×2, #581)", async () => {
     const c = client(reply({ ...JUDGEMENT, generated_points: [] }), reply(JUDGEMENT));
     await expect(
       judgeBrief(INPUT, { client: c, model: "claude-opus-5-5", record: vi.fn<typeof RecordUsage>(async () => 0) }),
@@ -91,6 +91,15 @@ describe("judgeBrief", () => {
     expect(
       incompleteJudgement({ ...JUDGEMENT, generated_points: [] }, { ...INPUT.generated, strengths: [], verdict: "skip" }),
     ).toBeUndefined();
+    // A strict subset is caught, per kind: listing one of two strengths fails.
+    const two = { ...INPUT.generated, strengths: [...INPUT.generated.strengths, ...INPUT.generated.strengths] };
+    const one = { kind: "strength" as const, point: "g", matches_reference: true };
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [one] }, two)).toMatch(/1 generated strength point/);
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [one, one] }, two)).toBeUndefined();
+    // Points of the wrong kind do not stand in for missing ones.
+    expect(
+      incompleteJudgement({ ...JUDGEMENT, generated_points: [{ ...one, kind: "exposure" }] }, INPUT.generated),
+    ).toMatch(/0 generated strength point/);
   });
 
   it("retries a malformed judgement", async () => {
