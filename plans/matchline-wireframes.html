@@ -298,9 +298,9 @@
   .src .sm{display:block;margin-top:2px}
   .unitin{border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:var(--panel);font-size:11px;margin:0 0 6px}
   .unitin.new{border-color:#c7cdf0;background:var(--accbg)}
-  .banner{display:flex;gap:10px;align-items:center;padding:8px 14px;background:#18181b;color:#fafafa;font-size:12px}
-  .banner .btn{background:#fafafa;color:#18181b;border-color:#fafafa;padding:3px 9px;font-size:11px}
-  .banner .btn.ghost{background:transparent;color:#d4d4d8;border-color:#52525b}
+  .upd{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;border-top:1px solid var(--line);background:var(--panel);
+    padding:10px 16px;font-size:12px;color:var(--mut);box-shadow:0 -8px 24px rgba(0,0,0,.08);flex:0 0 auto}
+  .btn.amber{background:#92400e;color:#fff;border-color:#92400e}
   .modal{position:absolute;inset:0;background:rgba(24,24,27,.35);display:flex;align-items:center;justify-content:center;z-index:4;padding:20px}
   .modal .card{width:380px;max-width:100%}
   .auth .center{flex-direction:column;gap:18px}
@@ -555,7 +555,7 @@ function signin(state) {
       <div class="or">or</div>
       <div class="field"><span class="lbl">Email</span><div class="in ${state === 'error' ? '' : 'ph'}">${state === 'error' ? 'sam@example.com' : 'you@example.com'}</div></div>
       <div class="field"><span class="lbl">Password</span><div class="in ${state === 'error' ? 'focus' : 'ph'}">${state === 'error' ? '••••••••' : 'password'}</div></div>
-      ${btn('Sign in' + an(2), 'pri block')}
+      ${btn('Sign in' + an(2), state === 'error' ? 'pri block' : 'pri block off')}
     </div>
     <div class="dim sm" style="text-align:center;max-width:320px">Single-user install. There is no sign-up; access is the owner allowlist.${an(3)}</div>
   </div>${HOME}</div>`;
@@ -579,7 +579,7 @@ function onboarding(state) {
     <div class="in ta ${extracting ? 'mut' : ''}" style="min-height:${extracting ? 220 : 300}px">${err || extracting || state === 'ready' ? '# Sam Okafor\nSenior Product Manager — video platforms\n\n## Beacon Streaming · 2019–2026\n- Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.\n- Owned device certification for 40+ partner platforms…\n\n## Cobalt Devices · 2014–2019\n- Negotiated multi-vendor CDN contracts…' : '<span class="dim">Paste your résumé — Markdown renders (# headers, **bold**, - bullet lists). We’ll structure it.</span>'}</div>
     <div class="rowhead sm dim" style="margin-top:6px;justify-content:space-between"><span class="num">${extracting || err ? '4,812' : '0'} characters</span>${btn('Extract Units' + an(2), (extracting || state === 'idle') ? 'pri off' : 'pri')}</div>
   </div>`;
-  const units = `<div><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('7 so far', 'acc') : ''}${an(4)}</div>
+  const units = `<div class="nb"><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('7 so far', 'acc') : ''}${an(4)}</div>
     ${extracting ? UNITS.slice(0, 3).map((u, i) => `<div class="unitin ${i === 0 ? 'new' : ''}"><div class="clamp2">${u.s}</div><div class="meta">${u.sk.slice(0, 2).map(s => chip(s)).join('')}<span class="xs dim num">${u.c}%</span></div></div>`).join('') + `<div class="unitin dim">…more arriving</div>`
       : `<div class="empty">Units appear here in real time while extraction runs, then you review each one before it enters matching.</div>`}
   </div>`;
@@ -590,9 +590,9 @@ function onboarding(state) {
 
 function unitReview(state) {
   const filters = `<div class="filters">
-    ${chip('Approved 27', 'on')}${chip('Pending 11')}${chip('Flagged 3')}
-    <span class="adv">${chip('Skill: Video playback ' + ic('x'), 'acc')}${chip('Tool ' + ic('chevron-down'), 'line')}${chip('Domain ' + ic('chevron-down'), 'line')}${chip('Source ' + ic('chevron-down'), 'line')}<span class="in sm">from 2019-01</span><span class="in sm">to</span></span>
-    ${btn('Filters · 2', 'morebtn')}<span class="sp"></span><span class="sm dim num">27 of 41 approved${an(1)}</span>${btn('Clear')}${an(2)}</div>`;
+    ${chip('Approved 27')}${chip('Pending 11')}${chip('Flagged 3')}
+    <span class="adv">${chip('Skill ' + ic('chevron-down'), 'line')}${chip('Tool ' + ic('chevron-down'), 'line')}${chip('Domain ' + ic('chevron-down'), 'line')}${chip('Source ' + ic('chevron-down'), 'line')}<span class="in sm">from 2019-01</span><span class="in sm">to</span></span>
+    ${btn('Filters', 'morebtn')}<span class="sp"></span><span class="sm dim num">27 of 41 approved${an(1)}</span>${btn('Clear')}${an(2)}</div>`;
   if (state === 'empty') {
     return shell('evidence', `<div class="ttl">Unit Review</div><div class="dim sm" style="margin-bottom:12px">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div>
       <div class="empty" style="padding:36px 20px"><div class="h2">No Experience Units yet</div><div style="margin:4px 0 14px">Import your career, add a Unit by hand, or drop an artifact. Every path lands here for review.</div>
@@ -795,7 +795,7 @@ function editor(state) {
       <div>• <span class="u">Launched the first set-top partner program; 6 OEMs in year one.</span></div>
       <div style="margin-top:8px">${btn(ic('plus') + ' Add bullet', 'ghost')}</div></div></div>`;
   const right = `<div class="evid"><div class="rowhead" style="margin-bottom:6px"><b>Approved evidence</b>${chip('9 Units', 'line')}${chip('4 rules', 'line nb')}</div>
-    <div class="list">${unitRow(UNITS[0], 0, { cls: 'sel' }).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow(UNITS[1], 1).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow(UNITS[4], 4).replace('<div class="acts">', '<div class="acts" style="display:none">')}</div>
+    <div class="list">${unitRow(UNITS[0], 0, { cls: 'sel' }).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow(UNITS[1], 1).replace('<div class="acts">', '<div class="acts" style="display:none">')}${unitRow({ ...UNITS[4], st: 'ok' }, 4).replace('<div class="acts">', '<div class="acts" style="display:none">')}</div>
     <div class="sm dim" style="margin:6px 0 10px">Highlighted: the source of the claim under the pointer.${an(5)}</div>
     <div class="card" style="border-color:#fecaca"><div class="rowhead"><b>Export blocked</b>${chip('3 flags', 'red')}</div><div class="task"><span class="rail" style="color:var(--red)">${ic('circle-x')}</span>1 traceability failure</div><div class="task nb"><span class="rail" style="color:var(--red)">§</span>1 claim-rule hit</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>1 specificity warning</div>
       <div class="btnrow" style="margin-top:8px;position:relative">${btn(ic('download') + ' Export', 'pri off')}${btn(ic('refresh-cw') + ' Re-run validation')}<span class="tip" style="left:0;top:-30px">Resolve 3 flags to export${an(6)}</span></div></div></div>`;
@@ -870,9 +870,8 @@ function system(state) {
   if (state === 'splash') return `<div class="app">${SBAR}<div class="center"><span class="dim sm">Loading…</span></div>${HOME}</div>`;
   if (state === 'update') {
     const body = `<div class="ttl">Unit Review</div><div class="dim sm" style="margin-bottom:12px">Approve, correct, or reject every extracted Experience Unit.</div><div class="list">${unitRow(UNITS[0], 0)}${unitRow(UNITS[1], 1)}</div>`;
-    const banner = `<div class="banner"><span>A new version of Matchline is ready.</span>${btn(ic('refresh-cw') + ' Reload')}${btn('Later', 'ghost')}<span class="sp"></span>${an(1)}</div>`;
-    const modal = `<div class="modal"><div class="card"><div class="h2">Reload now?</div><div class="sm">You have an unsaved edit on one Unit. Reloading discards it.${an(2)}</div><div class="btnrow" style="justify-content:flex-end;margin-top:12px">${btn('Keep editing')}${btn('Discard and reload', 'danger')}</div></div></div>`;
-    return shell('evidence', body, { banner, after: modal });
+    const banner = `<div class="upd" role="status"><span>Reloading will discard your unsaved changes on this page.${an(1)}</span>${btn('Reload anyway', 'amber')}${btn('Keep editing', 'ghost')}${an(2)}</div>`;
+    return shell('evidence', body, { after: banner });
   }
   if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Role not found, or not owned by you.${an(3)}</div><div class="btnrow" style="margin-top:10px">${btn('Back to Pipeline')}</div>`);
   // command palette
@@ -894,7 +893,7 @@ const GROUPS = [
   { id: 'entry', title: 'Entry — sign in', sub: 'The only surface before the app knows who you are. Single-user install: no sign-up, no marketing. Shipped in <code>src/routes/SignIn.tsx</code>.', screens: [
     { id: 'signin', title: 'Sign in', fn: signin, legend: [
       '<b>Google SSO first.</b> One click, no password to manage; sits above the divider so it is the obvious path (<code>SignIn.tsx</code>, “data-action=sign-in-google”).',
-      '<b>Email + password as the fallback</b> for popup-blocked browsers and pre-existing accounts. Enter submits.',
+      '<b>Email + password as the fallback</b> for popup-blocked browsers and pre-existing accounts. Sign in stays disabled until both fields are filled; Enter submits.',
       '<b>No create-account mode</b> (#439). The boundary is the owner allowlist in every callable and in <code>firestore.rules</code>, not the UI.',
       '<b>Errors inline, never a toast</b> (ui-guidance rule 10). The failing field keeps focus; copy comes from <code>friendlyAuthError</code>.'],
       states: [
@@ -905,7 +904,7 @@ const GROUPS = [
       '<b>Four sources, one review queue.</b> Paste résumé is shipped and selected; the other three are dashed. Each captures a different facet of the same career; all land in Unit Review.',
       '<b>Extract Units</b> is disabled while the field is empty or an extraction is in flight. The reload banner is suppressed for the whole call (busy lease, <code>src/lib/appBusy.ts</code>).',
       '<b>Progress is staged, not a spinner.</b> Elapsed time against a typical duration, then the pipeline stage (upload → text extracted → reading experience → Units committed) as events arrive.',
-      '<b>Units stream into the right pane</b> as they are extracted — the newest highlighted — so a two-minute call never feels like a batch job. After extraction the user lands in Unit Review; the review is not skippable.',
+      '<b>Units streaming into the right pane (proposed)</b>: the shipped route waits for the pipeline to persist everything, then lands in Unit Review. ui-guidance § Onboarding asks for Units to appear as they are extracted, newest highlighted, so a two-minute call never feels like a batch job. The review is not skippable either way.',
       '<b>Timeout and failure copy</b> is specific and actionable (<code>friendlyCallableError</code>): what failed, what usually helps. The pasted text is kept.'],
       states: [
         { id: 'idle', label: 'before extraction', kind: 'shipped', cap: { desk: 'Three panes: source picker, content, Units. The content pane takes the width; the Units pane explains what will happen there.', tab: 'Panes stack: the source picker becomes a row of four cards above the content; Units follow below.', ph: 'Source cards scroll horizontally; the textarea is the screen. Units appear below once extraction runs.' } },
@@ -914,13 +913,13 @@ const GROUPS = [
   { id: 'evidence', title: 'Evidence — Units, canonical résumé, claim rules', sub: 'The integrity-defining surfaces. Unit Review ships (<code>src/routes/UnitReview/</code>: filters synced to the URL, inline edit, approve / flag / reject, manual add). The canonical résumé editor with visible line ids, the list of tailored views behind the current version, and the claim-rules list are PRD v0.2 § Interface additions and have no shipped surface.', screens: [
     { id: 'units', title: 'Unit Review', fn: unitReview, legend: [
       '<b>Global approved counter</b> over the whole snapshot, not the filtered view — “≥ 20 approved” is the onboarding milestone and should not rubber-band with filters.',
-      '<b>Filter bar</b>: approval-status chips are toggles; skill / tool / domain chips are seeded from values that actually appear in the Units; date range; source type. State lives in the URL. On narrow widths the advanced chips fold into one <i>Filters · n</i> button.',
+      '<b>Filter bar</b>: approval-status chips are toggles; skill / tool / domain chips are seeded from values that actually appear in the Units; date range; source type. Filters AND across axes and live in the URL; none is active in this frame, so the list shows every non-rejected Unit. On narrow widths the advanced chips fold into one <i>Filters</i> button.',
       '<b>Row anatomy</b> (≈ 48 px): left-rail state icon (✓ approved · — pending · ⚠ flagged), two-line summary, metadata row of skill and tool chips, confidence as a tabular number, provenance (artifact Units render <code>artifact · file · page</code>). Pending rows are slightly dimmed; approved is the default visual state.',
       '<b>Inline edit</b>, never a modal: Tab moves between fields, Enter commits, Esc reverts. Saving re-runs the Unit’s embedding. An open draft gates the update-reload banner behind a confirmation (#456).',
       '<b>Bulk selection (proposed)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with the same a / f / r shortcuts a focused row answers to. Reject asks once because rejected Units leave matching.',
       '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
-        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. Advanced filter chips fold into “Filters · 2”.', ph: 'Rows wrap: action cluster moves under the summary; chips truncate to one line. The bulk bar sticks to the top of the scrolling list.' } },
+        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. Advanced filter chips fold into one “Filters” button.', ph: 'Rows wrap: action cluster moves under the summary; chips truncate to one line. The bulk bar sticks to the top of the scrolling list.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'Genuinely empty, after the first snapshot: three entry CTAs, no counter.', tab: 'Unchanged.', ph: 'CTAs stack vertically.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'Thin indeterminate bar and row skeletons; no counter, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
@@ -997,13 +996,13 @@ const GROUPS = [
         { id: 'first', label: 'first run · no boards', kind: 'state', cap: { desk: 'Empty state asks for the first board URL.', tab: 'Unchanged.', ph: 'Input goes full width.' } }] }] },
   { id: 'system', title: 'System states — splash, update prompt, not found, command palette', sub: 'Surfaces every screen inherits. Shipped: the auth splash, the update-reload prompt with its busy-lease suppression and unsaved-work confirmation (<code>specs/matchline.md</code> § Update prompt, #456), and the anti-enumeration not-found copy. Proposed: the command palette (ui-guidance rule 5).', screens: [
     { id: 'system', title: 'System surfaces', fn: system, legend: [
-      '<b>Update prompt</b> is a banner under the header, never a toast; it is hidden outright while extraction, generation or a save holds a busy lease.',
-      '<b>Unsaved work</b> (an open inline edit, a pasted résumé, a New Role draft) turns Reload into a confirmation; the destructive choice is the secondary button.',
+      '<b>Update prompt</b> is a bottom banner (<code>src/components/UpdatePrompt.tsx</code>), never a modal or a toast; it is hidden outright while extraction, generation or a save holds a busy lease.',
+      '<b>Unsaved work</b> (an open inline edit, a pasted résumé, a New Role draft) turns the first Reload click into the banner’s confirming state: the copy becomes “Reloading will discard your unsaved changes on this page.”, Reload becomes an amber “Reload anyway”, and the dismiss becomes “Keep editing”. One extra click, no blocking dialog.',
       '<b>Not found and not yours collapse</b> to one sentence so the UI cannot be used to enumerate ids.',
       '<b>Command palette</b> (<code>⌘K</code>): Roles, actions and navigation in one list; arrow keys and Enter, Esc closes. Every mouse-reachable action is listed here.'],
       states: [
         { id: 'splash', label: 'auth splash', kind: 'shipped', cap: { desk: 'Tiny monochrome “Loading…” while Firebase resolves the first auth state — no shell flashes before the sign-in redirect.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'update', label: 'update ready · unsaved edit', kind: 'shipped', cap: { desk: 'Banner under the header; the confirmation is one of the two modals the product allows (the other is destructive delete).', tab: 'Unchanged.', ph: 'Banner wraps to two lines; the modal is full width inside the gutter.' } },
+        { id: 'update', label: 'update ready · unsaved edit · confirming', kind: 'shipped', cap: { desk: 'The bottom banner in its confirming state: amber “Reload anyway”, “Keep editing”.', tab: 'Unchanged.', ph: 'The banner sits above the tab bar and wraps to two lines.' } },
         { id: 'notfound', label: 'Role not found', kind: 'shipped', cap: { desk: 'One line, one way back.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'cmdk', label: 'command palette', kind: 'prd', cap: { desk: 'Centered 520 px palette over a dimmed board.', tab: 'Unchanged.', ph: 'Palette sits near the top so the keyboard does not cover it; full width inside the gutter.' } }] }] },
 ];
