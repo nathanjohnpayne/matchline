@@ -224,6 +224,7 @@
   .lrow{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);min-height:48px}
   .lrow:last-child{border-bottom:0}
   .lrow.sel{background:#f4f4f5}
+  .lrow.sel + .lrow.sel{border-top:0}
   .lrow.focus{box-shadow:inset 0 0 0 2px #18181b}
   .lrow.dimmed{color:var(--dim)}
   .rail{width:16px;flex:0 0 auto;text-align:center;font-size:12px;color:var(--mut);padding-top:1px}
@@ -542,9 +543,9 @@ const UNITS = [
 ];
 const UNIT_STATE = { ok: ['Approved', 'ink'], pend: ['Pending', ''], flag: ['Flagged', 'amb'] };
 const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
-  <div class="grow"><div class="clamp2 ${u.st === 'pend' ? 'mut' : ''}">${u.s}${o.an || ''}</div>
+  <div class="grow"><div class="ellip ${u.st === 'pend' ? 'mut' : ''}" title="${u.s}">${u.s}${o.an || ''}</div>
     <div class="meta"><span class="xs dim">${u.ut} · ${u.src}</span>${chip(UNIT_STATE[u.st][0], UNIT_STATE[u.st][1])}<span class="xs dim num">${u.c}%</span></div></div>
-  <div class="acts">${btn(ic('check') + ' Approve', u.st === 'ok' ? 'off' : '')}${btn(ic('flag') + ' Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn(ic('x') + ' Reject', 'ghost')}${btn(ic('pencil') + ' Edit', 'ghost')}</div></div>`;
+  ${o.noActs ? '' : `<div class="acts">${btn(ic('check') + ' Approve', u.st === 'ok' ? 'off' : '')}${btn(ic('flag') + ' Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn(ic('x') + ' Reject', 'ghost')}${btn(ic('pencil') + ' Edit', 'ghost')}</div>`}</div>`;
 
 const CANON = [
   ['L-001', 'headline', 'Senior Product Manager — video platforms and developer tools'],
@@ -613,25 +614,27 @@ function onboarding(state) {
 }
 
 function unitReview(state) {
+  const ready = state === 'ready' || state === 'empty';
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    ${state === 'ready' ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${chip('27 approved — onboarding complete', 'ink')}${an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
+    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('27 approved — onboarding complete', 'ink') + an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
+  const pill = (t, on) => `<span class="pill ${on ? 'on' : ''}" style="${on ? 'background:#18181b;color:#fafafa' : 'background:transparent;border:1px solid var(--line)'}">${t}</span>`;
+  const fpanel = (skills, tools, domains) => `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${state === 'ready' ? an(2) : ''}</div>
+    <div class="frow"><span class="flbl">Skills</span>${skills.length ? skills.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No skills in the corpus yet.</span>'}</div>
+    <div class="frow"><span class="flbl">Tools</span>${tools.length ? tools.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No tools in the corpus yet.</span>'}</div>
+    <div class="frow"><span class="flbl">Domains</span>${domains.length ? domains.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No domains in the corpus yet.</span>'}</div>
+    <div class="frow"><span class="flbl">Status</span>${pill('Approved')}${pill('Pending')}${pill('Flagged')}</div>
+    <div class="frow"><span class="flbl">From</span><span class="in sm ph">yyyy-mm-dd</span><span class="flbl" style="min-width:0">To</span><span class="in sm ph">yyyy-mm-dd</span></div></div>`;
   if (state === 'empty') {
-    return shell('evidence', head + `<div class="empty" style="padding:36px 20px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
+    return shell('evidence', head + fpanel([], [], []) + `<div class="empty" style="padding:36px 20px;margin-top:10px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
       <div class="btnrow" style="justify-content:center">${btn(ic('plus') + ' Add Unit manually', 'pri')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`, { width: 'w5' });
   }
   if (state === 'loading') return shell('evidence', head + `<div class="info" role="status">Loading Units…</div>`, { width: 'w5' });
   if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: permission-denied</div>`, { width: 'w5' });
-  const pill = (t, on) => `<span class="pill ${on ? 'on' : ''}" style="${on ? 'background:#18181b;color:#fafafa' : 'background:transparent;border:1px solid var(--line)'}">${t}</span>`;
-  const filters = `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${an(2)}</div>
-    <div class="frow"><span class="flbl">Skills</span>${['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'].map(t => chip(t, 'line')).join('')}</div>
-    <div class="frow"><span class="flbl">Tools</span>${['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'].map(t => chip(t, 'line')).join('')}</div>
-    <div class="frow"><span class="flbl">Domains</span>${['Streaming video', 'Developer tools', 'Support ops'].map(t => chip(t, 'line')).join('')}</div>
-    <div class="frow"><span class="flbl">Status</span>${pill('Approved')}${pill('Pending')}${pill('Flagged')}</div>
-    <div class="frow"><span class="flbl">From</span><span class="in sm ph">yyyy-mm-dd</span><span class="flbl" style="min-width:0">To</span><span class="in sm ph">yyyy-mm-dd</span></div></div>`;
+  const filters = fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops']);
   const bulk = `<div class="card tight bulkbar nb"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const f = (l, v, cls = '') => `<div class="field"><span class="lbl">${l}</span><div class="in ${cls}">${v}</div></div>`;
-  const editing = `<div class="lrow sel" style="display:block" role="form" aria-label="Edit Unit"><div class="rowhead sm"><span class="cb on"></span><b>Editing</b>${an(4)}</div>
-    <div class="pair" style="gap:0 8px;margin-top:8px"><div style="grid-column:1/-1">${f('Raw text', 'Ran the 12-person live-streaming squad; we got glass-to-glass under 3 seconds.')}</div>
+  const editing = unitRow(UNITS[2], 2, { bulk: true, on: true, noActs: true, cls: 'sel', an: an(4) }).replace('</div></div>`', '') + `<div class="lrow sel" style="display:block;border-top:0;padding-top:0" role="form" aria-label="Edit Unit">
+    <div class="pair" style="gap:0 8px"><div style="grid-column:1/-1">${f('Raw text', 'Ran the 12-person live-streaming squad; we got glass-to-glass under 3 seconds.')}</div>
     <div style="grid-column:1/-1">${f('Normalized summary', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', 'focus')}</div>
     ${f('Source type', 'long_form ' + ic('chevron-down'))}${f('Unit type', 'leadership ' + ic('chevron-down'))}${f('Evidence type', 'inferred ' + ic('chevron-down'))}${f('Source ref', '2024 retro')}
     ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', 'Streaming video')}${f('Start date', '2023-03')}${f('End date', '2024-02')}${f('Confidence (0-1)', '0.81')}</div>
@@ -716,8 +719,8 @@ function roleHeader(opts = {}) {
 }
 const ROLE_TABS = ['Fit brief', 'Requirements & matches', 'Package', 'Process', 'Correspondence'];
 const REQS = [['must', 'Experience with ad-supported streaming', 'domain', 1], ['must', 'Lead the roadmap for playback and device certification', 'scope', 1], ['must', '7+ years in product management, 3+ in video', 'experience', 2], ['nice', 'Partner with 20+ device OEMs', 'scope', 3], ['nice', 'Familiarity with low-latency live', 'domain', 4], ['nice', 'Experience shipping developer SDKs', 'tooling', 5]];
-const matchCard = (u, score, st, comps) => `<div class="card tight" style="margin:6px 0"><div class="rowhead"><b class="grow">${u.s}</b><span class="score num">${score.toFixed(2)}</span></div>
-  <div class="xs dim num">${comps} · confidence ${u.c}%</div>
+const matchCard = (u, score, st, comps, tip) => `<div class="card tight" style="margin:6px 0;position:relative"><div class="rowhead"><b class="grow">${u.s}</b><span class="score num" title="score breakdown">${(score * 100).toFixed(1)}</span></div>
+  ${tip ? `<div class="pop" role="tooltip" style="right:10px;top:30px;width:270px"><div class="xs num">${comps.split(' · ').map(c => { const [k, v] = c.split(' '); const w = { semantic: 0.4, skills: 0.35, recency: 0.25 }[k]; return `${k} ${v} ×${w.toFixed(2)} = ${(parseFloat(v) * w).toFixed(3)}`; }).join('<br>')}<br>Unit confidence multiplier: ×${(u.c / 100).toFixed(2)}<br><span class="dim">Final score = Σ(score × weight) × confidence.</span></div></div>` : ''}
   <div class="sm" style="margin-top:4px"><b>Why:</b> ${u.sk[0]} and ${u.tl[0] || 'the shipped metric'} appear verbatim in the Unit; the clause names both.</div>
   <div class="sm dim"><b>Evidence:</b> “${u.s.split(';')[0].split(',')[0]}”</div>
   <div class="btnrow" style="margin-top:6px">${st === 'approved' ? btn(ic('check') + ' Approved ✓', 'pri') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`;
@@ -734,9 +737,9 @@ function roleShipped(state) {
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-run matching')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
   const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • ' + chip('must-have', 'ink') : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
   const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
-    + group(REQS[1], matchCard(UNITS[0], 0.91, 'approved', 'semantic .88 · skills .92 · recency .70') + matchCard(UNITS[1], 0.84, 'approved', 'semantic .80 · skills .90 · recency .70') + an(4))
-    + group(REQS[2], matchCard(UNITS[2], 0.52, 'none', 'semantic .55 · skills .48 · recency .60'))
-    + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], 0.77, 'none', 'semantic .74 · skills .81 · recency .70'));
+    + group(REQS[1], matchCard(UNITS[0], 0.91, 'approved', 'semantic 0.88 · skills 0.92 · recency 0.70', true) + matchCard(UNITS[1], 0.84, 'approved', 'semantic 0.80 · skills 0.90 · recency 0.70') + an(4))
+    + group(REQS[2], matchCard(UNITS[2], 0.52, 'none', 'semantic 0.55 · skills 0.48 · recency 0.60'))
+    + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], 0.77, 'none', 'semantic 0.74 · skills 0.81 · recency 0.70'));
   return shell('pipeline', body);
 }
 const roleTabs = on => `<div class="tabs">${ROLE_TABS.map(t => `<span class="${t === on ? 'on' : ''}${t === 'Requirements & matches' ? '' : ' nb'}">${t}</span>`).join('')}</div>`;
@@ -963,13 +966,13 @@ const GROUPS = [
     { id: 'units', title: 'Unit Review', fn: unitReview, legend: [
       '<b>Global approved counter</b> over the whole snapshot, not the filtered view (<code>ApprovalCounter.tsx</code>): below 20 approved it counts toward the onboarding milestone; at 20 or more it reads “N approved — onboarding complete”. It never uses the total as a denominator and does not rubber-band with filters.',
       '<b>Filter panel</b> (<code>Filters.tsx</code>): Skills, Tools and Domains as chip multi-selects seeded from values that actually appear in the Units, Status pills, From / To dates, and “Clear filters” once anything is active. Filters AND across axes and live in the URL; none is active in this frame, so the list shows every non-rejected Unit. The panel wraps at narrow widths; nothing folds.',
-      '<b>Row anatomy</b> (<code>UnitRow.tsx</code>): two-line summary, then <code>unit_type · source_type · source_ref</code>, the state pill (Approved / Pending / Flagged), confidence as a tabular percentage, and the action cluster Approve / Flag / Reject + Edit. The action for the row’s current state is disabled. Reject opens an inline confirmation because rejected Units leave matching. Pending rows are slightly dimmed.',
-      '<b>Inline edit</b>, never a modal (<code>InlineEditForm.tsx</code>): the row becomes the form — Raw text, Normalized summary, Source / Unit / Evidence type, Source ref, Skills / Tools / Domains one per line, dates, Confidence (0-1), Metrics as claim / value / unit — Save commits, Cancel reverts, and saving re-runs the Unit’s embedding. The <code>?</code> help popover and the a / f / r / e shortcuts are proposed per ui-guidance § Unit Review. An open draft gates the update-reload banner behind a confirmation (#456).',
+      '<b>Row anatomy</b> (<code>UnitRow.tsx</code>): a one-line summary (truncated; the full text is the row’s title tooltip), then <code>unit_type · source_type · source_ref</code>, the state pill (Approved / Pending / Flagged), confidence as a tabular percentage, and the action cluster Approve / Flag / Reject + Edit. The action for the row’s current state is disabled. Reject opens an inline confirmation because rejected Units leave matching. Pending rows are slightly dimmed.',
+      '<b>Inline edit</b>, never a modal (<code>InlineEditForm.tsx</code>): the row keeps its preview (summary, state, confidence) and the form opens beneath it — Raw text, Normalized summary, Source / Unit / Evidence type, Source ref, Skills / Tools / Domains one per line, dates, Confidence (0-1), Metrics as claim / value / unit — Save commits, Cancel reverts, and saving re-runs the Unit’s embedding. The <code>?</code> help popover and the a / f / r / e shortcuts are proposed per ui-guidance § Unit Review. An open draft gates the update-reload banner behind a confirmation (#456).',
       '<b>Bulk selection (proposed)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with a / f / r shortcuts. Reject asks once because rejected Units leave matching.',
       '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
-        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: action cluster moves under the summary. The bulk bar sticks to the top of the scrolling list.' } },
-        { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'Genuinely empty, after the first snapshot: the shipped EmptyState copy and its one action, no counter; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: the action cluster moves under the one-line summary. The bulk bar sticks to the top of the scrolling list.' } },
+        { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'A genuinely empty snapshot is still a ready state: “+ Add Unit”, the “0 of 20 approved” counter and the Filters panel (“No skills in the corpus yet.”) render above EmptyState’s copy and its one action; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no Add Unit, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count or Add Unit beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
     { id: 'canonical', title: 'Canonical résumé editor + tailored views', fn: canonical, legend: [
@@ -987,11 +990,10 @@ const GROUPS = [
       '<b>The JD is the second field</b>, right under Title, with its placeholder saying it can be added later from the Role page.',
       '<b>Without a JD</b> the placeholder says so; Create Role still creates the Role from the title alone, and Role detail opens its Requirements tab with “No JD yet”.',
       '<b>Draft persistence</b>: the form is saved to this browser as you type and restored on reload (<code>src/lib/formDraft.ts</code>); Cancel discards, creating clears, sign-out clears all. The “Draft restored” notice is proposed — the shipped route restores silently.',
-      '<b>Validation inline</b>, field keeps focus, no modal.'],
+      '<b>Validation is the browser’s</b>: Title is a required input and Create Role stays disabled until it is filled, so no click can reach the route’s defensive “Title is required.” alert; there is no blank-title state to draw.'],
       states: [
         { id: 'jd', label: 'with a JD', kind: 'shipped', cap: { desk: 'Single-column form, 720 px max; the JD follows the title, the short fields sit two-up.', tab: 'Unchanged.', ph: 'Short fields go one-up; the JD textarea keeps a tall minimum so pasting feels natural.' } },
-        { id: 'lead', label: 'title only · draft restored', kind: 'shipped', cap: { desk: 'Proposed restored-draft notice on top; the JD placeholder explains the lead path; the primary stays “Create Role”.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'error', label: 'title missing', kind: 'state', cap: { desk: 'Alert with role=alert above the form; Title regains focus; Create Role stays disabled until a title is entered (canSubmitRoleNew).', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
+        { id: 'lead', label: 'title only · draft restored', kind: 'shipped', cap: { desk: 'Proposed restored-draft notice on top; the JD placeholder explains the lead path; the primary stays “Create Role”.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
     { id: 'role', title: 'Role detail — the dossier', fn: roleDetail, legend: [
       '<b>“Where things stand”</b> is the first thing on every dossier, as the first line of each reference folder index: two or three sentences, hand-editable, regenerated on request from the process so far. The header’s action row (Update stage, Generate, Export) is proposed too: the shipped header carries only the title and Role id, and generation lives inside the Applications tab.',
       '<b>Next action</b> with its due date sits beside it; it is the same task the Pipeline card and sidebar show (#34), completable here.',
@@ -1010,7 +1012,7 @@ const GROUPS = [
       '<b>Requirements tab without a JD</b> (<code>RequirementsTab.tsx</code>): the JD source editor with its placeholder, Parse JD disabled until text is pasted, and the state line “No JD yet. Paste it above to parse requirements.” Save JD appears once the draft is dirty; Re-parse asks for an inline confirmation when requirements already exist.',
       '<b>Gaps first</b> (<code>GapsView.tsx</code>): unmet must-haves in amber with the shipped explanation, then unverified must-haves (a match exists but its evidence could not be checked). With no gaps the panel says “✓ Every must-have requirement has a qualifying match.”',
       '<b>Re-run matching</b> with its explanation sits above the list; “Computing matches…” is a static status line while a run is in flight.',
-      '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge and components, the “Why:” rationale, the “Evidence:” surface string, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
+      '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge (<code>MatchScoreBadge.tsx</code>: the 0–100 scale with one decimal; the component × weight breakdown and the confidence multiplier only in its hover / focus tooltip, shown on the first card), the “Why:” rationale, the “Evidence:” surface string, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
         { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } }] }] },
