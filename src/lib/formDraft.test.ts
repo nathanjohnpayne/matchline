@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  claimFormDrafts,
   clearAllFormDrafts,
   clearFormDraft,
   loadFormDraft,
@@ -100,5 +101,37 @@ describe("formDraft", () => {
     expect(loadFormDraft("a", storage)).toBeUndefined();
     expect(() => clearFormDraft("a", storage)).not.toThrow();
     expect(() => clearAllFormDrafts(storage)).not.toThrow();
+  });
+
+  it("claimFormDrafts keeps drafts for the same account", () => {
+    const storage = memoryStorage();
+    claimFormDrafts("uid-a", storage);
+    saveFormDraft("a", 1, storage);
+    claimFormDrafts("uid-a", storage);
+    expect(loadFormDraft("a", storage)).toBe(1);
+  });
+
+  it("claimFormDrafts clears drafts left by a different account", () => {
+    const storage = memoryStorage();
+    claimFormDrafts("uid-a", storage);
+    saveFormDraft("a", 1, storage);
+    claimFormDrafts("uid-b", storage);
+    expect(loadFormDraft("a", storage)).toBeUndefined();
+    // uid-b now owns the (empty) draft set.
+    saveFormDraft("b", 2, storage);
+    claimFormDrafts("uid-b", storage);
+    expect(loadFormDraft("b", storage)).toBe(2);
+  });
+
+  it("claimFormDrafts clears drafts with no recorded owner", () => {
+    const storage = memoryStorage();
+    saveFormDraft("a", 1, storage);
+    claimFormDrafts("uid-a", storage);
+    expect(loadFormDraft("a", storage)).toBeUndefined();
+  });
+
+  it("claimFormDrafts never throws when storage is unavailable or throws", () => {
+    expect(() => claimFormDrafts("uid-a", undefined)).not.toThrow();
+    expect(() => claimFormDrafts("uid-a", throwingStorage())).not.toThrow();
   });
 });
