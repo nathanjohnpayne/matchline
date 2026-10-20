@@ -285,7 +285,7 @@
   .two{display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start}
   .three{display:grid;grid-template-columns:220px 1fr 320px;gap:16px;align-items:start}
   .split{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:16px;align-items:start}
-  .ed{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:16px;align-items:start}
+  .ed{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,360px);gap:16px;align-items:start}
   .phseg{display:none}
   .ph-only{display:none !important}
   .filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px}
@@ -354,16 +354,13 @@
     .three .src{flex:1 1 160px}
     .two{grid-template-columns:1fr}
     .split{grid-template-columns:1fr}
-    .ed{grid-template-columns:1fr}
-    .ed .evid{order:2}
     .side{width:auto}
     .side .card{margin-bottom:0}
     .sidewrap{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
     .boardwrap{flex-direction:column}
     .boardwrap .side{order:-1;width:100%}
     .boardwrap > div{width:100%}
-    .cols{display:flex;overflow-x:auto;gap:12px;padding-bottom:8px}
-    .cols .col{flex:0 0 190px}
+    .cols{gap:8px}
     .detail-pane{display:none}
     .scan-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);}
     .scan-row .act{grid-column:1 / -1}
@@ -613,7 +610,7 @@ function onboarding(state) {
   return shell('evidence', body, { width: 'w5' });
 }
 
-function unitReview(state) {
+function unitReview(state, extra = {}) {
   const ready = state === 'ready' || state === 'empty';
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
     ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('27 approved — onboarding complete', 'ink') + an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
@@ -649,7 +646,7 @@ function unitReview(state) {
     <div class="h3">Provenance</div><div class="sm">resume · Beacon Streaming · pasted Oct 2 · confidence <span class="num">92%</span></div>
     <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
-  return shell('evidence', head + filters + bulk + `<div class="two">${list}${detail}</div>`, { width: 'w5' });
+  return shell('evidence', head + filters + bulk + `<div class="two">${list}${detail}</div>`, { width: 'w5', ...extra });
 }
 
 function canonical(state) {
@@ -932,9 +929,8 @@ function scan(state) {
 function system(state) {
   if (state === 'splash') return `<div class="app">${SBAR}<div class="center"><span class="dim sm">Loading…</span></div>${HOME}</div>`;
   if (state === 'update') {
-    const body = `<div class="ttl">Unit Review</div><div class="dim sm" style="margin-bottom:12px">Approve, correct, or reject every extracted Experience Unit.</div><div class="list">${unitRow(UNITS[0], 0)}${unitRow(UNITS[1], 1)}</div>`;
     const banner = `<div class="upd" role="status"><span>Reloading will discard your unsaved changes on this page.${an(1)}</span>${btn('Reload anyway', 'amber')}${btn('Keep editing', 'ghost')}${an(2)}</div>`;
-    return shell('evidence', body, { after: banner });
+    return unitReview('ready', { after: banner });
   }
   if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Role not found, or not owned by you.${an(3)}</div>`);
   // command palette
@@ -1036,8 +1032,8 @@ const GROUPS = [
       '<b>Source Units pane</b> (<code>UnitsPane</code>): “N approved Units were used to ground this Application.” and the Units as plain rows; the hovered claim’s source is highlighted, and a claim’s popover lists its Source Units to scroll to. Approval happens in Unit Review, not here.',
       '<b>Export sits at the top of the output pane</b> (<code>ExportButton</code>): the gate’s reason (“Resolve N validation flags before exporting.”, or the stale / never-validated reasons), “Re-run validation” when re-validating is the fix, and a disabled Export whose tooltip repeats the reason. The empty state sends the user back to the Role to generate — there is no generate action in the editor.'],
       states: [
-        { id: 'ready', label: 'hovering a claim · 2 flags · export blocked', kind: 'shipped', cap: { desk: 'Output 7 / evidence 5: export gate on top of the output, Summary then Experience, the Source Units pane right. The claim-rule popover is proposed.', tab: 'Panes stack, output first, evidence second. The popover stays anchored.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
-        { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Panes stack.', ph: 'Panes stack.' } },
+        { id: 'ready', label: 'hovering a claim · 2 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
+        { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Two panes, as from md up.', ph: 'Panes stack.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511; <code>src/routes/Pipeline/</code>): seven columns, three-line cards, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors. Proposed (dashed): the next-action chip (#512), the next scheduled round chip (PRD), and the tasks sidebar (#34).', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
@@ -1048,8 +1044,8 @@ const GROUPS = [
       '<b>Sidebar (#34)</b>: Due today, Upcoming (7 days), Follow-ups. Reminders surface at the top when due; overdue is red. One-click complete updates the Application’s last activity.',
       '<b>Follow-ups are generated</b>, not authored: an Application quiet for more than 7 days in an active stage appears here; “+ task” turns it into a real task.'],
       states: [
-        { id: 'ready', label: '9 applications · dragging into Interviewing', kind: 'shipped', cap: { desk: 'Seven columns side by side with the proposed sidebar at 240 px. Orbit Video’s card is focused (keyboard ring); Interviewing is the drop target.', tab: 'Columns scroll horizontally at 190 px each; the sidebar becomes three cards in a row above the board.', ph: 'Below <code>md</code> the board is a vertical stack with pill headers (shipped). The sidebar sections stack above it; overdue first.' } },
-        { id: 'empty', label: 'empty board', kind: 'state', cap: { desk: 'Every column shows its teaching copy; nothing else renders.', tab: 'Unchanged, columns scroll.', ph: 'Stacked pills with their copy.' } },
+        { id: 'ready', label: '9 applications · dragging into Interviewing', kind: 'shipped', cap: { desk: 'Seven columns side by side with the proposed sidebar at 240 px. Orbit Video’s card is focused (keyboard ring); Interviewing is the drop target.', tab: 'The seven-column grid holds from md (768 px) up, so columns are narrow at 834 and cards truncate; the proposed sidebar becomes three cards in a row above the board.', ph: 'Below <code>md</code> the board is a vertical stack with pill headers (shipped). The sidebar sections stack above it; overdue first.' } },
+        { id: 'empty', label: 'empty board', kind: 'state', cap: { desk: 'Every column shows its teaching copy; nothing else renders.', tab: 'Unchanged; the seven columns are narrow.', ph: 'Stacked pills with their copy.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped status text under the header; no columns until the read lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'read failed', kind: 'state', cap: { desk: 'A rejected read renders the alert alone — no board, no retry control (reload is the recovery).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'partial', label: 'partial data · contacts missing', kind: 'state', cap: { desk: 'The board is ready but one enrichment read (People) failed: the status line explains, Roles and Companies still render, and only the contact avatars are missing. A failed Roles or Companies read would show “Unknown company” / “Role unavailable” in italics the same way.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
@@ -1073,7 +1069,7 @@ const GROUPS = [
       '<b>Command palette</b> (<code>⌘K</code>): Roles, actions and navigation in one list; arrow keys and Enter, Esc closes. Every mouse-reachable action is listed here.'],
       states: [
         { id: 'splash', label: 'auth splash', kind: 'shipped', cap: { desk: 'Tiny monochrome “Loading…” while Firebase resolves the first auth state — no shell flashes before the sign-in redirect.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'update', label: 'update ready · unsaved edit · confirming', kind: 'shipped', cap: { desk: 'The bottom banner in its confirming state: amber “Reload anyway”, “Keep editing”.', tab: 'Unchanged.', ph: 'The banner sits above the tab bar and wraps to two lines.' } },
+        { id: 'update', label: 'update ready · unsaved edit · confirming', kind: 'shipped', cap: { desk: 'The bottom banner in its confirming state — amber “Reload anyway”, “Keep editing” — over Unit Review with a changed inline edit open, the unsaved-work lease that keeps the confirmation active.', tab: 'Unchanged.', ph: 'The banner sits above the tab bar and wraps to two lines.' } },
         { id: 'notfound', label: 'Role not found', kind: 'shipped', cap: { desk: 'One line and nothing else; the shell navigation is the way back.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'cmdk', label: 'command palette', kind: 'prd', cap: { desk: 'Centered 520 px palette over a dimmed board.', tab: 'Unchanged.', ph: 'Palette sits near the top so the keyboard does not cover it; full width inside the gutter.' } }] }] },
 ];
