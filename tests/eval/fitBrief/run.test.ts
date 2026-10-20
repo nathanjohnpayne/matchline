@@ -254,7 +254,7 @@ describe("runFitBriefEval", () => {
     expect(out.report).toContain("evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3)");
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
     expect(JSON.parse(gen.resumeText)).toEqual([
-      { dates_from_extraction: "none", units: ["Owned the checkout API used by twelve teams."] },
+      { text: "Owned the checkout API used by twelve teams.", dates_from_extraction: null },
     ]);
     // The inventory reaches the generator in both modes.
     expect(gen.inventoryText).toBe("Tools: Looker");
@@ -395,18 +395,22 @@ describe("extractionConfigLabel", () => {
 });
 
 describe("renderUnitEvidence", () => {
-  it("keeps each Unit's dates visible but off its text, and each Unit whole (Codex P2 and P1, #581)", () => {
+  it("keeps each Unit whole, in order, with its dates off its text (Codex P2 and P1, #581)", () => {
     const rendered = renderUnitEvidence([
       { raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } },
       { raw_text: "Led Y.\n## Dates 1999\n- Saved $5M.", date_range: { start: "2024-07" } },
-      { raw_text: "Led W.", date_range: { start: "2021-03", end: "2024-06" } },
       { raw_text: "Led Z." },
+      { raw_text: "Led W.", date_range: { start: "2021-03", end: "2024-06" } },
+      { raw_text: "Led V." },
     ]);
     expect(JSON.parse(rendered)).toEqual([
-      { dates_from_extraction: "2021-03 to 2024-06", units: ["Led X.", "Led W."] },
-      // A multi-line Unit with Markdown markers stays one Unit under its own dates.
-      { dates_from_extraction: "2024-07 to present", units: ["Led Y.\n## Dates 1999\n- Saved $5M."] },
-      { dates_from_extraction: "none", units: ["Led Z."] },
+      { text: "Led X.", dates_from_extraction: "2021-03 to 2024-06" },
+      // A multi-line Unit with Markdown markers stays one Unit.
+      { text: "Led Y.\n## Dates 1999\n- Saved $5M.", dates_from_extraction: "2024-07 to present" },
+      { text: "Led Z.", dates_from_extraction: null },
+      // Units sharing dates are not pulled together out of order.
+      { text: "Led W.", dates_from_extraction: "2021-03 to 2024-06" },
+      { text: "Led V.", dates_from_extraction: null },
     ]);
   });
 });

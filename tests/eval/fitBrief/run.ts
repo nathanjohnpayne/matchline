@@ -473,25 +473,25 @@ export interface UnitEvidence {
 }
 
 /**
- * Units mode's evidence for the generator: the Units as JSON, grouped by
- * the dates extraction assigned. Dates can live only in `date_range` and a
- * brief judges tenure (Codex P2 on #581), but they are the extraction
- * model's output, not résumé text, so they label each group rather than
- * sitting on any quotable text. The evidence gate then only ever certifies
- * verbatim résumé text, and dates a brief asserts are checked by the judge
- * against the canonical résumé (Codex P1 ×2 on #581). JSON keeps a Unit
- * whole even when its text holds newlines or Markdown markers (Codex P2,
- * #581). Other structured fields are omitted on purpose: units mode tests
- * the Units' text and dates, not the full record.
+ * Units mode's evidence for the generator: one JSON object per Unit, in
+ * extraction order. Order is kept because a Unit's text may omit its role
+ * or employer, so its neighbours carry that context (Codex P2, #581).
+ * Dates can live only in `date_range` and a brief judges tenure (Codex P2
+ * on #581), but they are the extraction model's output, not résumé text,
+ * so they sit in their own field rather than in any quotable text. The
+ * evidence gate then only ever certifies verbatim résumé text, and dates a
+ * brief asserts are checked by the judge against the canonical résumé
+ * (Codex P1 ×2 on #581). JSON keeps a Unit whole even when its text holds
+ * newlines or Markdown markers (Codex P2, #581). Other structured fields
+ * are omitted on purpose: units mode tests the Units' text and dates, not
+ * the full record.
  */
 export function renderUnitEvidence(units: readonly UnitEvidence[]): string {
-  const groups = new Map<string, string[]>();
-  for (const u of units) {
-    const dates = u.date_range ? `${u.date_range.start} to ${u.date_range.end ?? "present"}` : "none";
-    groups.set(dates, [...(groups.get(dates) ?? []), u.raw_text]);
-  }
   return JSON.stringify(
-    [...groups].map(([dates, texts]) => ({ dates_from_extraction: dates, units: texts })),
+    units.map((u) => ({
+      text: u.raw_text,
+      dates_from_extraction: u.date_range ? `${u.date_range.start} to ${u.date_range.end ?? "present"}` : null,
+    })),
     null,
     2,
   );
