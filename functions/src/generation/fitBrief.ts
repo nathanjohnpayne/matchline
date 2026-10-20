@@ -13,6 +13,7 @@
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
+import { createHash } from "node:crypto";
 
 import { anthropic } from "../llm/anthropic.js";
 import {
@@ -227,6 +228,36 @@ export async function generateFitBrief(
         : `Fit brief failed after ${failures.length} attempts. See .failures for per-attempt detail.`,
     failures,
   );
+}
+
+/**
+ * Identifies everything the generator sends apart from the model and the
+ * inputs: system prompt, few-shot, tool name, tool schema, retry reminders
+ * and the user-message template (built for a fixed canary input). The
+ * prompt version label alone misses code-side template changes, so evals
+ * record this too (Codex P2, #581).
+ */
+export function fitBriefRequestFingerprint(): string {
+  const prompt = loadPromptText("generation", "fitBrief");
+  const canary: FitBriefInput = {
+    jdText: "<jd>",
+    resumeText: "<resume>",
+    inventoryText: "<inventory>",
+    claimRulesText: "<rules>",
+  };
+  const hash = createHash("sha256")
+    .update(
+      JSON.stringify([
+        prompt.system,
+        TOOL_NAME,
+        zodToToolSchema(FitBriefResponseV1Schema),
+        SCHEMA_REMINDER,
+        NO_TOOL_REMINDER,
+        buildUserContent(prompt.userFewShot, canary),
+      ]),
+    )
+    .digest("hex");
+  return `sha256:${hash.slice(0, 12)}`;
 }
 
 function buildUserContent(fewShot: string, input: FitBriefInput): string {

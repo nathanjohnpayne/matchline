@@ -25,7 +25,7 @@
  */
 
 import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,7 @@ import { isEffort, profileFor, type Effort } from "../../../functions/src/llm/mo
 import { rateFor } from "../../../functions/src/llm/rates.ts";
 import { loadPromptText } from "../../../functions/src/prompts/loader.ts";
 import {
+  fitBriefRequestFingerprint,
   generateFitBrief,
   type FitBriefInput,
   type FitBriefResult,
@@ -247,11 +248,15 @@ export async function runFitBriefEval(
     model: options.model,
     ...(generatorEffort !== undefined && { effort: generatorEffort }),
     generatorPrompt: promptVersionLabel(loadPromptText("generation", "fitBrief")),
+    generatorRequest: fitBriefRequestFingerprint(),
     judgeModel: options.judgeModel,
     ...(judgeEffort !== undefined && { judgeEffort }),
     judgePrompt: JUDGE_PROMPT_FINGERPRINT,
     evidenceMode: options.evidence,
-    ...(options.evidence === "units" && { extraction: deps.extractionConfig ?? "unrecorded" }),
+    ...(options.evidence === "units" && {
+      extraction: deps.extractionConfig ?? "unrecorded",
+      unitsFormat: UNITS_FORMAT_FINGERPRINT,
+    }),
   };
   const report = (rows: readonly { split: string; score: BriefScore | null }[]) =>
     formatAggregate(aggregate(rows), { ...runConfig, spentUsd, maxUsd: options.maxUsd, incomplete });
@@ -496,6 +501,22 @@ export function renderUnitEvidence(units: readonly UnitEvidence[]): string {
     2,
   );
 }
+
+/**
+ * Identifies the units-mode serialization the generator reads, so runs
+ * whose evidence was laid out differently never share a configuration
+ * (Codex P2, #581). Hashes the rendering of a fixed canary.
+ */
+export const UNITS_FORMAT_FINGERPRINT = `sha256:${createHash("sha256")
+  .update(
+    renderUnitEvidence([
+      { raw_text: "<unit>", date_range: { start: "2000-01", end: "2001-02" } },
+      { raw_text: "<open unit>", date_range: { start: "2002-03" } },
+      { raw_text: "<undated unit>" },
+    ]),
+  )
+  .digest("hex")
+  .slice(0, 12)}`;
 
 /** What `extractFromResume` will run with, resolved the same way it resolves them. */
 export function extractionConfigLabel(): string {

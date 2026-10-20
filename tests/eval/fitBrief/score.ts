@@ -218,6 +218,8 @@ export function formatAggregate(
     readonly effort?: string;
     /** Generator prompt version, e.g. generation/fitBrief.v1. */
     readonly generatorPrompt?: string;
+    /** Fingerprint of the generator's full request template. */
+    readonly generatorRequest?: string;
     readonly judgeModel: string;
     readonly judgeEffort?: string;
     /** Judge prompt fingerprint. */
@@ -225,6 +227,8 @@ export function formatAggregate(
     readonly evidenceMode: string;
     /** Units mode: the extraction configuration that produced the evidence. */
     readonly extraction?: string;
+    /** Units mode: fingerprint of the evidence serialization. */
+    readonly unitsFormat?: string;
     readonly spentUsd: number;
     readonly maxUsd?: number;
     readonly incomplete: boolean;
@@ -232,10 +236,17 @@ export function formatAggregate(
 ): string {
   const lines = [
     `Fit-brief eval — model ${meta.model}${meta.effort ? ` (effort ${meta.effort})` : ""}, ` +
-      `evidence ${meta.evidenceMode}${meta.extraction ? ` (extraction ${meta.extraction})` : ""}, judge ${meta.judgeModel}` +
+      `evidence ${meta.evidenceMode}` +
+      `${meta.extraction ? ` (extraction ${meta.extraction}${meta.unitsFormat ? `, format ${meta.unitsFormat}` : ""})` : ""}` +
+      `, judge ${meta.judgeModel}` +
       `${meta.judgeEffort ? ` (effort ${meta.judgeEffort})` : ""}` +
       (meta.generatorPrompt || meta.judgePrompt
-        ? `; prompts ${[meta.generatorPrompt, meta.judgePrompt].filter(Boolean).join(", ")}`
+        ? `; prompts ${[
+            meta.generatorPrompt && `${meta.generatorPrompt}${meta.generatorRequest ? ` (request ${meta.generatorRequest})` : ""}`,
+            meta.judgePrompt,
+          ]
+            .filter(Boolean)
+            .join(", ")}`
         : ""),
     "",
     "| split | briefs | failed | gates passed | unsupported evidence | unsupported claims | claim-rule violations | recall* | precision* | verdict agreement |",

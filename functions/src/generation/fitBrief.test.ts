@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
 
-import { FitBriefError, generateFitBrief } from "./fitBrief.ts";
+import { FitBriefError, fitBriefRequestFingerprint, generateFitBrief } from "./fitBrief.ts";
 
 const BRIEF = {
   bottom_line: "Strong platform fit.",
@@ -197,5 +197,12 @@ describe("generateFitBrief", () => {
       "no_tool_use",
       "no_tool_use",
     ]);
+  });
+});
+
+describe("fitBriefRequestFingerprint", () => {
+  it("is a stable short hash of the request template (Codex P2, #581)", () => {
+    expect(fitBriefRequestFingerprint()).toMatch(/^sha256:[0-9a-f]{12}$/);
+    expect(fitBriefRequestFingerprint()).toBe(fitBriefRequestFingerprint());
   });
 });

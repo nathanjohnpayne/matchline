@@ -20,6 +20,7 @@ import {
   runFitBriefEval,
   extractionConfigLabel,
   renderUnitEvidence,
+  UNITS_FORMAT_FINGERPRINT,
   writePrivateFile,
   type FitBriefEvalDeps,
   type FitBriefEvalOptions,
@@ -236,10 +237,11 @@ describe("runFitBriefEval", () => {
   it("records the generator and judge prompt revisions in the report and every artifact (Codex P2, #581)", async () => {
     const d = deps();
     const out = await runFitBriefEval(CORPUS, OPTIONS, d);
-    expect(out.report).toMatch(/prompts generation\/fitBrief\.v\d+, judge sha256:[0-9a-f]{12}/);
+    expect(out.report).toMatch(/prompts generation\/fitBrief\.v\d+ \(request sha256:[0-9a-f]{12}\), judge sha256:[0-9a-f]{12}/);
     for (const text of d.files.values()) {
       expect(JSON.parse(text).config).toMatchObject({
         generatorPrompt: expect.stringMatching(/^generation\/fitBrief\.v\d+$/),
+        generatorRequest: expect.stringMatching(/^sha256:[0-9a-f]{12}$/),
         judgePrompt: expect.stringMatching(/^judge sha256:[0-9a-f]{12}$/),
         evidenceMode: "resume",
       });
@@ -251,7 +253,7 @@ describe("runFitBriefEval", () => {
     const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });
     const out = await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, { ...d, extractionConfig: "claude-haiku-4-5, prompt extraction/resume.v3" });
     // The report names the extraction pin behind the evidence (Codex P2, #581).
-    expect(out.report).toContain("evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3)");
+    expect(out.report).toContain(`evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3, format ${UNITS_FORMAT_FINGERPRINT})`);
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
     expect(JSON.parse(gen.resumeText)).toEqual([
       { text: "Owned the checkout API used by twelve teams.", dates_from_extraction: null },
