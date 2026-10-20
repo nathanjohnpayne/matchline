@@ -91,6 +91,13 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(evidenceUnits(resume)).toEqual(["owned the checkout api across three regions.", "led the pci migration."]);
   });
 
+  it("accepts a quote copied with its numbered, plus or heading marker (Codex P2, #581)", () => {
+    const resume = "## Platform leadership\n1. Led the rollout.\n+ Ran the migration.";
+    for (const q of ["## Platform leadership", "1. Led the rollout.", "+ Ran the migration.", "Led the rollout."]) {
+      expect(checkEvidence(brief([q]), [resume]).unsupported).toEqual([]);
+    }
+  });
+
   it("does not accept a paraphrase", () => {
     expect(checkEvidence(brief(["Ran the checkout API."]), ["Owned the checkout API."]).unsupported).toHaveLength(1);
   });

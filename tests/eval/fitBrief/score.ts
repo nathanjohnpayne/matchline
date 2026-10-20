@@ -33,7 +33,10 @@ export function normalizeForMatch(text: string): string {
     // Single-character emphasis (*x*, _x_) at word boundaries; asterisks
     // and underscores inside words are left alone (Codex P2, #581).
     .replace(/(^|[^\p{L}\p{N}])[*_](?=\S)(.+?)(?<=\S)[*_](?=$|[^\p{L}\p{N}])/gmu, "$1$2")
-    .replace(/^\s*[-*•]\s+/gm, "")
+    // The same list-item and heading markers evidenceUnits strips from the
+    // sources, so a quote copied with its marker still matches (Codex P2, #581).
+    .replace(/^\s*(?:[-*+•]|\d+[.)])\s+/gm, "")
+    .replace(/^\s*#{1,6}\s+/gm, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -224,6 +227,8 @@ export function formatAggregate(
     readonly judgeEffort?: string;
     /** Judge prompt fingerprint. */
     readonly judgePrompt?: string;
+    /** Hash of the corpus inputs the run read. */
+    readonly corpus?: string;
     readonly evidenceMode: string;
     /** Units mode: the extraction configuration that produced the evidence. */
     readonly extraction?: string;
@@ -240,7 +245,7 @@ export function formatAggregate(
 ): string {
   const lines = [
     `Fit-brief eval — model ${meta.model}${meta.effort ? ` (effort ${meta.effort})` : ""}, ` +
-      `evidence ${meta.evidenceMode}` +
+      `${meta.corpus ? `corpus ${meta.corpus}, ` : ""}evidence ${meta.evidenceMode}` +
       `${
         meta.extraction
           ? ` (extraction ${meta.extraction}` +

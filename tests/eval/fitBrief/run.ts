@@ -362,6 +362,18 @@ export async function runFitBriefEval(
     judgeModel: options.judgeModel,
     ...(judgeEffort !== undefined && { judgeEffort }),
     judgePrompt: judgeRequestFingerprint(options.judgeModel, options.judgeEffort),
+    // A privacy-safe hash of every corpus input this run read (résumé,
+    // inventory, claim rules, and each selected pair's id, JD and
+    // reference), so runs on different corpus revisions are told apart
+    // without recording the private text (Codex P2, #581).
+    corpus: `sha256:${sha256Hex(
+      JSON.stringify([
+        corpus.resumeText,
+        corpus.inventoryText ?? null,
+        corpus.claimRulesText ?? null,
+        pairs.map((p) => [p.id, p.split, p.jdText, p.referenceText]),
+      ]),
+    ).slice(0, 12)}`,
     evidenceMode: options.evidence,
     ...(options.evidence === "units" && {
       extraction: extractionLabel,

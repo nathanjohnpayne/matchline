@@ -252,6 +252,24 @@ describe("runFitBriefEval", () => {
     }
   });
 
+  it("fingerprints the corpus inputs, changing when any of them does (Codex P2, #581)", async () => {
+    const corpusOf = async (c: FitBriefCorpus) => {
+      const d = deps();
+      const out = await runFitBriefEval(c, OPTIONS, d);
+      const config = JSON.parse([...d.files.values()][0]!).config;
+      expect(out.report).toContain(`corpus ${config.corpus}`);
+      return config.corpus as string;
+    };
+    const base = await corpusOf(CORPUS);
+    expect(base).toMatch(/^sha256:[0-9a-f]{12}$/);
+    // The private text itself is never in the config.
+    expect(base).not.toContain("storefront");
+    expect(await corpusOf({ ...CORPUS, resumeText: CORPUS.resumeText + " (rev 2)" })).not.toBe(base);
+    expect(
+      await corpusOf({ ...CORPUS, pairs: CORPUS.pairs.map((p, i) => (i === 0 ? { ...p, referenceText: "Revised" } : p)) }),
+    ).not.toBe(base);
+  });
+
   it("saves the exact Units a units-mode run used, and records their hash (Codex P2, #581)", async () => {
     const d = deps({ extractionConfig: "claude-haiku-4-5, prompt extraction/resume.v3" });
     await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units" }, d);
