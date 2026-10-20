@@ -7,32 +7,86 @@
  * The pure `priceFor` is trivially testable and used by both the
  * per-call `recordUsage` path and any projection guard that wants to
  * pre-compute a spend estimate without hitting Firestore.
+ *
+ * **Every figure here is a list-price estimate, not an invoice.** It
+ * prices the token counts the provider reported against `rates.ts`; it
+ * does not see credits, discounts or billing adjustments. The eval
+ * harness's subscription-CLI token sources report a third kind of
+ * number — modeled cost for tokens that were never metered — and label
+ * it as such (tests/eval/README.md § Token sources).
  */
 
+import type Anthropic from "@anthropic-ai/sdk";
 import { FieldValue } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { getAdminDb } from "../firestore/admin.js";
-import { rateFor } from "./rates.js";
+import { rateFor, RATES, type RateCard } from "./rates.js";
 
 export const LLM_CALLS_COLLECTION = "llm_calls";
 
+/**
+ * Version of the `llm_calls` document shape. Docs written before this
+ * field existed are version 1 and stay as written — they are never
+ * backfilled or re-priced.
+ */
+export const USAGE_SCHEMA_VERSION = 2;
+
 export interface TokenCounts {
+  /** Uncached input tokens. */
   readonly inputTokens: number;
+  /**
+   * Output tokens. On Anthropic this already includes any thinking
+   * tokens; the API reports no separate reasoning count, so none is
+   * recorded (adding one would double count).
+   */
   readonly outputTokens: number;
+  /**
+   * Prompt-cache writes. `undefined` means the provider did not report
+   * the field, which is not the same as a reported `0`.
+   */
+  readonly cacheCreationInputTokens?: number;
+  /** Prompt-cache reads. `undefined` = not reported, as above. */
+  readonly cacheReadInputTokens?: number;
 }
 
 export interface UsageRecord extends TokenCounts {
   /** Pipeline stage the call served (e.g. "extraction", "generation"). */
   readonly stage: string;
 
-  /** Model identifier; must have an entry in `RATES`. */
+  /**
+   * Finer task within `stage`, where one stage makes several kinds of
+   * call — validation's "claim_extraction" / "traceability" /
+   * "specificity".
+   */
+  readonly subtask?: string;
+
+  /** Requested model identifier — what config or a sweep variant asked for. */
   readonly model: string;
+
+  /**
+   * Model the provider reports having served (`response.model`). Can
+   * differ from `model` when an alias resolves to a snapshot. Pricing
+   * uses it when it has a rate — see `priceUsage`.
+   */
+  readonly servedModel?: string;
 
   /** Provider side, "anthropic" | "openai" — split for per-vendor alarms. */
   readonly provider: "anthropic" | "openai";
 
   /** Wall-clock latency of the call. Used by the eval harness. */
   readonly latencyMs: number;
+
+  /** Prompt that built the request, as `<stage>/<name>.<version>`. */
+  readonly promptVersion?: string;
+
+  /** 0-based attempt within the caller's retry loop. */
+  readonly attempt?: number;
+
+  /** `max_tokens` the request was sent with. */
+  readonly maxTokens?: number;
+
+  /** Eval-harness run that made the call, when there is one. */
+  readonly runId?: string;
 
   /** Optional — the user whose flow originated the call. */
   readonly ownerUid?: string;
@@ -42,34 +96,125 @@ export interface UsageRecord extends TokenCounts {
 }
 
 export interface LlmCallDoc extends UsageRecord {
-  readonly costUsd: number;
+  readonly usageSchemaVersion: number;
+  /**
+   * `"unpriced"` when no rate could price the call. `costUsd` is then
+   * absent rather than `0`, so an unknown cost never reads as free.
+   */
+  readonly costStatus: "priced" | "unpriced";
+  readonly costUsd?: number;
+  /** Model whose rate produced `costUsd`. */
+  readonly pricedModel?: string;
   readonly createdAt: FirebaseFirestore.FieldValue;
+}
+
+function assertTokenCount(name: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(
+      `Token counts must be finite, non-negative numbers (got ${name}=${value}).`,
+    );
+  }
+}
+
+/** Every token the prompt carried: uncached input plus cache traffic. */
+function promptTokens(tokens: TokenCounts): number {
+  return (
+    tokens.inputTokens +
+    (tokens.cacheCreationInputTokens ?? 0) +
+    (tokens.cacheReadInputTokens ?? 0)
+  );
 }
 
 /**
  * Pure price calculator. No I/O. Reused by the eval-harness projection
  * guard (#48) to pre-compute run cost without burning Firestore reads.
  *
- * Throws on unknown models (via `rateFor`) or invalid token counts
- * (negative, `NaN`, `Infinity`) so bad inputs can never silently
- * persist as a $0 cost and corrupt downstream budget math.
+ * Throws on unknown models (via `rateFor`), on invalid token counts
+ * (negative, `NaN`, `Infinity`), and on cache tokens for a model with
+ * no cache rate, so bad inputs can never silently persist as a $0 cost
+ * and corrupt downstream budget math.
  */
 export function priceFor(model: string, tokens: TokenCounts): number {
-  if (
-    !Number.isFinite(tokens.inputTokens) ||
-    !Number.isFinite(tokens.outputTokens) ||
-    tokens.inputTokens < 0 ||
-    tokens.outputTokens < 0
-  ) {
-    throw new Error(
-      `Token counts must be finite, non-negative numbers (got input=${tokens.inputTokens}, output=${tokens.outputTokens}).`,
-    );
-  }
+  assertTokenCount("input", tokens.inputTokens);
+  assertTokenCount("output", tokens.outputTokens);
+  assertTokenCount("cacheCreationInput", tokens.cacheCreationInputTokens);
+  assertTokenCount("cacheReadInput", tokens.cacheReadInputTokens);
+
   const rate = rateFor(model);
+  // A request over the long-prompt threshold is priced entirely on the
+  // long card, cache hits included.
+  const card: RateCard =
+    rate.longPrompt && promptTokens(tokens) > rate.longPrompt.thresholdTokens
+      ? rate.longPrompt.rate
+      : rate;
+
+  const cacheWrite = tokens.cacheCreationInputTokens ?? 0;
+  const cacheRead = tokens.cacheReadInputTokens ?? 0;
+  if (cacheWrite > 0 && card.cacheWriteUsdPer1k === undefined) {
+    throw new Error(`No cache-write rate registered for model: ${model}.`);
+  }
+  if (cacheRead > 0 && card.cacheReadUsdPer1k === undefined) {
+    throw new Error(`No cache-read rate registered for model: ${model}.`);
+  }
+
   return (
-    (tokens.inputTokens / 1000) * rate.inputUsdPer1k +
-    (tokens.outputTokens / 1000) * rate.outputUsdPer1k
+    (tokens.inputTokens / 1000) * card.inputUsdPer1k +
+    (tokens.outputTokens / 1000) * card.outputUsdPer1k +
+    (cacheWrite / 1000) * (card.cacheWriteUsdPer1k ?? 0) +
+    (cacheRead / 1000) * (card.cacheReadUsdPer1k ?? 0)
   );
+}
+
+/**
+ * The model whose rate prices a call: the served model when it has a
+ * rate, otherwise the requested one. A served model with no rate is
+ * logged (it means rates.ts is missing a snapshot) but does not drop
+ * the call's cost, as long as the requested model can price it.
+ */
+export function pricedModelFor(usage: Pick<UsageRecord, "model" | "servedModel">): string {
+  const { model, servedModel } = usage;
+  if (servedModel === undefined || servedModel === model) return model;
+  if (Object.hasOwn(RATES, servedModel)) return servedModel;
+  logger.warn("cost.pricedModelFor: served model has no rate; pricing the requested model", {
+    model,
+    servedModel,
+  });
+  return model;
+}
+
+/**
+ * Price one usage record on the model `pricedModelFor` picks. Throws
+ * like `priceFor` when that model has no rate.
+ */
+export function priceUsage(usage: UsageRecord): { costUsd: number; pricedModel: string } {
+  const pricedModel = pricedModelFor(usage);
+  return { costUsd: priceFor(pricedModel, usage), pricedModel };
+}
+
+/**
+ * Token categories and served model off an Anthropic response, for
+ * spreading into a `UsageRecord`. Cache fields the API returned as
+ * `null` stay `undefined` (not reported), never `0`.
+ */
+export function anthropicUsageFields(
+  response: Pick<Anthropic.Messages.Message, "model" | "usage">,
+): Pick<
+  UsageRecord,
+  "inputTokens" | "outputTokens" | "cacheCreationInputTokens" | "cacheReadInputTokens" | "servedModel"
+> {
+  const { usage } = response;
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    ...(typeof usage.cache_creation_input_tokens === "number" && {
+      cacheCreationInputTokens: usage.cache_creation_input_tokens,
+    }),
+    ...(typeof usage.cache_read_input_tokens === "number" && {
+      cacheReadInputTokens: usage.cache_read_input_tokens,
+    }),
+    ...(typeof response.model === "string" && { servedModel: response.model }),
+  };
 }
 
 /**
@@ -148,20 +293,41 @@ export async function safeRecordUsage(
  *
  * The returned value lets the caller surface per-call cost on the
  * Application (Phase 2a Editor footer) without a round-trip read.
- * Returns `0` when pricing itself fails (logged as a warning).
+ * Returns `0` when pricing itself fails. That failure is logged at
+ * error level and the call is still persisted, with
+ * `costStatus: "unpriced"` and no `costUsd`, so its tokens are kept
+ * and the gap is visible in the data rather than recorded as free.
  */
 export async function recordUsage(usage: UsageRecord): Promise<number> {
-  let costUsd: number;
+  // Malformed token counts are dropped, not persisted: they would
+  // poison every rollup that sums them. Only a missing rate takes the
+  // persist-as-unpriced path below.
   try {
-    costUsd = priceFor(usage.model, usage);
+    assertTokenCount("input", usage.inputTokens);
+    assertTokenCount("output", usage.outputTokens);
+    assertTokenCount("cacheCreationInput", usage.cacheCreationInputTokens);
+    assertTokenCount("cacheReadInput", usage.cacheReadInputTokens);
   } catch (err) {
-    logger.warn("cost.recordUsage: pricing failed; skipping usage write", {
+    logger.warn("cost.recordUsage: invalid token counts; skipping usage write", {
       stage: usage.stage,
       model: usage.model,
       provider: usage.provider,
       error: err instanceof Error ? err.message : String(err),
     });
     return 0;
+  }
+
+  let priced: { costUsd: number; pricedModel: string } | undefined;
+  try {
+    priced = priceUsage(usage);
+  } catch (err) {
+    logger.error("cost.recordUsage: pricing failed; persisting the call as unpriced", {
+      stage: usage.stage,
+      model: usage.model,
+      servedModel: usage.servedModel,
+      provider: usage.provider,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   // Guard `latencyMs` before persisting: a NaN/Infinity/negative value
@@ -181,22 +347,22 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
   }
 
   // Firestore rejects documents containing `undefined` values by
-  // default. `usage.ownerUid` and `usage.applicationId` are optional
-  // and commonly absent (e.g. embeddings called from a non-user
-  // context), so we build the doc conditionally rather than globally
-  // enabling `ignoreUndefinedProperties` on the admin SDK.
-  const doc: LlmCallDoc = {
-    stage: usage.stage,
-    model: usage.model,
-    provider: usage.provider,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    latencyMs,
-    costUsd,
-    createdAt: FieldValue.serverTimestamp(),
-    ...(usage.ownerUid !== undefined && { ownerUid: usage.ownerUid }),
-    ...(usage.applicationId !== undefined && { applicationId: usage.applicationId }),
-  };
+  // default. Most UsageRecord fields are optional and commonly absent
+  // (e.g. embeddings called from a non-user context), so undefined
+  // entries are dropped rather than globally enabling
+  // `ignoreUndefinedProperties` on the admin SDK.
+  const doc = Object.fromEntries(
+    Object.entries({
+      ...usage,
+      latencyMs,
+      usageSchemaVersion: USAGE_SCHEMA_VERSION,
+      costStatus: priced ? "priced" : "unpriced",
+      costUsd: priced?.costUsd,
+      pricedModel: priced?.pricedModel,
+      createdAt: FieldValue.serverTimestamp(),
+    } satisfies LlmCallDoc).filter(([, value]) => value !== undefined),
+  ) as unknown as LlmCallDoc;
+  const costUsd = priced?.costUsd ?? 0;
 
   // Fire-and-forget: the caller's LLM response path must not block on
   // the telemetry write. Errors are logged via .catch. V1 accepts the
@@ -236,4 +402,13 @@ export async function recordUsage(usage: UsageRecord): Promise<number> {
   }
 
   return costUsd;
+}
+
+/** `<stage>/<name>.<version>` label for a loaded prompt, e.g. `extraction/resume.v1`. */
+export function promptVersionLabel(prompt: {
+  readonly stage: string;
+  readonly name: string;
+  readonly version: string;
+}): string {
+  return `${prompt.stage}/${prompt.name}.${prompt.version}`;
 }

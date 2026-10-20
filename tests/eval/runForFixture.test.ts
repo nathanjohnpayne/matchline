@@ -50,13 +50,16 @@ function makeMockAnthropic(seq: readonly unknown[]): Anthropic {
   let i = 0;
   return {
     messages: {
-      create: vi.fn(async () => {
+      // Echo the requested model as the served one, as the API does.
+      // Pricing follows the served model (#483), so a fixed model here
+      // would price every stage as that model.
+      create: vi.fn(async (params: { model: string }) => {
         const toolInput = seq[i++];
         return {
           id: `msg_${i}`,
           type: "message",
           role: "assistant",
-          model: "claude-haiku-4-5-20251001",
+          model: params.model,
           content: [
             {
               type: "tool_use",

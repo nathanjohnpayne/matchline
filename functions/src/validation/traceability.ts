@@ -32,7 +32,12 @@ import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   TraceabilityResponseV1Schema,
@@ -49,6 +54,9 @@ import {
 import type { Claim } from "./claimExtraction.js";
 import { formatUnit, quote } from "./unitPromptText.js";
 
+/** Output-token budget per attempt; also recorded on each usage record. */
+const MAX_OUTPUT_TOKENS = 1024;
+
 export interface TraceabilityResult {
   /** Strict binary verdict — see schema for the contract. */
   readonly supports: boolean;
@@ -60,6 +68,8 @@ export interface TraceabilityResult {
 
 export interface TraceabilityContext {
   readonly ownerUid: string;
+  /** Application whose asset is being validated; recorded on usage telemetry. */
+  readonly applicationId?: string;
 }
 
 export interface TraceabilityDeps {
@@ -125,7 +135,7 @@ export async function checkTraceability(
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 1024,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -166,10 +176,14 @@ export async function checkTraceability(
         stage: "validation",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        subtask: "traceability",
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: MAX_OUTPUT_TOKENS,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
+        ...(ctx.applicationId !== undefined && { applicationId: ctx.applicationId }),
       }),
       "validation.traceability",
     );

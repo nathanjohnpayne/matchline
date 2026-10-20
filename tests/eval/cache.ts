@@ -67,7 +67,7 @@ import {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { priceFor, type UsageRecord } from "../../functions/src/llm/cost.ts";
+import { priceUsage, type UsageRecord } from "../../functions/src/llm/cost.ts";
 
 /**
  * `read-write` — normal: serve hits, persist misses.
@@ -358,7 +358,7 @@ export class StageCache {
       // and never let a pricing failure (unknown model) throw into
       // the caller's pipeline.
       try {
-        return priceFor(usage.model, usage);
+        return priceUsage(usage).costUsd;
       } catch {
         return 0;
       }
@@ -430,7 +430,7 @@ export class StageCache {
 const warnedUnpricedModels = new Set<string>();
 
 /**
- * Sum `priceFor` across usage records. Shared by the actual-spend and
+ * Sum `priceUsage` across usage records. Shared by the actual-spend and
  * modeled-spend rollups so they can never drift apart.
  *
  * An unknown model contributes 0 rather than throwing — the harness
@@ -447,7 +447,7 @@ export function sumUsageCost(usage: readonly UsageRecord[]): number {
   let total = 0;
   for (const u of usage) {
     try {
-      total += priceFor(u.model, u);
+      total += priceUsage(u).costUsd;
     } catch {
       if (!warnedUnpricedModels.has(u.model)) {
         warnedUnpricedModels.add(u.model);
