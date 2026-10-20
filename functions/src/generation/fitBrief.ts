@@ -185,7 +185,9 @@ export async function generateFitBrief(
         kind: "max_tokens_exceeded",
         message: `The model hit the ${request.max_tokens}-token output budget mid-tool-call.`,
       });
-      continue;
+      // A retry with the same budget truncates the same way; stop rather
+      // than pay for it.
+      break;
     }
 
     const toolUse = response.content.find(
@@ -214,11 +216,13 @@ export async function generateFitBrief(
     };
   }
 
-  const refused = failures.at(-1)?.kind === "refusal";
+  const last = failures.at(-1)?.kind;
   throw new FitBriefError(
-    refused
+    last === "refusal"
       ? `Fit brief was declined by the model (stop_reason: "refusal"). See .failures for detail.`
-      : `Fit brief failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
+      : last === "max_tokens_exceeded"
+        ? `Fit brief was truncated at the output budget. See .failures for detail.`
+        : `Fit brief failed after ${failures.length} attempts. See .failures for per-attempt detail.`,
     failures,
   );
 }

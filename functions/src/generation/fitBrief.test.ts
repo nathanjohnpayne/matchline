@@ -122,6 +122,20 @@ describe("generateFitBrief", () => {
     expect(vi.mocked(c.messages.create)).toHaveBeenCalledTimes(1);
   });
 
+  it("stops on truncation instead of paying for retries that truncate the same way", async () => {
+    const c = client([
+      message(BRIEF, { stop_reason: "max_tokens" } as Partial<Anthropic.Messages.Message>),
+      message(BRIEF),
+    ]);
+    const err = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: c,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+    }).catch((e: unknown) => e);
+    expect((err as FitBriefError).message).toMatch(/truncated/);
+    expect(vi.mocked(c.messages.create)).toHaveBeenCalledTimes(1);
+  });
+
   it("fails after three attempts without a tool call", async () => {
     const text = message(BRIEF, { content: [{ type: "text", text: "no" }] } as Partial<Anthropic.Messages.Message>);
     const err = await generateFitBrief(INPUT, {
