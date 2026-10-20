@@ -192,9 +192,14 @@ codex:
   cli_login: nathanpayne-codex
 
   # Maximum number of `@codex review` rounds before escalating as runaway.
-  # The 3rd round trips the guard. Normal termination is either approval,
+  # The 5th round trips the guard. Normal termination is either approval,
   # disagreement (repeat-after-rebuttal), or timeout → Phase 4b fallback.
-  max_review_rounds: 2
+  # Raised from 2 as a stopgap for nathanjohnpayne/mergepath#2534: a
+  # CodeRabbit rate-limit failover request spends a round, which left
+  # owner-authored PRs at a runaway stop with no exit short of an admin
+  # merge. Lower it again once the mergepath owner runaway marker and
+  # failover-exclusion fixes propagate here.
+  max_review_rounds: 4
 
   # Poll timeout per round, in seconds, for `codex-review-request.sh`.
   # If Codex has not posted a review within this window, treat as timeout
