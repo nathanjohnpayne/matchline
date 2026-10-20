@@ -123,6 +123,15 @@ export interface RoleDetailViewProps {
   readonly onGenerate: () => void;
 }
 
+/**
+ * True when the Role carries a JD. A Role saved from `/roles/new`
+ * with only a title stores `jd_raw: ""` (#431); the `?? ""` also
+ * covers a document written before `jd_raw` was always stamped.
+ */
+function roleHasJd(role: Role): boolean {
+  return (role.jd_raw ?? "").trim() !== "";
+}
+
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
   { id: "requirements", label: "Requirements" },
   { id: "matches", label: "Matches" },
@@ -267,7 +276,8 @@ export default function RoleDetailView({
       >
         {activeTab === "requirements" && (
           <RequirementsTab
-            jdRaw={role.jd_raw}
+            // `?? ""`: same legacy-document guard as `roleHasJd`.
+            jdRaw={role.jd_raw ?? ""}
             draft={jdDraft}
             onDraftChange={onJdDraftChange}
             requirements={requirements}
@@ -293,6 +303,7 @@ export default function RoleDetailView({
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}
+            hasJd={roleHasJd(role)}
           />
         )}
         {activeTab === "applications" && (

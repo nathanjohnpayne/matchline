@@ -30,7 +30,12 @@ import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
   ClaimExtractionResponseV1Schema,
@@ -45,8 +50,13 @@ import {
   type ValidationAttemptFailure,
 } from "./errors.js";
 
+/** Output-token budget per attempt; also recorded on each usage record. */
+const MAX_OUTPUT_TOKENS = 2048;
+
 export interface ClaimExtractionContext {
   readonly ownerUid: string;
+  /** Application whose asset is being validated; recorded on usage telemetry. */
+  readonly applicationId?: string;
   readonly assetId: string;
   readonly bulletId: string;
   /** Optional: the section title ("experience", "summary"). */
@@ -159,7 +169,7 @@ export async function extractClaims(
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 2048,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -201,10 +211,14 @@ export async function extractClaims(
         stage: "validation",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        subtask: "claim_extraction",
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: MAX_OUTPUT_TOKENS,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
+        ...(ctx.applicationId !== undefined && { applicationId: ctx.applicationId }),
       }),
       "validation.claimExtraction",
     );

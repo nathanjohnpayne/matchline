@@ -164,6 +164,14 @@ level up: an ignored `--tokn-source claude-cli` would leave the default
 metered API selected and spend real money on a run you meant to bill to
 a subscription.
 
+### What the cost figures are
+
+Every dollar figure the harness prints is a **list-price estimate**: provider-reported token counts priced through `functions/src/llm/rates.ts` by `priceUsage` in `functions/src/llm/cost.ts`, the same function production telemetry uses. It is not an invoice. Credits, discounts and billing adjustments never show up here, so check the provider console for what was actually billed.
+
+- **`api` token source:** an estimate of metered spend.
+- **`claude-cli` token source:** modeled cost for tokens that were billed to a subscription, not metered. It answers "what would this have cost on the API", not "what did this cost".
+- **Pricing model:** each call is priced on the model the provider reports serving when that model has a rate, and on the requested model otherwise. Cache writes and reads are priced on their own rates. Haiku 5.5 prompts over 100,000 tokens, cache traffic included, use its long-prompt rates.
+
 ### API keys
 
 Both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are required for real

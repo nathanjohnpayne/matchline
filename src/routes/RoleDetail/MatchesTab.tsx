@@ -64,6 +64,14 @@ export interface MatchesTabProps {
    * earlier run (#504, `isMatchingRunIncomplete`).
    */
   readonly matchingIncomplete?: boolean;
+  /**
+   * False when the Role has no JD yet (#431). A Role can be saved as
+   * a lead with only a title, and "parse the JD" is the wrong advice
+   * when there is no JD to parse. Optional and treated as `true` when
+   * absent, so callers that predate JD-less Roles keep the original
+   * copy.
+   */
+  readonly hasJd?: boolean;
 }
 
 /**
@@ -150,6 +158,7 @@ export default function MatchesTab({
   onRerunMatching,
   matchingError,
   matchingIncomplete,
+  hasJd = true,
 }: MatchesTabProps): ReactElement {
   if (groups.length === 0) {
     // No Requirements at all — different from "Requirements
@@ -181,8 +190,11 @@ export default function MatchesTab({
           {strandedMatches !== undefined && strandedMatches > 0
             ? "This Role has no requirements right now, but it still has " +
               "matches from a previous version of the job description."
-            : "No Requirements parsed for this Role yet. Parse the JD on " +
-              "the Requirements tab first."}
+            : hasJd
+              ? "No Requirements parsed for this Role yet. Parse the JD on " +
+                "the Requirements tab first."
+              : "No JD yet. Paste it on the Requirements tab to parse " +
+                "requirements; matching starts once they exist."}
         </p>
         <StrandedNotice count={strandedMatches ?? 0} inRoleWithNoRequirements />
         {/*

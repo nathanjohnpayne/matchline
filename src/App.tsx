@@ -5,6 +5,7 @@ import UpdatePrompt from "./components/UpdatePrompt.tsx";
 import Wordmark from "./components/Wordmark.tsx";
 import { getAuthClient } from "./firebase.ts";
 import { useCurrentUser } from "./lib/auth.tsx";
+import { clearAllFormDrafts } from "./lib/formDraft.ts";
 import ApplicationEditor from "./routes/ApplicationEditor/index.tsx";
 import Onboarding from "./routes/Onboarding.tsx";
 import Pipeline from "./routes/Pipeline/index.tsx";
@@ -71,6 +72,10 @@ export default function App() {
               onClick={async () => {
                 try {
                   await signOut(getAuthClient());
+                  // Form drafts live in per-browser storage, not per
+                  // account; drop them so the next account to sign in
+                  // here does not inherit them (#431).
+                  clearAllFormDrafts();
                 } catch (err) {
                   // Rare — Firebase's sign-out is mostly a local
                   // token clear. Log for diagnosis; user can retry.

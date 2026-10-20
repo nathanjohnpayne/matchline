@@ -23,7 +23,12 @@ import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
@@ -199,8 +204,10 @@ export async function parseJobRequirements(
         stage: "requirement_parsing",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: MAX_OUTPUT_TOKENS,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
       }),

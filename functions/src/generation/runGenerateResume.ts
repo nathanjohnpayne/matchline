@@ -45,7 +45,8 @@ export interface RunGenerateResumeResult {
   readonly assetId: string;
   readonly applicationId: string;
   readonly content: GeneratedAssetContent;
-  readonly cost_usd: number;
+  /** `null` when generation could not price an attempt — see `RunGenerationResult.cost_usd`. */
+  readonly cost_usd: number | null;
   readonly input_tokens: number;
   readonly output_tokens: number;
   readonly latency_ms: number;
@@ -116,7 +117,8 @@ export async function runGenerateResume(
     storage_path: "",
     generated_content: result.content,
     validation_status: "pending",
-    cost_usd: result.cost_usd,
+    // Omitted rather than stored as 0 when the cost is unknown.
+    ...(result.cost_usd !== null && { cost_usd: result.cost_usd }),
     input_tokens: result.input_tokens,
     output_tokens: result.output_tokens,
     latency_ms: result.latency_ms,

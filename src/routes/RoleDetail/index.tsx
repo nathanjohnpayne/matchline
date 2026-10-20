@@ -760,7 +760,11 @@ export default function RoleDetail(): ReactElement {
           }
           return;
         }
-        setRole(r);
+        // Normalize a document written without `jd_raw` to the
+        // empty-string "no JD yet" state (#431), so every reader in
+        // this container and the tabs below sees a string. Codex P2
+        // on PR #575.
+        setRole({ ...r, jd_raw: r.jd_raw ?? "" });
         roleResolved = true;
         maybeReady();
       } catch (err) {

@@ -48,6 +48,10 @@ export interface Role {
   owner_uid: UUID;
   company_id: UUID;
   title: string;
+  /**
+   * Raw JD text. `""` means no JD yet: a Role can be saved as a lead
+   * with only a title and its JD pasted later (#431).
+   */
   jd_raw: string;
   jd_url?: string;
   location?: string;

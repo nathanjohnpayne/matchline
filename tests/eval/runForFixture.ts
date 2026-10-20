@@ -30,7 +30,7 @@ import { extractFromResume } from "../../functions/src/extraction/resume.ts";
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
 import { EMBEDDING_MODEL, modelFor } from "../../functions/src/llm/config.ts";
 import {
-  priceFor,
+  priceUsage,
   type UsageRecord,
 } from "../../functions/src/llm/cost.ts";
 import { embedMany } from "../../functions/src/llm/embeddings.ts";
@@ -133,7 +133,7 @@ export interface RunForFixtureResult {
    * Total cost in USD across every LLM call in this
    * fixture's run (extraction + Unit embeddings + parsing
    * + Requirement embeddings). Computed via the pure
-   * `priceFor` from `functions/src/llm/cost.ts` against
+   * `priceUsage` from `functions/src/llm/cost.ts` against
    * each call's token counts; the harness binds a
    * closure-scoped recorder to the pipeline deps so cost
    * accumulates without Firestore writes.
@@ -150,7 +150,7 @@ export interface RunForFixtureResult {
    * cache warms — correct for the projection guard, useless for
    * ranking models. `modeledCostUsd` prices every stage's usage
    * records (replayed from cache on a hit) through the same
-   * `priceFor` production uses, so the model sweep ranks on a number
+   * `priceUsage` production uses, so the model sweep ranks on a number
    * that doesn't move with cache state.
    *
    * On a fully cold run the two are equal.
@@ -194,7 +194,7 @@ export async function runForFixture(
   const recordCost = async (usage: UsageRecord): Promise<number> => {
     let cost = 0;
     try {
-      cost = priceFor(usage.model, usage);
+      cost = priceUsage(usage).costUsd;
     } catch {
       // Same fallback as production `recordUsage`: pricing
       // failures (unknown model) → 0 contribution. Don't
