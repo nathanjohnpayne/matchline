@@ -53,6 +53,7 @@ afterEach(() => {
 });
 
 const {
+  moveApplicationToStage,
   getApplication,
   removeBulletFromAsset,
   removeBulletFromContent,
@@ -1301,3 +1302,24 @@ describe("restoreAssetState (Firestore-mocked, sub-issue #197)", () => {
     expect(writtenAsset.validation_status).toBe("pending");
   });
 });
+
+describe("moveApplicationToStage (#511)", () => {
+  it("writes only stage and last_activity_at", async () => {
+    updateDoc.mockResolvedValue(undefined);
+    await moveApplicationToStage("app-1", "applied", "2026-10-20T02:00:00.000Z");
+    expect(updateDoc).toHaveBeenCalledTimes(1);
+    const fields = updateDoc.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(fields).toEqual({
+      stage: "applied",
+      last_activity_at: "2026-10-20T02:00:00.000Z",
+    });
+  });
+
+  it("propagates a rejected write so the board can roll back", async () => {
+    updateDoc.mockRejectedValue(new Error("permission-denied"));
+    await expect(
+      moveApplicationToStage("app-1", "offer", "2026-10-20T02:00:00.000Z"),
+    ).rejects.toThrow("permission-denied");
+  });
+});
+

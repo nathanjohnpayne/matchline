@@ -23,7 +23,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, setDoc, type Firestore } from "firebase/firestore";
+import { doc, getDoc, setDoc, type Firestore } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -62,7 +62,10 @@ vi.mock("../src/firebase.ts", () => ({
 // Imported after the mock is registered (vi.mock is hoisted).
 import { buildPipelineBoard } from "../src/routes/Pipeline/buildPipelineBoard.ts";
 import { loadPipelineData } from "../src/routes/Pipeline/loadPipelineData.ts";
-import { listApplications } from "../src/services/applications.ts";
+import {
+  listApplications,
+  moveApplicationToStage,
+} from "../src/services/applications.ts";
 import {
   listCompanies,
   listInteractions,
@@ -220,3 +223,45 @@ describe("Pipeline board read path (#510)", () => {
     });
   });
 });
+
+describe("Pipeline card move write path (#511)", () => {
+  async function readRaw(id: string): Promise<Record<string, unknown> | undefined> {
+    let raw: Record<string, unknown> | undefined;
+    // withSecurityRulesDisabled resolves to void, so capture the read.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      raw = (await getDoc(doc(ctx.firestore(), "applications", id))).data();
+    });
+    return raw;
+  }
+
+  it("persists the new stage, resets last_activity_at, and changes nothing else", async () => {
+    const before = await readRaw("a-applied");
+    const at = "2026-10-20T02:00:00.000Z";
+
+    await moveApplicationToStage("a-applied", "interviewing", at);
+
+    const after = await readRaw("a-applied");
+    expect(after).toEqual({ ...before, stage: "interviewing", last_activity_at: at });
+
+    // "After a reload it is still there": a fresh board load sees it.
+    const data = await loadPipelineData({
+      listApplications: () => listApplications(),
+      listRoles: () => listRoles(),
+      listCompanies,
+      listInteractions,
+      listPeople,
+    });
+    const board = buildPipelineBoard({ ...data, now: new Date(at) });
+    const interviewing = board.find((c) => c.stage === "interviewing")?.cards;
+    expect(interviewing?.map((c) => c.applicationId)).toEqual(["a-applied"]);
+    expect(interviewing?.[0]?.daysInStage).toBe(0);
+  });
+
+  it("is rejected by the rules for another owner's Application", async () => {
+    await expect(
+      moveApplicationToStage("a-bob", "offer", "2026-10-20T02:00:00.000Z"),
+    ).rejects.toThrow();
+    expect((await readRaw("a-bob"))?.stage).toBe("interviewing");
+  });
+});
+
