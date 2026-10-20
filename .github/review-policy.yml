@@ -153,8 +153,13 @@ coderabbit:
 #      comment and poll for the Codex review.
 #   2. Parse the returned JSON. Address each P0/P1 finding with a fix OR
 #      a reply explaining why the finding does not apply.
-#   3. Repeat up to `max_review_rounds`. On runaway (round > max), escalate
-#      to the human per REVIEW_POLICY.md § Disagreements and Tiebreaking.
+#   3. Repeat until Codex clears. `max_review_rounds` is the request
+#      ceiling, not the runaway signal: a spent ceiling (exit 7, kind
+#      "request-ceiling") runs `scripts/phase-4b-review.sh`, whose barrier
+#      stops for the human (exit 8) only when a human stop holds. A spent
+#      `max_blocking_reviews` budget (exit 7, kind "blocking-reviews") or a
+#      repeat-after-rebuttal escalates to the human per REVIEW_POLICY.md
+#      § Disagreements and Tiebreaking.
 #   4. On timeout (silence within `review_timeout_seconds`), the script
 #      exits with code 4 (FALLBACK_REQUIRED). The agent then falls back
 #      to the manual handoff in REVIEW_POLICY.md § Phase 4b, targeting
@@ -191,10 +196,25 @@ codex:
   # Phase 4b handoff. Must be a member of `available_reviewers` above.
   cli_login: nathanpayne-codex
 
-  # Maximum number of `@codex review` rounds before escalating as runaway.
-  # The 3rd round trips the guard. Normal termination is either approval,
+  # The per-PR Codex request ceiling: the 21st request is refused (exit 7,
+  # kind "request-ceiling"). Normal termination is either approval,
   # disagreement (repeat-after-rebuttal), or timeout → Phase 4b fallback.
-  max_review_rounds: 2
+  # Raised 2 -> 20 by the owner on 2026-10-20 to match the mergepath hub,
+  # after #581 hit the 2-request cap with Codex still finding real defects.
+  # This is the request CEILING (cost), not the runaway meter: the
+  # blocking-review budget below is. A spent ceiling runs automated Phase 4b,
+  # whose barrier stops for the human (exit 8) when a human stop holds
+  # (REVIEW_POLICY.md, Disagreements and Tiebreaking).
+  max_review_rounds: 20
+
+  # Blocking-review budget. Before every new request the requester counts the
+  # PR's SOLICITED Codex responses that are blocking (a finding at p0 or a
+  # feedback_policy-required tier), unknown-tier, or conflicting, across every
+  # head, and refuses the request once that count reaches this budget (exit 7,
+  # kind "blocking-reviews"). Clean and discretionary-only rounds spend
+  # nothing. Checked BEFORE max_review_rounds. Absent, it defaults to 10; set
+  # explicitly here so the runaway meter is visible next to the ceiling.
+  max_blocking_reviews: 10
 
   # Poll timeout per round, in seconds, for `codex-review-request.sh`.
   # If Codex has not posted a review within this window, treat as timeout

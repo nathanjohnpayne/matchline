@@ -116,6 +116,25 @@ export async function upsertApplication(
 }
 
 /**
+ * Move an Application to another pipeline stage (#511). Writes ONLY
+ * `stage` and `last_activity_at`, through `updateDoc` rather than a
+ * merge `setDoc`, so a stale copy of the rest of the document held by
+ * the board can never be written back over a newer one. The rules
+ * already admit exactly this update for the owner.
+ *
+ * `at` is the move time; it becomes the new `last_activity_at`, which
+ * resets the card's days-in-stage. The caller passes it so the
+ * optimistic board state and the persisted value agree.
+ */
+export async function moveApplicationToStage(
+  id: string,
+  stage: ApplicationStage,
+  at: string,
+): Promise<void> {
+  await updateDoc(ref(id), { stage, last_activity_at: at });
+}
+
+/**
  * Outcome of a `removeBulletFromAsset` call. The route uses this to
  * pick the right post-mutation surface — successful removal → re-
  * fetch the Application; not-found / wrong-asset → render an inline

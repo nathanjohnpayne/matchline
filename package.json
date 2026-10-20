@@ -15,7 +15,8 @@
     "eval:fit-brief": "tsx tests/eval/fitBrief/run.ts",
     "ontology:collect": "tsx scripts/ontology/collect-vocab.ts",
     "ontology:harvest-jd": "tsx scripts/ontology/harvest-jd-vocab.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:e2e": "scripts/firebase/with-java.sh firebase emulators:exec --only auth,firestore --project demo-matchline-e2e 'playwright test'"
   },
   "dependencies": {
     "@tiptap/extension-placeholder": "^3.32.0",
@@ -31,7 +32,10 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@firebase/rules-unit-testing": "^6.0.0",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/postcss": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
@@ -41,6 +45,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "firebase-tools": "^15.34.0",
     "globals": "^17.13.0",
+    "jsdom": "^28.1.0",
     "postcss": "^8.5.30",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.23.15",

@@ -1,6 +1,10 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { getAuth, type Auth } from "firebase/auth";
-import { getFirestore, type Firestore } from "firebase/firestore";
+import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
+import {
+  connectFirestoreEmulator,
+  getFirestore,
+  type Firestore,
+} from "firebase/firestore";
 import { getFunctions, type Functions } from "firebase/functions";
 
 /**
@@ -35,6 +39,17 @@ function readConfig() {
   };
 }
 
+/**
+ * True only when the build sets `VITE_FIREBASE_EMULATORS=true`, which
+ * the Playwright smoke tests do (`playwright.config.ts`, #511). The
+ * app then talks to the local Auth and Firestore emulators on their
+ * `firebase.json` ports. Production and ordinary dev builds never set
+ * it, so they are unaffected.
+ */
+function useEmulators(): boolean {
+  return import.meta.env.VITE_FIREBASE_EMULATORS === "true";
+}
+
 let app: FirebaseApp | undefined;
 let auth: Auth | undefined;
 let db: Firestore | undefined;
@@ -46,12 +61,22 @@ export function getApp(): FirebaseApp {
 }
 
 export function getAuthClient(): Auth {
-  if (!auth) auth = getAuth(getApp());
+  if (!auth) {
+    auth = getAuth(getApp());
+    if (useEmulators()) {
+      connectAuthEmulator(auth, "http://127.0.0.1:9099", {
+        disableWarnings: true,
+      });
+    }
+  }
   return auth;
 }
 
 export function getDb(): Firestore {
-  if (!db) db = getFirestore(getApp());
+  if (!db) {
+    db = getFirestore(getApp());
+    if (useEmulators()) connectFirestoreEmulator(db, "127.0.0.1", 8080);
+  }
   return db;
 }
 
