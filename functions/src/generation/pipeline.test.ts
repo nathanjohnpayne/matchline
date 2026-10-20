@@ -1,7 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { logger } from "firebase-functions";
 import { describe, expect, it, vi } from "vitest";
 
-import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import { priceFor, type recordUsage as RecordUsage } from "../llm/cost.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -19,6 +20,7 @@ import {
   type GenerationInputs,
   type RunGenerationContext,
 } from "./pipeline.ts";
+import { runGenerateResume } from "./runGenerateResume.ts";
 
 /**
  * DI-based pipeline tests. The Firestore boundary is replaced
@@ -596,11 +598,103 @@ describe("runGenerationPipeline", () => {
     expect(create).toHaveBeenCalledTimes(2);
     expect(result.input_tokens).toBe(1700); // 1000 + 700
     expect(result.output_tokens).toBe(700); // 500 + 200
-    // estimateCostUsd uses Haiku pricing
-    // ($0.25/MTok input, $1.25/MTok output): cumulative >
-    // single-attempt cost.
-    const singleAttemptCost = (700 * 0.25 + 200 * 1.25) / 1_000_000;
-    expect(result.cost_usd).toBeGreaterThan(singleAttemptCost);
+    // Both attempts priced on Haiku 4.5's list rate ($1 / $5 per
+    // MTok), each exactly once (#483).
+    expect(result.cost_usd).toBeCloseTo(
+      (1000 * 1 + 500 * 5 + 700 * 1 + 200 * 5) / 1_000_000,
+      12,
+    );
+  });
+
+  describe("cost attribution (#483)", () => {
+    it("prices generation on the shared rate table, not the old quarter-price estimate", async () => {
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+      const { client } = mockClient([
+        mockMessage(VALID_RESPONSE, { input_tokens: 1_000_000, output_tokens: 1_000_000 }),
+      ]);
+      const result = await runGenerationPipeline(CTX, {
+        client,
+        record,
+        loadInputs: async () => makeInputs(["u1"]),
+        generateId: () => "id-x",
+      });
+      // 1M in + 1M out on Haiku 4.5 = $1 + $5. The removed local
+      // estimate ($0.25 / $1.25) reported $1.50 for the same tokens.
+      expect(result.cost_usd).toBeCloseTo(6, 9);
+      expect(result.cost_usd).toBe(
+        priceFor("claude-haiku-4-5-20251001", {
+          inputTokens: 1_000_000,
+          outputTokens: 1_000_000,
+        }),
+      );
+    });
+
+    it("records task metadata and the application on every attempt's usage", async () => {
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+      const fabricated = {
+        ...VALID_RESPONSE,
+        summary: { text: "x", source_unit_ids: ["u-fab"] },
+      };
+      const { client } = mockClient([mockMessage(fabricated), mockMessage(VALID_RESPONSE)]);
+      await runGenerationPipeline(CTX, {
+        client,
+        record,
+        loadInputs: async () => makeInputs(["u1"]),
+        generateId: () => "id-x",
+        sleep: async () => {},
+      });
+      expect(record).toHaveBeenCalledTimes(2);
+      for (const [index, [usage]] of record.mock.calls.entries()) {
+        expect(usage).toMatchObject({
+          stage: "generation",
+          model: "claude-haiku-4-5-20251001",
+          servedModel: "claude-haiku-4-5-20251001",
+          promptVersion: "generation/resume.v1",
+          attempt: index,
+          maxTokens: 4096,
+          ownerUid: CTX.ownerUid,
+          applicationId: CTX.applicationId,
+        });
+      }
+    });
+
+    it("reports cost as unknown (null), not a lower number, when an attempt cannot be priced", async () => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+      const { client } = mockClient([
+        mockMessage(VALID_RESPONSE, { input_tokens: 800, output_tokens: -1 }),
+      ]);
+      const result = await runGenerationPipeline(CTX, {
+        client,
+        record,
+        loadInputs: async () => makeInputs(["u1"]),
+        generateId: () => "id-x",
+      });
+      expect(result.cost_usd).toBeNull();
+      expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+        expect.stringContaining("could not price attempt"),
+        expect.objectContaining({ attempt: 0 }),
+      );
+    });
+
+    it("persists the asset without cost_usd when the cost is unknown, rather than as 0", async () => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+      const persistAsset = vi.fn(async () => {});
+      const { client } = mockClient([
+        mockMessage(VALID_RESPONSE, { input_tokens: 800, output_tokens: -1 }),
+      ]);
+      const result = await runGenerateResume(CTX, {
+        client,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        loadInputs: async () => makeInputs(["u1"]),
+        generateId: () => "id-x",
+        persistAsset,
+      });
+      expect(result.cost_usd).toBeNull();
+      const [{ asset }] = persistAsset.mock.calls[0]! as unknown as [{ asset: object }];
+      expect(asset).not.toHaveProperty("cost_usd");
+      expect(asset).toMatchObject({ input_tokens: 800 });
+    });
   });
 
   it("CROSS-VALIDATION exhaustion: 3 fabricated-id responses → GenerationError with value_error failures", async () => {

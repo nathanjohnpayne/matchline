@@ -237,6 +237,7 @@ async function validateBullet(
     { text: bullet.text, source_unit_ids: bullet.source_unit_ids },
     {
       ownerUid: ctx.ownerUid,
+      applicationId: ctx.applicationId,
       assetId: ctx.assetId,
       bulletId: bullet.id,
     },
@@ -281,6 +282,7 @@ async function validateClaim(
   // its specificity is moot.
   const trace = await deps.checkTraceability(claim, candidateUnits, {
     ownerUid: ctx.ownerUid,
+    applicationId: ctx.applicationId,
   });
   if (!trace.supports) {
     return makeFlag(
@@ -298,6 +300,7 @@ async function validateClaim(
   // vacuous.
   const spec = await deps.checkSpecificity(claim, {
     ownerUid: ctx.ownerUid,
+    applicationId: ctx.applicationId,
   });
   if (!spec.specific) {
     return makeFlag(
