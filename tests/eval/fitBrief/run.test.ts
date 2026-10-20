@@ -126,6 +126,27 @@ describe("runFitBriefEval", () => {
     expect(out.report).toMatch(/exceeded --max-usd \$1\.50/);
   });
 
+  it("refuses a split with no pairs instead of reporting an empty pass (Codex P1, #581)", async () => {
+    const devOnly: FitBriefCorpus = { ...CORPUS, pairs: CORPUS.pairs.filter((p) => p.split === "dev") };
+    await expect(runFitBriefEval(devOnly, { ...OPTIONS, split: "test" }, deps())).rejects.toThrow(
+      /no pairs in split "test"/,
+    );
+  });
+
+  it("makes no paid call at all when the bound is already reached, units extraction included", async () => {
+    const d = deps();
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", maxUsd: 0 }, d);
+    expect(d.extractUnits).not.toHaveBeenCalled();
+    expect(d.generate).not.toHaveBeenCalled();
+    expect(out.incomplete).toBe(true);
+  });
+
+  it("reports the effort actually sent, including 5.5 profile defaults and the judge's", async () => {
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, model: "claude-sonnet-5-5" }, deps());
+    expect(out.report).toContain("claude-sonnet-5-5 (effort high)");
+    expect(out.report).toContain("judge claude-opus-5-5 (effort high)");
+  });
+
   it("counts a failed brief and keeps going", async () => {
     const d = deps({
       generate: vi.fn(async () => {

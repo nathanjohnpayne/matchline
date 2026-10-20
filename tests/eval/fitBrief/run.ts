@@ -100,8 +100,21 @@ export function preflight(options: Pick<FitBriefEvalOptions, "model" | "effort" 
   }
 }
 
+/**
+ * The pairs a run covers. Throws on an empty selection (Codex P1 on
+ * #581): a zero-row report that exits 0 would read as a passing run.
+ */
 export function selectPairs(corpus: FitBriefCorpus, split: FitBriefEvalOptions["split"]): CorpusPair[] {
-  return corpus.pairs.filter((p) => split === "all" || p.split === split);
+  const pairs = corpus.pairs.filter((p) => split === "all" || p.split === split);
+  if (pairs.length === 0) {
+    throw new Error(`The manifest has no pairs in split "${split}"; nothing to evaluate.`);
+  }
+  return pairs;
+}
+
+/** The effort a model is actually sent: the explicit one, else its profile default. */
+export function resolvedEffort(model: string, effort: Effort | undefined): Effort | undefined {
+  return effort ?? profileFor(model).defaultEffort;
 }
 
 export async function runFitBriefEval(
@@ -121,6 +134,28 @@ export async function runFitBriefEval(
     }
   };
   const overBudget = () => spentUsd >= options.maxUsd;
+  const pairs = selectPairs(corpus, options.split);
+  let incomplete = false;
+  const generatorEffort = resolvedEffort(options.model, options.effort);
+  const judgeEffort = resolvedEffort(options.judgeModel, options.judgeEffort);
+  const report = (rows: readonly { split: string; score: BriefScore | null }[]) =>
+    formatAggregate(aggregate(rows), {
+      model: options.model,
+      ...(generatorEffort !== undefined && { effort: generatorEffort }),
+      judgeModel: options.judgeModel,
+      ...(judgeEffort !== undefined && { judgeEffort }),
+      evidenceMode: options.evidence,
+      spentUsd,
+      maxUsd: options.maxUsd,
+      incomplete,
+    });
+
+  // A bound already reached (for example --max-usd 0) must stop before
+  // the first paid call, including units-mode extraction (Codex P2, #581).
+  if (overBudget()) {
+    incomplete = true;
+    return { report: report([]), spentUsd, incomplete, rows: [] };
+  }
 
   const resumeSources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
   let evidenceText = resumeSources.join("\n\n");
@@ -131,9 +166,8 @@ export async function runFitBriefEval(
   const sources = options.evidence === "units" ? [evidenceText] : resumeSources;
 
   const rows: { split: string; score: BriefScore | null }[] = [];
-  let incomplete = false;
   let index = 0;
-  for (const pair of selectPairs(corpus, options.split)) {
+  for (const pair of pairs) {
     for (let sample = 0; sample < options.samples; sample++) {
       if (overBudget()) {
         incomplete = true;
@@ -200,16 +234,7 @@ export async function runFitBriefEval(
     if (incomplete) break;
   }
 
-  const report = formatAggregate(aggregate(rows), {
-    model: options.model,
-    ...(options.effort !== undefined && { effort: options.effort }),
-    judgeModel: options.judgeModel,
-    evidenceMode: options.evidence,
-    spentUsd,
-    maxUsd: options.maxUsd,
-    incomplete,
-  });
-  return { report, spentUsd, incomplete, rows };
+  return { report: report(rows), spentUsd, incomplete, rows };
 }
 
 // -- CLI ---------------------------------------------------------------------
@@ -270,6 +295,10 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
   };
 }
 
+function effortLabel(effort: Effort | undefined): string {
+  return effort === undefined ? "" : ` (effort ${effort})`;
+}
+
 async function main(): Promise<number> {
   const options = parseArgs(process.argv.slice(2));
   const corpusDir = process.env.MATCHLINE_PRIVATE_CORPUS;
@@ -281,8 +310,9 @@ async function main(): Promise<number> {
   const calls = pairs.length * options.samples;
   console.log(
     `${calls} brief(s): ${pairs.length} ${options.split} pair(s) × ${options.samples} sample(s); ` +
-      `generator ${options.model}${options.effort ? ` (${options.effort})` : ""}, ` +
-      `judge ${options.judgeModel} (${options.judgeEffort}), evidence ${options.evidence}. ` +
+      `generator ${options.model}${effortLabel(resolvedEffort(options.model, options.effort))}, ` +
+      `judge ${options.judgeModel}${effortLabel(resolvedEffort(options.judgeModel, options.judgeEffort))}, ` +
+      `evidence ${options.evidence}. ` +
       `Output: ${options.outDir}`,
   );
   if (options.dryRun) return 0;
