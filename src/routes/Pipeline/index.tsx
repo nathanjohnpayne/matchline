@@ -44,7 +44,7 @@ import { completeTask, createTask, listTasks } from "../../services/tasks.ts";
 import type { ApplicationStage, UUID } from "../../types/crm.ts";
 
 import { buildPipelineBoard } from "./buildPipelineBoard.ts";
-import { msUntilNextLocalDay } from "./taskSidebar.ts";
+import { isSameLocalDay, msUntilNextLocalDay } from "./taskSidebar.ts";
 import {
   loadPipelineData,
   type PipelineData,
@@ -137,6 +137,22 @@ export default function Pipeline({
       msUntilNextLocalDay(deps.now()) + 1000,
     );
     return () => clearTimeout(timer);
+  }, [status, now, deps]);
+
+  // Timers are throttled in background tabs and paused while a device
+  // sleeps, so the midnight timer alone can leave yesterday's buckets
+  // up for hours after the lid opens. Re-check whenever the page
+  // becomes visible, re-reading the clock only if the local day has
+  // changed (CodeRabbit on #585).
+  useEffect(() => {
+    if (status !== "ready") return;
+    const onVisible = (): void => {
+      if (document.visibilityState !== "visible") return;
+      const current = deps.now();
+      if (!isSameLocalDay(current, now)) setNow(current);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [status, now, deps]);
 
   const columns = useMemo(

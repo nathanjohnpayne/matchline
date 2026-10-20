@@ -173,3 +173,12 @@ export function msUntilNextLocalDay(now: Date): number {
   return endOfLocalDay(now) + 1 - now.getTime();
 }
 
+/** True when both instants fall on the same local calendar day. */
+export function isSameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+

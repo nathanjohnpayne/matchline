@@ -6,6 +6,7 @@ import {
   buildTaskSidebar,
   defaultDueAt,
   endOfLocalDay,
+  isSameLocalDay,
   msUntilNextLocalDay,
 } from "./taskSidebar.ts";
 
@@ -55,6 +56,13 @@ describe("msUntilNextLocalDay", () => {
   it("counts down to local midnight", () => {
     expect(msUntilNextLocalDay(new Date(2026, 9, 20, 23, 59, 0))).toBe(60_000);
     expect(msUntilNextLocalDay(new Date(2026, 9, 20, 12, 0, 0))).toBe(12 * 3_600_000);
+  });
+});
+
+describe("isSameLocalDay", () => {
+  it("compares local calendar days, not 24-hour spans", () => {
+    expect(isSameLocalDay(new Date(2026, 9, 20, 0, 0), new Date(2026, 9, 20, 23, 59))).toBe(true);
+    expect(isSameLocalDay(new Date(2026, 9, 20, 23, 59), new Date(2026, 9, 21, 0, 1))).toBe(false);
   });
 });
 

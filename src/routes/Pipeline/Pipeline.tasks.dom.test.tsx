@@ -352,6 +352,26 @@ describe("pending completion and the clock (#34)", () => {
   });
 });
 
+describe("returning to the page (#34)", () => {
+  it("re-reads the clock when the page becomes visible on a new day", async () => {
+    let clock = new Date(2026, 9, 20, 22, 0, 0);
+    await renderBoard(
+      deps({
+        now: () => clock,
+        tasks: [task("t1", { due_at: localDay(21), title: "Call Dana" })],
+      }),
+    );
+    expect(within(section("pipeline-tasks-upcoming")).getByText("Call Dana")).toBeTruthy();
+
+    // The laptop slept through midnight; no timer fired.
+    clock = new Date(2026, 9, 21, 9, 0, 0);
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
+  });
+});
+
 describe("follow-ups (#34)", () => {
   it("surfaces an Applied application quiet for 8 days and turns it into a task due today", async () => {
     const d = deps({ applications: [app("a1", "applied", 12)] });
