@@ -18,6 +18,7 @@ import {
   preflight,
   prepareOutDir,
   runFitBriefEval,
+  extractionConfigLabel,
   renderUnitEvidence,
   writePrivateFile,
   type FitBriefEvalDeps,
@@ -235,7 +236,9 @@ describe("runFitBriefEval", () => {
   it("in units mode, the generator reads Units but the gates keep the canonical sources (Codex P1, #581)", async () => {
     const withInventory: FitBriefCorpus = { ...CORPUS, inventoryText: "Tools: Looker" };
     const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });
-    await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, d);
+    const out = await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, { ...d, extractionConfig: "claude-haiku-4-5, prompt extraction/resume.v3" });
+    // The report names the extraction pin behind the evidence (Codex P2, #581).
+    expect(out.report).toContain("evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3)");
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
     expect(gen.resumeText).toBe("## Dates (from extraction): none\n- Owned the checkout API used by twelve teams.");
     // The inventory reaches the generator in both modes.
@@ -359,6 +362,12 @@ describe("guardClient", () => {
   });
 });
 
+describe("extractionConfigLabel", () => {
+  it("names the extraction model and prompt version extractFromResume will use", () => {
+    expect(extractionConfigLabel()).toMatch(/^claude-[a-z0-9-]+( effort [a-z]+)?, prompt extraction\/resume\.v\d+$/);
+  });
+});
+
 describe("renderUnitEvidence", () => {
   it("keeps each Unit's dates visible but off its quotable line (Codex P2 and P1, #581)", () => {
     expect(
@@ -412,6 +421,15 @@ describe("parseArgs", () => {
       maxUsd: 10,
     });
     expect(o.outDir).toMatch(/\.matchline\/eval-private\/fit-brief\/fit-brief-2026-10-28T12-00-00-000Z$/);
+  });
+
+  it("rejects positional words, single-dash typos and repeated flags before a paid run (Codex P2, #581)", () => {
+    const base = ["--model", "claude-sonnet-5-5", "--max-usd", "10"];
+    expect(() => parseArgs([...base, "-split", "test"], now)).toThrow(/Unexpected argument -split/);
+    expect(() => parseArgs([...base, "test"], now)).toThrow(/Unexpected argument test/);
+    expect(() => parseArgs([...base, "--split", "dev", "--split=test"], now)).toThrow(/more than once/);
+    // A flag's value is consumed, not mistaken for a positional word.
+    expect(parseArgs([...base, "--split", "test", "--samples=2"], now)).toMatchObject({ split: "test", samples: 2 });
   });
 
   it("rejects a value on --dry-run instead of silently running a paid job (Codex P2, #581)", () => {

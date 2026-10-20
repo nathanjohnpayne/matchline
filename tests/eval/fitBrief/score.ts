@@ -219,6 +219,8 @@ export function formatAggregate(
     readonly judgeModel: string;
     readonly judgeEffort?: string;
     readonly evidenceMode: string;
+    /** Units mode: the extraction configuration that produced the evidence. */
+    readonly extraction?: string;
     readonly spentUsd: number;
     readonly maxUsd?: number;
     readonly incomplete: boolean;
@@ -226,7 +228,7 @@ export function formatAggregate(
 ): string {
   const lines = [
     `Fit-brief eval — model ${meta.model}${meta.effort ? ` (effort ${meta.effort})` : ""}, ` +
-      `evidence ${meta.evidenceMode}, judge ${meta.judgeModel}` +
+      `evidence ${meta.evidenceMode}${meta.extraction ? ` (extraction ${meta.extraction})` : ""}, judge ${meta.judgeModel}` +
       `${meta.judgeEffort ? ` (effort ${meta.judgeEffort})` : ""}`,
     "",
     "| split | briefs | failed | gates passed | unsupported evidence | unsupported claims | claim-rule violations | recall* | precision* | verdict agreement |",

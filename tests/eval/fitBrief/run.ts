@@ -34,9 +34,11 @@ import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/an
 
 import { extractFromResume } from "../../../functions/src/extraction/resume.ts";
 import { anthropicForCli } from "../../../functions/src/llm/anthropic.ts";
-import { priceUsage, type UsageRecord } from "../../../functions/src/llm/cost.ts";
+import { effortFor, modelFor } from "../../../functions/src/llm/config.ts";
+import { priceUsage, promptVersionLabel, type UsageRecord } from "../../../functions/src/llm/cost.ts";
 import { isEffort, profileFor, type Effort } from "../../../functions/src/llm/modelProfile.ts";
 import { rateFor } from "../../../functions/src/llm/rates.ts";
+import { loadPromptText } from "../../../functions/src/prompts/loader.ts";
 import {
   generateFitBrief,
   type FitBriefInput,
@@ -79,6 +81,12 @@ type RecordUsageFn = (u: UsageRecord) => Promise<number>;
 export interface FitBriefEvalDeps {
   readonly generate: (input: FitBriefInput, record: RecordUsageFn, guard: BudgetGuard) => Promise<FitBriefResult>;
   readonly judge: (args: Parameters<typeof judgeBrief>[0], record: RecordUsageFn, guard: BudgetGuard) => Promise<JudgeResult>;
+  /**
+   * Units mode only: the resolved extraction model, effort and prompt
+   * version, recorded in the report so runs on different extraction pins
+   * are never read as comparable (Codex P2, #581).
+   */
+  readonly extractionConfig?: string;
   /** Only called for --evidence units. Returns each Unit's verbatim text and date range. */
   readonly extractUnits: (resumeText: string, record: RecordUsageFn, guard: BudgetGuard) => Promise<UnitEvidence[]>;
   readonly writeFile?: (path: string, data: string) => void;
@@ -233,6 +241,7 @@ export async function runFitBriefEval(
       judgeModel: options.judgeModel,
       ...(judgeEffort !== undefined && { judgeEffort }),
       evidenceMode: options.evidence,
+      ...(options.evidence === "units" && { extraction: deps.extractionConfig ?? "unrecorded" }),
       spentUsd,
       maxUsd: options.maxUsd,
       incomplete,
@@ -386,13 +395,22 @@ const KNOWN_FLAGS = new Set([
 const BOOLEAN_FLAGS = new Set(["--dry-run"]);
 
 export function parseArgs(argv: readonly string[], now: Date = new Date()): FitBriefEvalOptions & { dryRun: boolean } {
-  for (const a of argv) {
+  // Walk every token: each must be a known flag, followed by its value
+  // unless it is boolean or written --name=value. Anything else, such as a
+  // positional word or a single-dash typo like `-split test`, is rejected
+  // rather than silently ignored before a paid run (Codex P2, #581).
+  const seen = new Set<string>();
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
     const name = a.split("=")[0]!;
-    if (a.startsWith("--") && !KNOWN_FLAGS.has(name)) {
-      throw new Error(`Unknown flag ${a}`);
-    }
-    if (BOOLEAN_FLAGS.has(name) && a !== name) {
-      throw new Error(`${name} takes no value (got ${a})`);
+    if (!a.startsWith("--")) throw new Error(`Unexpected argument ${a}`);
+    if (!KNOWN_FLAGS.has(name)) throw new Error(`Unknown flag ${a}`);
+    if (seen.has(name)) throw new Error(`${name} given more than once`);
+    seen.add(name);
+    if (BOOLEAN_FLAGS.has(name)) {
+      if (a !== name) throw new Error(`${name} takes no value (got ${a})`);
+    } else if (a === name) {
+      i += 1; // the value; flag() validates it below
     }
   }
   const model = flag(argv, "--model");
@@ -466,6 +484,15 @@ export function renderUnitEvidence(units: readonly UnitEvidence[]): string {
   return [...groups].map(([label, lines]) => [`## ${label}`, ...lines].join("\n")).join("\n\n");
 }
 
+/** What `extractFromResume` will run with, resolved the same way it resolves them. */
+export function extractionConfigLabel(): string {
+  const effort = effortFor("extraction");
+  return (
+    `${modelFor("extraction").model}${effort === undefined ? "" : ` effort ${effort}`}, ` +
+    `prompt ${promptVersionLabel(loadPromptText("extraction", "resume"))}`
+  );
+}
+
 function effortLabel(effort: Effort | undefined): string {
   return effort === undefined ? "" : ` (effort ${effort})`;
 }
@@ -507,6 +534,7 @@ async function main(): Promise<number> {
         record,
         runId: options.runId,
       }),
+    extractionConfig: extractionConfigLabel(),
     extractUnits: async (resumeText, record, guard) =>
       (
         await extractFromResume(
