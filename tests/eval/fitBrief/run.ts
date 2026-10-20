@@ -24,7 +24,8 @@
  * --out, which must be outside this repository.
  */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,6 +100,28 @@ export class BudgetReachedError extends Error {
   }
 }
 
+/**
+ * Write `data` to `path` privately and without following links (Codex
+ * review of #581): create a fresh 0600 file exclusively in the same
+ * directory, then rename it over the destination. The rename replaces a
+ * symlink at `path` rather than writing through it, so a planted link
+ * cannot carry private output into the repository, and the contents are
+ * never readable under looser permissions in between.
+ */
+export function writePrivateFile(path: string, data: string): void {
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", 0o600);
+  try {
+    writeSync(fd, data);
+  } catch (err) {
+    closeSync(fd);
+    unlinkSync(tmp);
+    throw err;
+  }
+  closeSync(fd);
+  renameSync(tmp, path);
+}
+
 /** Wrap a client so every `messages.create` checks the budget first. */
 export function guardClient(client: Anthropic, guard: BudgetGuard): Anthropic {
   const create = client.messages.create.bind(client.messages);
@@ -166,14 +189,7 @@ export async function runFitBriefEval(
   deps: FitBriefEvalDeps,
 ): Promise<FitBriefEvalOutcome> {
   // Owner-only: these files hold the private corpus's briefs and quotes.
-  // `mode` applies only when a file is created, so a file reused from an
-  // earlier run is chmod-ed too (Codex P2, #581).
-  const writeFile =
-    deps.writeFile ??
-    ((p: string, d: string) => {
-      writeFileSync(p, d, { mode: 0o600 });
-      chmodSync(p, 0o600);
-    });
+  const writeFile = deps.writeFile ?? writePrivateFile;
   let spentUsd = 0;
   const record = async (usage: UsageRecord): Promise<number> => {
     try {
@@ -308,6 +324,11 @@ export async function runFitBriefEval(
               // Keep a paid-for brief when only the judge failed.
               ...(generated !== undefined && { brief: generated.brief }),
               error: err instanceof Error ? err.message : String(err),
+              // Keep per-attempt detail (FitBriefError.failures) so a bad
+              // key or exhausted retries can be diagnosed privately.
+              ...(Array.isArray((err as { failures?: unknown })?.failures) && {
+                failures: (err as { failures: unknown[] }).failures,
+              }),
             },
             null,
             2,

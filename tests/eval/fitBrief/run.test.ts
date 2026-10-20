@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,7 @@ import {
   preflight,
   runFitBriefEval,
   unitEvidenceLine,
+  writePrivateFile,
   type FitBriefEvalDeps,
   type FitBriefEvalOptions,
 } from "./run.ts";
@@ -162,6 +163,19 @@ describe("runFitBriefEval", () => {
     expect(out.report).toContain("judge claude-opus-5-5 (effort high)");
   });
 
+  it("keeps per-attempt failure detail in the private artifact (Codex review, #581)", async () => {
+    const d = deps({
+      generate: vi.fn(async () => {
+        throw Object.assign(new Error("Fit brief failed after 1 attempts."), {
+          failures: [{ attempt: 0, kind: "transport_error", message: "401 invalid x-api-key" }],
+        });
+      }),
+    });
+    await runFitBriefEval(CORPUS, OPTIONS, d);
+    const first = JSON.parse([...d.files.values()][0]!);
+    expect(first.failures[0].message).toContain("401");
+  });
+
   it("keeps the paid-for brief when only the judge fails (CodeRabbit, #581)", async () => {
     const d = deps({
       judge: vi.fn(async () => {
@@ -267,6 +281,26 @@ describe("runFitBriefEval", () => {
     const d = deps();
     await runFitBriefEval(CORPUS, { ...OPTIONS, samples: 2 }, d);
     expect(d.generate).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("writePrivateFile", () => {
+  it("replaces a planted symlink instead of writing through it (Codex review, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-wpf-"));
+    try {
+      const target = join(dir, "elsewhere.json");
+      writeFileSync(target, "public");
+      const out = join(dir, "001-a-s0.json");
+      symlinkSync(target, out);
+      writePrivateFile(out, "private");
+      expect(readFileSync(target, "utf8")).toBe("public");
+      expect(lstatSync(out).isSymbolicLink()).toBe(false);
+      expect(readFileSync(out, "utf8")).toBe("private");
+      expect(statSync(out).mode & 0o077).toBe(0);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -47,6 +47,14 @@ describe("normalizeForMatch / checkEvidence", () => {
     expect(result.unsupported).toEqual(["Ran a twelve-team platform."]);
   });
 
+  it("checks a units-mode quote without its date annotation (Codex review, #581)", () => {
+    expect(
+      checkEvidence(brief(["Owned the checkout API. [2021-03–present]"]), ["- Owned the checkout API."]).unsupported,
+    ).toEqual([]);
+    // Only a trailing date annotation is stripped, never real text.
+    expect(checkEvidence(brief(["Owned the [new] API."]), ["Owned the API."]).unsupported).toHaveLength(1);
+  });
+
   it("strips single-character emphasis but leaves underscores inside words alone (Codex P2, #581)", () => {
     expect(checkEvidence(brief(["Owned the checkout API."]), ["- *Owned* the checkout API."]).unsupported).toEqual([]);
     expect(checkEvidence(brief(["Owned the checkout API."]), ["_Owned_ the checkout API."]).unsupported).toEqual([]);

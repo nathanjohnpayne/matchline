@@ -44,15 +44,23 @@ export interface EvidenceCheck {
   readonly unsupported: readonly string[];
 }
 
+/**
+ * Units mode annotates each Unit with its date range (`[2021-03–present]`).
+ * The annotation is metadata, not résumé text, so a quote that carries it
+ * is checked without it (Codex review of #581).
+ */
+const DATE_ANNOTATION = /\s*\[\d{4}(?:-\d{2}){0,2}–(?:\d{4}(?:-\d{2}){0,2}|present)\]\s*$/u;
+
 export function checkEvidence(
   brief: FitBriefResponseV1,
   sources: readonly string[],
 ): EvidenceCheck {
   const haystack = sources.map(normalizeForMatch).join("\n");
   const quotes = brief.strengths.flatMap((s) => s.evidence);
+  const stripAnnotation = (q: string) => q.replace(DATE_ANNOTATION, "");
   return {
     total: quotes.length,
-    unsupported: quotes.filter((q) => !containsAtWordBoundaries(haystack, normalizeForMatch(q))),
+    unsupported: quotes.filter((q) => !containsAtWordBoundaries(haystack, normalizeForMatch(stripAnnotation(q)))),
   };
 }
 
