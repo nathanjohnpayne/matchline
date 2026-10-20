@@ -155,6 +155,9 @@ export function judgeRequestFingerprint(model: string, effort?: Effort): string 
         request,
         JUDGE_TOOL_SCHEMA,
         judgeUserContent(FINGERPRINT_CANARY),
+        // Optional inputs absent, so a change to how an omitted section is
+        // rendered changes the fingerprint too (Codex P2, #581).
+        judgeUserContent({ ...FINGERPRINT_CANARY, claimRulesText: undefined }),
       ]),
     )
     .digest("hex");
@@ -169,6 +172,21 @@ export interface JudgeDeps {
   readonly runId?: string;
   /** Backoff between transient-failure retries; injectable for tests. */
   readonly sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * A schema-valid judgement can still skip the enumeration it exists for:
+ * `generated_points: []` for a brief that has strengths or exposures
+ * would score as null precision on a "successful" sample. Such a
+ * judgement is retried like a malformed one (Codex P2, #581). Returns the
+ * reason, or undefined when the judgement is complete.
+ */
+export function incompleteJudgement(judgement: JudgeResult, generated: FitBriefResponseV1): string | undefined {
+  const generatedCount = generated.strengths.length + generated.exposures.length;
+  if (generatedCount > 0 && judgement.generated_points.length === 0) {
+    return `judge listed no generated points for a brief with ${generatedCount}`;
+  }
+  return undefined;
 }
 
 export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<JudgeResult> {
@@ -244,7 +262,12 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
     );
     const parsed = toolUse ? JudgeResultSchema.safeParse(toolUse.input) : undefined;
-    if (parsed?.success) return parsed.data;
+    if (parsed?.success) {
+      const incomplete = incompleteJudgement(parsed.data, input.generated);
+      if (incomplete === undefined) return parsed.data;
+      lastError = incomplete;
+      continue;
+    }
     lastError = parsed ? parsed.error.message : "no tool call";
   }
   throw new Error(`Judge failed after ${MAX_ATTEMPTS} attempts: ${lastError}`);

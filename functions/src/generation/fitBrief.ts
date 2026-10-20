@@ -262,6 +262,9 @@ export function fitBriefRequestFingerprint(model: string, effort?: Effort): stri
         SCHEMA_REMINDER,
         NO_TOOL_REMINDER,
         buildUserContent(prompt.userFewShot, canary),
+        // Optional inputs absent, so a change to how an omitted section is
+        // rendered changes the fingerprint too (Codex P2, #581).
+        buildUserContent(prompt.userFewShot, { jdText: canary.jdText, resumeText: canary.resumeText }),
       ]),
     )
     .digest("hex");

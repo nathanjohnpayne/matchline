@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 import type { recordUsage as RecordUsage } from "../../../functions/src/llm/cost.ts";
 
-import { judgeBrief, judgeRequestFingerprint, judgeUserContent, type JudgeResult } from "./judge.ts";
+import { incompleteJudgement, judgeBrief, judgeRequestFingerprint, judgeUserContent, type JudgeResult } from "./judge.ts";
 
 const JUDGEMENT: JudgeResult = {
   reference_points: [{ kind: "strength", jd_clause: "c", point: "p", coverage: "partial" }],
@@ -79,6 +79,18 @@ describe("judgeBrief", () => {
     expect(judgeRequestFingerprint("claude-opus-5-5", "high")).not.toBe(judgeRequestFingerprint("claude-sonnet-4-6"));
     // The user message the judge receives is the one judgeBrief sends.
     expect(judgeUserContent(INPUT)).toContain("GENERATED brief (JSON):");
+  });
+
+  it("retries a judgement that lists no generated points for a brief that has some (Codex P2, #581)", async () => {
+    const c = client(reply({ ...JUDGEMENT, generated_points: [] }), reply(JUDGEMENT));
+    await expect(
+      judgeBrief(INPUT, { client: c, model: "claude-opus-5-5", record: vi.fn<typeof RecordUsage>(async () => 0) }),
+    ).resolves.toEqual(JUDGEMENT);
+    expect(c.messages.create).toHaveBeenCalledTimes(2);
+    // A brief with no strengths or exposures may legitimately have none.
+    expect(
+      incompleteJudgement({ ...JUDGEMENT, generated_points: [] }, { ...INPUT.generated, strengths: [], verdict: "skip" }),
+    ).toBeUndefined();
   });
 
   it("retries a malformed judgement", async () => {
