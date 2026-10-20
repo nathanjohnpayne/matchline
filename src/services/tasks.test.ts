@@ -68,6 +68,14 @@ describe("buildTask", () => {
     expect("due_at" in task).toBe(false);
   });
 
+  it("accepts a 200-character title and rejects 201", () => {
+    const ids = { id: "t1", ownerUid: "u1" };
+    expect(buildTask({ application_id: "a1", title: "x".repeat(200) }, ids, NOW).title).toHaveLength(200);
+    expect(() =>
+      buildTask({ application_id: "a1", title: "x".repeat(201) }, ids, NOW),
+    ).toThrow("at most 200 characters");
+  });
+
   it("rejects an empty or whitespace-only title", () => {
     expect(() =>
       buildTask({ application_id: "a1", title: "   " }, { id: "t1", ownerUid: "u1" }, NOW),

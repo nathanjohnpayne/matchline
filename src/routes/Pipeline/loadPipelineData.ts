@@ -35,6 +35,12 @@ export interface PipelineData {
   readonly interactions: readonly Interaction[];
   readonly people: readonly Person[];
   readonly tasks: readonly Task[];
+  /**
+   * False when the tasks read failed. An empty `tasks` then means
+   * "unknown", not "none", and Follow-ups must not be offered: every
+   * quiet Application would look task-free and invite duplicates.
+   */
+  readonly tasksLoaded: boolean;
   /** True when any enrichment reader failed and its data is missing. */
   readonly partial: boolean;
 }
@@ -78,6 +84,7 @@ export async function loadPipelineData(
     interactions: valueOr(interactions),
     people: valueOr(people),
     tasks: valueOr(tasks),
+    tasksLoaded: tasks.status === "fulfilled",
     partial: enrichment.some((r) => r.status === "rejected"),
   };
 }

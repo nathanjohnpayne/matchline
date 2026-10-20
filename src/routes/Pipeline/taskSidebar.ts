@@ -6,7 +6,7 @@
  *
  * Sections (#34):
  *   - Due today: open tasks due by the end of today, overdue included.
- *   - Upcoming: open tasks due within the next 7 days, then open
+ *   - Upcoming: open tasks due within the next 7 calendar days, then open
  *     tasks with no due date (they belong to no day, and hiding them
  *     would lose them).
  *   - Follow-ups: Applications in an active stage (Applied,
@@ -42,12 +42,16 @@ function toMs(iso: string | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** The last millisecond of `now`'s local calendar day. */
-export function endOfLocalDay(now: Date): number {
+/**
+ * The last millisecond of the local calendar day `daysAhead` days after
+ * `now`'s (0 = today). Calendar arithmetic, not multiples of 24h, so a
+ * daylight-saving change inside the span cannot shift the boundary.
+ */
+export function endOfLocalDay(now: Date, daysAhead = 0): number {
   return new Date(
     now.getFullYear(),
     now.getMonth(),
-    now.getDate() + 1,
+    now.getDate() + daysAhead + 1,
     0,
     0,
     0,
@@ -56,15 +60,26 @@ export function endOfLocalDay(now: Date): number {
 }
 
 /**
- * Default `due_at` for a new task (#34): now + 3 days for an
- * Application in an active stage, otherwise none.
+ * Default `due_at` for a new task (#34): three calendar days out for
+ * an Application in an active stage, otherwise none. Local noon of that
+ * day, the same instant a picked date is stored as
+ * (`src/lib/taskDates.ts`), and calendar arithmetic so a DST change
+ * cannot land it on the neighboring day.
  */
 export function defaultDueAt(
   stage: ApplicationStage,
   now: Date,
 ): string | undefined {
   if (!ACTIVE_STAGES.has(stage)) return undefined;
-  return new Date(now.getTime() + DEFAULT_DUE_DAYS * MS_PER_DAY).toISOString();
+  return new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + DEFAULT_DUE_DAYS,
+    12,
+    0,
+    0,
+    0,
+  ).toISOString();
 }
 
 export interface FollowUp {
@@ -92,7 +107,9 @@ export function buildTaskSidebar(
   now: Date,
 ): TaskSidebar {
   const endOfToday = endOfLocalDay(now);
-  const upcomingEnd = now.getTime() + UPCOMING_DAYS * MS_PER_DAY;
+  // Whole calendar days: a task due on the 7th day ahead is Upcoming
+  // whatever the time of day the board is opened.
+  const upcomingEnd = endOfLocalDay(now, UPCOMING_DAYS);
   const open = tasks.filter((t) => !t.completed);
 
   const dueToday: Task[] = [];

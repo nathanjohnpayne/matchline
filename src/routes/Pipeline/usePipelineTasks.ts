@@ -16,7 +16,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { beginAppBusy } from "../../lib/appBusy.ts";
-import type { NewTask } from "../../services/tasks.ts";
+import { MAX_TASK_TITLE, type NewTask } from "../../services/tasks.ts";
 import type { Application, Task, UUID } from "../../types/crm.ts";
 
 import type { PipelineMoveAction } from "./pipelineMoves.ts";
@@ -33,6 +33,13 @@ export interface PipelineTaskDeps {
   readonly now: () => Date;
 }
 
+/** Fit a generated title within the rules' limit. */
+function truncateTitle(title: string): string {
+  return title.length <= MAX_TASK_TITLE
+    ? title
+    : `${title.slice(0, MAX_TASK_TITLE - 1)}…`;
+}
+
 function reason(err: unknown): string {
   return (err instanceof Error ? err.message : String(err))
     .trim()
@@ -42,6 +49,7 @@ function reason(err: unknown): string {
 export function usePipelineTasks({
   deps,
   loadedTasks,
+  tasksLoaded,
   applications,
   labelFor,
   now,
@@ -51,6 +59,8 @@ export function usePipelineTasks({
   readonly deps: PipelineTaskDeps;
   /** Tasks from the latest load; replaces local state when it changes. */
   readonly loadedTasks: readonly Task[] | null;
+  /** False when the tasks read failed (see `PipelineData.tasksLoaded`). */
+  readonly tasksLoaded: boolean;
   readonly applications: readonly Application[];
   /** "Acme: Staff PM" for an Application, with the board's fallbacks. */
   readonly labelFor: (applicationId: UUID) => string;
@@ -109,7 +119,7 @@ export function usePipelineTasks({
       // Due today: the application has already been quiet too long.
       create({
         application_id: applicationId,
-        title: `Follow up: ${labelFor(applicationId)}`,
+        title: truncateTitle(`Follow up: ${labelFor(applicationId)}`),
         due_at: deps.now().toISOString(),
       })
         .catch((err: unknown) => {
@@ -178,7 +188,8 @@ export function usePipelineTasks({
   return {
     dueToday: sidebar.dueToday.map(toItem),
     upcoming: sidebar.upcoming.map(toItem),
-    followUps: sidebar.followUps.map((f) => ({
+    // Without the task list, "no open task" cannot be known.
+    followUps: (tasksLoaded ? sidebar.followUps : []).map((f) => ({
       applicationId: f.application.id,
       label: labelFor(f.application.id),
       stageLabel: STAGE_LABELS[f.application.stage],
@@ -194,5 +205,6 @@ export function usePipelineTasks({
     },
     error,
     onDismissError: () => setError(null),
+    tasksUnavailable: !tasksLoaded,
   };
 }

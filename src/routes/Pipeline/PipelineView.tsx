@@ -251,18 +251,22 @@ function CardTaskAdd({
   readonly tasks: PipelineTasks;
 }): ReactElement {
   const [open, setOpen] = useState(false);
+  // Locked while a save is in flight: closing and reopening the form
+  // mid-save would start a second submission and a duplicate task.
+  const [saving, setSaving] = useState(false);
   const label = cardLabel(card);
   return (
     <>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        disabled={saving}
         aria-expanded={open}
         aria-label={`Add task for ${label}`}
         title="Add task"
         data-action="pipeline-card-add-task"
         data-application-id={card.applicationId}
-        className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded text-sm text-zinc-600 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
+        className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded text-sm text-zinc-600 disabled:opacity-60 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
       >
         +
       </button>
@@ -272,8 +276,13 @@ function CardTaskAdd({
             label={label}
             defaultDueAt={tasks.defaultDueAtFor(card.applicationId)}
             onSubmit={async (title, dueAt) => {
-              await tasks.onAddTask(card.applicationId, title, dueAt);
-              setOpen(false);
+              setSaving(true);
+              try {
+                await tasks.onAddTask(card.applicationId, title, dueAt);
+                setOpen(false);
+              } finally {
+                setSaving(false);
+              }
             }}
             onCancel={() => setOpen(false)}
           />

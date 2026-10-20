@@ -20,6 +20,9 @@ import { getOwnerUidOrThrow, ownerScope } from "./auth.ts";
 import { typedCollection, typedDoc } from "./firestore.ts";
 
 const TASKS = "tasks";
+
+/** Same limit `firestore.rules` enforces on `title`. */
+export const MAX_TASK_TITLE = 200;
 const APPLICATIONS = "applications";
 
 export interface NewTask {
@@ -50,6 +53,11 @@ export function buildTask(
 ): Task {
   const title = input.title.trim();
   if (title === "") throw new Error("A task needs a title.");
+  // Checked here so every creation path (quick-add, follow-ups) fails
+  // locally with the cause instead of as a rules permission-denied.
+  if (title.length > MAX_TASK_TITLE) {
+    throw new Error(`A task title can be at most ${MAX_TASK_TITLE} characters.`);
+  }
   return {
     id: ids.id,
     owner_uid: ids.ownerUid,

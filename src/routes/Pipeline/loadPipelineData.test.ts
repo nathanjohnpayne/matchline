@@ -45,6 +45,7 @@ describe("loadPipelineData", () => {
     expect(data.applications).toEqual([APP]);
     expect(data.roles).toEqual([ROLE]);
     expect(data.companies).toEqual([COMPANY]);
+    expect(data.tasksLoaded).toBe(true);
     expect(data.partial).toBe(false);
   });
 
@@ -91,6 +92,7 @@ describe("loadPipelineData", () => {
     );
     expect(data.applications).toEqual([APP]);
     expect(data.tasks).toEqual([]);
+    expect(data.tasksLoaded).toBe(false);
     expect(data.partial).toBe(true);
   });
 

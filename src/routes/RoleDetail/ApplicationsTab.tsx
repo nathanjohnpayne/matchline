@@ -94,6 +94,9 @@ function RowTaskAdd({
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const [added, setAdded] = useState(false);
+  // Locked while a save is in flight: closing and reopening the form
+  // mid-save would start a second submission and a duplicate task.
+  const [saving, setSaving] = useState(false);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center gap-2">
@@ -103,10 +106,11 @@ function RowTaskAdd({
             setOpen((v) => !v);
             setAdded(false);
           }}
+          disabled={saving}
           aria-expanded={open}
           data-action="applications-add-task"
           data-application-id={application.id}
-          className="rounded px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
+          className="rounded px-2 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
         >
           + task
         </button>
@@ -124,9 +128,14 @@ function RowTaskAdd({
           label={`application ${application.id}`}
           defaultDueAt={defaultDueAt}
           onSubmit={async (title, dueAt) => {
-            await onAddTask(application.id, title, dueAt);
-            setOpen(false);
-            setAdded(true);
+            setSaving(true);
+            try {
+              await onAddTask(application.id, title, dueAt);
+              setOpen(false);
+              setAdded(true);
+            } finally {
+              setSaving(false);
+            }
           }}
           onCancel={() => setOpen(false)}
         />

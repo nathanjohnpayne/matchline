@@ -46,6 +46,11 @@ export interface PipelineTasks {
   readonly defaultDueAtFor: (applicationId: UUID) => string | undefined;
   readonly error: string | null;
   readonly onDismissError: () => void;
+  /**
+   * The tasks read failed, so which Applications already have a task
+   * is unknown. Follow-ups are withheld rather than risk duplicates.
+   */
+  readonly tasksUnavailable: boolean;
 }
 
 const SIDEBAR_ID = "pipeline-task-sidebar-body";
@@ -210,7 +215,11 @@ export default function TaskSidebar({
             title="Follow-ups"
             testId="pipeline-follow-ups"
             count={tasks.followUps.length}
-            empty="No applied or interviewing application has gone quiet for over a week."
+            empty={
+              tasks.tasksUnavailable
+                ? "Tasks couldn't be loaded, so follow-ups are hidden to avoid duplicates. Reload to try again."
+                : "No applied or interviewing application has gone quiet for over a week."
+            }
           >
             {tasks.followUps.map((f) => (
               <li

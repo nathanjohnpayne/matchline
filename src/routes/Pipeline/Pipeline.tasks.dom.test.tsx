@@ -223,6 +223,34 @@ describe("card quick-add (#34)", () => {
     );
   });
 
+  it("locks the + task toggle while a save is in flight", async () => {
+    let finish: (t: Task) => void = () => {};
+    const d = deps({
+      createTask: vi.fn(
+        (input: NewTask, now: Date) =>
+          new Promise<Task>((resolve) => {
+            finish = () =>
+              resolve({ ...task("slow"), ...input, created_at: now.toISOString() });
+          }),
+      ),
+    });
+    await renderBoard(d);
+    const toggle = screen.getByRole("button", { name: "Add task for Acme: Staff PM" });
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByTestId("task-quick-add-title"), {
+      target: { value: "Email the recruiter" },
+    });
+    fireEvent.click(screen.getByText("Add"));
+
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("task-quick-add")).toBeTruthy();
+
+    await act(async () => finish(task("slow")));
+    expect((toggle as HTMLButtonElement).disabled).toBe(false);
+    expect(d.createTask).toHaveBeenCalledTimes(1);
+  });
+
   it("closes on Escape without writing", async () => {
     const d = deps();
     await renderBoard(d);
@@ -298,6 +326,35 @@ describe("follow-ups (#34)", () => {
     );
     // An open task now covers it, so it is no longer a follow-up.
     expect(within(section("pipeline-follow-ups")).queryByText("Add task")).toBeNull();
+  });
+
+  it("hides follow-ups when the tasks read failed, so no duplicate can be added", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await renderBoard(
+      deps({
+        applications: [app("a1", "applied", 1)],
+        listTasks: () => Promise.reject(new Error("unavailable")),
+      }),
+    );
+    const followUps = section("pipeline-follow-ups");
+    expect(within(followUps).queryByText("Add task")).toBeNull();
+    expect(followUps.textContent).toContain("Tasks couldn't be loaded");
+    vi.restoreAllMocks();
+  });
+
+  it("truncates a follow-up title to the 200-character limit", async () => {
+    const longName = "A".repeat(250);
+    const d = deps({
+      applications: [app("a1", "applied", 1)],
+      listCompanies: () =>
+        Promise.resolve([{ id: "c1", owner_uid: "u", name: longName, priority: "high" }]),
+    });
+    await renderBoard(d);
+    fireEvent.click(within(section("pipeline-follow-ups")).getByText("Add task"));
+    await waitFor(() => expect(d.createTask).toHaveBeenCalledTimes(1));
+    const title = (d.createTask as ReturnType<typeof vi.fn>).mock.calls[0]?.[0].title as string;
+    expect(title).toHaveLength(200);
+    expect(title.endsWith("…")).toBe(true);
   });
 
   it("shows nothing for an application that is quiet but not in an active stage", async () => {

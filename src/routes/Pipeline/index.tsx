@@ -189,6 +189,8 @@ export default function Pipeline({
   const tasks = usePipelineTasks({
     deps,
     loadedTasks: data?.tasks ?? null,
+    // Before the first load there is nothing to withhold.
+    tasksLoaded: data?.tasksLoaded ?? true,
     applications: moveState.applications,
     labelFor: describe,
     now,

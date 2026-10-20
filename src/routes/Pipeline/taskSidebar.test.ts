@@ -51,8 +51,8 @@ describe("endOfLocalDay", () => {
 });
 
 describe("defaultDueAt", () => {
-  it("is now + 3 days for Applied and Interviewing", () => {
-    const expected = new Date(NOW.getTime() + 3 * 86_400_000).toISOString();
+  it("is local noon three calendar days out for Applied and Interviewing", () => {
+    const expected = new Date(2026, 9, 23, 12, 0, 0).toISOString();
     expect(defaultDueAt("applied", NOW)).toBe(expected);
     expect(defaultDueAt("interviewing", NOW)).toBe(expected);
   });
@@ -61,6 +61,26 @@ describe("defaultDueAt", () => {
     for (const stage of ["saved", "drafting", "offer", "rejected", "withdrawn"] as const) {
       expect(defaultDueAt(stage, NOW)).toBeUndefined();
     }
+  });
+});
+
+describe("calendar-day boundaries (DST-safe)", () => {
+  it("adds calendar days across a daylight-saving change", () => {
+    // 23:30 the night before a DST change: +72h would be off by an hour
+    // and can cross midnight; calendar days cannot.
+    const lateNight = new Date(2026, 2, 7, 23, 30);
+    expect(defaultDueAt("applied", lateNight)).toBe(new Date(2026, 2, 10, 12).toISOString());
+    expect(endOfLocalDay(lateNight, 7)).toBe(new Date(2026, 2, 15, 0, 0, 0).getTime() - 1);
+  });
+
+  it("keeps a task due on the 7th day in Upcoming at any time of day", () => {
+    const seventhDay = task("d7", { due_at: new Date(2026, 9, 27, 12).toISOString() });
+    for (const hour of [0, 8, 12, 23]) {
+      const s = buildTaskSidebar([seventhDay], [], new Date(2026, 9, 20, hour, 0));
+      expect(ids(s.upcoming), `opened at ${hour}:00`).toEqual(["d7"]);
+    }
+    const eighthDay = task("d8", { due_at: new Date(2026, 9, 28, 9).toISOString() });
+    expect(buildTaskSidebar([eighthDay], [], new Date(2026, 9, 20, 23, 0)).upcoming).toEqual([]);
   });
 });
 

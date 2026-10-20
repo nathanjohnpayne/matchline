@@ -62,6 +62,29 @@ describe("ApplicationsTab + task (#34)", () => {
     expect(screen.queryByTestId("task-quick-add")).toBeNull();
   });
 
+  it("locks + task while the save is in flight", async () => {
+    let finish: () => void = () => {};
+    const onAddTask = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderTab({ onAddTask });
+    const toggle = screen.getByText("+ task") as HTMLButtonElement;
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByTestId("task-quick-add-title"), {
+      target: { value: "Ask about the panel" },
+    });
+    fireEvent.submit(screen.getByTestId("task-quick-add"));
+    await waitFor(() => expect(toggle.disabled).toBe(true));
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("task-quick-add")).toBeTruthy();
+    finish();
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    expect(onAddTask).toHaveBeenCalledTimes(1);
+  });
+
   it("has no + task control when tasks are not wired", () => {
     renderTab();
     expect(screen.queryByText("+ task")).toBeNull();
