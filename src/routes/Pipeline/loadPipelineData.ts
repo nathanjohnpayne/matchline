@@ -38,20 +38,27 @@ export interface PipelineData {
 export async function loadPipelineData(
   readers: PipelineReaders,
 ): Promise<PipelineData> {
-  const [applications, roles, companies, interactions, people] =
-    await Promise.allSettled([
-      readers.listApplications(),
-      readers.listRoles(),
-      readers.listCompanies(),
-      readers.listInteractions(),
-      readers.listPeople(),
-    ]);
-  if (applications.status === "rejected") {
-    throw applications.reason instanceof Error
-      ? applications.reason
-      : new Error(String(applications.reason));
+  // Start every read at once. The enrichment reads are wrapped in
+  // `allSettled`, which never rejects, so they cannot raise an
+  // unhandled rejection while Applications is awaited on its own.
+  // Awaiting Applications first lets its failure surface as soon as it
+  // happens instead of waiting out a slow enrichment read. Codex P2 on
+  // PR #576.
+  const applicationsRead = readers.listApplications();
+  const enrichmentRead = Promise.allSettled([
+    readers.listRoles(),
+    readers.listCompanies(),
+    readers.listInteractions(),
+    readers.listPeople(),
+  ]);
+  let applications: Application[];
+  try {
+    applications = await applicationsRead;
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
   }
-  const enrichment = [roles, companies, interactions, people];
+  const enrichment = await enrichmentRead;
+  const [roles, companies, interactions, people] = enrichment;
   for (const r of enrichment) {
     if (r.status === "rejected") {
       console.error("Pipeline: an enrichment read failed:", r.reason);
@@ -60,7 +67,7 @@ export async function loadPipelineData(
   const valueOr = <T>(r: PromiseSettledResult<T[]>): T[] =>
     r.status === "fulfilled" ? r.value : [];
   return {
-    applications: applications.value,
+    applications,
     roles: valueOr(roles),
     companies: valueOr(companies),
     interactions: valueOr(interactions),

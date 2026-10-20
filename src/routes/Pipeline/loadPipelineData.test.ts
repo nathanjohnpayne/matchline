@@ -65,6 +65,23 @@ describe("loadPipelineData", () => {
     ).rejects.toThrow("offline");
   });
 
+  it("rejects on an Applications failure without waiting for enrichment reads", async () => {
+    // Codex P2 on PR #576: an enrichment read that never settles must
+    // not hold the board in its loading state once Applications failed.
+    const never = <T>(): Promise<T> => new Promise<T>(() => {});
+    await expect(
+      loadPipelineData(
+        readers({
+          listApplications: () => Promise.reject(new Error("permission-denied")),
+          listRoles: never,
+          listCompanies: never,
+          listInteractions: never,
+          listPeople: never,
+        }),
+      ),
+    ).rejects.toThrow("permission-denied");
+  });
+
   it("degrades a failed enrichment read to an empty list and partial=true", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const data = await loadPipelineData(

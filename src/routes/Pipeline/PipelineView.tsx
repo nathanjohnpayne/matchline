@@ -73,7 +73,7 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
       to={`/roles/${card.roleId}`}
       data-testid="pipeline-card"
       data-application-id={card.applicationId}
-      className="block rounded-md border border-zinc-200 bg-white px-3 py-2 transition duration-150 hover:border-zinc-400 focus:border-zinc-900 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:focus:border-zinc-100"
+      className="block rounded-md border border-zinc-200 bg-white px-3 py-2 transition duration-150 ease-in-out hover:border-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 motion-reduce:transition-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-950"
     >
       <p
         className={

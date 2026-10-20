@@ -179,6 +179,15 @@ describe("PipelineView", () => {
     expect(html).toContain('href="/roles/role-456"');
   });
 
+  it("gives cards a visible keyboard focus ring (accessibility baseline)", () => {
+    // Codex P2 on PR #576: suppressing the outline needs a ring-2
+    // replacement per docs/design/ui-guidance.md § Accessibility.
+    const html = render({ columns: board({ applied: [card()] }) });
+    const tag = html.match(/<a[^>]*data-testid="pipeline-card"[^>]*>/)?.[0] ?? "";
+    expect(tag).toContain("focus-visible:ring-2");
+    expect(tag).toContain("dark:focus-visible:ring-zinc-100");
+  });
+
   it("stacks vertically below md and sits side by side from md", () => {
     const html = render();
     const boardTag = html.match(/<div[^>]*data-testid="pipeline-board"[^>]*>/)?.[0] ?? "";
