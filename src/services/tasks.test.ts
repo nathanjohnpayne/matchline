@@ -4,6 +4,7 @@
  * `tests/tasks.integration.test.ts` and `tests/firestore-rules.test.ts`.
  */
 
+import { FirebaseError } from "firebase/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./auth.ts", () => ({
@@ -14,6 +15,7 @@ vi.mock("./auth.ts", () => ({
 vi.mock("../firebase.ts", () => ({ getDb: () => ({ name: "db" }) }));
 
 const setDoc = vi.fn();
+const updateDoc = vi.fn();
 const txGet = vi.fn();
 const txUpdate = vi.fn();
 const runTransaction = vi.fn(
@@ -28,6 +30,7 @@ vi.mock("firebase/firestore", () => ({
   },
   query: () => undefined,
   setDoc: (...args: unknown[]) => setDoc(...args),
+  updateDoc: (...args: unknown[]) => updateDoc(...args),
   runTransaction: (db: unknown, fn: (tx: unknown) => Promise<void>) =>
     runTransaction(db, fn),
 }));
@@ -140,10 +143,28 @@ describe("completeTask", () => {
     expect(txUpdate).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
   });
 
-  it("propagates a failed transaction", async () => {
-    runTransaction.mockRejectedValueOnce(new Error("permission-denied"));
+  it("completes the task alone when the transaction is denied (Application deleted)", async () => {
+    runTransaction.mockRejectedValueOnce(
+      new FirebaseError("permission-denied", "Missing or insufficient permissions."),
+    );
+    updateDoc.mockResolvedValueOnce(undefined);
+    await completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z");
+    expect(updateDoc).toHaveBeenCalledWith({ path: "tasks/t1" }, { completed: true });
+  });
+
+  it("propagates when the fallback is denied too", async () => {
+    runTransaction.mockRejectedValueOnce(new FirebaseError("permission-denied", "no"));
+    updateDoc.mockRejectedValueOnce(new FirebaseError("permission-denied", "still no"));
     await expect(
       completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z"),
-    ).rejects.toThrow("permission-denied");
+    ).rejects.toThrow("still no");
+  });
+
+  it("propagates any other transaction failure without falling back", async () => {
+    runTransaction.mockRejectedValueOnce(new Error("unavailable"));
+    await expect(
+      completeTask({ id: "t1", application_id: "a1" }, "2026-10-20T12:00:00.000Z"),
+    ).rejects.toThrow("unavailable");
+    expect(updateDoc).not.toHaveBeenCalled();
   });
 });

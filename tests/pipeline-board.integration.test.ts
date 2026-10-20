@@ -23,7 +23,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { doc, getDoc, setDoc, type Firestore } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, setDoc, type Firestore } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -325,6 +325,18 @@ describe("Pipeline tasks write path (#34)", () => {
     expect((await readRaw("applications", "a-applied"))?.last_activity_at).toBe(
       "2026-10-21T09:00:00.000Z",
     );
+  });
+
+  it("still completes a task whose Application was deleted", async () => {
+    const task = await createTask({ application_id: "a-applied", title: "Email Dana" });
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "applications", "a-applied"));
+    });
+
+    await completeTask(task, "2026-10-20T12:00:00.000Z");
+
+    expect((await readRaw("tasks", task.id))?.completed).toBe(true);
+    expect(await readRaw("applications", "a-applied")).toBeUndefined();
   });
 
   it("refuses a task on another owner's Application", async () => {

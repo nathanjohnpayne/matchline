@@ -5,12 +5,14 @@
  * `due_at` and `completed` change after creation).
  */
 
+import { FirebaseError } from "firebase/app";
 import {
   doc,
   getDocs,
   query,
   runTransaction,
   setDoc,
+  updateDoc,
 } from "firebase/firestore";
 
 import { getDb } from "../firebase.ts";
@@ -90,22 +92,37 @@ export async function createTask(
  * timestamp only moves forward: if newer activity was recorded since
  * `at` was captured (another tab, a slow write), it is kept rather
  * than overwritten with the older value (#588).
+ *
+ * A task can outlive its Application. The rules deny reading a
+ * missing Application (`isOwner()` is false without a resource, the
+ * anti-enumeration contract), so the transaction is rejected with
+ * `permission-denied`. That case falls back to completing the task
+ * alone, which the task rules allow; there is no Application left to
+ * stamp. Any other failure propagates.
  */
 export async function completeTask(
   task: Pick<Task, "id" | "application_id">,
   at: string,
 ): Promise<void> {
   const db = getDb();
+  const taskRef = doc(db, TASKS, task.id);
   const appRef = doc(db, APPLICATIONS, task.application_id);
-  await runTransaction(db, async (tx) => {
-    const app = await tx.get(appRef);
-    tx.update(doc(db, TASKS, task.id), { completed: true });
-    // A deleted Application has nothing to stamp; the task can still
-    // be completed.
-    if (app.exists() && !isNewer(app.data()["last_activity_at"], at)) {
-      tx.update(appRef, { last_activity_at: at });
+  try {
+    await runTransaction(db, async (tx) => {
+      const app = await tx.get(appRef);
+      tx.update(taskRef, { completed: true });
+      if (app.exists() && !isNewer(app.data()["last_activity_at"], at)) {
+        tx.update(appRef, { last_activity_at: at });
+      }
+    });
+  } catch (err) {
+    if (!(err instanceof FirebaseError && err.code === "permission-denied")) {
+      throw err;
     }
-  });
+    // Most likely the Application is gone. If the task itself is not
+    // ours either, this update is denied too and that error surfaces.
+    await updateDoc(taskRef, { completed: true });
+  }
 }
 
 /** True when `current` is a valid timestamp strictly later than `at`. */
