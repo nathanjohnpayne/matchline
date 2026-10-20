@@ -27,6 +27,7 @@
 import {
   chmodSync,
   closeSync,
+  existsSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -214,11 +215,51 @@ export function writePrivateFile(path: string, data: string): void {
  * (Codex P2, #581). The default --out is a fresh timestamped directory.
  */
 export function prepareOutDir(dir: string): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  if (readdirSync(dir).length > 0) {
+  // Inspect before changing anything: a mistyped --out naming a shared,
+  // non-empty directory must be refused with its permissions untouched
+  // (Codex P1, #581).
+  if (existsSync(dir) && readdirSync(dir).length > 0) {
     throw new Error(`--out ${dir} is not empty; give each run its own directory.`);
   }
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+}
+
+/**
+ * Raised instead of retrying units extraction after a truncated response.
+ * The production extractor retries `stop_reason: max_tokens` with the
+ * same request and budget, which for an eval only pays for the same
+ * truncation again (Codex P2, #581).
+ */
+export class ExtractionTruncatedError extends Error {
+  readonly status = 400;
+  constructor() {
+    super("Units extraction was truncated at its output budget; not retrying.");
+    this.name = "ExtractionTruncatedError";
+  }
+}
+
+/**
+ * Wrap the extraction client so that, once a response is truncated, every
+ * later request fails locally without a paid call. The extractor treats
+ * the failure as a transport error and gives up after its attempts, all
+ * of them free.
+ */
+export function stopAfterTruncation(client: Anthropic): Anthropic {
+  const create = client.messages.create.bind(client.messages);
+  let truncated = false;
+  return {
+    ...client,
+    messages: {
+      ...client.messages,
+      create: (async (...args: Parameters<typeof create>) => {
+        if (truncated) throw new ExtractionTruncatedError();
+        const response = await create(...args);
+        if ((response as { stop_reason?: string }).stop_reason === "max_tokens") truncated = true;
+        return response;
+      }) as typeof create,
+    },
+  } as Anthropic;
 }
 
 /** Wrap a client so every `messages.create` checks the budget first. */
@@ -675,15 +716,19 @@ async function main(): Promise<number> {
         await extractFromResume(
           resumeText,
           { ownerUid: "eval-fit-brief" },
-          { client: guardClient(client, guard), record },
+          { client: stopAfterTruncation(guardClient(client, guard)), record },
         )
       ).map((u) => ({ raw_text: u.raw_text, ...(u.date_range && { date_range: u.date_range }) })),
   });
   console.log(outcome.report);
-  // Nonzero when the run stopped early or any sample could not be
-  // evaluated (an invalid key, a judge failing every request), so
-  // automation never reads failures as a pass (Codex P2, #581).
-  return outcome.incomplete || outcome.rows.some((r) => r.score === null) ? 1 : 0;
+  // Nonzero when the run stopped early, any sample could not be evaluated
+  // (an invalid key, a judge failing every request), or spend reached the
+  // bound (even on the final call, after which no
+  // further check runs), so automation never reads any of those as a
+  // clean pass (Codex P2, #581).
+  return outcome.incomplete || outcome.rows.some((r) => r.score === null) || outcome.spentUsd >= options.maxUsd
+    ? 1
+    : 0;
 }
 
 const isScriptEntry = process.argv[1] === fileURLToPath(import.meta.url);

@@ -20,7 +20,9 @@ import {
   prepareOutDir,
   runFitBriefEval,
   extractionConfigLabel,
+  ExtractionTruncatedError,
   parseFrozenUnits,
+  stopAfterTruncation,
   renderUnitEvidence,
   UNITS_FORMAT_FINGERPRINT,
   writePrivateFile,
@@ -375,6 +377,19 @@ describe("writePrivateFile", () => {
 });
 
 describe("prepareOutDir", () => {
+  it("refuses a non-empty directory without changing its permissions (Codex P1, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
+    try {
+      chmodSync(dir, 0o755);
+      writeFileSync(join(dir, "someone-elses-file"), "x");
+      expect(() => prepareOutDir(dir)).toThrow(/is not empty/);
+      expect(statSync(dir).mode & 0o777).toBe(0o755);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
   it("refuses a directory that already holds an earlier run's files (Codex P2, #581)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
     try {
@@ -437,6 +452,24 @@ describe("guardClient", () => {
 describe("extractionConfigLabel", () => {
   it("names the extraction model and prompt version extractFromResume will use", () => {
     expect(extractionConfigLabel()).toMatch(/^claude-[a-z0-9-]+( effort [a-z]+)?, prompt extraction\/resume\.v\d+$/);
+  });
+});
+
+describe("stopAfterTruncation", () => {
+  it("fails later extraction attempts locally once a response is truncated (Codex P2, #581)", async () => {
+    const create = vi.fn(async () => ({ stop_reason: "max_tokens", content: [] }));
+    const client = stopAfterTruncation({ messages: { create } } as unknown as Anthropic);
+    await client.messages.create({} as never);
+    await expect(client.messages.create({} as never)).rejects.toBeInstanceOf(ExtractionTruncatedError);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes complete responses through untouched", async () => {
+    const create = vi.fn(async () => ({ stop_reason: "tool_use", content: [] }));
+    const client = stopAfterTruncation({ messages: { create } } as unknown as Anthropic);
+    await client.messages.create({} as never);
+    await client.messages.create({} as never);
+    expect(create).toHaveBeenCalledTimes(2);
   });
 });
 

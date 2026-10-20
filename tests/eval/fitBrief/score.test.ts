@@ -147,6 +147,12 @@ describe("aggregate / formatAggregate", () => {
     expect(dev).toMatchObject({ split: "dev", briefs: 2, failed: 1, gatesPassed: 1, verdictAgreement: 1 });
   });
 
+  it("flags a complete run whose final call reached the bound (Codex P2, #581)", () => {
+    const base = { model: "m", judgeModel: "j", evidenceMode: "resume", maxUsd: 1, incomplete: false };
+    expect(formatAggregate(aggregate([{ split: "dev", score: ok }]), { ...base, spentUsd: 1.2 })).toMatch(/BOUND REACHED/);
+    expect(formatAggregate(aggregate([{ split: "dev", score: ok }]), { ...base, spentUsd: 0.4 })).not.toMatch(/BOUND REACHED/);
+  });
+
   it("prints configuration and aggregates only, and flags model-graded columns and an incomplete run", () => {
     const out = formatAggregate(aggregate([{ split: "dev", score: ok }]), {
       model: "claude-sonnet-5-5",

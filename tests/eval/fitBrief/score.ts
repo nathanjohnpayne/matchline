@@ -272,6 +272,11 @@ export function formatAggregate(
     `* model-graded by ${meta.judgeModel}; unsupported claims and claim-rule violations are model-graded too.`,
     `Spend (list-price estimate from usage records): $${meta.spentUsd.toFixed(2)}.` +
       (meta.incomplete ? " INCOMPLETE: the run stopped at its --max-usd bound." : "") +
+      // Every sample ran, but the last call reached the bound: say so, so a
+      // complete-looking report never hides an over-budget run (Codex P2, #581).
+      (!meta.incomplete && meta.maxUsd !== undefined && meta.spentUsd >= meta.maxUsd
+        ? ` BOUND REACHED: the final call brought spend to the --max-usd bound; every requested sample was evaluated.`
+        : "") +
       // A paid call already in flight when the bound is reached still
       // completes, so say so rather than imply the bound held exactly.
       (meta.maxUsd !== undefined && meta.spentUsd > meta.maxUsd
