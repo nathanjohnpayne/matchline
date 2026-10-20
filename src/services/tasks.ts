@@ -9,8 +9,8 @@ import {
   doc,
   getDocs,
   query,
+  runTransaction,
   setDoc,
-  writeBatch,
 } from "firebase/firestore";
 
 import { getDb } from "../firebase.ts";
@@ -86,18 +86,32 @@ export async function createTask(
 /**
  * Mark a task done and stamp its Application's `last_activity_at`
  * (#34: completing a follow-up is activity on the Application). One
- * batch, so the two writes land together or not at all; a task can
- * never read as done while its Application still looks stale.
+ * transaction, so the two writes land together or not at all, and the
+ * timestamp only moves forward: if newer activity was recorded since
+ * `at` was captured (another tab, a slow write), it is kept rather
+ * than overwritten with the older value (#588).
  */
 export async function completeTask(
   task: Pick<Task, "id" | "application_id">,
   at: string,
 ): Promise<void> {
   const db = getDb();
-  const batch = writeBatch(db);
-  batch.update(doc(db, TASKS, task.id), { completed: true });
-  batch.update(doc(db, APPLICATIONS, task.application_id), {
-    last_activity_at: at,
+  const appRef = doc(db, APPLICATIONS, task.application_id);
+  await runTransaction(db, async (tx) => {
+    const app = await tx.get(appRef);
+    tx.update(doc(db, TASKS, task.id), { completed: true });
+    // A deleted Application has nothing to stamp; the task can still
+    // be completed.
+    if (app.exists() && !isNewer(app.data()["last_activity_at"], at)) {
+      tx.update(appRef, { last_activity_at: at });
+    }
   });
-  await batch.commit();
+}
+
+/** True when `current` is a valid timestamp strictly later than `at`. */
+function isNewer(current: unknown, at: string): boolean {
+  if (typeof current !== "string") return false;
+  const c = Date.parse(current);
+  const a = Date.parse(at);
+  return !Number.isNaN(c) && !Number.isNaN(a) && c > a;
 }

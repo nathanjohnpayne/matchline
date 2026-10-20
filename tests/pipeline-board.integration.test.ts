@@ -314,6 +314,19 @@ describe("Pipeline tasks write path (#34)", () => {
     });
   });
 
+  it("never moves last_activity_at backwards (#588)", async () => {
+    const task = await createTask({ application_id: "a-applied", title: "Email Dana" });
+    // Newer activity recorded elsewhere after this completion's time.
+    await moveApplicationToStage("a-applied", "interviewing", "2026-10-21T09:00:00.000Z");
+
+    await completeTask(task, "2026-10-20T12:00:00.000Z");
+
+    expect((await readRaw("tasks", task.id))?.completed).toBe(true);
+    expect((await readRaw("applications", "a-applied"))?.last_activity_at).toBe(
+      "2026-10-21T09:00:00.000Z",
+    );
+  });
+
   it("refuses a task on another owner's Application", async () => {
     await expect(
       createTask({ application_id: "a-bob", title: "Not mine" }),

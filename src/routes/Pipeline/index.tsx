@@ -124,37 +124,6 @@ export default function Pipeline({
     };
   }, [deps]);
 
-  // Re-read the clock at the next local midnight, so tasks roll from
-  // Upcoming into Due today, days in stage tick over and new
-  // follow-ups appear while the page stays open (Codex P2 on #585).
-  // Re-armed whenever the clock is re-read for any other reason.
-  useEffect(() => {
-    if (status !== "ready") return;
-    const timer = setTimeout(
-      () => setNow(deps.now()),
-      // A second past midnight, so the new reading is safely inside
-      // the new day.
-      msUntilNextLocalDay(deps.now()) + 1000,
-    );
-    return () => clearTimeout(timer);
-  }, [status, now, deps]);
-
-  // Timers are throttled in background tabs and paused while a device
-  // sleeps, so the midnight timer alone can leave yesterday's buckets
-  // up for hours after the lid opens. Re-check whenever the page
-  // becomes visible, re-reading the clock only if the local day has
-  // changed (CodeRabbit on #585).
-  useEffect(() => {
-    if (status !== "ready") return;
-    const onVisible = (): void => {
-      if (document.visibilityState !== "visible") return;
-      const current = deps.now();
-      if (!isSameLocalDay(current, now)) setNow(current);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [status, now, deps]);
-
   /**
    * "Acme: Staff PM" for an Application, with the board's fallbacks.
    * Read from the data directly (not from the built columns) because
@@ -173,7 +142,11 @@ export default function Pipeline({
     };
   }, [data, moveState.applications]);
 
-  const { view: tasks, tasks: liveTasks } = usePipelineTasks({
+  const {
+    view: tasks,
+    tasks: liveTasks,
+    nextFollowUpAt: nextFollowUp,
+  } = usePipelineTasks({
     deps,
     loadedTasks: data?.tasks ?? null,
     // Before the first load there is nothing to withhold.
@@ -184,6 +157,47 @@ export default function Pipeline({
     dispatch,
     onActivity: setNow,
   });
+
+  // Re-read the clock at whichever comes first: the next local
+  // midnight (tasks roll from Upcoming into Due today, days in stage
+  // tick over; Codex P2 on #585) or the moment the next Application
+  // crosses the 7-day follow-up threshold (#589). Re-armed whenever
+  // the clock is re-read for any other reason.
+  useEffect(() => {
+    if (status !== "ready") return;
+    const current = deps.now();
+    const untilMidnight = msUntilNextLocalDay(current);
+    const untilFollowUp =
+      nextFollowUp === null ? Infinity : nextFollowUp - current.getTime();
+    const timer = setTimeout(
+      () => setNow(deps.now()),
+      // A second past the boundary, so the new reading is safely on
+      // the far side of it.
+      Math.max(0, Math.min(untilMidnight, untilFollowUp)) + 1000,
+    );
+    return () => clearTimeout(timer);
+  }, [status, now, deps, nextFollowUp]);
+
+  // Timers are throttled in background tabs and paused while a device
+  // sleeps, so the timer alone can leave stale buckets up for hours
+  // after the lid opens. Re-check whenever the page becomes visible,
+  // re-reading the clock if the local day changed or a follow-up has
+  // come due meanwhile (CodeRabbit on #585, #589).
+  useEffect(() => {
+    if (status !== "ready") return;
+    const onVisible = (): void => {
+      if (document.visibilityState !== "visible") return;
+      const current = deps.now();
+      if (
+        !isSameLocalDay(current, now) ||
+        (nextFollowUp !== null && current.getTime() >= nextFollowUp)
+      ) {
+        setNow(current);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [status, now, deps, nextFollowUp]);
 
   const columns = useMemo(
     () =>

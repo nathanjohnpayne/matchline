@@ -430,6 +430,60 @@ describe("card next action (#512)", () => {
   });
 });
 
+describe("follow-ups that come due during the day (#589)", () => {
+  // Last touched 7 days ago at 13:00; the board opens at 12:00, an
+  // hour before it crosses the threshold.
+  const almostQuiet = (): Application => ({
+    ...app("a1", "applied"),
+    last_activity_at: new Date(2026, 9, 13, 13, 0, 0).toISOString(),
+  });
+
+  it("schedules a clock re-read for the threshold and shows the follow-up then", async () => {
+    const scheduled: { fn: () => void; ms: number }[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (ms !== undefined && ms >= 60_000) {
+          scheduled.push({ fn, ms });
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        }
+        return realSetTimeout(fn, ms, ...rest);
+      }) as typeof setTimeout);
+    try {
+      let clock = new Date(2026, 9, 20, 12, 0, 0);
+      await renderBoard(deps({ now: () => clock, applications: [almostQuiet()] }));
+      expect(within(section("pipeline-follow-ups")).queryByText("Add task")).toBeNull();
+
+      await waitFor(() => expect(scheduled.length).toBeGreaterThan(0));
+      // One hour (plus 1 ms) to the threshold, plus the 1 s margin;
+      // earlier than midnight, so it wins.
+      const threshold = scheduled.at(-1);
+      expect(threshold?.ms).toBe(3_600_000 + 1 + 1000);
+
+      clock = new Date(2026, 9, 20, 13, 0, 2);
+      act(() => threshold?.fn());
+      expect(within(section("pipeline-follow-ups")).getByText("Add task")).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("shows it on return to the tab once the threshold has passed the same day", async () => {
+    let clock = new Date(2026, 9, 20, 12, 0, 0);
+    await renderBoard(deps({ now: () => clock, applications: [almostQuiet()] }));
+    expect(within(section("pipeline-follow-ups")).queryByText("Add task")).toBeNull();
+
+    clock = new Date(2026, 9, 20, 16, 0, 0);
+    await waitFor(() => {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(within(section("pipeline-follow-ups")).getByText("Add task")).toBeTruthy();
+    });
+  });
+});
+
 describe("follow-ups (#34)", () => {
   it("surfaces an Applied application quiet for 8 days and turns it into a task due today", async () => {
     const d = deps({ applications: [app("a1", "applied", 12)] });

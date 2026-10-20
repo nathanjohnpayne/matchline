@@ -9,6 +9,7 @@ import {
   isSameLocalDay,
   msUntilNextLocalDay,
   nextActionByApplication,
+  nextFollowUpAt,
 } from "./taskSidebar.ts";
 
 // Local-time construction keeps every test independent of the
@@ -280,6 +281,34 @@ describe("nextActionByApplication (#512)", () => {
     ]);
     expect(next.get("a1")?.id).toBe("a1-task");
     expect(next.get("a2")?.id).toBe("a2-task");
+  });
+});
+
+describe("nextFollowUpAt (#589)", () => {
+  it("is the first instant the soonest active application crosses 7 days", () => {
+    const appA = { ...app("a", "applied", 15), last_activity_at: local(15, 10) };
+    const appB = { ...app("b", "interviewing", 14), last_activity_at: local(14, 18) };
+    // b crosses at Oct 21 18:00 + 1ms, a at Oct 22 10:00 + 1ms.
+    expect(nextFollowUpAt([], [appA, appB], NOW)).toBe(Date.parse(local(21, 18)) + 1);
+  });
+
+  it("skips applications already due, inactive, covered by a task, or suppressed", () => {
+    const due = app("due", "applied", 1);
+    const saved = app("saved", "saved", 19);
+    const covered = app("covered", "applied", 19);
+    const suppressed = app("suppressed", "applied", 18);
+    expect(
+      nextFollowUpAt(
+        [task("t", { application_id: "covered" })],
+        [due, saved, covered, suppressed],
+        NOW,
+        new Set(["suppressed"]),
+      ),
+    ).toBeNull();
+  });
+
+  it("is null with no applications", () => {
+    expect(nextFollowUpAt([], [], NOW)).toBeNull();
   });
 });
 
