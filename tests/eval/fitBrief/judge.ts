@@ -18,6 +18,8 @@
  */
 
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 import { anthropicUsageFields, recordUsage, safeRecordUsage } from "../../../functions/src/llm/cost.ts";
@@ -80,6 +82,17 @@ Return your judgement via the \`${TOOL_NAME}\` tool.
 5. reference_verdict: the reference brief's recommendation as one of apply, hold, referral_needed, skip; "unclear" if it states none.
 
 Be strict and literal. Do not reward length.`;
+
+/**
+ * Identifies the judge prompt and output schema, so a report says which
+ * judge graded it. The judge is eval-only and unversioned, so this is a
+ * content hash rather than a hand-bumped version.
+ */
+export const JUDGE_PROMPT_FINGERPRINT = `judge sha256:${createHash("sha256")
+  .update(JUDGE_SYSTEM)
+  .update(JSON.stringify(z.toJSONSchema(JudgeResultSchema)))
+  .digest("hex")
+  .slice(0, 12)}`;
 
 /**
  * The generated brief as JSON, so field and list boundaries survive

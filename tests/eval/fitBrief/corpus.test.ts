@@ -93,6 +93,12 @@ describe("loadCorpus", () => {
     expect(() => loadCorpus(dir)).toThrow(/pair role-a jd not found/);
   });
 
+  it("refuses a blank reference brief, JD or résumé before any paid call (Codex P2, #581)", () => {
+    write("b/brief.md", "  \n\t\n");
+    manifest(GOOD);
+    expect(() => loadCorpus(dir)).toThrow(/pair role-b reference is empty/);
+  });
+
   it("requires a manifest", () => {
     expect(() => loadCorpus(dir)).toThrow(/No matchline-fit-brief-manifest.json/);
   });

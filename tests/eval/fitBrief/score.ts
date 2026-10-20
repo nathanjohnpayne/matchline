@@ -216,8 +216,12 @@ export function formatAggregate(
   meta: {
     readonly model: string;
     readonly effort?: string;
+    /** Generator prompt version, e.g. generation/fitBrief.v1. */
+    readonly generatorPrompt?: string;
     readonly judgeModel: string;
     readonly judgeEffort?: string;
+    /** Judge prompt fingerprint. */
+    readonly judgePrompt?: string;
     readonly evidenceMode: string;
     /** Units mode: the extraction configuration that produced the evidence. */
     readonly extraction?: string;
@@ -229,7 +233,10 @@ export function formatAggregate(
   const lines = [
     `Fit-brief eval — model ${meta.model}${meta.effort ? ` (effort ${meta.effort})` : ""}, ` +
       `evidence ${meta.evidenceMode}${meta.extraction ? ` (extraction ${meta.extraction})` : ""}, judge ${meta.judgeModel}` +
-      `${meta.judgeEffort ? ` (effort ${meta.judgeEffort})` : ""}`,
+      `${meta.judgeEffort ? ` (effort ${meta.judgeEffort})` : ""}` +
+      (meta.generatorPrompt || meta.judgePrompt
+        ? `; prompts ${[meta.generatorPrompt, meta.judgePrompt].filter(Boolean).join(", ")}`
+        : ""),
     "",
     "| split | briefs | failed | gates passed | unsupported evidence | unsupported claims | claim-rule violations | recall* | precision* | verdict agreement |",
     "|---|---|---|---|---|---|---|---|---|---|",

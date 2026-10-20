@@ -233,6 +233,19 @@ describe("runFitBriefEval", () => {
     expect([...d.files.values()].join()).toContain("boom");
   });
 
+  it("records the generator and judge prompt revisions in the report and every artifact (Codex P2, #581)", async () => {
+    const d = deps();
+    const out = await runFitBriefEval(CORPUS, OPTIONS, d);
+    expect(out.report).toMatch(/prompts generation\/fitBrief\.v\d+, judge sha256:[0-9a-f]{12}/);
+    for (const text of d.files.values()) {
+      expect(JSON.parse(text).config).toMatchObject({
+        generatorPrompt: expect.stringMatching(/^generation\/fitBrief\.v\d+$/),
+        judgePrompt: expect.stringMatching(/^judge sha256:[0-9a-f]{12}$/),
+        evidenceMode: "resume",
+      });
+    }
+  });
+
   it("in units mode, the generator reads Units but the gates keep the canonical sources (Codex P1, #581)", async () => {
     const withInventory: FitBriefCorpus = { ...CORPUS, inventoryText: "Tools: Looker" };
     const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });

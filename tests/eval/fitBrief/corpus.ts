@@ -146,7 +146,12 @@ function readInside(dir: string, rel: string, label: string): string {
     throw new Error(`${label} (${rel}) points outside the corpus directory.`);
   }
   if (!existsSync(full)) throw new Error(`${label} not found: ${rel}`);
-  return readFileSync(full, "utf8");
+  const text = readFileSync(full, "utf8");
+  // A blank file would let a paid run score against nothing, for example an
+  // empty reference brief yielding null recall on a "successful" sample
+  // (Codex P2, #581).
+  if (text.trim() === "") throw new Error(`${label} is empty: ${rel}`);
+  return text;
 }
 
 /** Load and validate the corpus. Refuses a corpus directory inside the repository. */

@@ -46,7 +46,7 @@ import {
 } from "../../../functions/src/generation/fitBrief.ts";
 
 import { assertOutsideRepo, loadCorpus, type CorpusPair, type FitBriefCorpus } from "./corpus.ts";
-import { judgeBrief, type JudgeResult } from "./judge.ts";
+import { judgeBrief, JUDGE_PROMPT_FINGERPRINT, type JudgeResult } from "./judge.ts";
 import {
   aggregate,
   checkEvidence,
@@ -234,18 +234,21 @@ export async function runFitBriefEval(
   let incomplete = false;
   const generatorEffort = resolvedEffort(options.model, options.effort);
   const judgeEffort = resolvedEffort(options.judgeModel, options.judgeEffort);
+  // Everything that decides what a run measured. It heads the report and
+  // is persisted in every sample artifact, so runs on different prompts or
+  // pins are never read as comparable (Codex P2, #581).
+  const runConfig = {
+    model: options.model,
+    ...(generatorEffort !== undefined && { effort: generatorEffort }),
+    generatorPrompt: promptVersionLabel(loadPromptText("generation", "fitBrief")),
+    judgeModel: options.judgeModel,
+    ...(judgeEffort !== undefined && { judgeEffort }),
+    judgePrompt: JUDGE_PROMPT_FINGERPRINT,
+    evidenceMode: options.evidence,
+    ...(options.evidence === "units" && { extraction: deps.extractionConfig ?? "unrecorded" }),
+  };
   const report = (rows: readonly { split: string; score: BriefScore | null }[]) =>
-    formatAggregate(aggregate(rows), {
-      model: options.model,
-      ...(generatorEffort !== undefined && { effort: generatorEffort }),
-      judgeModel: options.judgeModel,
-      ...(judgeEffort !== undefined && { judgeEffort }),
-      evidenceMode: options.evidence,
-      ...(options.evidence === "units" && { extraction: deps.extractionConfig ?? "unrecorded" }),
-      spentUsd,
-      maxUsd: options.maxUsd,
-      incomplete,
-    });
+    formatAggregate(aggregate(rows), { ...runConfig, spentUsd, maxUsd: options.maxUsd, incomplete });
 
   // A bound already reached (for example --max-usd 0) must stop before
   // the first paid call, including units-mode extraction (Codex P2, #581).
@@ -306,7 +309,7 @@ export async function runFitBriefEval(
           writeFile(
             file,
             JSON.stringify(
-              { pair: pair.id, split: pair.split, sample, brief: generated.brief, unjudged: "spend bound reached" },
+              { pair: pair.id, split: pair.split, sample, config: runConfig, brief: generated.brief, unjudged: "spend bound reached" },
               null,
               2,
             ),
@@ -333,7 +336,7 @@ export async function runFitBriefEval(
         writeFile(
           file,
           JSON.stringify(
-            { pair: pair.id, split: pair.split, sample, brief: generated.brief, evidence, judgement, score },
+            { pair: pair.id, split: pair.split, sample, config: runConfig, brief: generated.brief, evidence, judgement, score },
             null,
             2,
           ),
@@ -351,6 +354,7 @@ export async function runFitBriefEval(
               pair: pair.id,
               split: pair.split,
               sample,
+              config: runConfig,
               // Keep a paid-for brief when only the judge failed.
               ...(generated !== undefined && { brief: generated.brief }),
               error: err instanceof Error ? err.message : String(err),
