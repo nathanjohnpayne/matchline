@@ -333,6 +333,16 @@ function effectiveEfforts(): Partial<Record<Stage, Effort>> {
 export function assertVariantsCallable(variants: readonly SweepVariant[]): void {
   const problems: string[] = [];
   for (const variant of variants) {
+    // Codex P1 on #579: the subscription-CLI adapters drop
+    // `output_config`, so an effort clause there would run the CLI's own
+    // effort while the row is labelled with the requested one.
+    const tokenSource = variant.tokenSource ?? "api";
+    if (tokenSource !== "api" && Object.keys(variant.efforts ?? {}).length > 0) {
+      problems.push(
+        `${variant.label}: effort clauses need --token-source api; ` +
+          `${tokenSource} does not forward output_config.effort`,
+      );
+    }
     for (const stage of SWEEPABLE_STAGES) {
       const model = variant.models?.[stage]?.model ?? modelFor(stage).model;
       let accepted: readonly Effort[];
@@ -436,7 +446,9 @@ export async function runVariant(
       {
         ...variant,
         models: effectiveModels(),
-        efforts: effectiveEfforts(),
+        // Only the metered API sends `output_config.effort`; a CLI row
+        // records none rather than a profile default it never sent.
+        efforts: (variant.tokenSource ?? "api") === "api" ? effectiveEfforts() : {},
         promptVersions: {
           ...effectivePromptVersions,
           ...resolvedPromptVersions(),

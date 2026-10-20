@@ -966,6 +966,22 @@ describe("effort variants (#495)", () => {
     expect(() => assertVariantsCallable([v])).toThrow(/no request profile for claude-unprofiled/);
   });
 
+  it("refuses an effort clause on a subscription-CLI token source (Codex P1, #579)", () => {
+    const v = parseVariantFlag(
+      "cli-low:model.extraction=claude-sonnet-5-5,effort.extraction=low",
+      "claude-cli",
+    );
+    expect(() => assertVariantsCallable([v])).toThrow(/effort clauses need --token-source api/);
+  });
+
+  it("records no effort for a CLI row, since the CLI never sends one", async () => {
+    const result = await runVariant(
+      parseVariantFlag("cli:model.extraction=claude-sonnet-5-5", "claude-cli"),
+      { runCorpus: async () => [fixtureResult()] },
+    );
+    expect(result.efforts).toEqual({});
+  });
+
   it("accepts a 5.5 model with an effort", () => {
     const v = parseVariantFlag("ok:model.extraction=claude-opus-5-5,effort.extraction=high", "api");
     expect(() => assertVariantsCallable([v])).not.toThrow();

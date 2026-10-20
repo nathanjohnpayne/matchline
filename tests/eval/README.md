@@ -157,7 +157,7 @@ npm run eval -- --full --samples 3 \
   --variant 'opus55:model.extraction=claude-opus-5-5,effort.extraction=medium'
 ```
 
-The sweep refuses to start when a variant names a model with no profile, or an effort its model does not accept (the 4.x pins take none). The results table shows the effort each stage actually sent, defaults included. An effort override is part of the stage-cache key; with no override the key is unchanged, so existing cache entries stay valid. A safety decline (`stop_reason: "refusal"`) is recorded as a `refusal` failure and is not retried.
+The sweep refuses to start when a variant names a model with no profile, an effort its model does not accept (the 4.x pins take none), or an effort on a subscription-CLI token source, whose adapters do not forward `output_config.effort`; CLI rows record no effort. The results table shows the effort each stage actually sent, defaults included. An effort override is part of the stage-cache key; with no override the key is unchanged, so existing cache entries stay valid. A safety decline (`stop_reason: "refusal"`) is recorded as a `refusal` failure and is not retried.
 
 Cost is **modeled** — payload tokens priced through
 `functions/src/llm/rates.ts` — never the CLI's reported
