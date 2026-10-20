@@ -207,6 +207,7 @@
   .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel)}
   .seg span{padding:4px 10px;font-size:11px;color:var(--dim);border-right:1px solid var(--line)}
   .seg span:last-child{border-right:0}.seg span.on{background:#18181b;color:#fafafa}
+  .bulkbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;position:sticky;top:-16px;z-index:2}
   .list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
   .lrow{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);min-height:48px}
   .lrow:last-child{border-bottom:0}
@@ -360,6 +361,7 @@
     .nav{display:none}
     .hd .menu{display:block}
     .main{padding:12px 14px 20px}
+    .bulkbar{top:-12px}
     .ttl{font-size:17px}
     .three{grid-template-columns:1fr}
     .three .srcs{flex-direction:row;overflow-x:auto;flex-wrap:nowrap}
@@ -604,19 +606,19 @@ function unitReview(state) {
   if (state === 'error') {
     return shell('evidence', `<div class="ttl">Unit Review</div><div class="alert" role="alert">Couldn’t load your Experience Units: permission-denied. Sign out and back in; if it keeps happening the owner allowlist may have changed.</div>`);
   }
-  const bulk = `<div class="card tight bulkbar" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
+  const bulk = `<div class="card tight bulkbar nb"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const editing = `<div class="lrow sel" style="display:block"><div class="rowhead sm"><span class="cb on"></span><span class="rail flag">${ic('triangle-alert')}</span><b>Editing</b><span class="dim">Tab moves between fields · Enter saves · Esc reverts</span>${an(4)}</div>
     <div class="pair" style="gap:8px;margin-top:8px"><div style="grid-column:1/-1"><span class="lbl">Summary</span><div class="in focus">Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).</div></div>
     <div><span class="lbl">Skills</span><div class="in">Live streaming, Team leadership</div></div><div><span class="lbl">Tools</span><div class="in">HLS, WebRTC</div></div>
     <div><span class="lbl">Metric</span><div class="in">glass-to-glass latency · &lt; 3 s</div></div><div><span class="lbl">Dates</span><div class="in">2023-03 – 2024-02</div></div></div>
     <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}<span class="sm dim">Saving re-runs this Unit’s embedding.</span></div></div>`;
   const list = `<div class="list">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}</div>`;
-  const detail = `<div class="detail-pane card"><div class="rowhead"><b>Unit detail</b><span class="sp"></span>${btn(ic('x'), 'ghost')}</div>
+  const detail = `<div class="detail-pane card nb"><div class="rowhead"><b>Unit detail</b><span class="sp"></span>${btn(ic('x'), 'ghost')}</div>
     <div class="h3">Normalized summary</div><div>${UNITS[0].s}</div>
     <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (iOS/tvOS/web) — cut app startup time by 38% across 12M MAU.</div>
     <div class="h3">Signals</div><div class="meta">${chip('Video playback')}${chip('Platform strategy')}${chip('ExoPlayer', 'line')}${chip('AVFoundation', 'line')}${chip('startup time −38%', 'grn')}</div>
     <div class="h3">Provenance</div><div class="sm">resume · Beacon Streaming · pasted Oct 2 · confidence <span class="num">92%</span></div>
-    <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc nb')}</div>${an(6)}
+    <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
   const body = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
     <div class="btnrow">${btn(ic('plus') + ' Add Unit')}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd">?</span></div></div>
@@ -915,10 +917,10 @@ const GROUPS = [
       '<b>Filter bar</b>: approval-status chips are toggles; skill / tool / domain chips are seeded from values that actually appear in the Units; date range; source type. State lives in the URL. On narrow widths the advanced chips fold into one <i>Filters · n</i> button.',
       '<b>Row anatomy</b> (≈ 48 px): left-rail state icon (✓ approved · — pending · ⚠ flagged), two-line summary, metadata row of skill and tool chips, confidence as a tabular number, provenance (artifact Units render <code>artifact · file · page</code>). Pending rows are slightly dimmed; approved is the default visual state.',
       '<b>Inline edit</b>, never a modal: Tab moves between fields, Enter commits, Esc reverts. Saving re-runs the Unit’s embedding. An open draft gates the update-reload banner behind a confirmation (#456).',
-      '<b>Bulk selection</b>: checkboxes plus a sticky action bar with the same a / f / r shortcuts a focused row answers to. Reject asks once because rejected Units leave matching.',
-      '<b>Right-pane detail</b> (desktop only) keeps the list in context: raw source, signals, provenance, and — proposed — the canonical lines this Unit evidences.'],
+      '<b>Bulk selection (proposed)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with the same a / f / r shortcuts a focused row answers to. Reject asks once because rejected Units leave matching.',
+      '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
-        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. Advanced filter chips fold into “Filters · 2”.', ph: 'Rows wrap: action cluster moves under the summary; chips truncate to one line. Bulk bar stays sticky under the filters.' } },
+        { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. Advanced filter chips fold into “Filters · 2”.', ph: 'Rows wrap: action cluster moves under the summary; chips truncate to one line. The bulk bar sticks to the top of the scrolling list.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'Genuinely empty, after the first snapshot: three entry CTAs, no counter.', tab: 'Unchanged.', ph: 'CTAs stack vertically.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'Thin indeterminate bar and row skeletons; no counter, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
@@ -950,7 +952,7 @@ const GROUPS = [
       '<b>Exposures are listed, not hidden</b>: the clause, the gap, and how the package handles it. On the Requirements &amp; matches tab the same gap shows as a muted chip on the requirement itself (ui-guidance § Role Detail), and scores are tabular numbers with an expandable rationale.',
       '<b>What this package does not claim</b> closes the brief and is where claim rules become visible to the reader — each hit cites its rule. On Package, the validation card shows traceability, claim rules and specificity as three separate checks, and export records the canonical version. On Process, each round carries a prep brief, a debrief from the transcript and a signal; the scorecard and leveling brief roll the loop up. On Correspondence, the log is verbatim and in order; drafts are copied and marked sent by the user, never sent by Matchline.'],
       states: [
-        { id: 'fit', label: 'Fit brief (default)', kind: 'prd', cap: { desk: 'Header with where-things-stand and next action, five tabs, brief in two columns: argument left, homework / questions / does-not-claim right.', tab: 'Right column drops under the left; tabs stay on one line.', ph: 'Tabs scroll horizontally; header cards stack; the action bar collapses to its primary. Everything is one column.' } },
+        { id: 'fit', label: 'Fit brief (default)', kind: 'prd', cap: { desk: 'Header with where-things-stand and next action, five tabs, brief in two columns: argument left, homework / questions / does-not-claim right.', tab: 'Right column drops under the left; tabs stay on one line.', ph: 'Tabs scroll horizontally; header cards stack; the three actions sit on their own row under the title. Everything is one column.' } },
         { id: 'reqs', label: 'Requirements & matches · computing', kind: 'shipped', cap: { desk: 'Requirements left (must-haves first, gap and unverifiable chips inline), candidates for the selected requirement right with scores, component breakdown and approve / reject shortcuts. Shipped behaviour in the dossier’s shell.', tab: 'Split view stacks: requirements first, then candidates for the selected one.', ph: 'Score moves to the right edge of the first line; action buttons wrap under the evidence.' } },
         { id: 'package', label: 'Package · résumé view behind canonical', kind: 'prd', cap: { desk: 'Sub-navigation across the four artifacts; the résumé view is a selection of canonical lines with one tracked exception; validation and export to the right.', tab: 'Validation and export move under the lines.', ph: 'Sub-navigation scrolls; each line row wraps its chips. Export buttons stay reachable at the bottom.' } },
         { id: 'process', label: 'Process · rounds, scorecard, leveling', kind: 'prd', cap: { desk: 'Rounds as rows with prep / debrief / signal chips; scorecard table; org map and leveling brief at right.', tab: 'Org map and leveling drop under the scorecard.', ph: 'Scorecard hides its two prose columns and keeps round + signal; rows wrap.' } },
