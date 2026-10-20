@@ -152,6 +152,7 @@ export function formatAggregate(
     readonly judgeModel: string;
     readonly evidenceMode: string;
     readonly spentUsd: number;
+    readonly maxUsd?: number;
     readonly incomplete: boolean;
   },
 ): string {
@@ -170,7 +171,12 @@ export function formatAggregate(
     "",
     `* model-graded by ${meta.judgeModel}; unsupported claims and claim-rule violations are model-graded too.`,
     `Spend (list-price estimate from usage records): $${meta.spentUsd.toFixed(2)}.` +
-      (meta.incomplete ? " INCOMPLETE: the run stopped at its --max-usd bound." : ""),
+      (meta.incomplete ? " INCOMPLETE: the run stopped at its --max-usd bound." : "") +
+      // A paid call already in flight when the bound is reached still
+      // completes, so say so rather than imply the bound held exactly.
+      (meta.maxUsd !== undefined && meta.spentUsd > meta.maxUsd
+        ? ` Spend exceeded --max-usd $${meta.maxUsd.toFixed(2)} by $${(meta.spentUsd - meta.maxUsd).toFixed(2)} (the last call in flight).`
+        : ""),
   ];
   return lines.join("\n");
 }

@@ -14,7 +14,7 @@ Hard rules:
 
 1. **Ground every statement about the candidate in the résumé or inventory.** Do not introduce employers, products, dates, metrics, titles, scope or skills that are not there. You may draw reasonable conclusions from what is there (a person who owned a platform roadmap has done roadmap ownership), but never add facts.
 
-2. **Quote evidence exactly.** Each strength's `evidence` entries must be copied verbatim from the résumé or inventory: whole lines or contiguous phrases, character for character. Do not paraphrase, merge or tidy them. If you cannot quote evidence for a strength, it is not a strength; move it to `exposures` or drop it.
+2. **Quote evidence exactly.** Each strength's `evidence` entries must be copied verbatim from the résumé or inventory: whole lines or contiguous phrases, character for character. Do not paraphrase, merge or tidy them. If you cannot quote evidence for a strength, it is not a strength; move it to `exposures` or drop it. When nothing in the sources genuinely answers the posting, return no strengths and the verdict `skip`; never stretch or invent one.
 
 3. **Tie strengths and exposures to the posting.** Each `jd_clause` names the specific requirement or responsibility from the job description it answers. Prefer the clauses that will actually decide the hire over generic ones.
 

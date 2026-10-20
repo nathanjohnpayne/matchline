@@ -109,6 +109,23 @@ describe("runFitBriefEval", () => {
     expect(out.report).toMatch(/INCOMPLETE/);
   });
 
+  it("does not start the judge once generation reaches the bound, and reports incomplete (Codex P1, #581)", async () => {
+    const d = deps();
+    // Generation costs ~$1, so a $1 bound is reached before the judge.
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, maxUsd: 1 }, d);
+    expect(d.generate).toHaveBeenCalledTimes(1);
+    expect(d.judge).not.toHaveBeenCalled();
+    expect(out.incomplete).toBe(true);
+    expect([...d.files.values()].join()).toContain("spend bound reached");
+  });
+
+  it("says so when a call in flight overran the bound", async () => {
+    const d = deps();
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, maxUsd: 1.5 }, d);
+    expect(out.spentUsd).toBeGreaterThan(1.5);
+    expect(out.report).toMatch(/exceeded --max-usd \$1\.50/);
+  });
+
   it("counts a failed brief and keeps going", async () => {
     const d = deps({
       generate: vi.fn(async () => {

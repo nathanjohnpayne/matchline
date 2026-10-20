@@ -150,6 +150,20 @@ export async function runFitBriefEval(
           },
           record,
         );
+        // Recheck before the second paid stage (Codex P1 on #581): a
+        // generation that reaches the bound must not start the judge.
+        if (overBudget()) {
+          incomplete = true;
+          writeFile(
+            file,
+            JSON.stringify(
+              { pair: pair.id, split: pair.split, sample, brief: generated.brief, unjudged: "spend bound reached" },
+              null,
+              2,
+            ),
+          );
+          break;
+        }
         const judgement = await deps.judge(
           {
             jdText: pair.jdText,
@@ -192,6 +206,7 @@ export async function runFitBriefEval(
     judgeModel: options.judgeModel,
     evidenceMode: options.evidence,
     spentUsd,
+    maxUsd: options.maxUsd,
     incomplete,
   });
   return { report, spentUsd, incomplete, rows };

@@ -50,7 +50,8 @@ export const FitBriefResponseV1Schema = z
   .object({
     /** Two to four sentences: is this worth pursuing, and on what pitch. */
     bottom_line: nonEmpty,
-    strengths: z.array(FitBriefStrengthV1Schema).min(1),
+    /** May be empty only with verdict "skip" — see the refinement below. */
+    strengths: z.array(FitBriefStrengthV1Schema),
     exposures: z.array(FitBriefExposureV1Schema),
     /** How the package should be positioned: the lead argument and what to foreground. */
     positioning: nonEmpty,
@@ -64,7 +65,14 @@ export const FitBriefResponseV1Schema = z
     does_not_claim: z.array(nonEmpty),
     verdict: z.enum(FIT_BRIEF_VERDICTS),
   })
-  .strict();
+  .strict()
+  // An honest weak-fit brief can have no supportable strength; demanding
+  // one would push the model to stretch or invent (Codex P1 on #581).
+  // Every other verdict rests on at least one.
+  .refine((b) => b.verdict === "skip" || b.strengths.length > 0, {
+    message: 'strengths may be empty only when verdict is "skip"',
+    path: ["strengths"],
+  });
 
 export type FitBriefResponseV1 = z.infer<typeof FitBriefResponseV1Schema>;
 export type FitBriefVerdict = (typeof FIT_BRIEF_VERDICTS)[number];

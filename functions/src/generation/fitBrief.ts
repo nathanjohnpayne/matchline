@@ -83,7 +83,7 @@ const MAX_OUTPUT_TOKENS = 8192;
 const TOOL_NAME = "record_fit_brief";
 
 const SCHEMA_REMINDER =
-  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema: every strength needs at least one verbatim evidence line, and verdict must be one of apply, hold, referral_needed, skip.";
+  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema: every strength needs at least one verbatim evidence line, strengths may be empty only with verdict skip, and verdict must be one of apply, hold, referral_needed, skip.";
 const NO_TOOL_REMINDER =
   "\n\nYour previous response did not call the tool. Respond only by calling the tool with the complete brief.";
 

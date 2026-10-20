@@ -34,8 +34,11 @@ describe("FitBriefResponseV1Schema", () => {
     expect(FitBriefResponseV1Schema.safeParse(bad).success).toBe(false);
   });
 
-  it("rejects a brief with no strengths", () => {
+  it("rejects a brief with no strengths unless the verdict is skip (Codex P1, #581)", () => {
     expect(FitBriefResponseV1Schema.safeParse({ ...KNOWN_GOOD, strengths: [] }).success).toBe(false);
+    expect(
+      FitBriefResponseV1Schema.safeParse({ ...KNOWN_GOOD, strengths: [], verdict: "skip" }).success,
+    ).toBe(true);
   });
 
   it("rejects an unknown verdict", () => {
