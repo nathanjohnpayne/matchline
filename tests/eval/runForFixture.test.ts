@@ -30,12 +30,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
-import { modelFor } from "../../functions/src/llm/config.ts";
+import {
+  clearEffortOverrides,
+  modelFor,
+  setEffortOverrides,
+} from "../../functions/src/llm/config.ts";
 import { priceFor } from "../../functions/src/llm/cost.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
-import { describeError, promptFingerprint, runForFixture } from "./runForFixture.ts";
+import { cacheKey } from "./cache.ts";
+import { describeError, promptFingerprint, runForFixture, withEffort } from "./runForFixture.ts";
 
 // -- Mock factories ---------------------------------------------------------
 
@@ -798,5 +803,38 @@ describe("runForFixture", () => {
       // Requirement texts.
       expect(entriesIn("embedding")).toHaveLength(2);
     });
+  });
+});
+
+describe("withEffort (#495)", () => {
+  afterEach(() => clearEffortOverrides());
+
+  const keyInput = {
+    stage: "extraction",
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    promptVersion: "v1",
+    input: "resume text",
+  };
+
+  it("leaves the key untouched when no effort is set, so existing entries stay valid", () => {
+    expect(withEffort(undefined, "extraction")).toBeUndefined();
+    expect(withEffort({ tokenSource: "cli" }, "extraction")).toEqual({ tokenSource: "cli" });
+  });
+
+  it("adds the effort to the key when one is set, so efforts never share an entry", () => {
+    setEffortOverrides({ extraction: "low" });
+    const low = withEffort(undefined, "extraction");
+    expect(low).toEqual({ effort: "low" });
+    expect(cacheKey({ ...keyInput, discriminators: low })).not.toBe(cacheKey(keyInput));
+    setEffortOverrides({ extraction: "high" });
+    expect(cacheKey({ ...keyInput, discriminators: withEffort(undefined, "extraction") })).not.toBe(
+      cacheKey({ ...keyInput, discriminators: low }),
+    );
+  });
+
+  it("scopes the effort to its own stage", () => {
+    setEffortOverrides({ extraction: "low" });
+    expect(withEffort(undefined, "requirement_parsing")).toBeUndefined();
   });
 });

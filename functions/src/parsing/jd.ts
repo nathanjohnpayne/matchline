@@ -22,7 +22,8 @@ import { randomUUID } from "node:crypto";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
-import { modelFor } from "../llm/config.js";
+import { effortFor, modelFor } from "../llm/config.js";
+import { toolCallRequest } from "../llm/modelProfile.js";
 import {
   anthropicUsageFields,
   promptVersionLabel,
@@ -104,8 +105,11 @@ function retryReminderFor(
       return attempt >= 2 ? REPEATED_SCHEMA_ERROR_REMINDER : SCHEMA_ERROR_REMINDER;
     case "no_tool_use":
       return NO_TOOL_USE_REMINDER;
+    // A refusal ends the loop, so no attempt follows it; it is listed
+    // here only to keep the switch exhaustive.
     case "transport_error":
     case "max_tokens_exceeded":
+    case "refusal":
       return "";
   }
 }
@@ -131,6 +135,14 @@ export async function parseJobRequirements(
   }
 
   const toolSchema = zodToToolSchema(JdParsingResponseV1Schema);
+  // Model-specific request shape: tool choice, output budget, effort and
+  // timeout (#495). Unchanged for the current pins; see llm/modelProfile.ts.
+  const request = toolCallRequest({
+    model,
+    toolName: TOOL_NAME,
+    baseMaxTokens: MAX_OUTPUT_TOKENS,
+    effort: effortFor("requirement_parsing"),
+  });
 
   const failures: JdParsingAttemptFailure[] = [];
 
@@ -149,14 +161,14 @@ export async function parseJobRequirements(
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder =
-      prompt.system + retryReminderFor(failures.at(-1), attempt);
+      prompt.system + request.systemSuffix + retryReminderFor(failures.at(-1), attempt);
     const userContent = `${prompt.userFewShot}\n\nJob description to parse:\n\n${text}`;
 
     let response: Anthropic.Messages.Message;
     try {
       response = await client.messages.create({
         model,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: request.max_tokens,
         system: systemWithReminder,
         tools: [
           {
@@ -165,10 +177,11 @@ export async function parseJobRequirements(
             input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
           },
         ],
-        tool_choice: { type: "tool", name: TOOL_NAME },
+        tool_choice: request.tool_choice,
+        ...(request.output_config !== undefined && { output_config: request.output_config }),
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, request.requestOptions);
     } catch (err) {
       failures.push({
         attempt,
@@ -207,7 +220,8 @@ export async function parseJobRequirements(
         ...anthropicUsageFields(response),
         promptVersion: promptVersionLabel(prompt),
         attempt,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: request.max_tokens,
+        ...(request.effort !== undefined && { effort: request.effort }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
       }),
@@ -220,13 +234,27 @@ export async function parseJobRequirements(
     // misleading "requirements required" schema error. Retries
     // can't fix the truncation. See extraction/resume.ts for the
     // full rationale.
+    // A safety classifier declined the request (5.5 models report
+    // `stop_reason: "refusal"`). Resending the same input declines the
+    // same way, so stop here instead of spending the retry budget.
+    if (response.stop_reason === "refusal") {
+      failures.push({
+        attempt,
+        kind: "refusal",
+        message:
+          `Anthropic declined the request (stop_reason: "refusal"` +
+          `${response.stop_details?.category ? `, category: ${response.stop_details.category}` : ""}).`,
+      });
+      break;
+    }
+
     if (response.stop_reason === "max_tokens") {
       failures.push({
         attempt,
         kind: "max_tokens_exceeded",
         message:
           `Anthropic returned stop_reason: "max_tokens" — the model hit the ` +
-          `${MAX_OUTPUT_TOKENS}-token output budget mid-tool-call and the ` +
+          `${request.max_tokens}-token output budget mid-tool-call and the ` +
           `tool_use.input was truncated. Retries cannot recover; raise ` +
           `MAX_OUTPUT_TOKENS in parsing/jd.ts.`,
       });

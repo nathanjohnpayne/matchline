@@ -1,7 +1,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  clearEffortOverrides,
+  clearModelOverrides,
+  setEffortOverrides,
+  setModelOverrides,
+} from "../llm/config.ts";
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
 
 import { JdParsingError } from "./errors.ts";
@@ -409,3 +415,84 @@ describe("parseJobRequirements", () => {
     }
   });
 });
+
+describe("parseJobRequirements — Claude 5.5 request shape (#495)", () => {
+  afterEach(() => {
+    clearModelOverrides();
+    clearEffortOverrides();
+  });
+
+  function thinkingThenTool(response: Anthropic.Messages.Message): Anthropic.Messages.Message {
+    return {
+      ...response,
+      model: "claude-sonnet-5-5",
+      content: [
+        { type: "thinking", thinking: "", signature: "sig" },
+        ...response.content,
+      ],
+    } as Anthropic.Messages.Message;
+  }
+
+  it("asks Sonnet 5.5 for the tool without forcing it, with effort, a doubled budget and a timeout", async () => {
+    setModelOverrides({ requirement_parsing: { provider: "anthropic", model: "claude-sonnet-5-5" } });
+    const client = mockClient([thinkingThenTool(mockMessage(VALID_RESPONSE))]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("text", CTX, { client, record });
+
+    const create = vi.mocked(client.messages.create);
+    const [body, options] = create.mock.calls[0]! as unknown as [
+      Anthropic.Messages.MessageCreateParamsNonStreaming,
+      { timeout: number } | undefined,
+    ];
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    expect(body.output_config).toEqual({ effort: "high" });
+    expect(body.max_tokens).toBe(32_768);
+    expect(String(body.system)).toContain("`record_job_requirements`");
+    expect(options?.timeout).toBeGreaterThan(10 * 60 * 1000);
+    // A thinking block ahead of the tool call is skipped, not treated as the answer.
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-sonnet-5-5", effort: "high", maxTokens: 32_768 }),
+    );
+  });
+
+  it("sends an effort override and records it", async () => {
+    setModelOverrides({ requirement_parsing: { provider: "anthropic", model: "claude-sonnet-5-5" } });
+    setEffortOverrides({ requirement_parsing: "low" });
+    const client = mockClient([thinkingThenTool(mockMessage(VALID_RESPONSE))]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("text", CTX, { client, record });
+
+    const body = vi.mocked(client.messages.create).mock.calls[0]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+    expect(body.output_config).toEqual({ effort: "low" });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ effort: "low" }));
+  });
+
+  it("stops on a refusal instead of spending the retry budget", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
+    vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    const refusal = {
+      ...mockMessage(VALID_RESPONSE),
+      content: [],
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    } as unknown as Anthropic.Messages.Message;
+    const client = mockClient([refusal, mockMessage(VALID_RESPONSE)]);
+
+    const err = await parseJobRequirements("text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(JdParsingError);
+    expect(vi.mocked(client.messages.create)).toHaveBeenCalledTimes(1);
+    expect((JdParsingFailures(err))).toEqual([
+      expect.objectContaining({ attempt: 0, kind: "refusal", message: expect.stringContaining("cyber") }),
+    ]);
+  });
+});
+
+function JdParsingFailures(err: unknown): readonly { kind: string }[] {
+  return (err as { failures: readonly { kind: string }[] }).failures;
+}

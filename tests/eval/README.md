@@ -138,9 +138,26 @@ npm run eval -- --token-source claude-cli \
 ```
 
 Grammar: `--variant '<label>:<key>=<value>[,<key>=<value>...]'`, where
-`<key>` is `model.<stage>` or `prompt.<stage>/<name>`. Repeatable.
+`<key>` is `model.<stage>`, `prompt.<stage>/<name>` or `effort.<stage>`. Repeatable.
 Command-wide `--prompt` flags carry into every variant; a variant's own
 prompt override wins on conflict.
+
+#### Claude 5.5 models and effort (#495)
+
+How each model is called lives in `functions/src/llm/modelProfile.ts`, and a model must be registered there (and in `rates.ts`) before it can be swept. The current pins are called exactly as before. The 5.5 family differs in three ways the profile absorbs:
+
+- **Tool choice.** Opus 5.5 and Sonnet 5.5 reject a forced `tool_choice`, so they are asked to answer through the tool with `tool_choice: auto` and a system instruction. A text answer is the existing `no_tool_use` failure and retries. Haiku 5.5 keeps the forced choice.
+- **Output budget.** The 5.5 tokenizer counts about 30–35% more tokens for the same text, and Opus/Sonnet 5.5 thinking counts toward `max_tokens`, so their budget is doubled. Above the SDK's non-streaming limit the call passes an explicit timeout.
+- **Effort.** `output_config.effort` is always sent for 5.5 models: the profile default (`medium` for Opus and Haiku 5.5, `high` for Sonnet 5.5) unless the variant sets one.
+
+```bash
+npm run eval -- --full --samples 3 \
+  --variant 'haiku55:model.extraction=claude-haiku-5-5' \
+  --variant 'sonnet55-low:model.extraction=claude-sonnet-5-5,effort.extraction=low' \
+  --variant 'opus55:model.extraction=claude-opus-5-5,effort.extraction=medium'
+```
+
+The sweep refuses to start when a variant names a model with no profile, or an effort its model does not accept (the 4.x pins take none). The results table shows the effort each stage actually sent, defaults included. An effort override is part of the stage-cache key; with no override the key is unchanged, so existing cache entries stay valid. A safety decline (`stop_reason: "refusal"`) is recorded as a `refusal` failure and is not retried.
 
 Cost is **modeled** — payload tokens priced through
 `functions/src/llm/rates.ts` — never the CLI's reported

@@ -45,7 +45,12 @@ import {
   type TokenSourceKind,
 } from "./tokenSource.js";
 import { checkCaps, DEFAULT_CAPS, shouldBlock } from "./projection.js";
-import { assertModelsPriced, parseVariants, runSweep } from "./sweep.js";
+import {
+  assertModelsPriced,
+  assertVariantsCallable,
+  parseVariants,
+  runSweep,
+} from "./sweep.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
 import { runForFixture, type RunForFixtureResult } from "./runForFixture.js";
 
@@ -514,6 +519,7 @@ async function main(): Promise<number> {
   }
   const variants = parseVariants(argv, tokenSource);
   assertModelsPriced(variants);
+  assertVariantsCallable(variants);
   const cacheMode = resolveCacheMode(argv, samples);
   const cache = new StageCache({ mode: cacheMode });
   // Omitted from the report when caching is off, so a `--no-cache`

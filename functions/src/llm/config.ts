@@ -5,6 +5,8 @@
  *
  * See specs/matchline.md § AI pipeline → Model strategy.
  */
+import type { Effort } from "./modelProfile.js";
+
 export interface ModelConfig {
   readonly provider: "anthropic" | "openai";
   readonly model: string;
@@ -98,6 +100,38 @@ export function getModelOverrides(): Readonly<Partial<Record<Stage, ModelConfig>
 
 export function modelFor(stage: Stage): ModelConfig {
   return runtimeModelOverrides.get(stage) ?? defaults[stage];
+}
+
+/**
+ * Runtime per-stage effort overrides (#495). Same inversion as the
+ * model overrides above, for the same reason: the sweep sets them
+ * before a variant runs and production leaves the map empty, in which
+ * case each model's profile default applies (see `llm/modelProfile.ts`).
+ * Call `clearEffortOverrides()` in test teardown.
+ */
+const runtimeEffortOverrides = new Map<Stage, Effort>();
+
+/** Replace the entire effort override map (full replacement, not a merge). */
+export function setEffortOverrides(overrides: Partial<Record<Stage, Effort>>): void {
+  runtimeEffortOverrides.clear();
+  for (const [stage, effort] of Object.entries(overrides)) {
+    if (effort !== undefined) runtimeEffortOverrides.set(stage as Stage, effort);
+  }
+}
+
+export function clearEffortOverrides(): void {
+  runtimeEffortOverrides.clear();
+}
+
+export function getEffortOverrides(): Readonly<Partial<Record<Stage, Effort>>> {
+  return Object.freeze(Object.fromEntries(runtimeEffortOverrides)) as Readonly<
+    Partial<Record<Stage, Effort>>
+  >;
+}
+
+/** The effort override for a stage, or `undefined` to use the model's default. */
+export function effortFor(stage: Stage): Effort | undefined {
+  return runtimeEffortOverrides.get(stage);
 }
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";
