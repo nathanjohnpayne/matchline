@@ -74,6 +74,7 @@ import {
   type MatchApprovalState,
 } from "../../services/matches.ts";
 import { invokeGenerateResume } from "../../services/generation.ts";
+import { createTask } from "../../services/tasks.ts";
 import { invokeParseJobRequirements } from "../../services/requirements.ts";
 import { beginAppBusy, beginUnsavedWork } from "../../lib/appBusy.ts";
 import { type ProgressEvent } from "../../services/progress.ts";
@@ -88,6 +89,7 @@ import type { Application, Role } from "../../types/crm.ts";
 import RoleDetailView, { type LoadState, type Tab } from "./RoleDetailView.tsx";
 import type { ApplicationsTabStatus } from "./ApplicationsTab.tsx";
 import type { RequirementsTabStatus } from "./RequirementsTab.tsx";
+import { defaultDueAt } from "../Pipeline/taskSidebar.ts";
 import { shouldAutoTriggerMatching } from "./autoTriggerGate.ts";
 import { legacyEvidenceKey } from "./evidenceKey.ts";
 import type { EvidenceStatus } from "./GapsView.tsx";
@@ -1107,6 +1109,34 @@ export default function RoleDetail(): ReactElement {
    * persists on the server but the user won't be redirected
    * away from B).
    */
+  // Follow-up tasks from the Applications tab (#34). Rejections
+  // propagate to the inline quick-add form, which keeps the typed
+  // title and shows the error.
+  const onAddTask = useCallback(
+    async (
+      applicationId: string,
+      title: string,
+      dueAt: string | undefined,
+    ): Promise<void> => {
+      const releaseBusy = beginAppBusy("roleDetail.addTask");
+      try {
+        await createTask({
+          application_id: applicationId,
+          title,
+          ...(dueAt !== undefined && { due_at: dueAt }),
+        });
+      } finally {
+        releaseBusy();
+      }
+    },
+    [],
+  );
+  const defaultDueAtForApplication = useCallback(
+    (application: Application): string | undefined =>
+      defaultDueAt(application.stage, new Date()),
+    [],
+  );
+
   const onGenerate = useCallback((): void => {
     if (roleId === undefined || roleId === "") return;
     if (generationStatus === "generating") return;
@@ -1225,6 +1255,8 @@ export default function RoleDetail(): ReactElement {
       generationStatus={generationStatus}
       generationError={generationError}
       onGenerate={onGenerate}
+      onAddTask={onAddTask}
+      defaultDueAtFor={defaultDueAtForApplication}
     />
   );
 }

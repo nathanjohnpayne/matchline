@@ -11,6 +11,10 @@
  * drop on the card's own column, or a second move while the first is
  * in flight, writes nothing.
  *
+ * Tasks (#34) live in `usePipelineTasks`: the sidebar's Due today /
+ * Upcoming / Follow-ups, the card quick-add, and optimistic completion
+ * that also resets the card's days in stage.
+ *
  * The readers and the writer are injectable (`deps`) so the container
  * can be exercised end to end in a DOM test with fakes; the app renders
  * it with no props and gets the real services.
@@ -36,6 +40,7 @@ import {
   listPeople,
 } from "../../services/people.ts";
 import { listRoles } from "../../services/roles.ts";
+import { completeTask, createTask, listTasks } from "../../services/tasks.ts";
 import type { ApplicationStage, UUID } from "../../types/crm.ts";
 
 import { buildPipelineBoard } from "./buildPipelineBoard.ts";
@@ -54,8 +59,9 @@ import PipelineView, {
   type PipelineLoadState,
   type PipelineMoves,
 } from "./PipelineView.tsx";
+import { usePipelineTasks, type PipelineTaskDeps } from "./usePipelineTasks.ts";
 
-export interface PipelineDeps extends PipelineReaders {
+export interface PipelineDeps extends PipelineReaders, PipelineTaskDeps {
   readonly moveApplicationToStage: (
     id: UUID,
     stage: ApplicationStage,
@@ -73,7 +79,10 @@ const DEFAULT_DEPS: PipelineDeps = {
   listCompanies,
   listInteractions,
   listPeople,
+  listTasks,
   moveApplicationToStage,
+  createTask: (input, now) => createTask(input, now),
+  completeTask,
   now: () => new Date(),
 };
 
@@ -177,6 +186,16 @@ export default function Pipeline({
     [deps, describe, moveState],
   );
 
+  const tasks = usePipelineTasks({
+    deps,
+    loadedTasks: data?.tasks ?? null,
+    applications: moveState.applications,
+    labelFor: describe,
+    now,
+    dispatch,
+    onActivity: setNow,
+  });
+
   const moves: PipelineMoves = {
     onMove,
     pendingIds: new Set(moveState.pending.keys()),
@@ -193,6 +212,7 @@ export default function Pipeline({
       error={error}
       partial={data?.partial ?? false}
       moves={moves}
+      tasks={tasks}
     />
   );
 }

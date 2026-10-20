@@ -37,8 +37,11 @@ import { Link } from "react-router-dom";
 
 import type { ApplicationStage, UUID } from "../../types/crm.ts";
 
+import TaskQuickAdd from "../../components/TaskQuickAdd.tsx";
+
 import type { PipelineCard, PipelineColumn } from "./buildPipelineBoard.ts";
 import { neighborStage } from "./pipelineMoves.ts";
+import TaskSidebar, { type PipelineTasks } from "./TaskSidebar.tsx";
 
 /** `DataTransfer` type carrying a dragged card's Application id. */
 export const PIPELINE_CARD_MIME = "application/x-matchline-application";
@@ -68,6 +71,8 @@ export interface PipelineViewProps {
   readonly partial: boolean;
   /** Present when cards can be moved; absent for a read-only board. */
   readonly moves?: PipelineMoves;
+  /** Present when tasks are enabled (#34): sidebar + card quick-add. */
+  readonly tasks?: PipelineTasks;
 }
 
 export const STAGE_LABELS: Readonly<Record<ApplicationStage, string>> = {
@@ -107,14 +112,21 @@ function daysLabel(days: number): string {
 
 const MOVE_HINT_ID = "pipeline-move-hint";
 
+function cardLabel(card: PipelineCard): string {
+  return `${card.companyName ?? UNKNOWN_COMPANY}: ${card.roleTitle ?? UNKNOWN_ROLE}`;
+}
+
 function Card({
   card,
   stage,
   moves,
+  reserveActionSpace,
 }: {
   readonly card: PipelineCard;
   readonly stage: ApplicationStage;
   readonly moves: PipelineMoves | undefined;
+  /** Leave room at the top right for the `+ task` button. */
+  readonly reserveActionSpace: boolean;
 }): ReactElement {
   const company = card.companyName ?? UNKNOWN_COMPANY;
   const title = card.roleTitle ?? UNKNOWN_ROLE;
@@ -162,6 +174,7 @@ function Card({
       })}
       className={
         (pending ? "opacity-60 " : "") +
+        (reserveActionSpace ? "pr-8 " : "") +
         "block rounded-md border border-zinc-200 bg-white px-3 py-2 transition duration-150 ease-in-out hover:border-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 motion-reduce:transition-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-950"
       }
     >
@@ -225,12 +238,59 @@ function Card({
   );
 }
 
+/**
+ * The card's `+ task` affordance (#34). A sibling of the card link,
+ * not a child: a button inside an `<a>` is invalid and would also
+ * navigate.
+ */
+function CardTaskAdd({
+  card,
+  tasks,
+}: {
+  readonly card: PipelineCard;
+  readonly tasks: PipelineTasks;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const label = cardLabel(card);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={`Add task for ${label}`}
+        title="Add task"
+        data-action="pipeline-card-add-task"
+        data-application-id={card.applicationId}
+        className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded text-sm text-zinc-600 hover:bg-zinc-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:focus-visible:ring-zinc-100"
+      >
+        +
+      </button>
+      {open && (
+        <div className="mt-1.5">
+          <TaskQuickAdd
+            label={label}
+            defaultDueAt={tasks.defaultDueAtFor(card.applicationId)}
+            onSubmit={async (title, dueAt) => {
+              await tasks.onAddTask(card.applicationId, title, dueAt);
+              setOpen(false);
+            }}
+            onCancel={() => setOpen(false)}
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 function Column({
   column,
   moves,
+  tasks,
 }: {
   readonly column: PipelineColumn;
   readonly moves: PipelineMoves | undefined;
+  readonly tasks: PipelineTasks | undefined;
 }): ReactElement {
   const label = STAGE_LABELS[column.stage];
   const headingId = `pipeline-column-${column.stage}`;
@@ -308,8 +368,14 @@ function Column({
       ) : (
         <ul className="space-y-2">
           {column.cards.map((card) => (
-            <li key={card.applicationId}>
-              <Card card={card} stage={column.stage} moves={moves} />
+            <li key={card.applicationId} className="relative">
+              <Card
+                card={card}
+                stage={column.stage}
+                moves={moves}
+                reserveActionSpace={tasks !== undefined}
+              />
+              {tasks !== undefined && <CardTaskAdd card={card} tasks={tasks} />}
             </li>
           ))}
         </ul>
@@ -324,6 +390,7 @@ export default function PipelineView({
   error,
   partial,
   moves,
+  tasks,
 }: PipelineViewProps): ReactElement {
   return (
     <section
@@ -410,13 +477,27 @@ export default function PipelineView({
               </button>
             </div>
           )}
-          <div
-            className="flex flex-col gap-6 md:grid md:grid-cols-7 md:gap-3"
-            data-testid="pipeline-board"
-          >
-            {columns.map((column) => (
-              <Column key={column.stage} column={column} moves={moves} />
-            ))}
+          {/* Sidebar first in reading order so due work is met first;
+              from lg up it sits to the right of the board. */}
+          <div className="flex flex-col gap-6 lg:flex-row-reverse lg:items-start lg:gap-4">
+            {tasks !== undefined && (
+              <div className="lg:w-64 lg:shrink-0">
+                <TaskSidebar tasks={tasks} />
+              </div>
+            )}
+            <div
+              className="flex min-w-0 flex-1 flex-col gap-6 md:grid md:grid-cols-7 md:gap-3"
+              data-testid="pipeline-board"
+            >
+              {columns.map((column) => (
+                <Column
+                  key={column.stage}
+                  column={column}
+                  moves={moves}
+                  tasks={tasks}
+                />
+              ))}
+            </div>
           </div>
         </>
       )}

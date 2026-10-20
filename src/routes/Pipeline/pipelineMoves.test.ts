@@ -132,4 +132,16 @@ describe("pipelineMoveReducer", () => {
     expect(next.applications.map((a) => a.id)).toEqual(["a9"]);
     expect(next.pending.size).toBe(0);
   });
+
+  it("touched updates last_activity_at only, and only when no move is in flight", () => {
+    const state = loaded(app("a1", "applied"));
+    const touched = pipelineMoveReducer(state, { type: "touched", id: "a1", at: AT });
+    expect(touched.applications[0]).toMatchObject({ stage: "applied", last_activity_at: AT });
+
+    const moving = pipelineMoveReducer(state, { type: "move", id: "a1", stage: "offer", at: AT });
+    expect(
+      pipelineMoveReducer(moving, { type: "touched", id: "a1", at: "2026-10-21T00:00:00.000Z" }),
+    ).toBe(moving);
+    expect(pipelineMoveReducer(state, { type: "touched", id: "nope", at: AT })).toBe(state);
+  });
 });

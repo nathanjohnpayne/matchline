@@ -30,6 +30,7 @@ function readers(overrides: Partial<PipelineReaders> = {}): PipelineReaders {
     listCompanies: () => Promise.resolve([COMPANY]),
     listInteractions: () => Promise.resolve([]),
     listPeople: () => Promise.resolve([]),
+    listTasks: () => Promise.resolve([]),
     ...overrides,
   };
 }
@@ -77,9 +78,20 @@ describe("loadPipelineData", () => {
           listCompanies: never,
           listInteractions: never,
           listPeople: never,
+          listTasks: never,
         }),
       ),
     ).rejects.toThrow("permission-denied");
+  });
+
+  it("degrades a failed tasks read like any other enrichment read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const data = await loadPipelineData(
+      readers({ listTasks: () => Promise.reject(new Error("unavailable")) }),
+    );
+    expect(data.applications).toEqual([APP]);
+    expect(data.tasks).toEqual([]);
+    expect(data.partial).toBe(true);
   });
 
   it("degrades a failed enrichment read to an empty list and partial=true", async () => {
@@ -93,7 +105,7 @@ describe("loadPipelineData", () => {
     expect(data.partial).toBe(true);
   });
 
-  it("starts all five reads before any of them settles", async () => {
+  it("starts every read before any of them settles", async () => {
     // A sequential loader would wait on Applications before starting
     // the rest; here every reader must have been called while the
     // first is still pending.
@@ -122,8 +134,12 @@ describe("loadPipelineData", () => {
         started.push("people");
         return Promise.resolve([]);
       },
+      listTasks: () => {
+        started.push("tasks");
+        return Promise.resolve([]);
+      },
     });
-    expect(started).toHaveLength(5);
+    expect(started).toHaveLength(6);
     releaseApps([APP]);
     await expect(promise).resolves.toMatchObject({ applications: [APP] });
   });

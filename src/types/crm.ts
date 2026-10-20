@@ -252,3 +252,20 @@ export interface Interaction {
   summary: string;
   occurred_at: ISOTimestamp;
 }
+
+/**
+ * A follow-up reminder on an Application (#34). Lightweight on
+ * purpose: a title, an optional due date, and done-or-not. Nothing is
+ * sent anywhere; the human acts on it.
+ */
+export interface Task {
+  id: UUID;
+  /** See Person.owner_uid. */
+  owner_uid: UUID;
+  application_id: UUID;
+  title: string;
+  due_at?: ISOTimestamp;
+  completed: boolean;
+  created_at: ISOTimestamp;
+}
+

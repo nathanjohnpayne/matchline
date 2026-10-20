@@ -30,7 +30,18 @@ export type PipelineMoveAction =
       readonly at: string;
     }
   | { readonly type: "confirm"; readonly id: UUID }
-  | { readonly type: "fail"; readonly id: UUID };
+  | { readonly type: "fail"; readonly id: UUID }
+  | {
+      /**
+       * Activity recorded elsewhere (a completed task, #34) moved
+       * `last_activity_at`. Ignored while a move of that card is in
+       * flight: the move's own timestamp is newer, and a rollback
+       * restores the stored pre-move Application.
+       */
+      readonly type: "touched";
+      readonly id: UUID;
+      readonly at: string;
+    };
 
 export const EMPTY_MOVE_STATE: PipelineMoveState = {
   applications: [],
@@ -100,6 +111,15 @@ export function pipelineMoveReducer(
     case "confirm":
       if (!state.pending.has(action.id)) return state;
       return { ...state, pending: withoutPending(state.pending, action.id) };
+    case "touched":
+      if (state.pending.has(action.id)) return state;
+      if (!state.applications.some((a) => a.id === action.id)) return state;
+      return {
+        ...state,
+        applications: state.applications.map((a) =>
+          a.id === action.id ? { ...a, last_activity_at: action.at } : a,
+        ),
+      };
     case "fail": {
       const before = state.pending.get(action.id);
       if (before === undefined) return state;

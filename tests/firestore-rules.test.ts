@@ -58,6 +58,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -847,6 +848,115 @@ describe("rules: applications field limits", () => {
 });
 
 // -- unitMatches contradictory-shape guard (cursor #133 r4) --------------
+
+// -- tasks (#34) -----------------------------------------------------------
+
+describe("rules: tasks", () => {
+  /** The shape `createTask` writes (src/services/tasks.ts buildTask). */
+  const newTask = (ownerUid: string, applicationId = "app-1") => ({
+    owner_uid: ownerUid,
+    application_id: applicationId,
+    title: "Follow up with the recruiter",
+    due_at: "2026-10-23T12:00:00.000Z",
+    completed: false,
+    created_at: "2026-10-20T12:00:00.000Z",
+  });
+
+  const application = (ownerUid: string) => ({
+    owner_uid: ownerUid,
+    role_id: "role-1",
+    stage: "applied",
+    last_activity_at: "2026-10-01T00:00:00.000Z",
+    generated_assets: [],
+    approved_unit_ids: [],
+  });
+
+  beforeEach(async () => {
+    await seedDoc("applications", "app-1", application(OWNER_UID));
+    await seedDoc("applications", "app-bob", application(OTHER_UID));
+  });
+
+  it("ALLOWS the createTask shape on the owner's own Application", async () => {
+    await assertSucceeds(setDoc(doc(db(OWNER_UID), "tasks", "t-1"), newTask(OWNER_UID)));
+  });
+
+  it("ALLOWS an undated task", async () => {
+    const { due_at: _due, ...undated } = newTask(OWNER_UID);
+    await assertSucceeds(setDoc(doc(db(OWNER_UID), "tasks", "t-1"), undated));
+  });
+
+  it("REJECTS a task on another owner's Application", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "tasks", "t-1"), newTask(OWNER_UID, "app-bob")),
+    );
+  });
+
+  it("REJECTS a task on an Application that does not exist", async () => {
+    await assertFails(
+      setDoc(doc(db(OWNER_UID), "tasks", "t-1"), newTask(OWNER_UID, "app-missing")),
+    );
+  });
+
+  it("REJECTS creating a task for someone else", async () => {
+    await assertFails(setDoc(doc(db(OWNER_UID), "tasks", "t-1"), newTask(OTHER_UID)));
+  });
+
+  it("REJECTS an empty title, an over-long title, extra fields, or a pre-completed task", async () => {
+    const base = newTask(OWNER_UID);
+    for (const bad of [
+      { ...base, title: "" },
+      { ...base, title: "x".repeat(201) },
+      { ...base, priority: "high" },
+      { ...base, completed: true },
+    ]) {
+      await assertFails(setDoc(doc(db(OWNER_UID), "tasks", "t-1"), bad));
+    }
+  });
+
+  it("ALLOWS the owner to complete or retitle a task, nothing else", async () => {
+    await seedDoc("tasks", "t-1", newTask(OWNER_UID));
+    const ref = doc(db(OWNER_UID), "tasks", "t-1");
+    await assertSucceeds(updateDoc(ref, { completed: true }));
+    await assertSucceeds(updateDoc(ref, { title: "Renamed", due_at: deleteField() }));
+    await assertFails(updateDoc(ref, { application_id: "app-bob" }));
+    await assertFails(updateDoc(ref, { created_at: "2027-01-01T00:00:00.000Z" }));
+    await assertFails(updateDoc(ref, { completed: "yes" }));
+  });
+
+  it("REJECTS reading, completing or deleting another owner's task", async () => {
+    await seedDoc("tasks", "t-bob", newTask(OTHER_UID, "app-bob"));
+    const ref = doc(db(OWNER_UID), "tasks", "t-bob");
+    await assertFails(getDoc(ref));
+    await assertFails(updateDoc(ref, { completed: true }));
+    await assertFails(deleteDoc(ref));
+  });
+
+  it("ALLOWS the completeTask batch: task done + Application last_activity_at", async () => {
+    await seedDoc("tasks", "t-1", newTask(OWNER_UID));
+    const ownerDb = db(OWNER_UID);
+    const batch = writeBatch(ownerDb);
+    batch.update(doc(ownerDb, "tasks", "t-1"), { completed: true });
+    batch.update(doc(ownerDb, "applications", "app-1"), {
+      last_activity_at: "2026-10-20T12:00:00.000Z",
+    });
+    await assertSucceeds(batch.commit());
+  });
+
+  it("REJECTS an owner-scoped list query only when it is unscoped", async () => {
+    await seedDoc("tasks", "t-1", newTask(OWNER_UID));
+    await assertSucceeds(
+      getDocs(query(collectionRef(db(OWNER_UID), "tasks"), where("owner_uid", "==", OWNER_UID))),
+    );
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), "tasks")));
+  });
+
+  it("REJECTS a signed-in user who is not on the owner allowlist", async () => {
+    await seedDoc("applications", "app-m", application(STRANGER_UID));
+    await assertFails(
+      setDoc(doc(db(STRANGER_UID), "tasks", "t-1"), newTask(STRANGER_UID, "app-m")),
+    );
+  });
+});
 
 describe("rules: unitMatches contradictory-flag guard", () => {
   // The unified `setMatchApprovalState` setter (cursor #133

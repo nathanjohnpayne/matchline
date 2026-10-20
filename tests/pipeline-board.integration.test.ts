@@ -72,6 +72,11 @@ import {
   listPeople,
 } from "../src/services/people.ts";
 import { listRoles } from "../src/services/roles.ts";
+import {
+  completeTask,
+  createTask,
+  listTasks,
+} from "../src/services/tasks.ts";
 
 let testEnv: RulesTestEnvironment;
 
@@ -179,6 +184,7 @@ describe("Pipeline board read path (#510)", () => {
       listCompanies,
       listInteractions,
       listPeople,
+      listTasks,
     });
     expect(data.partial).toBe(false);
     expect(data.applications.map((a) => a.id).sort()).toEqual([
@@ -250,6 +256,7 @@ describe("Pipeline card move write path (#511)", () => {
       listCompanies,
       listInteractions,
       listPeople,
+      listTasks,
     });
     const board = buildPipelineBoard({ ...data, now: new Date(at) });
     const interviewing = board.find((c) => c.stage === "interviewing")?.cards;
@@ -262,6 +269,56 @@ describe("Pipeline card move write path (#511)", () => {
       moveApplicationToStage("a-bob", "offer", "2026-10-20T02:00:00.000Z"),
     ).rejects.toThrow();
     expect((await readRaw("a-bob"))?.stage).toBe("interviewing");
+  });
+});
+
+describe("Pipeline tasks write path (#34)", () => {
+  async function readRaw(
+    collection: string,
+    id: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    let raw: Record<string, unknown> | undefined;
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      raw = (await getDoc(doc(ctx.firestore(), collection, id))).data();
+    });
+    return raw;
+  }
+
+  it("creates a task through the service and lists it back, owner-scoped", async () => {
+    const task = await createTask(
+      { application_id: "a-applied", title: "Email Dana", due_at: "2026-10-23T12:00:00.000Z" },
+      new Date("2026-10-20T12:00:00.000Z"),
+    );
+    expect(await listTasks()).toEqual([task]);
+    expect(await readRaw("tasks", task.id)).toEqual({
+      owner_uid: OWNER_UID,
+      application_id: "a-applied",
+      title: "Email Dana",
+      due_at: "2026-10-23T12:00:00.000Z",
+      completed: false,
+      created_at: "2026-10-20T12:00:00.000Z",
+    });
+  });
+
+  it("completes a task and stamps only the Application's last_activity_at", async () => {
+    const task = await createTask({ application_id: "a-applied", title: "Email Dana" });
+    const appBefore = await readRaw("applications", "a-applied");
+    const at = "2026-10-20T15:00:00.000Z";
+
+    await completeTask(task, at);
+
+    expect((await readRaw("tasks", task.id))?.completed).toBe(true);
+    expect(await readRaw("applications", "a-applied")).toEqual({
+      ...appBefore,
+      last_activity_at: at,
+    });
+  });
+
+  it("refuses a task on another owner's Application", async () => {
+    await expect(
+      createTask({ application_id: "a-bob", title: "Not mine" }),
+    ).rejects.toThrow();
+    expect(await listTasks()).toEqual([]);
   });
 });
 

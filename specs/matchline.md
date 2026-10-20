@@ -138,6 +138,7 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
   - `jd_raw` may be the empty string. A Role can be saved with only a title, as a lead whose JD arrives later (#431). Parsing, matching and generation stay gated on the JD: an empty `jd_raw` yields no Requirements, matching does not run without Requirements, and generation needs approved matches.
 - `Application { id, role_id, stage, applied_at?, last_activity_at, generated_assets[], approved_unit_ids[] }`
 - `Interaction { id, person_id, application_id?, type, direction, summary, occurred_at }`
+- `Task { id, application_id, title, due_at?, completed, created_at }` (#34): a follow-up reminder on an Application. Completing one also stamps the Application's `last_activity_at`. V1 sends nothing; tasks are reminders the human acts on.
 
 ### Capability Graph
 
