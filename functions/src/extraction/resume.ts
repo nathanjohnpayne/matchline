@@ -35,6 +35,7 @@ import {
 } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { logger } from "firebase-functions";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   ExtractionResponseV1Schema,
@@ -302,9 +303,19 @@ export async function extractFromResume(
   // Not a retry-budget exhaustion when we stopped because the
   // caller disconnected — logging it as one would misattribute
   // a deliberate stop as a failure (#436).
-  if (!abortedBeforeAttempt) logRetryExhaustion("extraction.resume", model, failures);
+  // A refusal stops after one attempt, so it is neither a retry-budget
+  // exhaustion nor "Extraction failed after 3 attempts" (CodeRabbit on #579). Log it
+  // as what it is, without request content, and say so to the caller.
+  const refusal = failures.at(-1)?.kind === "refusal" ? failures.at(-1) : undefined;
+  if (refusal) {
+    logger.warn("extraction.resume: model declined the request", { model, detail: refusal.message });
+  } else if (!abortedBeforeAttempt) {
+    logRetryExhaustion("extraction.resume", model, failures);
+  }
   throw new ExtractionError(
-    `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
+    refusal
+      ? `Extraction was declined by the model (stop_reason: "refusal"). See .failures for detail.`
+      : `Extraction failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
 }

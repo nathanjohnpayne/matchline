@@ -32,6 +32,7 @@ import {
 } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { logger } from "firebase-functions";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
 import {
   JdParsingResponseV1Schema,
@@ -292,9 +293,19 @@ export async function parseJobRequirements(
   // Not a retry-budget exhaustion when we stopped because the
   // caller disconnected — logging it as one would misattribute
   // a deliberate stop as a failure (#436).
-  if (!abortedBeforeAttempt) logRetryExhaustion("parsing.jd", model, failures);
+  // A refusal stops after one attempt, so it is neither a retry-budget
+  // exhaustion nor "JD parsing failed after 3 attempts" (CodeRabbit on #579). Log it
+  // as what it is, without request content, and say so to the caller.
+  const refusal = failures.at(-1)?.kind === "refusal" ? failures.at(-1) : undefined;
+  if (refusal) {
+    logger.warn("parsing.jd: model declined the request", { model, detail: refusal.message });
+  } else if (!abortedBeforeAttempt) {
+    logRetryExhaustion("parsing.jd", model, failures);
+  }
   throw new JdParsingError(
-    `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
+    refusal
+      ? `JD parsing was declined by the model (stop_reason: "refusal"). See .failures for detail.`
+      : `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
 }

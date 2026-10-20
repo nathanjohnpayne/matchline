@@ -521,6 +521,14 @@ describe("extractFromResume — Claude 5.5 request shape (#495)", () => {
     }).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(ExtractionError);
+    expect((err as Error).message).toMatch(/declined by the model/);
+    expect((err as Error).message).not.toMatch(/after 3 attempts/);
+    // Logged as a refusal, not as an exhausted retry budget.
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.stringContaining("model declined the request"),
+      expect.objectContaining({ detail: expect.stringContaining("cyber") }),
+    );
+    expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
     expect(vi.mocked(client.messages.create)).toHaveBeenCalledTimes(1);
     expect((ExtractionFailures(err))).toEqual([
       expect.objectContaining({ attempt: 0, kind: "refusal", message: expect.stringContaining("cyber") }),
