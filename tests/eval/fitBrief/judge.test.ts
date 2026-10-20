@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 import type { recordUsage as RecordUsage } from "../../../functions/src/llm/cost.ts";
 
-import { judgeBrief, judgeUserContent, JUDGE_PROMPT_FINGERPRINT, type JudgeResult } from "./judge.ts";
+import { judgeBrief, judgeRequestFingerprint, judgeUserContent, type JudgeResult } from "./judge.ts";
 
 const JUDGEMENT: JudgeResult = {
   reference_points: [{ kind: "strength", jd_clause: "c", point: "p", coverage: "partial" }],
@@ -74,7 +74,9 @@ describe("judgeBrief", () => {
   });
 
   it("fingerprints the whole request, including the user-message template (Codex P2, #581)", () => {
-    expect(JUDGE_PROMPT_FINGERPRINT).toMatch(/^judge sha256:[0-9a-f]{12}$/);
+    expect(judgeRequestFingerprint("claude-opus-5-5", "high")).toMatch(/^judge sha256:[0-9a-f]{12}$/);
+    // The resolved per-model request shape is part of it.
+    expect(judgeRequestFingerprint("claude-opus-5-5", "high")).not.toBe(judgeRequestFingerprint("claude-sonnet-4-6"));
     // The user message the judge receives is the one judgeBrief sends.
     expect(judgeUserContent(INPUT)).toContain("GENERATED brief (JSON):");
   });

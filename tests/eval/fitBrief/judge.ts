@@ -135,26 +135,31 @@ const FINGERPRINT_CANARY: JudgeInput = {
 };
 
 /**
- * Identifies the whole judge request: system prompt, tool name and
- * description, base output budget, the exact tool schema sent, and the user message built for a fixed canary input,
+ * Identifies the whole judge request for `model` and `effort`: system
+ * prompt, tool name and description, the resolved request shape, the
+ * exact tool schema sent, and the user message built for a fixed canary input,
  * so any change to the template or the brief's serialization changes it
  * (Codex P2 ×2, #581). The judge is eval-only and unversioned, so this is
- * a content hash rather than a hand-bumped version. The model and effort
- * are recorded separately.
+ * a content hash rather than a hand-bumped version.
  */
-export const JUDGE_PROMPT_FINGERPRINT = `judge sha256:${createHash("sha256")
-  .update(
-    JSON.stringify([
-      JUDGE_SYSTEM,
-      TOOL_NAME,
-      TOOL_DESCRIPTION,
-      MAX_OUTPUT_TOKENS,
-      JUDGE_TOOL_SCHEMA,
-      judgeUserContent(FINGERPRINT_CANARY),
-    ]),
-  )
-  .digest("hex")
-  .slice(0, 12)}`;
+export function judgeRequestFingerprint(model: string, effort?: Effort): string {
+  // The request shape as resolved for this model and effort, so a
+  // model-profile correction changes the fingerprint too (Codex P2, #581).
+  const request = toolCallRequest({ model, toolName: TOOL_NAME, baseMaxTokens: MAX_OUTPUT_TOKENS, effort });
+  const hash = createHash("sha256")
+    .update(
+      JSON.stringify([
+        JUDGE_SYSTEM,
+        TOOL_NAME,
+        TOOL_DESCRIPTION,
+        request,
+        JUDGE_TOOL_SCHEMA,
+        judgeUserContent(FINGERPRINT_CANARY),
+      ]),
+    )
+    .digest("hex");
+  return `judge sha256:${hash.slice(0, 12)}`;
+}
 
 export interface JudgeDeps {
   readonly client: Anthropic;

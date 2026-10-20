@@ -276,6 +276,7 @@ describe("runFitBriefEval", () => {
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", frozenUnits: frozen }, d);
     expect(d.extractUnits).not.toHaveBeenCalled();
     expect(out.report).toContain("extraction old-pin");
+    expect(out.report).toMatch(/units frozen sha256:[0-9a-f]{12}\)/);
     const artifact = JSON.parse([...d.files].find(([k]) => k !== "/private/out/units.json")![1]);
     expect(artifact.config).toMatchObject({ unitsSource: "frozen", extraction: "old-pin" });
     expect(JSON.parse(vi.mocked(d.generate).mock.calls[0]![0].resumeText)).toEqual([
@@ -294,7 +295,9 @@ describe("runFitBriefEval", () => {
     const d = deps({ extractUnits: vi.fn(async () => [{ raw_text: "Owned the checkout API used by twelve teams." }]) });
     const out = await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, { ...d, extractionConfig: "claude-haiku-4-5, prompt extraction/resume.v3" });
     // The report names the extraction pin behind the evidence (Codex P2, #581).
-    expect(out.report).toContain(`evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3, format ${UNITS_FORMAT_FINGERPRINT})`);
+    expect(out.report).toContain(
+      `evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3, format ${UNITS_FORMAT_FINGERPRINT}, units extracted sha256:`,
+    );
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
     expect(JSON.parse(gen.resumeText)).toEqual([
       { text: "Owned the checkout API used by twelve teams.", dates_from_extraction: null },

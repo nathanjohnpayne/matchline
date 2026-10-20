@@ -59,7 +59,7 @@ import {
 } from "../../../functions/src/generation/fitBrief.ts";
 
 import { assertOutsideRepo, loadCorpus, type CorpusPair, type FitBriefCorpus } from "./corpus.ts";
-import { judgeBrief, JUDGE_PROMPT_FINGERPRINT, type JudgeResult } from "./judge.ts";
+import { judgeBrief, judgeRequestFingerprint, type JudgeResult } from "./judge.ts";
 import {
   aggregate,
   checkEvidence,
@@ -317,10 +317,10 @@ export async function runFitBriefEval(
     model: options.model,
     ...(generatorEffort !== undefined && { effort: generatorEffort }),
     generatorPrompt: promptVersionLabel(loadPromptText("generation", "fitBrief")),
-    generatorRequest: fitBriefRequestFingerprint(),
+    generatorRequest: fitBriefRequestFingerprint(options.model, options.effort),
     judgeModel: options.judgeModel,
     ...(judgeEffort !== undefined && { judgeEffort }),
-    judgePrompt: JUDGE_PROMPT_FINGERPRINT,
+    judgePrompt: judgeRequestFingerprint(options.judgeModel, options.judgeEffort),
     evidenceMode: options.evidence,
     ...(options.evidence === "units" && {
       extraction: extractionLabel,

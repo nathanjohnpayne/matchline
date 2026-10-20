@@ -229,6 +229,10 @@ export function formatAggregate(
     readonly extraction?: string;
     /** Units mode: fingerprint of the evidence serialization. */
     readonly unitsFormat?: string;
+    /** Units mode: whether the Units were extracted this run or reused. */
+    readonly unitsSource?: string;
+    /** Units mode: hash of exactly the evidence the generator read. */
+    readonly unitsSha256?: string;
     readonly spentUsd: number;
     readonly maxUsd?: number;
     readonly incomplete: boolean;
@@ -237,7 +241,14 @@ export function formatAggregate(
   const lines = [
     `Fit-brief eval — model ${meta.model}${meta.effort ? ` (effort ${meta.effort})` : ""}, ` +
       `evidence ${meta.evidenceMode}` +
-      `${meta.extraction ? ` (extraction ${meta.extraction}${meta.unitsFormat ? `, format ${meta.unitsFormat}` : ""})` : ""}` +
+      `${
+        meta.extraction
+          ? ` (extraction ${meta.extraction}` +
+            `${meta.unitsFormat ? `, format ${meta.unitsFormat}` : ""}` +
+            `${meta.unitsSource ? `, units ${meta.unitsSource}` : ""}` +
+            `${meta.unitsSha256 ? ` sha256:${meta.unitsSha256.slice(0, 12)}` : ""})`
+          : ""
+      }` +
       `, judge ${meta.judgeModel}` +
       `${meta.judgeEffort ? ` (effort ${meta.judgeEffort})` : ""}` +
       (meta.generatorPrompt || meta.judgePrompt

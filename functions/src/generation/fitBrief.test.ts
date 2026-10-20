@@ -202,7 +202,10 @@ describe("generateFitBrief", () => {
 
 describe("fitBriefRequestFingerprint", () => {
   it("is a stable short hash of the request template (Codex P2, #581)", () => {
-    expect(fitBriefRequestFingerprint()).toMatch(/^sha256:[0-9a-f]{12}$/);
-    expect(fitBriefRequestFingerprint()).toBe(fitBriefRequestFingerprint());
+    expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).toMatch(/^sha256:[0-9a-f]{12}$/);
+    expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).toBe(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium"));
+    // The resolved per-model request shape is part of it.
+    expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).not.toBe(fitBriefRequestFingerprint("claude-sonnet-4-6"));
+    expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).not.toBe(fitBriefRequestFingerprint("claude-sonnet-5-5", "high"));
   });
 });

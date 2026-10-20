@@ -232,16 +232,19 @@ export async function generateFitBrief(
 }
 
 /**
- * Identifies everything the generator sends apart from the model and the
- * inputs: system prompt, few-shot, tool name and description, base output
- * budget, tool schema, retry reminders and the user-message template
- * (built for a fixed canary input). The model profile's adjustments to the
- * budget and effort follow from the model, which is recorded separately. The
+ * Identifies everything the generator sends for `model` and `effort`
+ * apart from the inputs: system prompt, few-shot, tool name and
+ * description, the resolved request shape, tool schema, retry reminders
+ * and the user-message template (built for a fixed canary input). The
  * prompt version label alone misses code-side template changes, so evals
  * record this too (Codex P2, #581).
  */
-export function fitBriefRequestFingerprint(): string {
+export function fitBriefRequestFingerprint(model: string, effort?: Effort): string {
   const prompt = loadPromptText("generation", "fitBrief");
+  // The request shape as resolved for this model and effort (output
+  // budget, tool choice, system suffix, output config), so a model-profile
+  // correction changes the fingerprint too (Codex P2, #581).
+  const request = toolCallRequest({ model, toolName: TOOL_NAME, baseMaxTokens: MAX_OUTPUT_TOKENS, effort });
   const canary: FitBriefInput = {
     jdText: "<jd>",
     resumeText: "<resume>",
@@ -254,7 +257,7 @@ export function fitBriefRequestFingerprint(): string {
         prompt.system,
         TOOL_NAME,
         TOOL_DESCRIPTION,
-        MAX_OUTPUT_TOKENS,
+        request,
         zodToToolSchema(FitBriefResponseV1Schema),
         SCHEMA_REMINDER,
         NO_TOOL_REMINDER,
