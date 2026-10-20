@@ -4,8 +4,9 @@
  * with #129.
  *
  * Three states the tab can be in:
- *   1. `jd_raw` empty → "Paste JD text first" empty state with
- *      an inline editable textarea bound to `jd_raw`.
+ *   1. `jd_raw` empty → "No JD yet" empty state with an inline
+ *      editable textarea bound to `jd_raw`. A Role saved from
+ *      `/roles/new` with only a title lands here (#431).
  *   2. `jd_raw` non-empty AND requirements empty → JD textarea
  *      + "Parse JD" button. Click → callable → subscription
  *      delivers parsed Requirements.
@@ -416,9 +417,15 @@ export default function RequirementsTab({
           className="border-t border-zinc-200 pt-4 text-sm text-zinc-500 dark:border-zinc-800"
           data-testid="requirements-tab-empty"
         >
+          {/* Three distinct reads (#431): no JD at all, a JD typed
+              but not saved, and a saved JD that has not been parsed.
+              The last is the only "JD present, not yet parsed" case;
+              the first is a lead saved before its JD arrived. */}
           {draftEmpty
-            ? "Paste JD text above, then click Parse JD."
-            : "JD ready. Click Parse JD to extract structured Requirements."}
+            ? "No JD yet. Paste it above to parse requirements."
+            : jdRaw.trim() === ""
+              ? "JD not saved yet. Click Parse JD to save it and extract structured Requirements."
+              : "JD ready. Click Parse JD to extract structured Requirements."}
         </p>
       )}
     </section>

@@ -27,6 +27,7 @@ function render(props: {
   readonly computingMatches?: boolean;
   readonly matchingIncomplete?: boolean;
   readonly groups?: RequirementWithMatches[];
+  readonly hasJd?: boolean;
 }): string {
   return renderToStaticMarkup(
     <MatchesTab
@@ -61,6 +62,22 @@ describe("MatchesTab: the no-Requirements branch", () => {
     const html = render({ strandedMatches: 0 });
     expect(html).toContain("No Requirements parsed for this Role yet");
     expect(html).not.toContain("gaps-stranded");
+  });
+
+  it("says 'No JD yet' for a Role saved without a JD (#431)", () => {
+    // A lead saved with only a title has nothing to parse; telling
+    // the user to "parse the JD" reads as if a JD were present.
+    const html = render({ hasJd: false });
+    expect(html).toContain("No JD yet");
+    expect(html).not.toContain("No Requirements parsed for this Role yet");
+  });
+
+  it("keeps the stranded copy over 'No JD yet' when matches are stranded", () => {
+    // A JD that was parsed and then cleared can still leave stranded
+    // matches; the stranded warning is the more important read.
+    const html = render({ hasJd: false, strandedMatches: 1 });
+    expect(html).toContain("previous version of the job description");
+    expect(html).not.toContain("No JD yet");
   });
 
   it("treats an absent count as none stranded", () => {
