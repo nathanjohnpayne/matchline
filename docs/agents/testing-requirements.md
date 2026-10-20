@@ -72,6 +72,11 @@ test, not a metric — it moves from pass to fail the moment it regresses.
   Playwright smoke tests for the critical paths (flag resolution,
   drag-to-stage, export-blocked-on-flag). Extraction variants
   (LinkedIn, long-form) reuse the Phase 1 fixture harness.
+  Smoke specs live in `tests/e2e/*.e2e.ts` and run with
+  `npm run test:e2e`: Playwright drives the real app against the
+  Auth + Firestore emulators (offline `demo-matchline-e2e`
+  project; see `playwright.config.ts`). CI runs them in the
+  `e2e smoke` job of `.github/workflows/test.yml`.
 - **Phase 3** (`#37`): prompt-tuning changes run the full eval
   harness on every push and block merge if 80/80 regresses. Cost and
   latency telemetry (`#41`) ships with a fixture test that proves the

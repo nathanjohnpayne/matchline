@@ -1,10 +1,16 @@
 /**
- * Pipeline board view (#510, sub-issue of #32). Read-only: seven stage
- * columns of Application cards, built by `buildPipelineBoard`.
+ * Pipeline board view (#510, sub-issue of #32): seven stage columns of
+ * Application cards, built by `buildPipelineBoard`.
  *
- * Pure presentational, no Firestore, so it is exercised with
- * `renderToStaticMarkup` like `RoleDetailView`. The container
- * (`index.tsx`) owns loading and the join.
+ * Moving cards (#511): when the container passes `moves`, a card can
+ * be dragged to another column with the browser's native drag API
+ * (the drop target gets a 2px border, no animation), or moved one
+ * column with the Left / Right arrow keys while focused. Both call the
+ * same `moves.onMove`. Without `moves` the board is read-only, which
+ * keeps the static-render tests and any read-only caller unchanged.
+ *
+ * Presentational, no Firestore. The container (`index.tsx`) owns
+ * loading, the join, the optimistic state and the write.
  *
  * UI guidance § Pipeline (#32): a muted column header with stage name
  * and count; cards at most three lines (company, muted truncated
@@ -19,12 +25,38 @@
  * PR #576).
  */
 
-import type { ReactElement } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactElement,
+} from "react";
 import { Link } from "react-router-dom";
 
-import type { ApplicationStage } from "../../types/crm.ts";
+import type { ApplicationStage, UUID } from "../../types/crm.ts";
 
 import type { PipelineCard, PipelineColumn } from "./buildPipelineBoard.ts";
+import { neighborStage } from "./pipelineMoves.ts";
+
+/** `DataTransfer` type carrying a dragged card's Application id. */
+export const PIPELINE_CARD_MIME = "application/x-matchline-application";
+
+/** Everything the board needs to make cards movable (#511). */
+export interface PipelineMoves {
+  /** Move an Application to a stage. The container ignores no-ops. */
+  readonly onMove: (applicationId: UUID, stage: ApplicationStage) => void;
+  /** Applications whose move is still being written. */
+  readonly pendingIds: ReadonlySet<UUID>;
+  /** Inline failure from the last rejected move, or `null`. */
+  readonly error: string | null;
+  readonly onDismissError: () => void;
+  /** Polite live-region text describing the last move. */
+  readonly announcement: string;
+  /** The card to keep focused after it moves (keyboard moves). */
+  readonly focusApplicationId: UUID | null;
+}
 
 export type PipelineLoadState = "loading" | "ready" | "error";
 
@@ -34,6 +66,8 @@ export interface PipelineViewProps {
   readonly error: Error | null;
   /** Some enrichment data (Roles, Companies, contacts) failed to load. */
   readonly partial: boolean;
+  /** Present when cards can be moved; absent for a read-only board. */
+  readonly moves?: PipelineMoves;
 }
 
 export const STAGE_LABELS: Readonly<Record<ApplicationStage, string>> = {
@@ -71,15 +105,65 @@ function daysLabel(days: number): string {
   return days === 1 ? "1 day in stage" : `${days} days in stage`;
 }
 
-function Card({ card }: { readonly card: PipelineCard }): ReactElement {
+const MOVE_HINT_ID = "pipeline-move-hint";
+
+function Card({
+  card,
+  stage,
+  moves,
+}: {
+  readonly card: PipelineCard;
+  readonly stage: ApplicationStage;
+  readonly moves: PipelineMoves | undefined;
+}): ReactElement {
   const company = card.companyName ?? UNKNOWN_COMPANY;
   const title = card.roleTitle ?? UNKNOWN_ROLE;
+  const pending = moves?.pendingIds.has(card.applicationId) ?? false;
+  const ref = useRef<HTMLAnchorElement>(null);
+  const shouldFocus = moves?.focusApplicationId === card.applicationId;
+
+  // A moved card remounts in its new column (React keys are per list),
+  // which drops focus. Restore it so a keyboard user can keep moving
+  // the same card.
+  useEffect(() => {
+    if (shouldFocus) ref.current?.focus();
+  }, [shouldFocus]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLAnchorElement>): void => {
+    if (moves === undefined) return;
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const direction =
+      e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : null;
+    if (direction === null) return;
+    e.preventDefault();
+    const target = neighborStage(stage, direction);
+    if (target !== null) moves.onMove(card.applicationId, target);
+  };
+
+  const onDragStart = (e: DragEvent<HTMLAnchorElement>): void => {
+    e.dataTransfer.setData(PIPELINE_CARD_MIME, card.applicationId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
   return (
     <Link
       to={`/roles/${card.roleId}`}
+      ref={ref}
       data-testid="pipeline-card"
       data-application-id={card.applicationId}
-      className="block rounded-md border border-zinc-200 bg-white px-3 py-2 transition duration-150 ease-in-out hover:border-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 motion-reduce:transition-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-950"
+      {...(moves !== undefined && {
+        draggable: !pending,
+        onDragStart,
+        onKeyDown,
+        "aria-keyshortcuts": "ArrowLeft ArrowRight",
+        "aria-describedby": MOVE_HINT_ID,
+        "aria-busy": pending,
+        "data-pending": pending ? "true" : undefined,
+      })}
+      className={
+        (pending ? "opacity-60 " : "") +
+        "block rounded-md border border-zinc-200 bg-white px-3 py-2 transition duration-150 ease-in-out hover:border-zinc-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-50 motion-reduce:transition-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-600 dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-950"
+      }
     >
       <p
         className={
@@ -141,15 +225,63 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
   );
 }
 
-function Column({ column }: { readonly column: PipelineColumn }): ReactElement {
+function Column({
+  column,
+  moves,
+}: {
+  readonly column: PipelineColumn;
+  readonly moves: PipelineMoves | undefined;
+}): ReactElement {
   const label = STAGE_LABELS[column.stage];
   const headingId = `pipeline-column-${column.stage}`;
+  const [dragOver, setDragOver] = useState(false);
+
+  const carriesCard = (e: DragEvent<HTMLElement>): boolean =>
+    Array.from(e.dataTransfer.types).includes(PIPELINE_CARD_MIME);
+
+  const dropHandlers =
+    moves === undefined
+      ? {}
+      : {
+          onDragOver: (e: DragEvent<HTMLElement>): void => {
+            if (!carriesCard(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            if (!dragOver) setDragOver(true);
+          },
+          onDragLeave: (e: DragEvent<HTMLElement>): void => {
+            // Moving between children fires dragleave on the column;
+            // only clear the highlight when the pointer really left it.
+            const next = e.relatedTarget;
+            if (next instanceof Node && e.currentTarget.contains(next)) return;
+            setDragOver(false);
+          },
+          onDrop: (e: DragEvent<HTMLElement>): void => {
+            setDragOver(false);
+            const id = e.dataTransfer.getData(PIPELINE_CARD_MIME);
+            if (id === "") return;
+            e.preventDefault();
+            moves.onMove(id, column.stage);
+          },
+        };
+
   return (
     <section
       aria-labelledby={headingId}
       data-testid="pipeline-column"
       data-stage={column.stage}
-      className="min-w-0 space-y-2"
+      data-drop-target={dragOver ? "true" : undefined}
+      {...dropHandlers}
+      className={
+        "min-w-0 space-y-2 " +
+        (moves === undefined
+          ? ""
+          : // Always 2px so the highlight never shifts the layout.
+            "-m-1 rounded-md border-2 p-1 " +
+            (dragOver
+              ? "border-zinc-900 dark:border-zinc-100"
+              : "border-transparent"))
+      }
     >
       {/* One header element, two shapes: a pill below md, a muted
           header row from md up. */}
@@ -177,7 +309,7 @@ function Column({ column }: { readonly column: PipelineColumn }): ReactElement {
         <ul className="space-y-2">
           {column.cards.map((card) => (
             <li key={card.applicationId}>
-              <Card card={card} />
+              <Card card={card} stage={column.stage} moves={moves} />
             </li>
           ))}
         </ul>
@@ -191,6 +323,7 @@ export default function PipelineView({
   columns,
   error,
   partial,
+  moves,
 }: PipelineViewProps): ReactElement {
   return (
     <section
@@ -204,8 +337,27 @@ export default function PipelineView({
         </h1>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
           Every application by stage. Open a card to see its Role.
+          {moves !== undefined && (
+            <span id={MOVE_HINT_ID}>
+              {" "}
+              Drag a card to another column, or focus it and press the Left
+              or Right arrow key to move it one stage.
+            </span>
+          )}
         </p>
       </header>
+
+      {moves !== undefined && (
+        // Always mounted so screen readers pick up each new message.
+        <p
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          data-testid="pipeline-announcement"
+        >
+          {moves.announcement}
+        </p>
+      )}
 
       {status === "loading" && (
         <p
@@ -241,12 +393,29 @@ export default function PipelineView({
               placeholders. Reload to try again.
             </p>
           )}
+          {moves !== undefined && moves.error !== null && (
+            <div
+              role="alert"
+              data-testid="pipeline-move-error"
+              className="flex items-start justify-between gap-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+            >
+              <p>{moves.error}</p>
+              <button
+                type="button"
+                onClick={moves.onDismissError}
+                data-action="pipeline-dismiss-move-error"
+                className="shrink-0 rounded px-1.5 text-xs text-red-700 hover:bg-red-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-700 dark:text-red-300 dark:hover:bg-red-900 dark:focus-visible:ring-red-300"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <div
             className="flex flex-col gap-6 md:grid md:grid-cols-7 md:gap-3"
             data-testid="pipeline-board"
           >
             {columns.map((column) => (
-              <Column key={column.stage} column={column} />
+              <Column key={column.stage} column={column} moves={moves} />
             ))}
           </div>
         </>

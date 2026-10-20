@@ -102,3 +102,45 @@ jobs:
         #     generation-persistence, and derive-match-evidence
         #     (#441, read-only: asserts no write happens)
         run: npm run test:rules
+
+  e2e:
+    name: e2e smoke (Playwright, emulators)
+    runs-on: ubuntu-latest
+    # Browser smoke tests for UI critical paths (#511; testing-
+    # requirements.md § Phase 2): the real app in Chromium against the
+    # Auth + Firestore emulators for the offline demo-matchline-e2e
+    # project. One Node version: the unit and rules jobs already cover
+    # the engines matrix, and this job tests browser behavior.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node 22.12.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.12.0'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java 21 (emulator dependency)
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright smoke tests (Auth + Firestore emulators)
+        run: npm run test:e2e
+
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7
