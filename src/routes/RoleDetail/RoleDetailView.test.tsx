@@ -464,6 +464,30 @@ describe("RoleDetailView", () => {
     expect(html).toContain("JD not saved yet");
   });
 
+  it("REQUIREMENTS TAB: a saved JD cleared in the editor does not read as 'No JD yet' (#431)", () => {
+    // CodeRabbit on PR #575: the copy must key on the saved JD first.
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "Build great things." })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft=""
+      />,
+    );
+    expect(html).toContain("JD cleared in the editor but still saved");
+    expect(html).not.toContain("No JD yet");
+    expect(html).not.toContain("JD ready");
+  });
+
   it("MATCHES TAB: a Role saved without a JD says 'No JD yet' (#431)", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView

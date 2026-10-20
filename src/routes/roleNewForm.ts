@@ -114,3 +114,35 @@ export function buildRoleFromForm(
     ...(trimmedComp !== "" && { comp_range: trimmedComp }),
   };
 }
+
+export interface RoleNewSubmitDeps {
+  /** The service write (`upsertRole` in the app). */
+  readonly upsertRole: (role: Omit<Role, "owner_uid">) => Promise<void>;
+  /** Fresh UUID source, called once for the Role and once for its placeholder company. */
+  readonly newId: () => string;
+  readonly now: () => Date;
+}
+
+/**
+ * The create step behind the form's submit: validate, build the
+ * payload, write it, and return the new Role's id for the redirect.
+ * The component calls this with the real `upsertRole`; tests call it
+ * with a fake, which is how the submit wiring is covered without a DOM
+ * test environment (CodeRabbit on PR #575). Throws without writing
+ * when the title is missing; a failed write rejects with the service
+ * error so the form can show it and keep the draft.
+ */
+export async function submitRoleNewForm(
+  form: RoleNewFormState,
+  deps: RoleNewSubmitDeps,
+): Promise<string> {
+  if (!canSubmitRoleNew(form)) {
+    throw new Error("Title is required.");
+  }
+  const id = deps.newId();
+  await deps.upsertRole(
+    buildRoleFromForm(form, { id, companyId: deps.newId() }, deps.now()),
+  );
+  return id;
+}
+

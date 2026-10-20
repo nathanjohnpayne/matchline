@@ -45,10 +45,10 @@ import {
 import {
   REMOTE_POLICIES,
   ROLE_NEW_DRAFT_KEY,
-  buildRoleFromForm,
   canSubmitRoleNew,
   isRoleNewFormDirty,
   restoreRoleNewForm,
+  submitRoleNewForm,
   type RoleNewFormState as FormState,
 } from "./roleNewForm.ts";
 
@@ -114,14 +114,11 @@ export default function RoleNew(): ReactElement {
     // released in the finally below.
     const releaseBusy = beginAppBusy("roleNew.create");
     try {
-      const id = globalThis.crypto.randomUUID();
-      await upsertRole(
-        buildRoleFromForm(
-          form,
-          { id, companyId: globalThis.crypto.randomUUID() },
-          new Date(),
-        ),
-      );
+      const id = await submitRoleNewForm(form, {
+        upsertRole,
+        newId: () => globalThis.crypto.randomUUID(),
+        now: () => new Date(),
+      });
       clearFormDraft(ROLE_NEW_DRAFT_KEY);
       navigate(`/roles/${id}`);
     } catch (err) {

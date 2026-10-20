@@ -417,14 +417,19 @@ export default function RequirementsTab({
           className="border-t border-zinc-200 pt-4 text-sm text-zinc-500 dark:border-zinc-800"
           data-testid="requirements-tab-empty"
         >
-          {/* Three distinct reads (#431): no JD at all, a JD typed
-              but not saved, and a saved JD that has not been parsed.
-              The last is the only "JD present, not yet parsed" case;
-              the first is a lead saved before its JD arrived. */}
-          {draftEmpty
-            ? "No JD yet. Paste it above to parse requirements."
-            : jdRaw.trim() === ""
-              ? "JD not saved yet. Click Parse JD to save it and extract structured Requirements."
+          {/* Four reads (#431), keyed on the SAVED JD first so the
+              copy never contradicts what is persisted: no JD at all
+              (a lead saved before its JD arrived), a JD typed but not
+              saved, a saved JD cleared in the editor but not saved,
+              and a saved JD not yet parsed. Checking the draft first
+              said "No JD yet" for a cleared-but-saved JD (CodeRabbit
+              on PR #575). */}
+          {jdRaw.trim() === ""
+            ? draftEmpty
+              ? "No JD yet. Paste it above to parse requirements."
+              : "JD not saved yet. Click Parse JD to save it and extract structured Requirements."
+            : draftEmpty
+              ? "JD cleared in the editor but still saved. Click Save JD to remove it, or paste a JD to parse."
               : "JD ready. Click Parse JD to extract structured Requirements."}
         </p>
       )}

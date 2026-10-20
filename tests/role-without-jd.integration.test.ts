@@ -1,9 +1,9 @@
 /**
  * Title-only Role write path against the Firestore emulator (#431).
  *
- * `/roles/new` submits `upsertRole(buildRoleFromForm(form, …))`. The
- * unit tests pin the payload shape; this test drives the same two
- * functions through the real client SDK and `firestore.rules`, so a
+ * `/roles/new` submits through `submitRoleNewForm(form, { upsertRole,
+ * … })`. The unit tests pin the payload shape; this test drives that
+ * same call through the real client SDK and `firestore.rules`, so a
  * wiring or rules regression that stops a JD-less Role from being
  * created fails here rather than in the browser. It then covers the
  * "paste the JD later" half: Role Detail saves a JD onto the existing
@@ -63,6 +63,7 @@ vi.mock("../src/firebase.ts", () => ({
 import {
   EMPTY_ROLE_NEW_FORM,
   buildRoleFromForm,
+  submitRoleNewForm,
 } from "../src/routes/roleNewForm.ts";
 import { getRole, upsertRole } from "../src/services/roles.ts";
 
@@ -97,14 +98,18 @@ beforeEach(async () => {
 });
 
 describe("Role without a JD (#431)", () => {
-  it("creates a title-only Role through upsertRole and reads it back", async () => {
-    const role = buildRoleFromForm(
+  it("creates a title-only Role through the form's submit step and reads it back", async () => {
+    // The same call RoleNew's onSubmit makes, with the real upsertRole.
+    const ids = ["role-lead", "company-placeholder"];
+    const id = await submitRoleNewForm(
       { ...EMPTY_ROLE_NEW_FORM, title: "Staff Product Manager" },
-      { id: "role-lead", companyId: "company-placeholder" },
-      new Date("2026-10-19T12:00:00.000Z"),
+      {
+        upsertRole,
+        newId: () => ids.shift() ?? "unexpected-id",
+        now: () => new Date("2026-10-19T12:00:00.000Z"),
+      },
     );
-
-    await upsertRole(role);
+    expect(id).toBe("role-lead");
 
     const stored = await getRole("role-lead");
     expect(stored).toEqual({

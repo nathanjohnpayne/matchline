@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import type { Role } from "../types/crm.ts";
 
 import {
   EMPTY_ROLE_NEW_FORM,
@@ -6,6 +8,7 @@ import {
   canSubmitRoleNew,
   isRoleNewFormDirty,
   restoreRoleNewForm,
+  submitRoleNewForm,
   type RoleNewFormState,
 } from "./roleNewForm.ts";
 
@@ -129,3 +132,51 @@ describe("restoreRoleNewForm", () => {
     ).toEqual(form({ location: "Berlin" }));
   });
 });
+
+describe("submitRoleNewForm", () => {
+  function deps(upsertRole = vi.fn((_: Omit<Role, "owner_uid">) => Promise.resolve())) {
+    const ids = ["role-new-1", "company-new-1"];
+    return {
+      upsertRole,
+      newId: vi.fn(() => ids.shift() ?? "extra-id"),
+      now: () => NOW,
+    };
+  }
+
+  it("writes a title-only Role with an empty JD and returns its id (#431)", async () => {
+    const d = deps();
+    const id = await submitRoleNewForm(form({ title: " Staff PM " }), d);
+    expect(id).toBe("role-new-1");
+    expect(d.upsertRole).toHaveBeenCalledTimes(1);
+    expect(d.upsertRole).toHaveBeenCalledWith({
+      id: "role-new-1",
+      company_id: "company-new-1",
+      title: "Staff PM",
+      jd_raw: "",
+      discovered_at: "2026-10-19T12:00:00.000Z",
+    });
+  });
+
+  it("writes the pasted JD when there is one", async () => {
+    const d = deps();
+    await submitRoleNewForm(form({ title: "PM", jdRaw: "About us" }), d);
+    expect(d.upsertRole.mock.calls[0]?.[0].jd_raw).toBe("About us");
+  });
+
+  it("throws without writing when the title is missing", async () => {
+    const d = deps();
+    await expect(
+      submitRoleNewForm(form({ jdRaw: "About us" }), d),
+    ).rejects.toThrow("Title is required.");
+    expect(d.upsertRole).not.toHaveBeenCalled();
+    expect(d.newId).not.toHaveBeenCalled();
+  });
+
+  it("rejects with the service error when the write fails", async () => {
+    const d = deps(vi.fn(() => Promise.reject(new Error("permission-denied"))));
+    await expect(
+      submitRoleNewForm(form({ title: "PM" }), d),
+    ).rejects.toThrow("permission-denied");
+  });
+});
+
