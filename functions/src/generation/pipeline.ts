@@ -29,12 +29,19 @@
 
 import type Anthropic from "@anthropic-ai/sdk";
 import { randomUUID } from "node:crypto";
+import { logger } from "firebase-functions";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { getAdminDb } from "../firestore/admin.js";
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage } from "../llm/cost.js";
+import {
+  anthropicUsageFields,
+  priceUsage,
+  promptVersionLabel,
+  recordUsage,
+  type UsageRecord,
+} from "../llm/cost.js";
 import { transportBackoffMs } from "../llm/retry.js";
 import { loadPromptText } from "../prompts/loader.js";
 import {
@@ -79,7 +86,13 @@ export interface RunGenerationResult {
    * matches — see `requirementSetToken`.
    */
   readonly requirement_set_token: string;
-  readonly cost_usd: number;
+  /**
+   * List-price estimate of every attempt, priced through the shared
+   * rate table (`llm/rates.ts`) on the model that served each call.
+   * `null` when any attempt could not be priced: an unknown cost is
+   * reported as unknown, never as a lower number.
+   */
+  readonly cost_usd: number | null;
   readonly input_tokens: number;
   readonly output_tokens: number;
   readonly latency_ms: number;
@@ -99,6 +112,7 @@ export interface GenerationDeps {
 }
 
 const MAX_ATTEMPTS = 3;
+const MAX_OUTPUT_TOKENS = 4096;
 const TOOL_NAME = "record_resume";
 
 const RETRY_REMINDERS: readonly string[] = [
@@ -277,7 +291,7 @@ export async function runGenerationPipeline(
   // gap on PR #123 (advisory finding round 2).
   let cumulativeInputTokens = 0;
   let cumulativeOutputTokens = 0;
-  let cumulativeCostUsd = 0;
+  let cumulativeCostUsd: number | null = 0;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Per-attempt timing for telemetry recordUsage — we want
@@ -291,7 +305,7 @@ export async function runGenerationPipeline(
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 4096,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -329,29 +343,49 @@ export async function runGenerationPipeline(
 
     const attemptLatencyMs = Date.now() - attemptStart;
 
+    const usage: UsageRecord = {
+      stage: "generation",
+      provider: "anthropic",
+      model,
+      ...anthropicUsageFields(response),
+      latencyMs: attemptLatencyMs,
+      promptVersion: promptVersionLabel(prompt),
+      attempt,
+      maxTokens: MAX_OUTPUT_TOKENS,
+      ownerUid: ctx.ownerUid,
+      applicationId: ctx.applicationId,
+    };
+
     // Accumulate immediately on a successful LLM round-trip,
     // BEFORE any of the schema / fabricated-id / no-tool-use
     // continues below. Tokens are billed even when the response
-    // fails our gates and we retry.
+    // fails our gates and we retry. Each attempt is counted
+    // exactly once, here; transport errors return no usage and
+    // add nothing.
     cumulativeInputTokens += response.usage.input_tokens;
     cumulativeOutputTokens += response.usage.output_tokens;
-    cumulativeCostUsd += estimateCostUsd(
-      response.usage.input_tokens,
-      response.usage.output_tokens,
-    );
+    // Price through the same rate table as `llm_calls` telemetry
+    // (#483). The previous local estimate used $0.25/$1.25 per MTok
+    // against the configured Haiku 4.5's $1/$5 — a quarter of the
+    // real list price for identical tokens.
+    if (cumulativeCostUsd !== null) {
+      try {
+        cumulativeCostUsd += priceUsage(usage).costUsd;
+      } catch (err) {
+        logger.error("generation.resume: could not price attempt; cost reported as unknown", {
+          model,
+          servedModel: usage.servedModel,
+          attempt,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        cumulativeCostUsd = null;
+      }
+    }
 
     // recordUsage is non-fatal — telemetry outages shouldn't
     // block generation. Mirror of #118's pattern.
     try {
-      await record({
-        stage: "generation",
-        provider: "anthropic",
-        model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        latencyMs: attemptLatencyMs,
-        ownerUid: ctx.ownerUid,
-      });
+      await record(usage);
     } catch (err) {
       console.warn("recordUsage failed (non-fatal)", err);
     }
@@ -657,17 +691,6 @@ function formatRequirement(req: JobRequirementUnit): string {
 
 function quote(value: string): string {
   return JSON.stringify(value);
-}
-
-/**
- * Approximate per-call cost in USD for budget telemetry.
- * Rough Anthropic Haiku pricing: $0.25/MTok input, $1.25/MTok
- * output (subject to vendor changes; not load-bearing for
- * correctness — the cost tracker logs the real $ figure when
- * the modelConfig points at the real provider).
- */
-function estimateCostUsd(inputTokens: number, outputTokens: number): number {
-  return (inputTokens * 0.25 + outputTokens * 1.25) / 1_000_000;
 }
 
 // -- Default Firestore loader -----------------------------------------------

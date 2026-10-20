@@ -27,7 +27,12 @@ import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
 import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import {
   SpecificityResponseV1Schema,
   type SpecificityResponseV1,
@@ -45,6 +50,9 @@ import {
   type DenyListEntry,
 } from "./specificity.denyList.js";
 
+/** Output-token budget per attempt; also recorded on each usage record. */
+const MAX_OUTPUT_TOKENS = 512;
+
 export interface SpecificityResult {
   readonly specific: boolean;
   readonly rationale: string;
@@ -59,6 +67,8 @@ export interface SpecificityResult {
 
 export interface SpecificityContext {
   readonly ownerUid: string;
+  /** Application whose asset is being validated; recorded on usage telemetry. */
+  readonly applicationId?: string;
 }
 
 export interface SpecificityDeps {
@@ -165,7 +175,7 @@ async function runLlmFallback(
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 512,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: systemWithReminder,
         tools: [
           {
@@ -198,10 +208,14 @@ async function runLlmFallback(
         stage: "validation",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        subtask: "specificity",
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: MAX_OUTPUT_TOKENS,
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
+        ...(ctx.applicationId !== undefined && { applicationId: ctx.applicationId }),
       }),
       "validation.specificity",
     );
