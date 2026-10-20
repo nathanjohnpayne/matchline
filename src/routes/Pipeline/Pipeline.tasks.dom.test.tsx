@@ -330,7 +330,19 @@ describe("pending completion and the clock (#34)", () => {
   });
 
   it("rolls tasks into Due today at local midnight while the page stays open", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Capture the scheduled midnight callback instead of using fake
+    // timers: deterministic under load, and it pins the delay too.
+    const scheduled: { fn: () => void; ms: number }[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (ms !== undefined && ms >= 60_000) {
+          scheduled.push({ fn, ms });
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        }
+        return realSetTimeout(fn, ms, ...rest);
+      }) as typeof setTimeout);
     try {
       let clock = new Date(2026, 9, 20, 23, 59, 0);
       await renderBoard(
@@ -341,13 +353,17 @@ describe("pending completion and the clock (#34)", () => {
       );
       expect(within(section("pipeline-tasks-upcoming")).getByText("Call Dana")).toBeTruthy();
 
-      clock = new Date(2026, 9, 21, 0, 0, 2);
-      await act(async () => {
-        vi.advanceTimersByTime(62_000);
-      });
+      // The effect that schedules it may flush after the first paint.
+      await waitFor(() => expect(scheduled.length).toBeGreaterThan(0));
+      // One minute to midnight, plus the one-second margin.
+      const midnight = scheduled.at(-1);
+      expect(midnight?.ms).toBe(61_000);
+
+      clock = new Date(2026, 9, 21, 0, 0, 1);
+      act(() => midnight?.fn());
       expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
     } finally {
-      vi.useRealTimers();
+      spy.mockRestore();
     }
   });
 });
@@ -365,10 +381,14 @@ describe("returning to the page (#34)", () => {
 
     // The laptop slept through midnight; no timer fired.
     clock = new Date(2026, 9, 21, 9, 0, 0);
-    act(() => {
-      document.dispatchEvent(new Event("visibilitychange"));
+    // Retried because the listener is attached by an effect that may
+    // flush after the first paint.
+    await waitFor(() => {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
     });
-    expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
   });
 });
 
