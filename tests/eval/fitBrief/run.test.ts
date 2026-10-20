@@ -9,7 +9,18 @@ import type { FitBriefResponseV1 } from "../../../functions/src/prompts/generati
 
 import type { FitBriefCorpus } from "./corpus.ts";
 import type { JudgeResult } from "./judge.ts";
-import { parseArgs, preflight, runFitBriefEval, type FitBriefEvalDeps, type FitBriefEvalOptions } from "./run.ts";
+import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
+
+import {
+  BudgetReachedError,
+  guardClient,
+  parseArgs,
+  preflight,
+  runFitBriefEval,
+  unitEvidenceLine,
+  type FitBriefEvalDeps,
+  type FitBriefEvalOptions,
+} from "./run.ts";
 
 // Synthetic corpus only.
 const CORPUS: FitBriefCorpus = {
@@ -199,19 +210,84 @@ describe("runFitBriefEval", () => {
     expect([...d.files.values()].join()).toContain("boom");
   });
 
-  it("in units mode, grounds the brief and the evidence check on extracted Units", async () => {
-    const d = deps();
-    await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units" }, d);
-    expect(d.extractUnits).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(d.generate).mock.calls[0]![0].resumeText).toBe(
-      "- Owned the checkout API used by four storefront teams.",
-    );
+  it("in units mode, the generator reads Units but the gates keep the canonical sources (Codex P1, #581)", async () => {
+    const withInventory: FitBriefCorpus = { ...CORPUS, inventoryText: "Tools: Looker" };
+    const d = deps({ extractUnits: vi.fn(async () => ["Owned the checkout API used by twelve teams."]) });
+    await runFitBriefEval(withInventory, { ...OPTIONS, evidence: "units" }, d);
+    const gen = vi.mocked(d.generate).mock.calls[0]![0];
+    expect(gen.resumeText).toBe("- Owned the checkout API used by twelve teams.");
+    // The inventory reaches the generator in both modes.
+    expect(gen.inventoryText).toBe("Tools: Looker");
+    // The judge grounds on the résumé and inventory, not the extracted Units.
+    const sources = vi.mocked(d.judge).mock.calls[0]![0].sourcesText;
+    expect(sources).toContain("four storefront teams");
+    expect(sources).toContain("Tools: Looker");
+    expect(sources).not.toContain("twelve teams");
+  });
+
+  it("stops at the bound inside a stage's retries, not only between stages (Codex P1, #581)", async () => {
+    // Each internal attempt checks the guard, then costs ~$1.
+    const d = deps({
+      generate: vi.fn(async (_input, record, guard) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          guard();
+          await record(usage("fit_brief"));
+        }
+        return { brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+      }),
+    });
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, maxUsd: 1.5 }, d);
+    expect(out.spentUsd).toBeLessThan(2.1);
+    expect(d.judge).not.toHaveBeenCalled();
+    expect(out.incomplete).toBe(true);
+    // A sample stopped by the bound is unfinished, not a failed brief.
+    expect(out.rows).toHaveLength(0);
+  });
+
+  it("stops before units extraction's retries pass the bound", async () => {
+    const d = deps({
+      extractUnits: vi.fn(async (_text, _record, guard) => {
+        guard();
+        throw new BudgetReachedError();
+      }),
+    });
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", maxUsd: 0.5 }, d);
+    expect(out.incomplete).toBe(true);
+    expect(d.generate).not.toHaveBeenCalled();
   });
 
   it("runs each pair once per sample", async () => {
     const d = deps();
     await runFitBriefEval(CORPUS, { ...OPTIONS, samples: 2 }, d);
     expect(d.generate).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("guardClient", () => {
+  it("checks the budget before every request and makes none once it is reached", async () => {
+    const create = vi.fn(async () => ({ ok: true }));
+    let spent = 0;
+    const guarded = guardClient({ messages: { create } } as unknown as Anthropic, () => {
+      if (spent >= 1) throw new BudgetReachedError();
+    });
+    await guarded.messages.create({} as never);
+    spent = 1;
+    await expect(guarded.messages.create({} as never)).rejects.toBeInstanceOf(BudgetReachedError);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("raises a non-retryable status so stage retry loops stop", () => {
+    expect(new BudgetReachedError().status).toBe(402);
+  });
+});
+
+describe("unitEvidenceLine", () => {
+  it("keeps a Unit's dates alongside its text (Codex P2, #581)", () => {
+    expect(unitEvidenceLine({ raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } })).toBe(
+      "Led X. [2021-03–2024-06]",
+    );
+    expect(unitEvidenceLine({ raw_text: "Led Y.", date_range: { start: "2024-07" } })).toBe("Led Y. [2024-07–present]");
+    expect(unitEvidenceLine({ raw_text: "Led Z." })).toBe("Led Z.");
   });
 });
 
@@ -249,6 +325,17 @@ describe("parseArgs", () => {
       maxUsd: 10,
     });
     expect(o.outDir).toMatch(/\.matchline\/eval-private\/fit-brief\/fit-brief-2026-10-28T12-00-00-000Z$/);
+  });
+
+  it("rejects a value on --dry-run instead of silently running a paid job (Codex P2, #581)", () => {
+    expect(() => parseArgs(["--model", "m", "--max-usd", "5", "--dry-run=true"], now)).toThrow(/takes no value/);
+  });
+
+  it("defaults judge effort only for a judge that accepts effort (Codex P2, #581)", () => {
+    expect(parseArgs(["--model", "m", "--dry-run"], now).judgeEffort).toBe("high");
+    const legacy = parseArgs(["--model", "m", "--dry-run", "--judge-model", "claude-sonnet-4-6"], now);
+    expect(legacy.judgeEffort).toBeUndefined();
+    expect(() => preflight({ ...OPTIONS, judgeModel: "claude-sonnet-4-6", judgeEffort: undefined })).not.toThrow();
   });
 
   it("rejects unknown flags and bad values", () => {

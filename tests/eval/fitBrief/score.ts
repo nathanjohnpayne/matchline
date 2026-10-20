@@ -30,6 +30,9 @@ export function normalizeForMatch(text: string): string {
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/\*\*|__|`/g, "")
+    // Single-character emphasis (*x*, _x_) at word boundaries; asterisks
+    // and underscores inside words are left alone (Codex P2, #581).
+    .replace(/(^|[^\p{L}\p{N}])[*_](?=\S)(.+?)(?<=\S)[*_](?=$|[^\p{L}\p{N}])/gmu, "$1$2")
     .replace(/^\s*[-*•]\s+/gm, "")
     .replace(/\s+/g, " ")
     .trim()

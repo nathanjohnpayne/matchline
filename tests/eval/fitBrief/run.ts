@@ -65,15 +65,58 @@ export interface FitBriefEvalOptions {
   readonly runId: string;
 }
 
+/**
+ * Throws `BudgetReachedError` once the run's spend bound is reached. Each
+ * dependency must call it before every paid request, retries included —
+ * `guardClient` does this for a real Anthropic client (Codex P1 on #581:
+ * stage-level checks let retries inside a stage overrun the bound).
+ */
+export type BudgetGuard = () => void;
+
+type RecordUsageFn = (u: UsageRecord) => Promise<number>;
+
 export interface FitBriefEvalDeps {
-  readonly generate: (input: FitBriefInput, record: (u: UsageRecord) => Promise<number>) => Promise<FitBriefResult>;
-  readonly judge: (
-    args: Parameters<typeof judgeBrief>[0],
-    record: (u: UsageRecord) => Promise<number>,
-  ) => Promise<JudgeResult>;
-  /** Only called for --evidence units. Returns one evidence line per Unit. */
-  readonly extractUnits: (resumeText: string, record: (u: UsageRecord) => Promise<number>) => Promise<string[]>;
+  readonly generate: (input: FitBriefInput, record: RecordUsageFn, guard: BudgetGuard) => Promise<FitBriefResult>;
+  readonly judge: (args: Parameters<typeof judgeBrief>[0], record: RecordUsageFn, guard: BudgetGuard) => Promise<JudgeResult>;
+  /**
+   * Only called for --evidence units. Returns one evidence line per Unit:
+   * its verbatim text plus its date range, so tenure stays visible.
+   */
+  readonly extractUnits: (resumeText: string, record: RecordUsageFn, guard: BudgetGuard) => Promise<string[]>;
   readonly writeFile?: (path: string, data: string) => void;
+}
+
+/**
+ * Raised instead of making a paid request once the bound is reached.
+ * Carries HTTP-style status 402 so the stages' retry loops treat it as
+ * non-retryable rather than backing off and trying again.
+ */
+export class BudgetReachedError extends Error {
+  readonly status = 402;
+  constructor() {
+    super("Spend bound reached; no further paid requests.");
+    this.name = "BudgetReachedError";
+  }
+}
+
+/** Wrap a client so every `messages.create` checks the budget first. */
+export function guardClient(client: Anthropic, guard: BudgetGuard): Anthropic {
+  const create = client.messages.create.bind(client.messages);
+  return {
+    ...client,
+    messages: {
+      ...client.messages,
+      create: ((...args: Parameters<typeof create>) => {
+        // Reject rather than throw, like any other failed request.
+        try {
+          guard();
+        } catch (err) {
+          return Promise.reject(err);
+        }
+        return create(...args);
+      }) as typeof create,
+    },
+  } as Anthropic;
 }
 
 export interface FitBriefEvalOutcome {
@@ -135,6 +178,9 @@ export async function runFitBriefEval(
     }
   };
   const overBudget = () => spentUsd >= options.maxUsd;
+  const guard: BudgetGuard = () => {
+    if (overBudget()) throw new BudgetReachedError();
+  };
   const pairs = selectPairs(corpus, options.split);
   let incomplete = false;
   const generatorEffort = resolvedEffort(options.model, options.effort);
@@ -158,13 +204,23 @@ export async function runFitBriefEval(
     return { report: report([]), spentUsd, incomplete, rows: [] };
   }
 
-  const resumeSources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
-  let evidenceText = resumeSources.join("\n\n");
+  // The canonical résumé and inventory are the grounding authority for
+  // both gates in every mode (Codex P1 on #581): Units are what the
+  // generator reads in units mode, never what certifies a claim, so an
+  // extraction error cannot launder an unsupported claim through the gates.
+  const sources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
+  let generatorEvidence = corpus.resumeText;
   if (options.evidence === "units") {
-    const lines = await deps.extractUnits(corpus.resumeText, record);
-    evidenceText = lines.map((l) => `- ${l}`).join("\n");
+    let lines: string[];
+    try {
+      lines = await deps.extractUnits(corpus.resumeText, record, guard);
+    } catch (err) {
+      if (!(err instanceof BudgetReachedError) && !overBudget()) throw err;
+      incomplete = true;
+      return { report: report([]), spentUsd, incomplete, rows: [] };
+    }
+    generatorEvidence = lines.map((l) => `- ${l}`).join("\n");
   }
-  const sources = options.evidence === "units" ? [evidenceText] : resumeSources;
 
   const rows: { split: string; score: BriefScore | null }[] = [];
   let index = 0;
@@ -184,10 +240,14 @@ export async function runFitBriefEval(
         generated = await deps.generate(
           {
             jdText: pair.jdText,
-            resumeText: evidenceText,
+            resumeText: generatorEvidence,
+            // Kept in both modes so the comparison changes only the résumé's
+            // representation, not the facts available (Codex P2, #581).
+            ...(corpus.inventoryText !== undefined && { inventoryText: corpus.inventoryText }),
             ...(corpus.claimRulesText !== undefined && { claimRulesText: corpus.claimRulesText }),
           },
           record,
+          guard,
         );
         // Recheck before the second paid stage (Codex P1 on #581): a
         // generation that reaches the bound must not start the judge.
@@ -212,6 +272,7 @@ export async function runFitBriefEval(
             ...(corpus.claimRulesText !== undefined && { claimRulesText: corpus.claimRulesText }),
           },
           record,
+          guard,
         );
         const evidence = checkEvidence(generated.brief, sources);
         const score = scoreBrief({ evidence, judge: judgement, generatedVerdict: generated.brief.verdict });
@@ -225,7 +286,11 @@ export async function runFitBriefEval(
           ),
         );
       } catch (err) {
-        rows.push({ split: pair.split, score: null });
+        // The bound stopped a request mid-stage: the sample is unfinished,
+        // not failed, and nothing after it may run.
+        const stoppedByBound = err instanceof BudgetReachedError || overBudget();
+        if (stoppedByBound) incomplete = true;
+        else rows.push({ split: pair.split, score: null });
         writeFile(
           file,
           JSON.stringify(
@@ -241,6 +306,7 @@ export async function runFitBriefEval(
             2,
           ),
         );
+        if (stoppedByBound) break;
       }
     }
     if (incomplete) break;
@@ -267,16 +333,33 @@ const KNOWN_FLAGS = new Set([
   "--split", "--samples", "--max-usd", "--out", "--dry-run",
 ]);
 
+/** Boolean flags take no value; `--dry-run=true` is rejected, not silently ignored (Codex P2, #581). */
+const BOOLEAN_FLAGS = new Set(["--dry-run"]);
+
 export function parseArgs(argv: readonly string[], now: Date = new Date()): FitBriefEvalOptions & { dryRun: boolean } {
   for (const a of argv) {
-    if (a.startsWith("--") && !KNOWN_FLAGS.has(a.split("=")[0]!)) {
+    const name = a.split("=")[0]!;
+    if (a.startsWith("--") && !KNOWN_FLAGS.has(name)) {
       throw new Error(`Unknown flag ${a}`);
+    }
+    if (BOOLEAN_FLAGS.has(name) && a !== name) {
+      throw new Error(`${name} takes no value (got ${a})`);
     }
   }
   const model = flag(argv, "--model");
   if (!model) throw new Error("--model is required");
   const effortRaw = flag(argv, "--effort");
-  const judgeEffortRaw = flag(argv, "--judge-effort") ?? "high";
+  const judgeModel = flag(argv, "--judge-model") ?? "claude-opus-5-5";
+  // Default the judge to high effort only when its model takes effort, so a
+  // judge such as claude-sonnet-4-6 stays usable (Codex P2, #581). An
+  // unprofiled judge is left for preflight to reject.
+  let judgeEffortDefault: string | undefined;
+  try {
+    judgeEffortDefault = profileFor(judgeModel).efforts.includes("high") ? "high" : undefined;
+  } catch {
+    judgeEffortDefault = undefined;
+  }
+  const judgeEffortRaw = flag(argv, "--judge-effort") ?? judgeEffortDefault;
   for (const [n, v] of [["--effort", effortRaw], ["--judge-effort", judgeEffortRaw]] as const) {
     if (v !== undefined && !isEffort(v)) throw new Error(`${n} must be low|medium|high|xhigh|max`);
   }
@@ -295,8 +378,8 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
   return {
     model,
     ...(effortRaw !== undefined && { effort: effortRaw as Effort }),
-    judgeModel: flag(argv, "--judge-model") ?? "claude-opus-5-5",
-    judgeEffort: judgeEffortRaw as Effort,
+    judgeModel,
+    ...(judgeEffortRaw !== undefined && { judgeEffort: judgeEffortRaw as Effort }),
     evidence,
     split,
     samples,
@@ -305,6 +388,16 @@ export function parseArgs(argv: readonly string[], now: Date = new Date()): FitB
     runId,
     dryRun,
   };
+}
+
+/**
+ * One evidence line per Unit: its verbatim text plus its date range.
+ * Dates can live only in `date_range`, and a brief judges tenure (Codex
+ * P2 on #581). Other structured fields are omitted on purpose: units mode
+ * tests the Units' text and dates, not the full record.
+ */
+export function unitEvidenceLine(u: { raw_text: string; date_range?: { start: string; end?: string } }): string {
+  return u.date_range ? `${u.raw_text} [${u.date_range.start}–${u.date_range.end ?? "present"}]` : u.raw_text;
 }
 
 function effortLabel(effort: Effort | undefined): string {
@@ -332,26 +425,30 @@ async function main(): Promise<number> {
   mkdirSync(options.outDir, { recursive: true, mode: 0o700 });
   const client: Anthropic = anthropicForCli();
   const outcome = await runFitBriefEval(corpus, options, {
-    generate: (input, record) =>
+    generate: (input, record, guard) =>
       generateFitBrief(input, {
         model: options.model,
         ...(options.effort !== undefined && { effort: options.effort }),
-        client,
+        client: guardClient(client, guard),
         record,
         runId: options.runId,
       }),
-    judge: (args, record) =>
+    judge: (args, record, guard) =>
       judgeBrief(args, {
-        client,
+        client: guardClient(client, guard),
         model: options.judgeModel,
         ...(options.judgeEffort !== undefined && { effort: options.judgeEffort }),
         record,
         runId: options.runId,
       }),
-    extractUnits: async (resumeText, record) =>
-      (await extractFromResume(resumeText, { ownerUid: "eval-fit-brief" }, { client, record })).map(
-        (u) => u.raw_text,
-      ),
+    extractUnits: async (resumeText, record, guard) =>
+      (
+        await extractFromResume(
+          resumeText,
+          { ownerUid: "eval-fit-brief" },
+          { client: guardClient(client, guard), record },
+        )
+      ).map(unitEvidenceLine),
   });
   console.log(outcome.report);
   return outcome.incomplete ? 1 : 0;
@@ -362,7 +459,17 @@ if (isScriptEntry) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error("fit-brief eval failed:", err instanceof Error ? err.message : err);
+      // Corpus errors can carry pair ids, manifest paths or manifest text;
+      // keep them off stdout unless asked (Codex P2, #581).
+      const detail = err instanceof Error ? err.message : String(err);
+      if (process.env.FIT_BRIEF_VERBOSE === "1") {
+        console.error("fit-brief eval failed:", detail);
+      } else {
+        console.error(
+          `fit-brief eval failed (${err instanceof Error ? err.name : "error"}). ` +
+            "Details are withheld because they can quote the private corpus; rerun with FIT_BRIEF_VERBOSE=1 to see them.",
+        );
+      }
       process.exit(2);
     });
 }
