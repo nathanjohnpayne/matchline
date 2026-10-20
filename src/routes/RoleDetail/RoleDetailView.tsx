@@ -276,7 +276,8 @@ export default function RoleDetailView({
       >
         {activeTab === "requirements" && (
           <RequirementsTab
-            jdRaw={role.jd_raw}
+            // `?? ""`: same legacy-document guard as `roleHasJd`.
+            jdRaw={role.jd_raw ?? ""}
             draft={jdDraft}
             onDraftChange={onJdDraftChange}
             requirements={requirements}

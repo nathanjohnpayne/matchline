@@ -439,6 +439,31 @@ describe("RoleDetailView", () => {
     expect(html).not.toContain("No JD yet");
   });
 
+  it("REQUIREMENTS TAB: a legacy Role with no jd_raw field renders a typed draft without crashing (#431)", () => {
+    // Codex P2 on PR #575: typing the first JD into a Role whose
+    // document omits `jd_raw` used to call trim() on undefined.
+    const legacy = makeRole();
+    delete (legacy as Partial<Role>).jd_raw;
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={legacy}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft="First JD paste."
+      />,
+    );
+    expect(html).toContain("JD not saved yet");
+  });
+
   it("MATCHES TAB: a Role saved without a JD says 'No JD yet' (#431)", () => {
     const html = renderToStaticMarkup(
       <RoleDetailView
