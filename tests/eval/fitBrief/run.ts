@@ -24,7 +24,7 @@
  * --out, which must be outside this repository.
  */
 
-import { chmodSync, closeSync, mkdirSync, openSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -142,10 +142,16 @@ export function writePrivateFile(path: string, data: string): void {
  * Create the output directory owner-only, and tighten it if it already
  * exists: `mode` applies only to directories mkdir creates, a reused --out
  * keeps its old permissions, and filenames carry pair ids (Codex P2, #581).
+ * A directory that already holds files is refused, so artifacts from an
+ * earlier run can never sit beside this run's and be read as current
+ * (Codex P2, #581). The default --out is a fresh timestamped directory.
  */
 export function prepareOutDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
+  if (readdirSync(dir).length > 0) {
+    throw new Error(`--out ${dir} is not empty; give each run its own directory.`);
+  }
 }
 
 /** Wrap a client so every `messages.create` checks the budget first. */
@@ -467,25 +473,28 @@ export interface UnitEvidence {
 }
 
 /**
- * Units mode's evidence for the generator: each Unit's verbatim text as a
- * bullet, grouped under a heading naming the dates extraction assigned.
- * Dates can live only in `date_range` and a brief judges tenure (Codex P2
- * on #581), but they are the extraction model's output, not résumé text,
- * so they sit in group headings rather than on the quotable lines. The
- * evidence gate then only ever certifies verbatim résumé text, and dates
- * a brief asserts are checked by the judge against the canonical résumé
- * (Codex P1 ×2 on #581). Other structured fields are omitted on purpose:
- * units mode tests the Units' text and dates, not the full record.
+ * Units mode's evidence for the generator: the Units as JSON, grouped by
+ * the dates extraction assigned. Dates can live only in `date_range` and a
+ * brief judges tenure (Codex P2 on #581), but they are the extraction
+ * model's output, not résumé text, so they label each group rather than
+ * sitting on any quotable text. The evidence gate then only ever certifies
+ * verbatim résumé text, and dates a brief asserts are checked by the judge
+ * against the canonical résumé (Codex P1 ×2 on #581). JSON keeps a Unit
+ * whole even when its text holds newlines or Markdown markers (Codex P2,
+ * #581). Other structured fields are omitted on purpose: units mode tests
+ * the Units' text and dates, not the full record.
  */
 export function renderUnitEvidence(units: readonly UnitEvidence[]): string {
   const groups = new Map<string, string[]>();
   for (const u of units) {
-    const label = u.date_range
-      ? `Dates (from extraction): ${u.date_range.start} to ${u.date_range.end ?? "present"}`
-      : "Dates (from extraction): none";
-    groups.set(label, [...(groups.get(label) ?? []), `- ${u.raw_text}`]);
+    const dates = u.date_range ? `${u.date_range.start} to ${u.date_range.end ?? "present"}` : "none";
+    groups.set(dates, [...(groups.get(dates) ?? []), u.raw_text]);
   }
-  return [...groups].map(([label, lines]) => [`## ${label}`, ...lines].join("\n")).join("\n\n");
+  return JSON.stringify(
+    [...groups].map(([dates, texts]) => ({ dates_from_extraction: dates, units: texts })),
+    null,
+    2,
+  );
 }
 
 /** What `extractFromResume` will run with, resolved the same way it resolves them. */

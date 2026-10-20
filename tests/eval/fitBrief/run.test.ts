@@ -253,7 +253,9 @@ describe("runFitBriefEval", () => {
     // The report names the extraction pin behind the evidence (Codex P2, #581).
     expect(out.report).toContain("evidence units (extraction claude-haiku-4-5, prompt extraction/resume.v3)");
     const gen = vi.mocked(d.generate).mock.calls[0]![0];
-    expect(gen.resumeText).toBe("## Dates (from extraction): none\n- Owned the checkout API used by twelve teams.");
+    expect(JSON.parse(gen.resumeText)).toEqual([
+      { dates_from_extraction: "none", units: ["Owned the checkout API used by twelve teams."] },
+    ]);
     // The inventory reaches the generator in both modes.
     expect(gen.inventoryText).toBe("Tools: Looker");
     // The judge grounds on the résumé and inventory, not the extracted Units.
@@ -327,6 +329,17 @@ describe("writePrivateFile", () => {
 });
 
 describe("prepareOutDir", () => {
+  it("refuses a directory that already holds an earlier run's files (Codex P2, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
+    try {
+      writeFileSync(join(dir, "001-old-s1.json"), "{}");
+      expect(() => prepareOutDir(dir)).toThrow(/is not empty/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+
   it("tightens an existing world-readable output directory (Codex P2, #581)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
     try {
@@ -382,21 +395,19 @@ describe("extractionConfigLabel", () => {
 });
 
 describe("renderUnitEvidence", () => {
-  it("keeps each Unit's dates visible but off its quotable line (Codex P2 and P1, #581)", () => {
-    expect(
-      renderUnitEvidence([
-        { raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } },
-        { raw_text: "Led Y.", date_range: { start: "2024-07" } },
-        { raw_text: "Led W.", date_range: { start: "2021-03", end: "2024-06" } },
-        { raw_text: "Led Z." },
-      ]),
-    ).toBe(
-      [
-        "## Dates (from extraction): 2021-03 to 2024-06\n- Led X.\n- Led W.",
-        "## Dates (from extraction): 2024-07 to present\n- Led Y.",
-        "## Dates (from extraction): none\n- Led Z.",
-      ].join("\n\n"),
-    );
+  it("keeps each Unit's dates visible but off its text, and each Unit whole (Codex P2 and P1, #581)", () => {
+    const rendered = renderUnitEvidence([
+      { raw_text: "Led X.", date_range: { start: "2021-03", end: "2024-06" } },
+      { raw_text: "Led Y.\n## Dates 1999\n- Saved $5M.", date_range: { start: "2024-07" } },
+      { raw_text: "Led W.", date_range: { start: "2021-03", end: "2024-06" } },
+      { raw_text: "Led Z." },
+    ]);
+    expect(JSON.parse(rendered)).toEqual([
+      { dates_from_extraction: "2021-03 to 2024-06", units: ["Led X.", "Led W."] },
+      // A multi-line Unit with Markdown markers stays one Unit under its own dates.
+      { dates_from_extraction: "2024-07 to present", units: ["Led Y.\n## Dates 1999\n- Saved $5M."] },
+      { dates_from_extraction: "none", units: ["Led Z."] },
+    ]);
   });
 });
 

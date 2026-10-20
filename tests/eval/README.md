@@ -186,7 +186,7 @@ a subscription.
 `npm run eval:fit-brief` generates a fit brief for each job description in a **private** corpus and scores it against the brief the owner wrote and approved for that role. The corpus is the owner's real job search, and this repository is public, so the harness enforces three rules:
 
 - The corpus is read only from the directory named by `MATCHLINE_PRIVATE_CORPUS`, and the harness refuses to start if that directory resolves inside this repository, symlinks included.
-- Every generated brief, judgement and per-pair score is written to `--out` (default `~/.matchline/eval-private/fit-brief/<run-id>`), which must also be outside the repository.
+- Every generated brief, judgement and per-pair score is written to `--out` (default `~/.matchline/eval-private/fit-brief/<run-id>`), which must also be outside the repository and empty, so one run's artifacts are never mixed with another's. Each artifact records the run configuration, including the generator prompt version and a fingerprint of the judge request.
 - The printed report contains configuration and aggregates only, never a pair id, quote or corpus text.
 
 Nothing from the corpus belongs in a commit: no fixtures, examples or test expectations. The tests here use invented data.
@@ -202,7 +202,7 @@ npm run eval:fit-brief -- --model claude-opus-5-5 --evidence units --split test 
 
 Each brief is scored on:
 
-- **Evidence gate (deterministic).** Every evidence quote must appear within a single bullet, heading or line of the résumé or inventory, so adjacent claims cannot be stitched into one quote. Formatting and case are ignored; wording is not. Dates are never certified by this gate: in units mode the extraction's dates head each group of Units rather than sitting on the quotable lines, and any date a brief asserts is checked by the claim gate against the canonical résumé.
+- **Evidence gate (deterministic).** Every evidence quote must appear within a single bullet, heading or line of the résumé or inventory, so adjacent claims cannot be stitched into one quote. Formatting and case are ignored; wording is not. Dates are never certified by this gate: in units mode the generator receives the Units as JSON, grouped under the dates extraction assigned, so no date sits on quotable text, and any date a brief asserts is checked by the claim gate against the canonical résumé.
 - **Claim gate (model-graded).** The judge (default `claude-opus-5-5`, effort `high`) lists statements about the candidate that the sources don't support, and claim-rule violations. A brief passes the gates only with none of these and no unsupported evidence.
 - **Coverage (model-graded).** Recall: the reference's strengths and exposures that the brief covers, with half credit for partial coverage. Precision: the brief's points that match the reference.
 - **Verdict agreement** with the reference.

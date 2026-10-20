@@ -84,17 +84,6 @@ Return your judgement via the \`${TOOL_NAME}\` tool.
 Be strict and literal. Do not reward length.`;
 
 /**
- * Identifies the judge prompt and output schema, so a report says which
- * judge graded it. The judge is eval-only and unversioned, so this is a
- * content hash rather than a hand-bumped version.
- */
-export const JUDGE_PROMPT_FINGERPRINT = `judge sha256:${createHash("sha256")
-  .update(JUDGE_SYSTEM)
-  .update(JSON.stringify(z.toJSONSchema(JudgeResultSchema)))
-  .digest("hex")
-  .slice(0, 12)}`;
-
-/**
  * The generated brief as JSON, so field and list boundaries survive
  * newlines, quotes and delimiters inside values (Codex P2, #581).
  */
@@ -110,6 +99,52 @@ export interface JudgeInput {
   readonly sourcesText: string;
   readonly claimRulesText?: string;
 }
+
+/** The judge's user message: every input, with the generated brief as JSON. */
+export function judgeUserContent(input: JudgeInput): string {
+  return [
+    `Job description:\n\n${input.jdText}`,
+    `REFERENCE brief (written and approved by the candidate):\n\n${input.referenceText}`,
+    `GENERATED brief (JSON):\n\n${renderGenerated(input.generated)}`,
+    `Candidate sources:\n\n${input.sourcesText}`,
+    `Claim rules:\n\n${input.claimRulesText ?? "(none)"}`,
+  ].join("\n\n---\n\n");
+}
+
+/** The exact tool schema sent to Anthropic. */
+const JUDGE_TOOL_SCHEMA = z.toJSONSchema(JudgeResultSchema, { target: "draft-7" }) as Anthropic.Messages.Tool["input_schema"];
+
+/** A fixed input with every field set, used only to fingerprint the request template. */
+const FINGERPRINT_CANARY: JudgeInput = {
+  jdText: "<jd>",
+  referenceText: "<reference>",
+  generated: {
+    bottom_line: "<bottom line>",
+    strengths: [{ jd_clause: "<clause>", evidence: ["<evidence>"], argument: "<argument>" }],
+    exposures: [{ jd_clause: "<clause>", gap: "<gap>", handling: "<handling>" }],
+    positioning: "<positioning>",
+    level_strategy: "<level strategy>",
+    homework: ["<homework>"],
+    questions_to_ask: ["<question>"],
+    does_not_claim: ["<does not claim>"],
+    verdict: "apply",
+  },
+  sourcesText: "<sources>",
+  claimRulesText: "<rules>",
+};
+
+/**
+ * Identifies the whole judge request: system prompt, tool name, the exact
+ * tool schema sent, and the user message built for a fixed canary input,
+ * so any change to the template or the brief's serialization changes it
+ * (Codex P2 ×2, #581). The judge is eval-only and unversioned, so this is
+ * a content hash rather than a hand-bumped version. The model and effort
+ * are recorded separately.
+ */
+export const JUDGE_PROMPT_FINGERPRINT = `judge sha256:${createHash("sha256")
+  .update(JSON.stringify([JUDGE_SYSTEM, TOOL_NAME, JUDGE_TOOL_SCHEMA, judgeUserContent(FINGERPRINT_CANARY)]))
+  .digest("hex")
+  .slice(0, 12)}`;
 
 export interface JudgeDeps {
   readonly client: Anthropic;
@@ -130,13 +165,7 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
     baseMaxTokens: MAX_OUTPUT_TOKENS,
     effort: deps.effort,
   });
-  const content = [
-    `Job description:\n\n${input.jdText}`,
-    `REFERENCE brief (written and approved by the candidate):\n\n${input.referenceText}`,
-    `GENERATED brief (JSON):\n\n${renderGenerated(input.generated)}`,
-    `Candidate sources:\n\n${input.sourcesText}`,
-    `Claim rules:\n\n${input.claimRulesText ?? "(none)"}`,
-  ].join("\n\n---\n\n");
+  const content = judgeUserContent(input);
 
   let lastError = "";
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -154,7 +183,7 @@ export async function judgeBrief(input: JudgeInput, deps: JudgeDeps): Promise<Ju
             description: "Record the judgement of the generated fit brief.",
             // Root and functions/ resolve separate zod installs, so convert with
             // this file's own zod rather than functions' zodToToolSchema.
-            input_schema: z.toJSONSchema(JudgeResultSchema, { target: "draft-7" }) as Anthropic.Messages.Tool["input_schema"],
+            input_schema: JUDGE_TOOL_SCHEMA,
           },
         ],
         tool_choice: request.tool_choice,
