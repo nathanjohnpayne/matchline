@@ -93,8 +93,19 @@
   .fw.ph{width:calc(var(--w-ph)*var(--s-ph));height:calc(var(--h-ph)*var(--s-ph))}
   .frame{position:absolute;top:0;left:0;transform-origin:0 0;box-sizing:border-box;overflow:hidden;background:#fff;
     border:2px solid #2a2a2e;box-shadow:0 10px 30px rgba(0,0,0,.08)}
-  .fw.desk .frame{width:var(--w-desk);height:var(--h-desk);transform:scale(var(--s-desk));border-radius:10px}
-  .fw.tab .frame{width:var(--w-tab);height:var(--h-tab);transform:scale(var(--s-tab));border-radius:18px}
+  .fw.desk .frame{width:var(--w-desk);height:calc(var(--h-desk) + 38px);transform:scale(var(--s-desk));border-radius:10px;border:0;
+    display:flex;flex-direction:column;box-shadow:0 0 0 1px #b9b9c2,0 18px 44px rgba(0,0,0,.2)}
+  .fw.desk{height:calc((var(--h-desk) + 38px)*var(--s-desk))}
+  .macbar{height:38px;flex:0 0 auto;background:linear-gradient(#f3f3f5,#e6e6ea);border-bottom:1px solid #cfcfd6;display:flex;align-items:center;
+    padding:0 14px;gap:8px;position:relative}
+  .macbar i{width:12px;height:12px;border-radius:50%;display:block;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.15)}
+  .macbar i:nth-child(1){background:#ff5f57}.macbar i:nth-child(2){background:#febc2e}.macbar i:nth-child(3){background:#28c840}
+  .macbar .addr{position:absolute;left:50%;top:7px;transform:translateX(-50%);width:440px;height:24px;border-radius:7px;background:#fff;
+    border:1px solid #d4d4d8;font:11.5px Inter,system-ui,sans-serif;color:#52525b;display:flex;align-items:center;justify-content:center}
+  .fw.desk .frame > .app{height:auto;flex:1 1 auto;min-height:0}
+  .fw.tab .frame{width:var(--w-tab);height:var(--h-tab);transform:scale(var(--s-tab));border-radius:22px;border:0;
+    box-shadow:0 0 0 14px #17171a,0 0 0 15.5px #45454c,0 16px 40px rgba(0,0,0,.22)}
+  .fw.tab{margin:16px 16px 0}
   .fw.ph .frame{width:var(--w-ph);height:var(--h-ph);transform:scale(var(--s-ph));border-radius:44px;border:0;
     box-shadow:0 0 0 9px #17171a,0 0 0 10.5px #45454c,0 14px 34px rgba(0,0,0,.22)}
   .fw.ph{margin:11px 11px 0}
@@ -324,6 +335,15 @@
   .cmdk .in{font-size:13px}
 
   /* ---------- tablet: ≤ 900px container ---------- */
+  @container frame (max-width: 900px) and (min-width: 601px){
+    .sbar{display:flex;height:28px;padding:4px 22px 0;font-size:12px}
+    .sbar::before{display:none}
+    .sbar .sig{display:none}
+    .sbar svg.lucide{width:14px;height:14px}
+    .sbar .bat{width:22px;height:11px}
+    .homei{display:block;height:18px}
+    .homei::after{width:150px;margin-left:-75px;bottom:6px}
+  }
   @container frame (max-width: 900px){
     .main{padding:14px 16px 20px}
     .nav{gap:12px;font-size:12px}
@@ -411,7 +431,7 @@
 <body>
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
-<p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844, drawn with the iOS status bar, Dynamic Island and home indicator) canvas; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
+<p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844) canvas — drawn as a macOS window, an iPad and an iPhone respectively, with the device chrome outside the canvas so the container width stays exact; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
 <p class="sub">Sources, in the order they win: the PRD's <b>v0.2 "job-search dossier" revision</b> (October 2026; where it conflicts with the V1 interface section, the revision wins — it lives in the owner's private docs repository and is not in this tree; the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1, so a <code>PRD v0.2</code> chip cannot be checked against a file here), what is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
@@ -1053,7 +1073,7 @@ function unit(screen, state, w, label) {
   const kindChip = { shipped: 'shipped', prd: 'PRD v0.2', state: 'state' }[state.kind];
   return `<div class="unit ${w}" id="${id}">
     <div class="chips"><span class="fchip ${w}">${label}</span><span class="fchip ${state.kind}">${kindChip}</span></div>
-    <div class="fw ${w}"><div class="frame">${screen.fn(state.id)}</div></div>
+    <div class="fw ${w}"><div class="frame">${w === 'desk' ? '<div class="macbar"><i></i><i></i><i></i><span class="addr">app.matchline.example</span></div>' : ''}${screen.fn(state.id)}</div></div>
     <p class="cap"><b>${w === 'desk' ? state.label : (w === 'tab' ? 'Tablet' : 'Phone')}</b>${state.cap[w]}</p></div>`;
 }
 
