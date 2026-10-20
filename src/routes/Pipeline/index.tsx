@@ -124,6 +124,13 @@ export default function Pipeline({
     };
   }, [deps]);
 
+  // Activity reported by a write (a move, a completed task) only ever
+  // moves the board clock forward: a slow completion that settles
+  // after a newer move must not rewind it (CodeRabbit on #591).
+  const advanceNow = useCallback((at: Date): void => {
+    setNow((current) => (at.getTime() > current.getTime() ? at : current));
+  }, []);
+
   /**
    * "Acme: Staff PM" for an Application, with the board's fallbacks.
    * Read from the data directly (not from the built columns) because
@@ -155,7 +162,7 @@ export default function Pipeline({
     labelFor: describe,
     now,
     dispatch,
-    onActivity: setNow,
+    onActivity: advanceNow,
   });
 
   // Re-read the clock at whichever comes first: the next local
@@ -219,7 +226,7 @@ export default function Pipeline({
       const at = deps.now();
       const label = describe(id);
       dispatch({ type: "move", id, stage, at: at.toISOString() });
-      setNow(at);
+      advanceNow(at);
       setMoveError(null);
       setFocusApplicationId(id);
       setAnnouncement(`Moved ${label} to ${STAGE_LABELS[stage]}.`);
@@ -246,7 +253,7 @@ export default function Pipeline({
         )
         .finally(releaseBusy);
     },
-    [deps, describe, moveState],
+    [deps, describe, moveState, advanceNow],
   );
 
   const moves: PipelineMoves = {

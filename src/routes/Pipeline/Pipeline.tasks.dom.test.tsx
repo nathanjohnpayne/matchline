@@ -430,6 +430,42 @@ describe("card next action (#512)", () => {
   });
 });
 
+describe("board clock is forward-only", () => {
+  it("does not rewind when an older completion settles after a newer move", async () => {
+    let clock = new Date(2026, 9, 20, 23, 59, 0);
+    let finishSlow: () => void = () => {};
+    await renderBoard(
+      deps({
+        now: () => clock,
+        applications: [app("a1", "applied", 19), app("a2", "saved", 19)],
+        tasks: [
+          task("slow", { application_id: "a1", due_at: localDay(20), title: "Slow one" }),
+          task("tomorrow", { application_id: "a2", due_at: localDay(21), title: "Call Dana" }),
+        ],
+        completeTask: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              finishSlow = resolve;
+            }),
+        ),
+      }),
+    );
+    // Completion starts at 23:59 and stays in flight.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Slow one/ }));
+
+    // Past midnight, a move advances the board clock.
+    clock = new Date(2026, 9, 21, 0, 1, 0);
+    fireEvent.keyDown(card("a2"), { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy(),
+    );
+
+    // The 23:59 completion lands; the clock must not go back to 23:59.
+    await act(async () => finishSlow());
+    expect(within(section("pipeline-tasks-due-today")).getByText("Call Dana")).toBeTruthy();
+  });
+});
+
 describe("follow-ups that come due during the day (#589)", () => {
   // Last touched 7 days ago at 13:00; the board opens at 12:00, an
   // hour before it crosses the threshold.
