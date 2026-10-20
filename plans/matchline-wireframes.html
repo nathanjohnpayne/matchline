@@ -93,7 +93,9 @@
     border:2px solid #2a2a2e;box-shadow:0 10px 30px rgba(0,0,0,.08)}
   .fw.desk .frame{width:var(--w-desk);height:var(--h-desk);transform:scale(var(--s-desk));border-radius:10px}
   .fw.tab .frame{width:var(--w-tab);height:var(--h-tab);transform:scale(var(--s-tab));border-radius:18px}
-  .fw.ph .frame{width:var(--w-ph);height:var(--h-ph);transform:scale(var(--s-ph));border-radius:30px}
+  .fw.ph .frame{width:var(--w-ph);height:var(--h-ph);transform:scale(var(--s-ph));border-radius:44px;border:0;
+    box-shadow:0 0 0 9px #17171a,0 0 0 10.5px #45454c,0 14px 34px rgba(0,0,0,.22)}
+  .fw.ph{margin:11px 11px 0}
   .unit.desk{--capw:760px}.unit.tab{--capw:500px}.unit.ph{--capw:390px}
 
   /* ---------- app UI inside a frame (wireframe fidelity, Matchline tokens) ----------
@@ -124,9 +126,20 @@
   .app .nb{outline:1.5px dashed var(--acc);outline-offset:2px;border-radius:3px}
 
   /* phone status bar + home indicator; shown only at phone width */
-  .sbar{display:none;justify-content:space-between;padding:12px 22px 4px;font-size:12px;font-weight:600;background:var(--panel)}
-  .homei{display:none;height:18px;background:var(--panel);position:relative}
-  .homei::after{content:"";position:absolute;left:50%;bottom:6px;width:120px;height:4px;margin-left:-60px;border-radius:2px;background:#18181b}
+  .sbar{display:none;position:relative;height:54px;align-items:center;justify-content:space-between;padding:12px 30px 0;
+    font-size:15px;font-weight:600;letter-spacing:-.01em;background:var(--panel);flex:0 0 auto}
+  .sbar::before{content:"";position:absolute;left:50%;top:11px;width:124px;height:36px;margin-left:-62px;border-radius:20px;background:#0a0a0a}
+  .sbar .time{font-variant-numeric:tabular-nums}
+  .sbar .stat{display:inline-flex;align-items:center;gap:6px}
+  .sbar .sig{display:inline-flex;align-items:flex-end;gap:1.5px;height:11px}
+  .sbar .sig i{display:block;width:3px;border-radius:1px;background:#18181b}
+  .sbar .sig i:nth-child(1){height:4px}.sbar .sig i:nth-child(2){height:6px}.sbar .sig i:nth-child(3){height:8.5px}.sbar .sig i:nth-child(4){height:11px}
+  .sbar svg.lucide{width:16px;height:16px;stroke-width:2.5}
+  .sbar .bat{position:relative;width:26px;height:12.5px;border:1.5px solid rgba(24,24,27,.4);border-radius:4px;padding:1.5px;box-sizing:border-box}
+  .sbar .bat i{display:block;height:100%;width:100%;background:#18181b;border-radius:1.5px}
+  .sbar .bat::after{content:"";position:absolute;right:-4.5px;top:2.5px;width:2px;height:5px;background:rgba(24,24,27,.4);border-radius:0 1.5px 1.5px 0}
+  .homei{display:none;height:22px;background:var(--panel);position:relative;flex:0 0 auto}
+  .homei::after{content:"";position:absolute;left:50%;bottom:8px;width:134px;height:5px;margin-left:-67px;border-radius:3px;background:#18181b}
 
   /* shell */
   .hd{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 20px;background:var(--panel);
@@ -138,8 +151,8 @@
   .hd .menu{display:none;font-size:18px;line-height:1}
   .main{flex:1 1 auto;overflow:auto;padding:16px 20px 24px}
   .main > .wrap{max-width:1180px;margin:0 auto}
-  .tabbar{display:none;border-top:1px solid var(--line);background:var(--panel);padding:6px 4px 2px;justify-content:space-around;
-    font-size:10px;color:var(--dim)}
+  .tabbar{display:none;border-top:1px solid var(--line);background:var(--panel);padding:7px 4px 0;justify-content:space-around;
+    font-size:10px;font-weight:500;color:var(--dim);flex:0 0 auto}
   .tabbar span{display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 8px}
   .tabbar .on{color:var(--ink)}
 
@@ -174,7 +187,7 @@
   .alert{border:1px solid #fecaca;background:var(--redbg);color:#b91c1c;border-radius:6px;padding:7px 10px;font-size:12px;margin:0 0 12px}
   .warn{border:1px solid #fde68a;background:var(--ambbg);color:var(--amb);border-radius:6px;padding:7px 10px;font-size:12px;margin:0 0 12px}
   .info{border:1px solid var(--line);background:var(--panel);color:var(--mut);border-radius:6px;padding:7px 10px;font-size:12px;margin:0 0 12px}
-  .ok{border:1px solid #a7f3d0;background:var(--grnbg);color:var(--grn);border-radius:6px;padding:7px 10px;font-size:12px;margin:0 0 12px}
+  .okbox{border:1px solid #a7f3d0;background:var(--grnbg);color:var(--grn);border-radius:6px;padding:7px 10px;font-size:12px;margin:0 0 12px}
   .ttl{font-size:20px;font-weight:600;letter-spacing:-.01em;margin:0 0 2px}
   .h2{font-size:15px;font-weight:600;margin:0 0 6px}
   .h3{font-size:12px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin:14px 0 6px}
@@ -327,8 +340,9 @@
     .sbar{display:flex}
     .homei{display:block}
     .tabbar{display:flex}
-    .hd{padding:8px 14px}
-    .hd .wm{font-size:15px}
+    .hd{padding:0 16px;min-height:46px;align-items:center}
+    .hd .wm{font-size:17px}
+    .hd .menu{display:flex;align-items:center;color:var(--ink)}
     .nav{display:none}
     .hd .menu{display:block}
     .main{padding:12px 14px 20px}
@@ -348,7 +362,9 @@
     .colh{font-size:11px;text-transform:none;letter-spacing:0}
     .colh .stage{background:var(--chip);border-radius:999px;padding:1px 9px;color:var(--mut);font-weight:500}
     .lrow{flex-wrap:wrap}
-    .acts{margin-left:0;width:100%;justify-content:flex-start;padding-left:26px}
+    .acts{margin-left:0;width:100%;justify-content:flex-start;padding-left:0;flex-wrap:wrap;gap:6px;margin-top:4px}
+    .acts .kbd,.bulkbar .kbd,.bulkbar .esc{display:none}
+    .acts .btn{padding:4px 9px}
     .lrow .score{margin-left:auto}
     .detail-pane{display:none}
     .scan-row{grid-template-columns:1fr}
@@ -373,7 +389,7 @@
 <body>
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
-<p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844) canvas; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
+<p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844, drawn with the iOS status bar, Dynamic Island and home indicator) canvas; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
 <p class="sub">Sources, in the order they win: the PRD's <b>v0.2 "job-search dossier" revision</b> (October 2026; where it conflicts with the V1 interface section, the revision wins), what is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
@@ -444,13 +460,14 @@ const LUCIDE = {
 "sparkles": "<path d=\"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z\"/> <path d=\"M20 2v4\"/> <path d=\"M22 4h-4\"/> <circle cx=\"4\" cy=\"20\" r=\"2\"/>",
 "triangle-alert": "<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\"/> <path d=\"M12 9v4\"/> <path d=\"M12 17h.01\"/>",
 "undo-2": "<path d=\"M9 14 4 9l5-5\"/> <path d=\"M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11\"/>",
+"wifi": "<path d=\"M12 20h.01\"/> <path d=\"M2 8.82a15 15 0 0 1 20 0\"/> <path d=\"M5 12.859a10 10 0 0 1 14 0\"/> <path d=\"M8.5 16.429a5 5 0 0 1 7 0\"/>",
 "upload": "<path d=\"M12 3v12\"/> <path d=\"m17 8-5-5-5 5\"/> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/>",
 "user": "<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/> <circle cx=\"12\" cy=\"7\" r=\"4\"/>",
 "x": "<path d=\"M18 6 6 18\"/> <path d=\"m6 6 12 12\"/>"
 };
 const ic = (n, cls = '') => `<svg class="lucide ${cls}" data-lucide="${n}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[n]}</svg>`;
 
-const SBAR = `<div class="sbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>`;
+const SBAR = `<div class="sbar"><span class="time">9:41</span><span class="stat"><span class="sig"><i></i><i></i><i></i><i></i></span>${ic('wifi')}<span class="bat"><i></i></span></span></div>`;
 const HOME = `<div class="homei"></div>`;
 const NAV_ITEMS = [['pipeline', 'Pipeline', 'kanban'], ['evidence', 'Evidence', 'library'], ['scan', 'Scan', 'radar'], ['new', '+ New Role', 'plus']];
 
@@ -484,7 +501,7 @@ const UNITS = [
 const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
   <span class="rail ${u.st === 'ok' ? 'ok' : u.st === 'flag' ? 'flag' : ''}">${u.st === 'ok' ? ic('check') : u.st === 'flag' ? ic('flag') : ic('circle-dashed')}</span>
   <div style="min-width:0;flex:1"><div class="clamp2 ${u.st === 'pend' ? 'mut' : ''}">${u.s}${o.an || ''}</div>
-    <div class="meta">${u.sk.map(s => chip(s)).join('')}${u.tl.map(t => chip(t, 'line')).join('')}<span class="xs dim num">${u.c}% confidence</span><span class="xs dim">· ${u.src}</span></div></div>
+    <div class="meta">${u.sk.map(s => chip(s)).join('')}${u.tl.map(t => chip(t, 'line')).join('')}<span class="xs dim num">${u.c}% confidence</span><span class="xs dim">${u.src}</span></div></div>
   <div class="acts">${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}${btn(ic('pencil') + ' Edit ' + kbd('e'), 'ghost')}</div></div>`;
 
 const CANON = [
@@ -573,7 +590,7 @@ function unitReview(state) {
     return shell('evidence', `<div class="ttl">Unit Review</div><div class="alert" role="alert">Couldn’t load your Experience Units: permission-denied. Sign out and back in; if it keeps happening the owner allowlist may have changed.</div>
       <div class="sm dim">No list and no counter under an error — stale truth is worse than none.</div>`);
   }
-  const bulk = `<div class="card tight" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span class="sm"><b>3 selected</b></span>${btn('Approve ' + kbd('a'))}${btn('Flag ' + kbd('f'), 'ghost')}${btn('Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim">Esc clears</span>${an(5)}</div>`;
+  const bulk = `<div class="card tight bulkbar" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const editing = `<div class="lrow sel" style="display:block"><div class="rowhead sm"><span class="cb on"></span><span class="rail flag">${ic('triangle-alert')}</span><b>Editing</b><span class="dim">Tab moves between fields · Enter saves · Esc reverts</span>${an(4)}</div>
     <div class="pair" style="gap:8px;margin-top:8px"><div style="grid-column:1/-1"><span class="lbl">Summary</span><div class="in focus">Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).</div></div>
     <div><span class="lbl">Skills</span><div class="in">Live streaming, Team leadership</div></div><div><span class="lbl">Tools</span><div class="in">HLS, WebRTC</div></div>
@@ -794,7 +811,7 @@ function pipeline(state) {
   if (state === 'loading') body = head + `<div class="bar ind" style="margin-bottom:10px"><i></i></div><div class="sm dim">Loading pipeline…</div><div class="cols" style="margin-top:10px">${STAGES.map(([s]) => `<section class="col"><div class="colh"><span class="stage">${s}</span></div><div class="kc" style="height:56px;opacity:.4"></div></section>`).join('')}</div>`;
   else if (state === 'error') body = head + `<div class="alert" role="alert">Couldn’t load the Pipeline: Firestore unavailable. The board below is from the last successful read; moves are disabled until it reconnects. ${btn('Retry')}</div><div class="warn">Some Roles and Companies failed to load — cards show “Unknown company” / “Role unavailable” rather than guessing.</div>
     <div class="cols">${STAGES.map(([s, n]) => `<section class="col"><div class="colh"><span class="stage">${s}</span><span class="num">${n}</span></div>${n ? card('Unknown company', 'Role unavailable', 4, '', '', '', 'pend') : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`).join('')}</div>`;
-  else body = head + (state === 'ready' ? `<div class="ok" style="display:flex;gap:8px;align-items:center">Moved <b>Quill Systems</b> to Applied. ${btn('Undo', 'ghost')}<span class="sp"></span><span class="sm ph-hide">aria-live announcement; the move is optimistic and rolls back exactly if the write fails</span>${an(2)}</div>` : '') +
+  else body = head + (state === 'ready' ? `<div class="okbox" style="display:flex;gap:8px;align-items:center">Moved <b>Quill Systems</b> to Applied. ${btn('Undo', 'ghost')}<span class="sp"></span><span class="sm ph-hide">aria-live announcement; the move is optimistic and rolls back exactly if the write fails</span>${an(2)}</div>` : '') +
     `<div class="boardwrap"><div style="flex:1;min-width:0"><div class="cols">${STAGES.map(col).join('')}${state === 'ready' ? an(1) : ''}</div></div>${state === 'ready' ? side : ''}</div>`;
   if (state === 'empty') body += `<div class="empty" style="margin-top:14px"><div class="h2">Nothing in the pipeline yet</div><div style="margin:4px 0 12px">Save a Role — with or without a JD — and it appears in Saved. The scan can also add Roles for you.</div>${btn('+ New Role', 'pri')} ${btn('Run a scan', 'nb')}</div>`;
   return shell('pipeline', body);
