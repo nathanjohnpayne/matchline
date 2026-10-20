@@ -1403,7 +1403,7 @@ parse_rate_limit_window() {
 #   rate_limit | paused | in_progress | status_probe | review
 #
 # Pure: string predicates over the passed body, reading only the marker
-# constants above. No globals beyond those and no I/O — extracted by sentinel
+# constants above (including SUMMARY_MARKER). No other globals or I/O — extracted by sentinel
 # and sourced directly by tests/test_coderabbit_wait_status_probe.sh, the same
 # pattern as the coderabbit_summary_helpers block below.
 #
@@ -1469,7 +1469,12 @@ classify_comment() {
     echo "status_probe"
     return
   fi
-  if grep -qiE 'review in progress|currently reviewing|commits? under review' <<<"$body"; then
+  # #1569: the persistent summary's walkthrough and release notes narrate the
+  # PR's own changes, so these phrases there are content, not live state.
+  # Use the same byte-zero marker prefix as the summary selector. Actual
+  # in-progress markers and narration retain their earlier precedence; unmarked
+  # standalone status notices retain this legacy fallback.
+  if [[ "$body" != "$SUMMARY_MARKER"* ]] && grep -qiE 'review in progress|currently reviewing|commits? under review' <<<"$body"; then
     echo "in_progress"
     return
   fi
@@ -3645,11 +3650,13 @@ request_codex_rate_limit_failover() {
     # a head CodeRabbit refused to Codex so the PR is not stranded, and it
     # fires on the provider's refusal, not on a push the agent is amending.
     # The requester still warns, and its dedup/idempotency is untouched.
+    # --failover (#2534) marks a trigger it posts, so this stand-in for the
+    # lost CodeRabbit review does not spend the Codex request ceiling.
     local request_json
     # This substitution requires Codex on this exact head, so automatic
     # content-free carry-forward suppression cannot satisfy the request.
     if request_json=$(MERGEPATH_PHASE_4A_GATED=true MERGEPATH_CODEX_AUTO_TRIGGER=false \
-        "$CODEX_REQUEST_CMD" --trigger-only --allow-moving-head "$PR_NUMBER" "$REPO"); then
+        "$CODEX_REQUEST_CMD" --trigger-only --failover --allow-moving-head "$PR_NUMBER" "$REPO"); then
       printf '%s\n' "$request_json" >&2
       if ! printf '%s' "$request_json" | jq -e '.trigger_requested == true and (.blocked_reason // null) == null' >/dev/null 2>&1; then
         log "codex failover: unusable request or known provider block — human attention required"
