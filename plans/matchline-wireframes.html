@@ -638,7 +638,7 @@ function unitReview(state) {
     <div style="grid-column:1/-1">${f('Normalized summary', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', 'focus')}</div>
     ${f('Source type', 'long_form ' + ic('chevron-down'))}${f('Unit type', 'leadership ' + ic('chevron-down'))}${f('Evidence type', 'inferred ' + ic('chevron-down'))}${f('Source ref', '2024 retro')}
     ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', 'Streaming video')}${f('Seniority signals', 'ran a 12-person team')}${f('Scope signals', 'org-wide live pipeline')}${f('Business outcomes', 'sub-3 s glass to glass')}${f('Start date', '2023-03')}${f('End date', '2024-02')}${f('Confidence (0-1)', '0.81')}</div>
-    <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">verified ${ic('chevron-down')}</span>${btn('Remove', 'ghost')}</div>
+    <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">high ${ic('chevron-down')}</span>${btn('Remove', 'ghost')}</div>
     <div class="btnrow" style="margin-top:4px">${btn(ic('plus') + ' Add metric', 'ghost')}</div>
     <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}</div></div>`;
   const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}</div>`;
@@ -743,13 +743,14 @@ function roleShipped(state) {
       <div class="sm dim" style="margin-top:10px">No JD yet. Paste it above to parse requirements.${an(1)}</div>`);
   }
   const gaps = `<div class="card" style="border-color:#fde68a;margin-bottom:10px"><b>Gaps · 1 unmet must-have requirement</b>${an(2)}<div class="sm dim" style="margin:2px 0 6px">No Experience Unit qualifies for these. Consider adding context to your Capability Graph before generating.</div><div class="task">Experience with ad-supported streaming ${chip('must-have', 'ink')}</div></div>
-    <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task">Experience shipping developer SDKs ${chip('must-have', 'ink')}</div></div>
+    <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task">7+ years in product management, 3+ in video ${chip('must-have', 'ink')}</div></div>
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-running matching…', 'off')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
   const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • ' + chip('must-have', 'ink') : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
   const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
     + group(REQS[1], matchCard(UNITS[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true) + matchCard(UNITS[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved') + an(4))
     + group(REQS[2], matchCard(UNITS[2], [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], 'none'))
-    + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 1], 'none'));
+    + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 1], 'none'))
+    + group(REQS[4], matchCard(UNITS[2], [0.86, 0.8, 0.9, 0.85, 0.7, 0.8, 1], 'none')) + group(REQS[5], '');
   return shell('pipeline', body);
 }
 const roleTabs = on => `<div class="tabs">${ROLE_TABS.map(t => `<span class="${t === on ? 'on' : ''}${t === 'Requirements & matches' ? '' : ' nb'}">${t}</span>`).join('')}</div>`;
