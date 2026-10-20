@@ -578,7 +578,7 @@ function signin(state) {
       ${btn('<b>G</b> Continue with Google' + an(1), 'block')}
       <div class="or">or</div>
       <div class="field"><span class="lbl">Email</span><div class="in ${state === 'error' ? '' : 'ph'}">${state === 'error' ? 'sam@example.com' : 'you@example.com'}</div></div>
-      <div class="field"><span class="lbl">Password</span><div class="in ${state === 'error' ? 'focus' : 'ph'}">${state === 'error' ? '••••••••' : 'password'}</div></div>
+      <div class="field"><span class="lbl">Password</span><div class="in ${state === 'error' ? '' : 'ph'}">${state === 'error' ? '••••••••' : 'password'}</div></div>
       ${state === 'error' ? `<div class="alert">Email or password didn’t match. Try again.${an(4)}</div>` : ''}
       ${btn('Sign in' + an(2) + an(3), state === 'error' ? 'pri block' : 'pri block off')}
     </div>
@@ -648,7 +648,11 @@ function unitReview(state, extra = {}) {
     <div class="h3">Provenance</div><div class="sm">resume · Beacon Streaming · pasted Oct 2 · confidence <span class="num">92%</span></div>
     <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
-  return shell('evidence', head + filters + bulk + `<div class="two">${list}${detail}</div>`, { width: 'w5', ...extra });
+  const { noAn, after, ...rest } = extra;
+  let out = shell('evidence', head + filters + bulk + `<div class="two">${list}${detail}</div>`, { width: 'w5', ...rest });
+  if (noAn) out = out.replace(/<i class="an">\d+<\/i>/g, '');
+  if (after) out = out.replace('<nav class="tabbar">', after + '<nav class="tabbar">');
+  return out;
 }
 
 function canonical(state) {
@@ -749,7 +753,7 @@ function roleShipped(state) {
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-running matching…', 'off')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
   const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • <span style="color:var(--amb);font-weight:500">must-have</span>' : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
   const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
-    + group(REQS[1], matchCard(UNITS[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true, [3], 'The Unit describes owning a playback roadmap across three platforms; the clause asks for playback and device-certification roadmap ownership, and the Unit’s skills cover both.', 'Led the move of the playback SDK to one player across iOS, tvOS and web') + matchCard(UNITS[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved', false, [], 'Device certification is named in both the clause and the Unit, and the Unit’s partner-platform scope matches the roadmap-ownership ask.', 'Owned device certification for 40+ partner platforms') + an(4))
+    + group(REQS[1], matchCard(UNITS[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true, [3], 'The Unit describes owning the playback roadmap across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', 'Led the move of the playback SDK to one player across iOS, tvOS and web') + matchCard(UNITS[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved', false, [], 'Device certification is named in both the clause and the Unit, and the Unit’s partner-platform scope matches the roadmap-ownership ask.', 'Owned device certification for 40+ partner platforms') + an(4))
     + group(REQS[2], matchCard(UNITS[2], [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], 'none', false, [], 'The Unit shows product leadership in video but states no years of experience, so only the domain and seniority signals line up with the clause.', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline'))
     + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 1], 'none', false, [], 'Forty-plus partner platforms is direct evidence of working with device OEMs at the scale the clause names.', '40+ partner platforms, from test plan to partner sign-off'))
     + group(REQS[4], matchCard(UNITS[2], [0.86, 0.8, 0.9, 0.85, 0.7, 0.8, 1], 'none', false, [], 'Low-latency live delivery is the Unit’s subject; the clause asks for familiarity with it.', 'a low-latency live pipeline (under 3 s glass to glass)')) + group(REQS[5], '');
@@ -846,7 +850,7 @@ function editor(state) {
     <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
     <div class="list">${SRC_UNITS.map(t => `<div class="lrow" style="min-height:0" title="${t}"><div class="grow ellip">${t}</div></div>`).join('')}</div></div></div></div>`);
   const left = `<div><div class="card" style="position:relative;line-height:1.6">
-      <div class="exportrow"><span>Resolve 2 validation flags before exporting.${an(6)}</span>${btn(ic('refresh-cw') + ' Re-run validation')}${btn(ic('download') + ' Export', 'pri off')}</div>
+      <div class="exportrow"><span>Resolve 3 validation flags before exporting.${an(6)}</span>${btn(ic('refresh-cw') + ' Re-run validation')}${btn(ic('download') + ' Export', 'pri off')}</div>
       <div class="h3" style="margin-top:0">Summary</div>
       <div><span class="u">Senior product manager with twelve years in video platforms, playback and device partnerships.</span></div>
       <div class="h3">Experience</div>
@@ -864,7 +868,7 @@ function editor(state) {
     <div class="sm dim" style="margin-top:6px">Highlighted: the source of the claim under the pointer.${an(5)}</div>
     <div class="meta" style="margin-top:8px">${chip('4 claim rules', 'line nb')}</div></div></div>`;
   const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
-    <div class="seg phseg nb"><span class="on">Output · 2 flags</span><span>Evidence · 9</span></div>
+    <div class="seg phseg nb"><span class="on">Output · 3 flags</span><span>Evidence · 9</span></div>
     <div class="ed">${left}${right}</div>
     <div style="margin-top:12px">${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>`;
   return shell('pipeline', body);
@@ -903,7 +907,7 @@ function scan(state) {
     <div><div class="rowhead"><span class="tier ${tier === 2 ? 't2' : tier === 3 ? 't3' : ''}">${tier}</span><b>${co}</b>${ref ? chip('referral needed', 'amb') : ''}</div><div class="sm">${title}</div>
       <div class="meta"><span class="xs ${verified ? 'grn' : 'amb'}">${verified ? ic('circle-check') + ' verified on the employer board · Oct 19' : ic('triangle-alert') + ' not found on the employer board — aggregator only'}</span>${comp ? chip(comp + ' as posted', 'line') : chip('comp not posted', 'line')}</div></div>
     <dl class="lines"><dt>Lines up</dt><dd>${up}</dd></dl><dl class="lines"><dt>Exposed</dt><dd>${exp}</dd></dl>
-    <div class="act btnrow">${btn(ic('plus') + ' Turn into Role', 'pri')}${btn(ic('x') + ' Dismiss', 'ghost')}</div></div></div>`;
+    <div class="act btnrow">${btn(ic('plus') + ' Turn into Role', verified ? 'pri' : 'pri off')}${btn(ic('x') + ' Dismiss', 'ghost')}</div></div></div>`;
   if (state === 'first') {
     return shell('scan', `<div class="ttl">Weekly scan</div><div class="dim sm" style="margin-bottom:12px">Every week, Matchline checks the employer boards you name, verifies each role on the employer’s own posting, and tiers it against your approved evidence. Nothing is scraped from aggregators.</div>
       <div class="empty" style="padding:30px 20px"><div class="h2">No boards named yet</div><div style="margin:4px 0 14px">Add the careers pages you would check by hand. The first run starts right away; later runs land every Monday.${an(5)}</div>
@@ -924,7 +928,8 @@ function scan(state) {
       ${row(1, 'Orbit Video', 'Senior PM, Streaming Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true)}</div>
     <div class="h3">Tier 2 — worth a look</div>
     <div class="list">${row(2, 'Pike & Co', 'Product Manager, AI Workflows · Remote', true, '', 'LLM triage flow (EU-18)', 'Scope reads mid-level; comp not posted', false)}
-      ${row(2, 'Granite Labs', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}</div>
+      ${row(2, 'Granite Labs', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}
+      ${row(2, 'Kestrel Audio', 'Senior PM, Developer Platform · Remote (US)', true, '$175–215k', 'Partner API roadmap (EU-21), SDK ownership (L-010)', 'Audio, not video; no developer-platform title on record', false)}</div>
     <div class="h3">Tier 3 — on record, not now</div>
     <div class="list">${row(3, 'Tidewater Health', 'Senior PM, Platform · Remote', true, '$160–190k', 'Platform generalist', 'Domain is health, not media; comp under floor', false, 'dimmed')}</div>
     <div class="sm dim" style="margin-top:8px">New Roles land in Saved with the JD captured from the verified posting.${an(4)}</div>`;
@@ -935,7 +940,7 @@ function system(state) {
   if (state === 'splash') return `<div class="app">${SBAR}<div class="center"><span class="dim sm">Loading…</span></div>${HOME}</div>`;
   if (state === 'update') {
     const banner = `<div class="upd" role="status"><span>Reloading will discard your unsaved changes on this page.${an(1)}</span>${btn('Reload anyway', 'amber')}${btn('Keep editing', 'ghost')}${an(2)}</div>`;
-    return unitReview('ready', { after: banner });
+    return unitReview('ready', { after: banner, noAn: true });
   }
   if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Role not found, or not owned by you.${an(3)}</div>`);
   // command palette
@@ -959,10 +964,10 @@ const GROUPS = [
       '<b>Google SSO first.</b> One click, no password to manage; sits above the divider so it is the obvious path (<code>SignIn.tsx</code>, “data-action=sign-in-google”).',
       '<b>Email + password as the fallback</b> for popup-blocked browsers and pre-existing accounts. Sign in stays disabled until both fields are filled; Enter submits.',
       '<b>No create-account mode</b> (#439). The boundary is the owner allowlist in every callable and in <code>firestore.rules</code>, not the UI.',
-      '<b>Errors inline, never a toast</b> (ui-guidance rule 10): rendered after the fields and before Sign in, as <code>SignIn.tsx</code> does, with <code>friendlyAuthError</code>’s copy — wrong password, unknown user and invalid credential all collapse to “Email or password didn’t match. Try again.”'],
+      '<b>Errors inline, never a toast</b> (ui-guidance rule 10): rendered after the fields and before Sign in, as <code>SignIn.tsx</code> does, with <code>friendlyAuthError</code>’s copy — wrong password, unknown user and invalid credential all collapse to “Email or password didn’t match. Try again.” The route does not move focus after a failure.'],
       states: [
         { id: 'default', label: 'default', kind: 'shipped', cap: { desk: 'Centered card, wordmark top-center, tagline one line below. The card never grows past 360 px on any width.', tab: 'Same card, the canvas just has more margin. Nothing re-flows.', ph: 'Card goes full-width inside a 16 px gutter; the status bar and home indicator are the only additions.' } },
-        { id: 'error', label: 'wrong password', kind: 'state', cap: { desk: 'Inline alert between the fields and Sign in, where SignIn.tsx renders it; the password field keeps focus and nothing else moves.', tab: 'Unchanged from desktop.', ph: 'Unchanged; the card stays within the viewport without scrolling.' } }] }] },
+        { id: 'error', label: 'wrong password', kind: 'state', cap: { desk: 'Inline alert between the fields and Sign in, where SignIn.tsx renders it; nothing else moves, and focus stays wherever the submit came from (the route does not refocus the field).', tab: 'Unchanged from desktop.', ph: 'Unchanged; the card stays within the viewport without scrolling.' } }] }] },
   { id: 'onboarding', title: 'Onboarding — importing a career', sub: 'First-session flow from zero to a populated Capability Graph (PRD § 1 Onboarding; ui-guidance § Onboarding’s three panes). Shipped: the paste-résumé path with the thin progress bar and the ~108 s extraction (<code>src/routes/Onboarding.tsx</code>, <code>OperationProgress</code>). Drawn and marked not built: LinkedIn HTML (#28), long-form (#29), artifact upload (#87).', screens: [
     { id: 'import', title: 'Career import', fn: onboarding, legend: [
       '<b>Four sources, one review queue (proposed picker).</b> The shipped route is the paste-résumé editor alone; ui-guidance’s picker adds LinkedIn HTML, long-form context and artifact upload, each a facet of the same career, all landing in Unit Review.',
@@ -994,7 +999,7 @@ const GROUPS = [
       '<b>Claim rules are always visible while editing</b> — the panel does not collapse on desktop or tablet; on the phone it becomes a sticky bottom button that opens a sheet.',
       '<b>Tailored views list</b>: each view is a selection and order of canonical line ids pinned to a version, with tracked exceptions. Views behind the current version are listed first, in red, with a rebase action.'],
       states: [
-        { id: 'editor', label: 'editing L-012', kind: 'prd', cap: { desk: 'Editor left, claim rules and tailored views right. The tabs (Units · Canonical résumé · Claim rules) are the Evidence section’s sub-navigation.', tab: 'Rules and views move under the editor at full width; still always on the page.', ph: 'Editor is the screen; rules and views are a sticky two-button bar at the bottom that opens a sheet.' } },
+        { id: 'editor', label: 'editing L-010', kind: 'prd', cap: { desk: 'Editor left, claim rules and tailored views right. The tabs (Units · Canonical résumé · Claim rules) are the Evidence section’s sub-navigation.', tab: 'Rules and views move under the editor at full width; still always on the page.', ph: 'Editor is the screen; rules and views are a sticky two-button bar at the bottom that opens a sheet.' } },
         { id: 'rules', label: 'claim rules · adding one', kind: 'prd', cap: { desk: 'The full list with an inline add form (kind, statement, applies-to). Short, user-written, no prose.', tab: 'Add form wraps to two rows.', ph: 'Add form stacks; rows wrap the kind chip under the statement.' } }] }] },
   { id: 'roles', title: 'Roles — new Role and the dossier', sub: 'A Role arrives by paste or from the scan; it can be saved with only a title (#431). Its detail page is the dossier: a header that reads “where things stand” plus the next action, then Fit brief (default) · Requirements &amp; matches · Package · Process · Correspondence (PRD § Interface additions). Shipped today: the New Role form, the Requirements / Matches / Applications tabs with gaps, scores, approve / reject, “Computing matches…”, re-run.', screens: [
     { id: 'rolenew', title: 'New Role', fn: roleNew, legend: [
@@ -1035,9 +1040,9 @@ const GROUPS = [
       '<b>Specificity flag</b> (red underline, “vague claim”): the claim is too vague to verify. When a claim carries both flags the red wins.',
       '<b>Claim-rule hit</b> (red double underline, proposed): the popover names the rule and offers the same three resolution paths plus a link to the rule itself. Blocking, like traceability.',
       '<b>Source Units pane</b> (<code>UnitsPane</code>): “N approved Units were used to ground this Application.” and the Units as plain rows; the hovered claim’s source is highlighted, and a claim’s popover lists its Source Units to scroll to. Approval happens in Unit Review, not here.',
-      '<b>Export sits at the top of the output pane</b> (<code>ExportButton</code>): the gate’s reason (“Resolve N validation flags before exporting.”, or the stale / never-validated reasons), “Re-run validation” when re-validating is the fix, and a disabled Export whose tooltip repeats the reason. The empty state sends the user back to the Role to generate — there is no generate action in the editor.'],
+      '<b>Export sits at the top of the output pane</b> (<code>ExportButton</code>): the gate’s reason (“Resolve N validation flags before exporting.”, or the stale / never-validated reasons), “Re-run validation” when re-validating is the fix, and a disabled Export whose tooltip repeats the reason. The count here is 3: the two shipped flag kinds plus the proposed claim-rule hit, which the proposal adds to the same gate. The empty state sends the user back to the Role to generate — there is no generate action in the editor.'],
       states: [
-        { id: 'ready', label: 'hovering a claim · 2 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
+        { id: 'ready', label: 'hovering a claim · 3 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
         { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Two panes, as from md up.', ph: 'Panes stack.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511; <code>src/routes/Pipeline/</code>): seven columns, three-line cards, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors. Proposed (dashed): the next-action chip (#512), the next scheduled round chip (PRD), and the tasks sidebar (#34).', screens: [
@@ -1058,7 +1063,7 @@ const GROUPS = [
     { id: 'scan', title: 'Scan inbox', fn: scan, legend: [
       '<b>Corrections to the record first</b>: roles that closed, comp that changed, facts that turned out wrong — each already applied to the Role and logged.',
       '<b>Tiers</b>: 1 apply this week, 2 worth a look, 3 on record. Each row shows the verification note, comp exactly as posted, what lines up (with the line and Unit ids that make it so) and where the candidate is exposed.',
-      '<b>Unverified results are kept but marked</b> — aggregator-only listings are never silently promoted, and the copy says not to apply from the aggregator link.',
+      '<b>Unverified results are kept but marked</b> — aggregator-only listings are never silently promoted, the copy says not to apply from the aggregator link, and “Turn into Role” stays disabled until employer-board verification succeeds.',
       '<b>One action</b>: “Turn into Role” captures the JD from the verified posting, stamps the source, and lands the Role in Saved with the scan’s notes as the seed of the fit brief.',
       '<b>First run</b> asks for boards, not for preferences; the user names the careers pages they would check by hand.',
       '<b>A board that fails</b> keeps last week’s roles as “still open” with a note rather than closing them — never infer a closure from an error.'],
