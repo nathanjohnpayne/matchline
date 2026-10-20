@@ -562,8 +562,9 @@ const MORE_APPROVED = [
   ['Reduced startup buffering on living-room devices by 22%.', 'achievement', 'resume · Beacon Streaming', 85],
   ['Launched a partner developer portal with API docs and sample apps.', 'project', 'manual', 79],
 ].map(([s, ut, src, c]) => ({ s, ut, src, c, sk: [], tl: [], st: 'ok' }));
+const GROUND = [UNITS[0], UNITS[1], MORE_APPROVED[1], MORE_APPROVED[15], MORE_APPROVED[3], MORE_APPROVED[4], MORE_APPROVED[12], MORE_APPROVED[16], MORE_APPROVED[17]];
+const SRC_UNITS = GROUND.map(u => u.s);
 // the nine approved Units that ground the sample Application (UnitsPane renders every one)
-const SRC_UNITS = [UNITS[0].s, UNITS[1].s, 'Negotiated multi-vendor CDN contracts across three providers.', 'Defined the device-partner certification scorecard adopted by 40+ OEMs.', 'Cut playback error rate 45% by leading the ABR ladder redesign.', 'Launched the tvOS and Roku apps within one quarter of the web player rewrite.', 'Owned the partner API roadmap used by six OEM integrations.', 'Built the on-call runbook that halved incident response time.', 'Migrated off a legacy CDN contract without a playback regression.'];
 const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
   <div class="grow"><div class="ellip ${u.st === 'pend' ? 'mut' : ''}" title="${u.s}">${u.s}${o.an || ''}</div>
     <div class="meta"><span class="xs dim">${u.ut} · ${u.src}</span>${chip(UNIT_STATE[u.st][0], UNIT_STATE[u.st][1])}<span class="xs dim num">${u.c}%</span></div></div>
@@ -626,7 +627,7 @@ function onboarding(state) {
     <div class="in ta ${extracting ? 'mut' : ''}" style="min-height:${extracting ? 220 : 300}px">${err || extracting || state === 'ready' ? '# Sam Okafor\nSenior Product Manager — video platforms\n\n## Beacon Streaming · 2019–2026\n- Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.\n- Owned device certification for 40+ partner platforms…\n\n## Cobalt Devices · 2014–2019\n- Negotiated multi-vendor CDN contracts…' : '<span class="dim">Paste your resume — Markdown renders (# headers, **bold**, - bullet lists). We’ll structure it.</span>'}</div>
     <div class="rowhead sm dim" style="margin-top:6px;justify-content:space-between"><span class="num">${extracting || err ? '4,812' : '0'} characters</span>${btn('Extract Units' + an(2), (extracting || state === 'idle') ? 'pri off' : 'pri')}</div>
   </div>`;
-  const units = `<div class="nb"><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('7 so far', 'acc') : ''}${an(4)}</div>
+  const units = `<div class="nb"><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('3 so far', 'acc') : ''}${an(4)}</div>
     ${extracting ? UNITS.slice(0, 3).map((u, i) => `<div class="unitin ${i === 0 ? 'new' : ''}"><div class="clamp2">${u.s}</div><div class="meta">${u.sk.slice(0, 2).map(s => chip(s)).join('')}<span class="xs dim num">${u.c}%</span></div></div>`).join('') + `<div class="unitin dim">…more arriving</div>`
       : `<div class="empty">Units appear here in real time while extraction runs, then you review each one before it enters matching.</div>`}
   </div>`;
@@ -636,12 +637,12 @@ function onboarding(state) {
 }
 
 function unitReview(state, extra = {}) {
-  const ready = state === 'ready' || state === 'empty';
+  const ready = state === 'ready' || state === 'empty' || state === 'nomatch';
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('20 approved — onboarding complete', 'ink') + an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
+    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('20 approved — onboarding complete', 'ink') + (state === 'ready' ? an(1) : '')}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
   const pill = (t, on) => `<span class="pill ${on ? 'on' : ''}" style="${on ? 'background:#18181b;color:#fafafa' : 'background:transparent;border:1px solid var(--line)'}">${t}</span>`;
-  const fpanel = (skills, tools, domains) => `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${state === 'ready' ? an(2) : ''}</div>
-    <div class="frow"><span class="flbl">Skills</span>${skills.length ? skills.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No skills in the corpus yet.</span>'}</div>
+  const fpanel = (skills, tools, domains, active) => `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${active ? '<span class="sp"></span>' + btn('Clear filters', 'ghost') : ''}${state === 'ready' ? an(2) : ''}</div>
+    <div class="frow"><span class="flbl">Skills</span>${skills.length ? skills.map(t => chip(t, t === active ? 'on' : 'line')).join('') : '<span class="xs dim">No skills in the corpus yet.</span>'}</div>
     <div class="frow"><span class="flbl">Tools</span>${tools.length ? tools.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No tools in the corpus yet.</span>'}</div>
     <div class="frow"><span class="flbl">Domains</span>${domains.length ? domains.map(t => chip(t, 'line')).join('') : '<span class="xs dim">No domains in the corpus yet.</span>'}</div>
     <div class="frow"><span class="flbl">Status</span>${pill('Approved')}${pill('Pending')}${pill('Flagged')}</div>
@@ -650,6 +651,7 @@ function unitReview(state, extra = {}) {
     return shell('evidence', head + fpanel([], [], []) + `<div class="empty" style="padding:36px 20px;margin-top:10px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
       <div class="btnrow" style="justify-content:center">${btn(ic('plus') + ' Add Unit manually', 'pri')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`, { width: 'w5' });
   }
+  if (state === 'nomatch') return shell('evidence', head + fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy', 'Localization'], ['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops'], 'Localization') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
   if (state === 'loading') return shell('evidence', head + `<div class="info" role="status">Loading Units…</div>`, { width: 'w5' });
   if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: permission-denied</div>`, { width: 'w5' });
   const filters = fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops']);
@@ -742,7 +744,7 @@ function roleHeader(opts = {}) {
     <div class="where nb"><div class="card tight"><div class="eyebrow">Where things stand</div>
       <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 23. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
       <div class="card tight"><div class="eyebrow">Next action</div>
-      <div class="rowhead"><span class="cb"></span><span>${noJd ? 'Ask Morgan for the posting link' : 'Finish the prep brief for Dan K.'}</span><span class="chip ${noJd ? '' : 'red'} num">${noJd ? 'due Fri' : 'due tomorrow'}</span>${an(2)}</div></div></div>`;
+      <div class="rowhead"><span class="cb"></span><span>${noJd ? 'Ask Morgan for the posting link' : 'Finish the prep brief for Dan K.'}</span><span class="chip ${noJd ? '' : 'red'} num">${noJd ? 'due Fri' : 'due today'}</span>${an(2)}</div></div></div>`;
 }
 const ROLE_TABS = ['Fit brief', 'Requirements & matches', 'Package', 'Process', 'Correspondence'];
 const REQS = [['must', 'Experience with ad-supported streaming', 'domain', 'high'], ['must', 'Lead the roadmap for playback and device certification', 'scope', 'high'], ['must', '7+ years in product management, 3+ in video', 'experience', 'medium'], ['nice', 'Partner with 20+ device OEMs', 'scope', 'medium'], ['nice', 'Familiarity with low-latency live', 'domain', 'low'], ['nice', 'Experience shipping developer SDKs', 'tooling', 'low']];
@@ -766,6 +768,8 @@ const matchCard = (u, vals, st, tip, na = [], why = '', evidence = '') => {
 function roleShipped(state) {
   const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: 4d2c18a7-9b3e-4f52-8c1d-0a6e5b2f7d31</div>
     <div class="tabs" role="tablist"><span class="${state === 'nojd' ? 'on' : ''}">Requirements</span><span class="${state === 'matches' ? 'on' : ''}">Matches</span><span class="${state === 'applications' ? 'on' : ''}">Applications</span></div>`;
+  if (state === 'loading') return shell('pipeline', `<div class="sm dim">Loading Role…</div>`);
+  if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Failed to load Role: permission-denied</div>`);
   if (state === 'applications') {
     return shell('pipeline', head + `<div class="sm dim" style="margin-bottom:8px">Generate a resume from your approved matches under this Role.${an(5)}</div><div class="btnrow" style="margin-bottom:14px">${btn('Generate resume', 'pri')}</div>
       <div class="list"><div class="lrow"><div class="grow"><div class="rowhead">${chip('applied', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-09T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
@@ -779,11 +783,25 @@ function roleShipped(state) {
     <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task"><div><div>7+ years in product management, 3+ in video</div><div class="xs dim">experience · priority: medium</div></div></div></div>
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-running matching…', 'off')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
   const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • <span style="color:var(--amb);font-weight:500">must-have</span>' : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
+  const G = GROUND, F = UNITS[2];
   const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
-    + group(REQS[1], matchCard(UNITS[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true, [3], 'The Unit describes owning the playback roadmap across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', 'Led the move of the playback SDK to one player across iOS, tvOS and web') + matchCard(UNITS[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved', false, [], 'Device certification is named in both the clause and the Unit, and the Unit’s partner-platform scope matches the roadmap-ownership ask.', 'Owned device certification for 40+ partner platforms') + an(4))
-    + group(REQS[2], matchCard(UNITS[2], [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], 'none', false, [], 'The Unit shows product leadership in video but states no years of experience, so only the domain and seniority signals line up with the clause.', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline'))
-    + group(REQS[0], '') + group(REQS[3], matchCard(UNITS[1], [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 1], 'none', false, [], 'Forty-plus partner platforms is direct evidence of working with device OEMs at the scale the clause names.', '40+ partner platforms, from test plan to partner sign-off'))
-    + group(REQS[4], matchCard(UNITS[2], [0.86, 0.8, 0.9, 0.85, 0.7, 0.8, 1], 'none', false, [], 'Low-latency live delivery is the Unit’s subject; the clause asks for familiarity with it.', 'a low-latency live pipeline (under 3 s glass to glass)')) + group(REQS[5], '');
+    + group(REQS[1],
+        matchCard(G[0], [1, 1, 1, 1, 1, 0.95, 0.88], 'approved', true, [3], 'The Unit describes owning the playback roadmap across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', 'Led the move of the playback SDK to one player across iOS, tvOS and web')
+      + matchCard(G[1], [0.98, 0.95, 1, 0.9, 1, 0.9, 1], 'approved', false, [], 'Device certification is named in both the clause and the Unit, and the Unit’s partner-platform scope matches the roadmap-ownership ask.', 'Owned device certification for 40+ partner platforms')
+      + matchCard(G[2], [0.9, 0.92, 1, 0.8, 0.9, 0.85, 0.9], 'approved', false, [], 'A certification scorecard adopted by partners is roadmap-level ownership of the certification half of the clause.', 'the device-partner certification scorecard adopted by 40+ OEMs')
+      + matchCard(G[3], [0.86, 0.9, 1, 0.8, 0.9, 0.8, 0.9], 'approved', false, [], 'An RFC adopted as the partner standard shows the Unit set certification direction, not just ran it.', 'the device-certification RFC adopted as the partner standard') + an(4))
+    + group(REQS[2],
+        matchCard(G[4], [0.8, 0.7, 1, 0.7, 0.9, 0.8, 0.9], 'approved', false, [], 'Shipping across three platforms in one quarter is senior product work inside video; the Unit does not state a year count, so only the seniority and domain signals line up.', 'Launched the tvOS and Roku apps within one quarter of the web player rewrite')
+      + matchCard(F, [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], 'none', false, [], 'The Unit shows product leadership in video but states no years of experience, so only the domain and seniority signals line up with the clause.', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline'))
+    + group(REQS[0], '')
+    + group(REQS[3],
+        matchCard(G[5], [0.92, 0.88, 0.95, 0.85, 0.9, 0.9, 1], 'approved', false, [], 'A partner API roadmap used by six OEM integrations is direct evidence of working with device OEMs.', 'the partner API roadmap used by six OEM integrations')
+      + matchCard(G[6], [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 0.8], 'approved', false, [], 'Coordinating a launch with five hardware partners is the OEM partnership the clause names, at a smaller count.', 'the set-top launch with five hardware partners'))
+    + group(REQS[4],
+        matchCard(G[7], [0.84, 0.8, 0.95, 0.8, 0.8, 0.8, 1], 'approved', false, [], 'Startup buffering on living-room devices is a latency problem in playback; the clause asks for familiarity with low-latency delivery.', 'Reduced startup buffering on living-room devices by 22%')
+      + matchCard(F, [0.86, 0.8, 0.9, 0.85, 0.7, 0.8, 1], 'none', false, [], 'Low-latency live delivery is the Unit’s subject; the clause asks for familiarity with it.', 'a low-latency live pipeline (under 3 s glass to glass)'))
+    + group(REQS[5],
+        matchCard(G[8], [0.88, 0.85, 0.9, 0.9, 0.8, 0.8, 1], 'approved', false, [], 'A developer portal with API docs and sample apps is developer-facing delivery; the clause asks for shipped developer SDKs.', 'a partner developer portal with API docs and sample apps'));
   return shell('pipeline', body);
 }
 const roleTabs = on => `<div class="tabs">${ROLE_TABS.map(t => `<span class="${t === on ? 'on' : ''}${t === 'Requirements & matches' ? '' : ' nb'}">${t}</span>`).join('')}</div>`;
@@ -872,6 +890,7 @@ function roleDetail(state) {
 
 function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="sm dim" role="status">Loading Application…</div>`);
+  if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Couldn’t load Application: permission-denied</div>`);
   if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="ed"><div><div class="empty" style="padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div></div>
     <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
@@ -943,22 +962,22 @@ function scan(state) {
   if (state === 'running') {
     return shell('scan', `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Run in progress · started 09:02</div></div>${btn(ic('x') + ' Cancel', 'ghost')}</div>
       <div class="card" style="margin:12px 0"><div class="rowhead sm"><b>Checking 14 boards</b><span class="dim num">9 done · 2 new roles so far</span></div><div class="bar" style="margin:6px 0"><i style="width:64%"></i></div>
-        <div class="step"><i class="done"></i>Northwind Media · 3 roles · 1 new</div><div class="step"><i class="done"></i>Lumen Labs · 0 roles</div><div class="step now"><i class="now"></i>Orbit Video · fetching</div><div class="step todo"><i></i>Quill Systems</div><div class="step todo"><i></i>… 3 more</div></div>
+        <div class="step"><i class="done"></i>9 boards done · 2 new roles ${ic('chevron-down')}</div><div class="step now"><i class="now"></i>Vantage Stream · fetching</div><div class="step todo"><i></i>Meridian Labs</div><div class="step todo"><i></i>… 3 more</div></div>
       <div class="warn">Harbor Analytics’ board returned 403 twice. Last week’s roles stay open with a verification note.${an(6)}</div>
-      <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Northwind Media', 'Senior Product Manager, Video Platform', true, '$190–240k', 'Playback, device certification', 'Ads-tech', false, 'dimmed')}</div>`);
+      <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true, 'dimmed')}</div>`);
   }
   const body = `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Week of Oct 20 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 27</div></div><div class="btnrow">${btn(ic('link') + ' Boards · 14')}${btn(ic('radar') + ' Run now', 'pri')}</div></div>
-    <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Saved Role is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
+    <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Role in Applied is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
     <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ' + ic('chevron-down'), 'line')}${chip('Remote ' + ic('chevron-down'), 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
     <div class="h3">Tier 1 — apply this week${an(2)}</div>
-    <div class="list">${row(1, 'Lumen Labs', 'Staff Product Manager, Developer Tools · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner program (L-021), AI workflows (EU-18)', 'No developer-tools title on record; two years short on the seniority line', false)}
-      ${row(1, 'Orbit Video', 'Senior PM, Streaming Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true)}</div>
+    <div class="list">${row(1, 'Brightline Media', 'Staff Product Manager, Playback Platform · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner program (L-021)', 'Two years short on the seniority line', false)}
+      ${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true)}</div>
     <div class="h3">Tier 2 — worth a look</div>
-    <div class="list">${row(2, 'Pike & Co', 'Product Manager, AI Workflows · Remote', true, '', 'LLM triage flow (EU-18)', 'Scope reads mid-level; comp not posted', false)}
-      ${row(2, 'Granite Labs', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}
+    <div class="list">${row(2, 'Meridian Labs', 'Product Manager, AI Workflows · Remote', true, '', 'LLM triage flow (EU-18)', 'Scope reads mid-level; comp not posted', false)}
+      ${row(2, 'Northgate Video', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}
       ${row(2, 'Kestrel Audio', 'Senior PM, Developer Platform · Remote (US)', true, '$175–215k', 'Partner API roadmap (EU-21), SDK ownership (L-010)', 'Audio, not video; no developer-platform title on record', false)}</div>
     <div class="h3">Tier 3 — on record, not now</div>
-    <div class="list">${row(3, 'Tidewater Health', 'Senior PM, Platform · Remote', true, '$160–190k', 'Platform generalist', 'Domain is health, not media; comp under floor', false, 'dimmed')}</div>
+    <div class="list">${row(3, 'Coastline Health', 'Senior PM, Platform · Remote', true, '$160–190k', 'Platform generalist', 'Domain is health, not media; comp under floor', false, 'dimmed')}</div>
     <div class="sm dim" style="margin-top:8px">New Roles land in Saved with the JD captured from the verified posting.${an(4)}</div>`;
   return shell('scan', body);
 }
@@ -1016,6 +1035,7 @@ const GROUPS = [
       '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
         { id: 'ready', label: '23 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'All 23 non-rejected Units (20 approved, 1 flagged, 2 pending) plus the proposed detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: the action cluster moves under the one-line summary. The bulk bar sticks to the top of the scrolling list.' } },
+        { id: 'nomatch', label: 'a filter matches nothing', kind: 'state', cap: { desk: 'The panel shows “Clear filters” and the selected chip; below it the shipped “No Units match these filters.” region with its own Clear filters action, and no list.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'A genuinely empty snapshot is still a ready state: “+ Add Unit”, the “0 of 20 approved” counter and the Filters panel (“No skills in the corpus yet.”) render above EmptyState’s copy and its one action; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no Add Unit, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count or Add Unit beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
@@ -1063,7 +1083,9 @@ const GROUPS = [
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
         { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } },
-        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The row wraps its Open button under the metadata.' } }] }] },
+        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The row wraps its Open button under the metadata.' } },
+        { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped “Loading Role…” text alone; no header, no tabs until the Role arrives.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Failed to load Role: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'editor', title: 'Application editor — output and evidence', sub: 'Where generated output becomes something you send. Shipped (<code>src/routes/ApplicationEditor/</code>): two panes, <code>ClaimAnnotation</code> underlines with a popover, inline edit with autosave and undo, add / remove / reorder bullets, the export gate on the server attestation (#502), re-run validation. Drawn and marked not built: claim-rule hits as a third flag kind.', screens: [
     { id: 'editor', title: 'Application editor', fn: editor, legend: [
       '<b>Traced claim</b>: a 1 px low-opacity underline. Hovering it highlights its source Unit on the right; the hovered claim gets the accent wash.',
@@ -1075,7 +1097,8 @@ const GROUPS = [
       states: [
         { id: 'ready', label: 'hovering a claim · 3 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
         { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Two panes, as from md up.', ph: 'Panes stack.' } },
-        { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
+        { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Couldn’t load Application: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511; <code>src/routes/Pipeline/</code>): seven columns, three-line cards, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors. Proposed (dashed): the next-action chip (#512), the next scheduled round chip (PRD), and the tasks sidebar (#34).', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
       '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. Empty columns keep their teaching copy. A fatal read shows only the alert; partial enrichment keeps the board and marks the affected cards. The page-level New Role button is proposed: the shipped header is the title and the move hint, and New Role lives in the shell navigation.',
