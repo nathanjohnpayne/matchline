@@ -24,8 +24,8 @@ const judge = (over: Partial<JudgeResult> = {}): JudgeResult => ({
     { kind: "exposure", jd_clause: "c4", point: "p4", coverage: "covered" },
   ],
   generated_points: [
-    { kind: "strength", point: "g1", matches_reference: true },
-    { kind: "strength", point: "g2", matches_reference: false },
+    { kind: "strength", index: 0, point: "g1", matches_reference: true },
+    { kind: "strength", index: 1, point: "g2", matches_reference: false },
   ],
   unsupported_candidate_claims: [],
   claim_rule_violations: [],

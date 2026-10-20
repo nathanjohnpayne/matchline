@@ -7,7 +7,7 @@ import { incompleteJudgement, judgeBrief, judgeRequestFingerprint, judgeUserCont
 
 const JUDGEMENT: JudgeResult = {
   reference_points: [{ kind: "strength", jd_clause: "c", point: "p", coverage: "partial" }],
-  generated_points: [{ kind: "strength", point: "g", matches_reference: false }],
+  generated_points: [{ kind: "strength", index: 0, point: "g", matches_reference: false }],
   unsupported_candidate_claims: [{ quote: "Ran a twelve-team platform.", reason: "not in sources" }],
   claim_rule_violations: [],
   reference_verdict: "hold",
@@ -93,13 +93,21 @@ describe("judgeBrief", () => {
     ).toBeUndefined();
     // A strict subset is caught, per kind: listing one of two strengths fails.
     const two = { ...INPUT.generated, strengths: [...INPUT.generated.strengths, ...INPUT.generated.strengths] };
-    const one = { kind: "strength" as const, point: "g", matches_reference: true };
-    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [one] }, two)).toMatch(/1 generated strength point/);
-    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [one, one] }, two)).toBeUndefined();
+    const at = (index: number, kind: "strength" | "exposure" = "strength") => ({
+      kind,
+      index,
+      point: "g",
+      matches_reference: true,
+    });
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [at(0)] }, two)).toMatch(/strength indexes \[0\]/);
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [at(0), at(1)] }, two)).toBeUndefined();
+    // The same item twice does not stand in for the one never assessed (Codex P2, #581).
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [at(0), at(0)] }, two)).toMatch(/\[0, 0\]/);
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [at(0), at(2)] }, two)).toMatch(/\[0, 2\]/);
     // Points of the wrong kind do not stand in for missing ones.
-    expect(
-      incompleteJudgement({ ...JUDGEMENT, generated_points: [{ ...one, kind: "exposure" }] }, INPUT.generated),
-    ).toMatch(/0 generated strength point/);
+    expect(incompleteJudgement({ ...JUDGEMENT, generated_points: [at(0, "exposure")] }, INPUT.generated)).toMatch(
+      /strength indexes \[\]/,
+    );
   });
 
   it("retries a malformed judgement", async () => {

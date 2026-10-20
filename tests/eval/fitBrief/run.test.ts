@@ -18,6 +18,7 @@ import {
   parseArgs,
   preflight,
   prepareOutDir,
+  RUN_LOCK,
   runFitBriefEval,
   extractionConfigLabel,
   ExtractionTruncatedError,
@@ -54,7 +55,7 @@ const BRIEF: FitBriefResponseV1 = {
 
 const JUDGEMENT: JudgeResult = {
   reference_points: [{ kind: "strength", jd_clause: "c", point: "p", coverage: "covered" }],
-  generated_points: [{ kind: "strength", point: "g", matches_reference: true }],
+  generated_points: [{ kind: "strength", index: 0, point: "g", matches_reference: true }],
   unsupported_candidate_claims: [],
   claim_rule_violations: [],
   reference_verdict: "apply",
@@ -395,6 +396,19 @@ describe("writePrivateFile", () => {
 });
 
 describe("prepareOutDir", () => {
+  it("claims the directory exclusively, so a concurrent run on it is refused (Codex P2, #581)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
+    try {
+      const run = join(dir, "run");
+      prepareOutDir(run);
+      expect(readdirSync(run)).toEqual([RUN_LOCK]);
+      // A second run that raced past the emptiness check still loses the lock.
+      expect(() => prepareOutDir(run)).toThrow(/not empty|already in use/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a non-empty directory without changing its permissions (Codex P1, #581)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fit-brief-out-"));
     try {

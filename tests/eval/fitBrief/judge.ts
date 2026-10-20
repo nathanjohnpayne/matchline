@@ -52,6 +52,8 @@ export const JudgeResultSchema = z
       z
         .object({
           kind: z.enum(["strength", "exposure"]),
+          /** 0-based position of the item in the brief's strengths or exposures array. */
+          index: z.number().int().min(0),
           point: nonEmpty,
           matches_reference: z.boolean(),
         })
@@ -77,7 +79,7 @@ export const JUDGE_SYSTEM = `You grade a generated fit brief against a reference
 Return your judgement via the \`${TOOL_NAME}\` tool.
 
 1. reference_points: list every distinct strength and exposure the REFERENCE brief identifies, each tied to the job-description clause it concerns. For each, mark coverage in the GENERATED brief: "covered" if it makes the same point, "partial" if it touches the point but misses what matters, "missing" otherwise. Judge substance, not wording or order.
-2. generated_points: one entry for each item in the GENERATED brief's "strengths" array (kind "strength") and one for each item in its "exposures" array (kind "exposure"), in the order they appear, none merged, split or skipped. Mark whether each matches any reference point.
+2. generated_points: exactly one entry for each item in the GENERATED brief's "strengths" array (kind "strength") and one for each item in its "exposures" array (kind "exposure"), none merged, split, repeated or skipped. Set "index" to the item's 0-based position in its array. Mark whether each matches any reference point.
 3. unsupported_candidate_claims: quote every statement in the GENERATED brief about the candidate's own background (employers, roles, projects, metrics, dates, skills, scope) that the candidate sources do not support. Statements about the role or the company, advice, and reasonable conclusions drawn from the sources are not candidate claims. Return an empty list when there are none.
 4. claim_rule_violations: quote every place the GENERATED brief breaks a claim rule, naming the rule. Empty when none, or when there are no rules.
 5. reference_verdict: the reference brief's recommendation as one of apply, hold, referral_needed, skip; "unclear" if it states none.
@@ -177,9 +179,10 @@ export interface JudgeDeps {
 /**
  * A schema-valid judgement can still skip the enumeration it exists for.
  * Precision's denominator is `generated_points`, so a judge listing only
- * the points that match would score 100%. The judge must list exactly one
- * point per structured strength and per exposure; any other count is
- * retried like a malformed response (Codex P2 ×2, #581). Returns the
+ * the matching points, or one point twice, would score 100% without
+ * assessing the rest. Each point carries its item's index, and every
+ * strength and exposure must appear exactly once; anything else is
+ * retried like a malformed response (Codex P2 ×3, #581). Returns the
  * reason, or undefined when the judgement is complete.
  */
 export function incompleteJudgement(judgement: JudgeResult, generated: FitBriefResponseV1): string | undefined {
@@ -187,8 +190,13 @@ export function incompleteJudgement(judgement: JudgeResult, generated: FitBriefR
     ["strength", generated.strengths.length],
     ["exposure", generated.exposures.length],
   ] as const) {
-    const listed = judgement.generated_points.filter((p) => p.kind === kind).length;
-    if (listed !== expected) return `judge listed ${listed} generated ${kind} point(s) for a brief with ${expected}`;
+    const indexes = judgement.generated_points.filter((p) => p.kind === kind).map((p) => p.index);
+    const covered = new Set(indexes);
+    const complete =
+      indexes.length === expected && covered.size === expected && indexes.every((i) => i < expected);
+    if (!complete) {
+      return `judge listed ${kind} indexes [${indexes.join(", ")}] for a brief with ${expected} ${kind}(s)`;
+    }
   }
   return undefined;
 }

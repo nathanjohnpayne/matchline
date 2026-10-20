@@ -223,7 +223,22 @@ export function prepareOutDir(dir: string): void {
   }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
+  // Claim the directory atomically: two runs can both see it empty, but
+  // only one can create the lock exclusively, so concurrent runs never
+  // overwrite or mix each other's artifacts (Codex P2, #581). The lock
+  // stays, marking the directory as used.
+  try {
+    closeSync(openSync(join(dir, RUN_LOCK), "wx", 0o600));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`--out ${dir} is already in use by another run; give each run its own directory.`);
+    }
+    throw err;
+  }
 }
+
+/** Created exclusively in each run's output directory by `prepareOutDir`. */
+export const RUN_LOCK = ".fit-brief-run.lock";
 
 /**
  * Raised instead of retrying units extraction after a truncated response.
