@@ -11,6 +11,11 @@
  * title, metadata row). Below `md` the board is a vertical stack with
  * pill headers; from `md` up the seven columns sit side by side.
  * Loading and read failures render inline (rule 10), never as a toast.
+ *
+ * Muted text stays at or above 4.5:1 contrast on its background in
+ * both themes (accessibility baseline): zinc-500/600 on light,
+ * zinc-400 on dark. zinc-400 on white is about 2.5:1 (CodeRabbit on
+ * PR #576).
  */
 
 import type { ReactElement } from "react";
@@ -79,7 +84,7 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
         className={
           "truncate text-sm font-medium leading-snug " +
           (card.companyName === null
-            ? "italic text-zinc-400 dark:text-zinc-500"
+            ? "italic text-zinc-500 dark:text-zinc-400"
             : "text-zinc-900 dark:text-zinc-100")
         }
         data-testid="pipeline-card-company"
@@ -90,7 +95,7 @@ function Card({ card }: { readonly card: PipelineCard }): ReactElement {
         className={
           "truncate text-xs leading-snug " +
           (card.roleTitle === null
-            ? "italic text-zinc-400 dark:text-zinc-500"
+            ? "italic text-zinc-500 dark:text-zinc-400"
             : "text-zinc-500 dark:text-zinc-400")
         }
         data-testid="pipeline-card-title"
@@ -154,7 +159,7 @@ function Column({ column }: { readonly column: PipelineColumn }): ReactElement {
       >
         <span>{label}</span>
         <span
-          className="tabular-nums text-zinc-400 dark:text-zinc-500"
+          className="tabular-nums text-zinc-600 md:text-zinc-500 dark:text-zinc-400"
           data-testid="pipeline-column-count"
         >
           {column.cards.length}
@@ -162,7 +167,7 @@ function Column({ column }: { readonly column: PipelineColumn }): ReactElement {
       </h2>
       {column.cards.length === 0 ? (
         <p
-          className="text-xs leading-snug text-zinc-400 dark:text-zinc-500"
+          className="text-xs leading-snug text-zinc-600 dark:text-zinc-400"
           data-testid="pipeline-column-empty"
         >
           {STAGE_EMPTY_COPY[column.stage]}

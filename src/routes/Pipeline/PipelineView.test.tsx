@@ -188,6 +188,24 @@ describe("PipelineView", () => {
     expect(tag).toContain("dark:focus-visible:ring-zinc-100");
   });
 
+  it("keeps muted text off light-theme zinc-400 (contrast baseline)", () => {
+    // CodeRabbit on PR #576: zinc-400 on white is about 2.5:1.
+    const html = render({
+      columns: board({ offer: [card({ companyName: null, roleTitle: null })] }),
+    });
+    const lightZinc400 = /class="[^"]*(?<![:\w-])text-zinc-400(?![\w-])/;
+    for (const testId of [
+      "pipeline-column-empty",
+      "pipeline-column-count",
+      "pipeline-card-company",
+      "pipeline-card-title",
+    ]) {
+      const tag = html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
+      expect(tag, testId).not.toBe("");
+      expect(tag, testId).not.toMatch(lightZinc400);
+    }
+  });
+
   it("stacks vertically below md and sits side by side from md", () => {
     const html = render();
     const boardTag = html.match(/<div[^>]*data-testid="pipeline-board"[^>]*>/)?.[0] ?? "";
