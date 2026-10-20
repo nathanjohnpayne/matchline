@@ -181,6 +181,38 @@ level up: an ignored `--tokn-source claude-cli` would leave the default
 metered API selected and spend real money on a run you meant to bill to
 a subscription.
 
+### Fit-brief eval — private corpus (#495 Phase 3)
+
+`npm run eval:fit-brief` generates a fit brief for each job description in a **private** corpus and scores it against the brief the owner wrote and approved for that role. The corpus is the owner's real job search, and this repository is public, so the harness enforces three rules:
+
+- The corpus is read only from the directory named by `MATCHLINE_PRIVATE_CORPUS`, and the harness refuses to start if that directory resolves inside this repository, symlinks included.
+- Every generated brief, judgement and per-pair score is written to `--out` (default `~/.matchline/eval-private/fit-brief/<run-id>`), which must also be outside the repository and empty, so one run's artifacts are never mixed with another's. Each artifact records the run configuration, including the generator prompt version and a fingerprint of the judge request.
+- The printed report contains configuration and aggregates only, never a pair id, quote or corpus text.
+
+Nothing from the corpus belongs in a commit: no fixtures, examples or test expectations. The tests here use invented data.
+
+The corpus directory holds `matchline-fit-brief-manifest.json`, which names the canonical résumé, an optional skills inventory, optional claim rules, and the pairs. Each pair has an `id`, a `jd`, a `reference` brief, and a `split` of `dev` or `test`. Paths are relative to the corpus directory and may not leave it. See `fitBrief/corpus.ts`.
+
+```bash
+export MATCHLINE_PRIVATE_CORPUS=/path/outside/this/repo
+npm run eval:fit-brief -- --model claude-sonnet-5-5 --dry-run            # validate, print the plan, no API calls
+npm run eval:fit-brief -- --model claude-sonnet-5-5 --effort medium --max-usd 10
+npm run eval:fit-brief -- --model claude-opus-5-5 --evidence units --split test --samples 2 --max-usd 15
+```
+
+Each brief is scored on:
+
+- **Evidence gate (deterministic).** Every evidence quote must appear within a single bullet, heading or line of the résumé or inventory, so adjacent claims cannot be stitched into one quote. Formatting and case are ignored; wording is not. Dates are never certified by this gate: in units mode the generator receives the Units as JSON, one object per Unit in extraction order with the extracted dates in their own field, so no date sits on quotable text, and any date a brief asserts is checked by the claim gate against the canonical résumé.
+- **Claim gate (model-graded).** The judge (default `claude-opus-5-5`, effort `high`) lists statements about the candidate that the sources don't support, and claim-rule violations. A brief passes the gates only with none of these and no unsupported evidence.
+- **Coverage (model-graded).** Recall: the reference's strengths and exposures that the brief covers, with half credit for partial coverage. Precision: the brief's points that match the reference.
+- **Verdict agreement** with the reference.
+
+`--evidence units` feeds the generator Experience Units extracted from the résumé by the current extraction pin, instead of the résumé itself. Each Unit contributes its verbatim text and its date range; other structured fields are left out. The inventory reaches the generator in both modes, so the comparison changes only how the résumé is represented. Both gates still ground on the canonical résumé and inventory, never on the extracted Units, so an extraction error cannot certify a claim. The mode tests whether Units are sufficient evidence for a brief. Extraction is stochastic, so each units-mode run saves the Units it used as `units.json` in its output directory. Pass that file to later runs with `--units-from <path>` to compare generators on identical evidence; the report and artifacts record the extraction pin that made the Units, whether they were extracted or reused, and a hash of the evidence the generator read.
+
+`--max-usd` is required for a paid run. Every paid request checks the bound first, including retries inside generation, judging and extraction. A run that reaches the bound stops and reports itself as incomplete; a request already in flight still completes, and the report states any overrun. Errors that could quote the corpus (pair ids, manifest paths) are withheld from the terminal unless `FIT_BRIEF_VERBOSE=1` is set.
+
+The claim gate is model-graded rather than reusing the claim-extraction and traceability validators. Those validators assume every claim is about the candidate, as in a résumé bullet. A fit brief also states facts about the role and gives advice, and traceability would flag those as fabrications.
+
 ### What the cost figures are
 
 Every dollar figure the harness prints is a **list-price estimate**: provider-reported token counts priced through `functions/src/llm/rates.ts` by `priceUsage` in `functions/src/llm/cost.ts`, the same function production telemetry uses. It is not an invoice. Credits, discounts and billing adjustments never show up here, so check the provider console for what was actually billed.

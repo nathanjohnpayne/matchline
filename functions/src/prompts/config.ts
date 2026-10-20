@@ -27,6 +27,8 @@ export const PROMPT_CONFIG = {
   },
   generation: {
     resume: "v1",
+    // #495 Phase 3: evaluated privately before any product surface uses it.
+    fitBrief: "v1",
   },
 } as const;
 
