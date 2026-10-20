@@ -594,7 +594,7 @@ function onboarding(state) {
 
 function unitReview(state) {
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    <div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'ready' ? chip('27 approved — onboarding complete', 'ink') + an(1) : ''}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div></div>`;
+    ${state === 'ready' ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${chip('27 approved — onboarding complete', 'ink')}${an(1)}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
   if (state === 'empty') {
     return shell('evidence', head + `<div class="empty" style="padding:36px 20px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
       <div class="btnrow" style="justify-content:center">${btn(ic('plus') + ' Add Unit manually', 'pri')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`, { width: 'w5' });
@@ -699,6 +699,7 @@ const REQS = [['must', 'Experience with ad-supported streaming', 'domain', 1], [
 const matchCard = (u, score, st, comps) => `<div class="card tight" style="margin:6px 0"><div class="rowhead"><b class="grow">${u.s}</b><span class="score num">${score.toFixed(2)}</span></div>
   <div class="xs dim num">${comps} · confidence ${u.c}%</div>
   <div class="sm" style="margin-top:4px"><b>Why:</b> ${u.sk[0]} and ${u.tl[0] || 'the shipped metric'} appear verbatim in the Unit; the clause names both.</div>
+  <div class="sm dim"><b>Evidence:</b> “${u.s.split(';')[0].split(',')[0]}”</div>
   <div class="btnrow" style="margin-top:6px">${st === 'approved' ? btn(ic('check') + ' Approved ✓', 'pri') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`;
 function roleShipped(state) {
   const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: role_4d2c18</div>
@@ -805,7 +806,9 @@ function roleDetail(state) {
 function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="sm dim" role="status">Loading Application…</div>`);
   if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: app_7f3a91</div></div></div>
-    <div class="empty" style="margin-top:14px;padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div>`);
+    <div class="ed"><div><div class="empty" style="padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div></div>
+    <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
+    <div class="list">${[UNITS[0], UNITS[1], { ...UNITS[4], st: 'ok' }].map(u => `<div class="lrow" style="min-height:0"><div class="grow clamp2">${u.s}</div></div>`).join('')}</div></div></div></div>`);
   const left = `<div><div class="card" style="position:relative;line-height:1.6">
       <div class="exportrow"><span>Resolve 2 validation flags before exporting.${an(6)}</span>${btn(ic('refresh-cw') + ' Re-run validation')}${btn(ic('download') + ' Export', 'pri off')}</div>
       <div class="h3" style="margin-top:0">Summary</div>
@@ -824,9 +827,10 @@ function editor(state) {
     <div class="list">${srcRow(UNITS[0], true)}${srcRow(UNITS[1])}${srcRow({ ...UNITS[4], st: 'ok' })}</div>
     <div class="sm dim" style="margin-top:6px">Highlighted: the source of the claim under the pointer.${an(5)}</div>
     <div class="meta" style="margin-top:8px">${chip('4 claim rules', 'line nb')}</div></div></div>`;
-  const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: app_7f3a91</div></div>${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>
+  const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: app_7f3a91</div></div></div>
     <div class="seg phseg nb"><span class="on">Output · 2 flags</span><span>Evidence · 9</span></div>
-    <div class="ed">${left}${right}</div>`;
+    <div class="ed">${left}${right}</div>
+    <div style="margin-top:12px">${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>`;
   return shell('pipeline', body);
 }
 
@@ -852,7 +856,7 @@ function pipeline(state) {
   if (state === 'loading') body = head + `<div class="sm dim" role="status">Loading pipeline…</div>`;
   else if (state === 'error') body = head + `<p class="alert" role="alert">Couldn’t load your applications: Firestore unavailable.</p>`;
   else if (state === 'partial') body = head + `<div class="warn" role="status">Some details couldn’t be loaded, so a few cards show placeholders. Reload to try again.</div>
-    <div class="cols">${STAGES.map(([s, n]) => `<section class="col"><div class="colh"><span class="stage">${s}</span><span class="num">${n}</span></div>${n ? Array.from({ length: n }, () => card('Unknown company', 'Role unavailable', 4, '', '', '')).join('') : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`).join('')}</div>`;
+    <div class="cols">${STAGES.map(([s, n]) => `<section class="col"><div class="colh"><span class="stage">${s}</span><span class="num">${n}</span></div>${n ? cards[s].replace(/<span class="av">[A-Z?]+<\/span>/g, '') : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`).join('')}</div>`;
   else body = head +
     `<div class="boardwrap"><div style="flex:1;min-width:0"><div class="cols">${STAGES.map(col).join('')}${state === 'ready' ? an(1) : ''}</div></div>${state === 'ready' ? side : ''}</div>`;
   return shell('pipeline', body, { width: 'w7' });
@@ -946,8 +950,8 @@ const GROUPS = [
       states: [
         { id: 'ready', label: '41 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'List plus the detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: action cluster moves under the summary. The bulk bar sticks to the top of the scrolling list.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'Genuinely empty, after the first snapshot: the shipped EmptyState copy and its one action, no counter; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
+        { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no Add Unit, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'error', label: 'subscription error', kind: 'state', cap: { desk: 'Alert only — no list under it, no stale count or Add Unit beside it.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
     { id: 'canonical', title: 'Canonical résumé editor + tailored views', fn: canonical, legend: [
       '<b>One canonical résumé, line-addressable.</b> Each line has a stable id (<code>ResumeLine.id</code>), a section, text, and the Experience Units it evidences. Every edit bumps the version.',
       '<b>Lines render as rows, grouped by section</b>, with the id in the gutter and the evidenced Units as chips. Drag handle reorders within a section; click to edit in place.',
@@ -986,7 +990,7 @@ const GROUPS = [
       '<b>Requirements tab without a JD</b> (<code>RequirementsTab.tsx</code>): the JD source editor with its placeholder, Parse JD disabled until text is pasted, and the state line “No JD yet. Paste it above to parse requirements.” Save JD appears once the draft is dirty; Re-parse asks for an inline confirmation when requirements already exist.',
       '<b>Gaps first</b> (<code>GapsView.tsx</code>): unmet must-haves in amber with the shipped explanation, then unverified must-haves (a match exists but its evidence could not be checked). With no gaps the panel says “✓ Every must-have requirement has a qualifying match.”',
       '<b>Re-run matching</b> with its explanation sits above the list; “Computing matches…” is a static status line while a run is in flight.',
-      '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge and components, “Why:” rationale, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
+      '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge and components, the “Why:” rationale, the “Evidence:” surface string, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
         { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } }] }] },
@@ -1000,7 +1004,7 @@ const GROUPS = [
       '<b>Export sits at the top of the output pane</b> (<code>ExportButton</code>): the gate’s reason (“Resolve N validation flags before exporting.”, or the stale / never-validated reasons), “Re-run validation” when re-validating is the fix, and a disabled Export whose tooltip repeats the reason. The empty state sends the user back to the Role to generate — there is no generate action in the editor.'],
       states: [
         { id: 'ready', label: 'hovering a claim · 2 flags · export blocked', kind: 'shipped', cap: { desk: 'Output 7 / evidence 5: export gate on top of the output, Summary then Experience, the Source Units pane right. The claim-rule popover is proposed.', tab: 'Panes stack, output first, evidence second. The popover stays anchored.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
-        { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The shipped empty pane: generation happens on the Role, not here.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Panes stack.', ph: 'Panes stack.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511; <code>src/routes/Pipeline/</code>): seven columns, three-line cards, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors. Proposed (dashed): the next-action chip (#512), the next scheduled round chip (PRD), and the tasks sidebar (#34).', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
@@ -1015,7 +1019,7 @@ const GROUPS = [
         { id: 'empty', label: 'empty board', kind: 'state', cap: { desk: 'Every column shows its teaching copy; nothing else renders.', tab: 'Unchanged, columns scroll.', ph: 'Stacked pills with their copy.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped status text under the header; no columns until the read lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'read failed', kind: 'state', cap: { desk: 'A rejected read renders the alert alone — no board, no retry control (reload is the recovery).', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'partial', label: 'partial data · placeholders', kind: 'state', cap: { desk: 'The board is ready but enrichment failed for some cards: a status line explains, and those cards show “Unknown company” / “Role unavailable” in italics rather than guessing.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
+        { id: 'partial', label: 'partial data · contacts missing', kind: 'state', cap: { desk: 'The board is ready but one enrichment read (People) failed: the status line explains, Roles and Companies still render, and only the contact avatars are missing. A failed Roles or Companies read would show “Unknown company” / “Role unavailable” in italics the same way.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'scan', title: 'Weekly scan inbox', sub: 'PRD v0.2 reverses the “not a job board” non-goal for one case: a scheduled scan of employer boards the user names. Every result is verified on the employer’s own posting, tiered against approved evidence, and states what lines up and where the candidate is exposed. The run opens with corrections to the record. No shipped surface; the whole screen is PRD v0.2.', screens: [
     { id: 'scan', title: 'Scan inbox', fn: scan, legend: [
       '<b>Corrections to the record first</b>: roles that closed, comp that changed, facts that turned out wrong — each already applied to the Role and logged.',
