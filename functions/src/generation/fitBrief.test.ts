@@ -152,6 +152,22 @@ describe("generateFitBrief", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a 429 that reports the spend limit (CodeRabbit, #581)", async () => {
+    const create = vi.fn(async () => {
+      throw Object.assign(new Error("429"), {
+        status: 429,
+        error: { type: "error", error: { type: "rate_limit_error", details: { error_code: "enforced_spend_limit_reached" } } },
+      });
+    });
+    await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: { messages: { create } } as unknown as Anthropic,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      sleep: async () => {},
+    }).catch(() => undefined);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a rate limit", async () => {
     let calls = 0;
     const create = vi.fn(async () => {

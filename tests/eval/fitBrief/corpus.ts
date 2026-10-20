@@ -137,7 +137,11 @@ export function assertOutsideRepo(path: string, label: string, root: string = re
 
 function readInside(dir: string, rel: string, label: string): string {
   const full = resolve(dir, rel);
-  const relToDir = relative(comparable(realpathSync.native(dir)), comparable(realpathOrAncestor(full)));
+  // Both paths exist and are resolved to their on-disk case, so compare
+  // them as-is: case-folding here could accept a sibling directory on a
+  // case-sensitive volume (CodeRabbit on #581). The folded comparison is
+  // kept only in assertOutsideRepo, for output paths that may not exist.
+  const relToDir = relative(realpathSync.native(dir), realpathOrAncestor(full));
   if (!isWithin(relToDir)) {
     throw new Error(`${label} (${rel}) points outside the corpus directory.`);
   }

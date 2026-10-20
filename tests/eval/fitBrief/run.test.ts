@@ -267,9 +267,14 @@ describe("runFitBriefEval", () => {
 
   it("stops before units extraction's retries pass the bound", async () => {
     const d = deps({
-      extractUnits: vi.fn(async (_text, _record, guard) => {
-        guard();
-        throw new BudgetReachedError();
+      // Each extraction attempt checks the guard, then costs ~$1, so the
+      // guard itself must stop the second attempt (CodeRabbit on #581).
+      extractUnits: vi.fn(async (_text, record, guard) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          guard();
+          await record(usage("extraction"));
+        }
+        return ["unreachable"];
       }),
     });
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units", maxUsd: 0.5 }, d);

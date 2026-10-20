@@ -229,11 +229,28 @@ export async function generateFitBrief(
   );
 }
 
-/** Connection failures and 408/409/429/5xx are worth retrying; other statuses are not. */
+/**
+ * Connection failures and 408/409/429/5xx are worth retrying; other
+ * statuses are not. A 429 that reports the organization's spend limit
+ * (`enforced_spend_limit_reached`) is not a rate limit: access stays
+ * paused, so it is not retried either (CodeRabbit on #581).
+ */
 function isRetryable(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
   if (typeof status !== "number") return true;
+  if (status === 429 && mentionsSpendLimit(err)) return false;
   return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function mentionsSpendLimit(err: unknown): boolean {
+  const body = (err as { error?: unknown } | null)?.error;
+  let text = err instanceof Error ? err.message : "";
+  try {
+    text += JSON.stringify(body ?? "");
+  } catch {
+    // An unserializable body cannot carry the code; the message still can.
+  }
+  return text.includes("enforced_spend_limit_reached");
 }
 
 function buildUserContent(fewShot: string, input: FitBriefInput): string {
