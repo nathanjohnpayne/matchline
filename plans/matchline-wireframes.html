@@ -568,7 +568,7 @@ const SRC_UNITS = GROUND.map(u => u.s);
 // every match on the sample Role: Unit, the seven axis values, approval state, unevaluated axes, rationale, surface evidence
 const MATCHES = {
   1: [
-    { u: GROUND[0], vals: [1, 1, 1, 1, 1, 0.95, 0.88], st: 'approved', na: [3], why: 'The Unit describes owning the playback roadmap across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', ev: 'Led the move of the playback SDK to one player across iOS, tvOS and web' },
+    { u: GROUND[0], vals: [1, 1, 1, 1, 1, 0.95, 0.88], st: 'approved', na: [3], why: 'The Unit describes leading the playback SDK across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', ev: 'Led the move of the playback SDK to one player across iOS, tvOS and web' },
     { u: GROUND[1], vals: [0.98, 0.95, 1, 0.9, 1, 0.9, 1], st: 'approved', na: [], why: 'Device certification is named in both the clause and the Unit, and the Unit’s partner-platform scope matches the roadmap-ownership ask.', ev: 'Owned device certification for 40+ partner platforms' },
     { u: GROUND[2], vals: [0.9, 0.92, 1, 0.8, 0.9, 0.85, 0.9], st: 'approved', na: [], why: 'A certification scorecard adopted by partners is roadmap-level ownership of the certification half of the clause.', ev: 'the device-partner certification scorecard adopted by 40+ OEMs' },
     { u: GROUND[3], vals: [0.86, 0.9, 1, 0.8, 0.9, 0.8, 0.9], st: 'approved', na: [], why: 'An RFC adopted as the partner standard shows the Unit set certification direction, not just ran it.', ev: 'the device-certification RFC adopted as the partner standard' }],
@@ -591,14 +591,14 @@ const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `
   ${o.noActs ? '' : `<div class="acts">${btn(ic('check') + ' Approve', u.st === 'ok' ? 'off' : '')}${btn(ic('flag') + ' Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn(ic('x') + ' Reject', 'ghost')}${btn(ic('pencil') + ' Edit', 'ghost')}</div>`}</div>`;
 
 const CANON = [
-  ['L-001', 'headline', 'Senior Product Manager — video platforms and developer tools', ['EU-14', 'EU-15']],
-  ['L-002', 'summary', 'Twelve years shipping playback, live and device-partner products at consumer scale.', ['EU-14', 'EU-15']],
+  ['L-001', 'headline', 'Product Manager — video playback and device partnerships', ['EU-14', 'EU-15']],
+  ['L-002', 'summary', 'Shipped playback and device-partner products: one player across iOS, tvOS and web, and certification for 40+ partner platforms.', ['EU-14', 'EU-15']],
   ['L-010', 'Beacon Streaming · 2019–2026', 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ['EU-14']],
   ['L-011', 'Beacon Streaming · 2019–2026', 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ['EU-15']],
   ['L-012', 'Beacon Streaming · 2019–2026', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline.', ['EU-16']],
   ['L-020', 'Cobalt Devices · 2014–2019', 'Negotiated multi-vendor CDN contracts across three providers.', ['EU-19']],
   ['L-021', 'Cobalt Devices · 2014–2019', 'Coordinated the set-top launch with five hardware partners.', ['EU-21']],
-  ['L-030', 'skills', 'Video playback · Live streaming · Device certification · Partner management · AI workflows', ['EU-14', 'EU-15', 'EU-19']],
+  ['L-030', 'skills', 'Video playback · Platform strategy · Device certification · Partner management · CDN vendor contracts', ['EU-14', 'EU-15', 'EU-19']],
 ];
 const RULES = [
   ['never_claim', 'Never quote the CDN savings figure; it was retired after the FY24 restatement.', 'retired figure'],
@@ -691,7 +691,7 @@ function unitReview(state, extra = {}) {
     <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (iOS/tvOS/web) — cut app startup time by 38% across 12M MAU.</div>
     <div class="h3">Signals</div><div class="meta">${chip('Video playback')}${chip('Platform strategy')}${chip('ExoPlayer', 'line')}${chip('AVFoundation', 'line')}${chip('startup time −38%', 'grn')}</div>
     <div class="h3">Provenance</div><div class="sm">resume · Beacon Streaming · pasted Oct 2 · confidence <span class="num">92%</span></div>
-    <div class="h3">Canonical lines evidenced</div><div class="meta">${chip('L-010', 'acc')}</div>${an(6)}
+    <div class="h3">Canonical lines evidenced</div><div class="meta">${CANON.filter(l => l[3].includes('EU-14')).map(l => chip(l[0], 'acc')).join('')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
   const { noAn, after, ...rest } = extra;
   let out = shell('evidence', head + filters + bulk + `<div class="two">${list}${detail}</div>`, { width: 'w5', ...rest });
@@ -793,7 +793,7 @@ function roleShipped(state) {
   if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Failed to load Role: permission-denied</div>`);
   if (state === 'applications') {
     return shell('pipeline', head + `<div class="sm dim" style="margin-bottom:8px">Generate a resume from your approved matches under this Role.${an(5)}</div><div class="btnrow" style="margin-bottom:14px">${btn('Generate resume', 'pri')}</div>
-      <div class="list"><div class="lrow"><div class="grow"><div class="rowhead">${chip('applied', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-09T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
+      <div class="list"><div class="lrow"><div class="grow"><div class="rowhead">${chip('interviewing', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-09T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
   }
   if (state === 'nojd') {
     return shell('pipeline', head + `<div class="field"><span class="lbl">JD source <span class="dim">(paste JD text first)</span></span><div class="in ta ph" style="min-height:220px">Paste the full JD as plain text. Headers and bullet points are fine.</div></div>
@@ -822,7 +822,7 @@ function roleDetail(state) {
       <div><div class="card" style="margin-bottom:12px"><div class="rowhead"><b>Bottom line</b>${chip('Verdict: apply', 'grn')}<span class="sp"></span><span class="sm dim">generated Oct 8 · from 9 approved matches</span>${an(3)}</div>
         <div style="margin-top:6px">Strong on playback quality and device certification, the two must-haves the posting leads with. Exposed on ad-supported streaming: no owned ads-tech work in the evidence. Apply, position as the platform PM who brings the device side, and get a referral to offset the ads gap.</div></div>
       <div class="h3">Strengths tied to the JD${an(4)}</div>
-      <div class="list"><div class="lrow"><div style="flex:1"><div class="sm dim">“Lead the roadmap for playback and device certification”</div><div>Owned both at Beacon: one player across three platforms, 40+ certified partners.</div><div class="meta">${chip('L-010', 'acc')}${chip('L-011', 'acc')}${chip('EU-14', 'line')}${chip('EU-15', 'line')}</div></div></div>
+      <div class="list"><div class="lrow"><div style="flex:1"><div class="sm dim">“Lead the roadmap for playback and device certification”</div><div>Led playback at Beacon — one player across three platforms — and owned certification for 40+ partner platforms.</div><div class="meta">${chip('L-010', 'acc')}${chip('L-011', 'acc')}${chip('EU-14', 'line')}${chip('EU-15', 'line')}</div></div></div>
         <div class="lrow"><div style="flex:1"><div class="sm dim">“Partner with 20+ device OEMs”</div><div>A partner API roadmap used by six OEM integrations, a set-top launch with five hardware partners, and certification across 40+ platforms.</div><div class="meta">${chip('L-021', 'acc')}${chip('L-011', 'acc')}${chip('EU-22', 'line')}${chip('EU-21', 'line')}${chip('EU-15', 'line')}</div></div></div></div>
       <div class="h3">Where you are exposed${an(5)}</div>
       <div class="list"><div class="lrow"><span class="rail flag">${ic('triangle-alert')}</span><div style="flex:1"><div class="sm dim">“Experience with ad-supported streaming (must have)”</div><div><b>Gap.</b> No owned ads work in the evidence. Handling: lead with playback and certification ownership and say plainly that ads-tech is not owned; do not claim it.</div></div></div></div>
@@ -851,11 +851,11 @@ function roleDetail(state) {
       <div class="warn">Built from canonical <b>v12</b>; canonical is now <b>v14</b> — 2 lines changed (L-010, L-012). ${btn(ic('refresh-cw') + ' Rebase to v14')} ${btn('Keep v12', 'ghost')}${an(4)}</div>
       <div class="two"><div class="list section-lines">
         <div class="lrow secrow"><span class="eyebrow">headline · summary</span></div>
-        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-001</span><div style="flex:1">Senior Product Manager — video platforms and developer tools</div></div>
-        <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Twelve years shipping playback and device-partner products for subscription streaming services at consumer scale.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s platform scope</span>${an(5)}</div></div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-001</span><div style="flex:1">${CANON[0][2]}</div></div>
+        <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Platform product manager for playback and device partners: one player across iOS, tvOS and web, and certification for 40+ partner platforms.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s platform scope</span>${an(5)}</div></div></div>
         <div class="lrow secrow"><span class="eyebrow">Beacon Streaming · 2019–2026</span></div>
-        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</div></div>
-        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">${CANON[3][2]}</div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">${CANON[2][2]}<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
         <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}<span class="xs dim">its Unit (EU-16) is flagged, so the line cannot pass traceability</span></div></div></div>
         <div class="lrow" style="min-height:0">${btn(ic('plus') + ' Pick canonical lines', 'ghost')}</div></div>
       <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">${ic('check')}</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">${ic('check')}</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">${ic('check')}</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>Stale against canonical v14 (warning, not blocking)</div></div>
@@ -905,7 +905,7 @@ function editor(state) {
   const left = `<div><div class="card" style="position:relative;line-height:1.6">
       <div class="exportrow"><span>Resolve 5 validation flags before exporting.${an(6)}</span>${btn(ic('refresh-cw') + ' Re-run validation')}${btn(ic('download') + ' Export', 'pri off')}</div>
       <div class="h3" style="margin-top:0">Summary</div>
-      <div><span class="u">Senior product manager with twelve years in video platforms, playback and device partnerships.</span></div>
+      <div><span class="u">Product manager for video playback and device partnerships: one player across iOS, tvOS and web, and certification for 40+ partner platforms.</span></div>
       <div class="h3">Experience</div>
       <div>• <span class="u hover">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.</span>${an(1)}</div>
       <div>• <span class="u">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</span></div>
@@ -977,14 +977,14 @@ function scan(state) {
     <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Role in Applied is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
     <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ' + ic('chevron-down'), 'line')}${chip('Remote ' + ic('chevron-down'), 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
     <div class="h3">Tier 1 — apply this week${an(2)}</div>
-    <div class="list">${row(1, 'Brightline Media', 'Staff Product Manager, Playback Platform · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner program (L-021)', 'Two years short on the seniority line', false)}
+    <div class="list">${row(1, 'Brightline Media', 'Staff Product Manager, Playback Platform · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner launches (L-021)', 'Staff posting asks 10+ years; no approved Unit states a year count, so the seniority line is unverifiable', false)}
       ${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Playback SDK (L-010), CDN vendors (L-020)', 'Posting leads with ads measurement; no approved live-pipeline evidence yet', true)}</div>
     <div class="h3">Tier 2 — worth a look</div>
     <div class="list">${row(2, 'Meridian Labs', 'Product Manager, AI Workflows · Remote', true, '', 'Partner developer portal (EU-23)', 'No approved AI-workflow evidence yet (the LLM triage Unit is still pending); scope reads mid-level; comp not posted', false)}
-      ${row(2, 'Northgate Video', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}
+      ${row(2, 'Northgate Video', 'Director of Product, Media · NYC', false, '$240–300k', 'Playback ownership (L-010, L-011)', 'Not on the employer board — aggregator only; do not apply from the aggregator link. Director scope; no approved Unit shows org-level leadership', false)}${an(3)}
       ${row(2, 'Kestrel Audio', 'Senior PM, Developer Platform · Remote (US)', true, '$175–215k', 'Partner API roadmap (EU-22), SDK ownership (L-010)', 'Audio, not video; no developer-platform title on record', false)}</div>
     <div class="h3">Tier 3 — on record, not now</div>
-    <div class="list">${row(3, 'Coastline Health', 'Senior PM, Platform · Remote', true, '$160–190k', 'Platform generalist', 'Domain is health, not media; comp under floor', false, 'dimmed')}</div>
+    <div class="list">${row(3, 'Coastline Health', 'Senior PM, Platform · Remote', true, '$160–190k', 'Platform ownership (L-010)', 'Domain is health, not media; comp under floor', false, 'dimmed')}</div>
     <div class="sm dim" style="margin-top:8px">New Roles land in Saved with the JD captured from the verified posting.${an(4)}</div>`;
   return shell('scan', body);
 }
@@ -1121,7 +1121,7 @@ const GROUPS = [
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped status text under the header; no columns until the read lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'read failed', kind: 'state', cap: { desk: 'A rejected read renders the alert alone — no board, no retry control (reload is the recovery).', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'partial', label: 'partial data · contacts missing', kind: 'state', cap: { desk: 'The board is ready but one enrichment read (People) failed: the status line explains, Roles and Companies still render, and only the contact avatars are missing. A failed Roles or Companies read would show “Unknown company” / “Role unavailable” in italics the same way.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
-  { id: 'scan', title: 'Weekly scan inbox', sub: 'PRD v0.2 reverses the “not a job board” non-goal for one case: a scheduled scan of employer boards the user names. Every result is verified on the employer’s own posting, tiered against approved evidence, and states what lines up and where the candidate is exposed. The run opens with corrections to the record. No shipped surface; the whole screen is PRD v0.2.', screens: [
+  { id: 'scan', title: 'Weekly scan inbox', sub: 'PRD v0.2 reverses the “not a job board” non-goal for one case: a scheduled scan of employer boards the user names. A result becomes a Role only once it is verified on the employer’s own posting; a discovery seen only on an aggregator is kept, marked unverified, until that board confirms it. Each result is tiered against approved evidence and states what lines up and where the candidate is exposed. The run opens with corrections to the record. No shipped surface; the whole screen is PRD v0.2.', screens: [
     { id: 'scan', title: 'Scan inbox', fn: scan, legend: [
       '<b>Corrections to the record first</b>: roles that closed, comp that changed, facts that turned out wrong — each already applied to the Role and logged.',
       '<b>Tiers</b>: 1 apply this week, 2 worth a look, 3 on record. Each row shows the verification note, comp exactly as posted, what lines up (with the line and Unit ids that make it so) and where the candidate is exposed.',
