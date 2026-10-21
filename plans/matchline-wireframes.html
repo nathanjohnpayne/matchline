@@ -539,7 +539,7 @@ const UNITS = [
   { s: 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ut: 'ownership', sk: ['Device certification', 'Partner management'], tl: ['TestRail'], c: 88, src: 'resume · Beacon Streaming', st: 'ok' },
   { s: 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', ut: 'leadership', sk: ['Live streaming', 'Team leadership'], tl: ['HLS', 'WebRTC'], c: 81, src: 'long_form · 2024 retro', st: 'flag' },
   { s: 'Built an LLM-assisted support triage flow; the open backlog dropped 60% in two quarters.', ut: 'achievement', sk: ['AI workflows', 'Support ops'], tl: ['Claude API', 'Zendesk'], c: 74, src: 'manual', st: 'pend' },
-  { s: 'Negotiated multi-vendor CDN contracts across three providers.', ut: 'technical_decision', sk: ['Vendor management'], tl: [], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
+  { s: 'Presented the playback roadmap at two partner summits.', ut: 'leadership', sk: ['Partner management'], tl: [], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
 ];
 const UNIT_STATE = { ok: ['Approved', 'ink'], pend: ['Pending', ''], flag: ['Flagged', 'amb'] };
 // eighteen more approved Units, so the ready list carries the 20 the counter reports plus 1 flagged and 2 pending
@@ -592,13 +592,13 @@ const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `
 
 const CANON = [
   ['L-001', 'headline', 'Senior Product Manager — video platforms and developer tools', ['EU-14', 'EU-15']],
-  ['L-002', 'summary', 'Twelve years shipping playback, live and device-partner products at consumer scale.', ['EU-14', 'EU-15', 'EU-16']],
+  ['L-002', 'summary', 'Twelve years shipping playback, live and device-partner products at consumer scale.', ['EU-14', 'EU-15']],
   ['L-010', 'Beacon Streaming · 2019–2026', 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ['EU-14']],
   ['L-011', 'Beacon Streaming · 2019–2026', 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ['EU-15']],
   ['L-012', 'Beacon Streaming · 2019–2026', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline.', ['EU-16']],
   ['L-020', 'Cobalt Devices · 2014–2019', 'Negotiated multi-vendor CDN contracts across three providers.', ['EU-19']],
   ['L-021', 'Cobalt Devices · 2014–2019', 'Coordinated the set-top launch with five hardware partners.', ['EU-21']],
-  ['L-030', 'skills', 'Video playback · Live streaming · Device certification · Partner management · AI workflows', ['EU-14', 'EU-15', 'EU-16']],
+  ['L-030', 'skills', 'Video playback · Live streaming · Device certification · Partner management · AI workflows', ['EU-14', 'EU-15', 'EU-19']],
 ];
 const RULES = [
   ['never_claim', 'Never quote the CDN savings figure; it was retired after the FY24 restatement.', 'retired figure'],
@@ -856,7 +856,7 @@ function roleDetail(state) {
         <div class="lrow secrow"><span class="eyebrow">Beacon Streaming · 2019–2026</span></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</div></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
-        <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}</div></div></div>
+        <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}<span class="xs dim">its Unit (EU-16) is flagged, so the line cannot pass traceability</span></div></div></div>
         <div class="lrow" style="min-height:0">${btn(ic('plus') + ' Pick canonical lines', 'ghost')}</div></div>
       <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">${ic('check')}</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">${ic('check')}</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">${ic('check')}</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>Stale against canonical v14 (warning, not blocking)</div></div>
         <div class="card" style="margin-bottom:10px"><b>Export</b><div class="btnrow" style="margin-top:6px">${btn(ic('download') + ' PDF', 'pri')}${btn(ic('download') + ' DOCX')}${btn(ic('download') + ' Plain text')}</div><div class="sm dim" style="margin-top:6px">Export records the canonical version it was cut from.</div></div>
