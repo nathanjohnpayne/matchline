@@ -404,8 +404,11 @@
     .cols .col{flex:none;margin:0}
     .colh{font-size:11px;text-transform:none;letter-spacing:0}
     .colh .stage{background:var(--chip);border-radius:999px;padding:1px 9px;color:var(--mut);font-weight:500}
-    .lrow{flex-wrap:wrap}
-    .acts{margin-left:0;width:100%;justify-content:flex-start;padding-left:0;flex-wrap:wrap;gap:6px;margin-top:4px}
+    .lrow:not(.ship){flex-wrap:wrap}
+    .lrow:not(.ship) .acts{margin-left:0;width:100%;justify-content:flex-start;padding-left:0;flex-wrap:wrap;gap:6px;margin-top:4px}
+    .lrow.ship .grow{min-width:0}
+    .lrow.ship .acts .btn{padding:3px 5px}
+    .lrow.ship .acts .lucide{display:none}
     .acts .kbd,.bulkbar .kbd,.bulkbar .esc{display:none}
     .acts .btn{padding:4px 9px}
     .lrow .score{margin-left:auto}
@@ -535,7 +538,7 @@ function shell(active, body, opts = {}) {
 // Sample data — invented. Companies, people and résumé lines are placeholders.
 // ---------------------------------------------------------------------------
 const UNITS = [
-  { s: 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ut: 'project', sk: ['Video playback', 'Platform strategy'], tl: ['ExoPlayer', 'AVFoundation'], c: 92, src: 'resume · Beacon Streaming', st: 'ok' },
+  { s: 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ut: 'project', sk: ['Video playback', 'Platform strategy'], tl: ['AVFoundation', 'MSE'], c: 92, src: 'resume · Beacon Streaming', st: 'ok' },
   { s: 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ut: 'ownership', sk: ['Device certification', 'Partner management'], tl: ['TestRail'], c: 88, src: 'resume · Beacon Streaming', st: 'ok' },
   { s: 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', ut: 'leadership', sk: ['Live streaming', 'Team leadership'], tl: ['HLS', 'WebRTC'], c: 81, src: 'long_form · 2024 retro', st: 'flag' },
   { s: 'Built an LLM-assisted support triage flow; the open backlog dropped 60% in two quarters.', ut: 'achievement', sk: ['AI workflows', 'Support ops'], tl: ['Claude API', 'Zendesk'], c: 74, src: 'manual', st: 'pend' },
@@ -583,7 +586,7 @@ const MATCHES = {
     { u: GROUND[8], vals: [0.88, 0.85, 0.9, 0.9, 0.8, 0.8, 1], st: 'approved', na: [], why: 'A developer portal with API docs and sample apps is developer-facing delivery; the clause asks for shipped developer SDKs.', ev: 'a partner developer portal with API docs and sample apps' }],
 };
 // the nine approved Units that ground the sample Application (UnitsPane renders every one)
-const unitRow = (u, i, o = {}) => `<div class="lrow ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
+const unitRow = (u, i, o = {}) => `<div class="lrow ship ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
   <div class="grow"><div class="ellip ${u.st === 'pend' ? 'mut' : ''}" title="${u.s}">${u.s}${o.an || ''}</div>
     <div class="meta"><span class="xs dim">${u.ut} · ${u.src}</span>${chip(UNIT_STATE[u.st][0], UNIT_STATE[u.st][1])}<span class="xs dim num">${u.c}%</span></div></div>
   ${o.noActs ? '' : `<div class="acts">${btn(ic('check') + ' Approve', u.st === 'ok' ? 'off' : '')}${btn(ic('flag') + ' Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn(ic('x') + ' Reject', 'ghost')}${btn(ic('pencil') + ' Edit', 'ghost')}</div>`}</div>`;
@@ -669,10 +672,10 @@ function unitReview(state, extra = {}) {
     return shell('evidence', head + fpanel([], [], []) + `<div class="empty" style="padding:36px 20px;margin-top:10px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
       <div class="btnrow" style="justify-content:center">${btn(ic('plus') + ' Add Unit manually', 'pri')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`, { width: 'w5' });
   }
-  if (state === 'nomatch') return shell('evidence', head + fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops'], 'Live streaming', 'Approved') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
+  if (state === 'nomatch') return shell('evidence', head + fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['AVFoundation', 'MSE', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops'], 'Live streaming', 'Approved') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
   if (state === 'loading') return shell('evidence', head + `<div class="info" role="status">Loading Units…</div>`, { width: 'w5' });
   if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: permission-denied</div>`, { width: 'w5' });
-  const filters = fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['ExoPlayer', 'AVFoundation', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops']);
+  const filters = fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['AVFoundation', 'MSE', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops']);
   const bulk = `<div class="card tight bulkbar nb"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const f = (l, v, cls = '') => `<div class="field"><span class="lbl">${l}</span><div class="in ${cls}">${v}</div></div>`;
   const editing = unitRow(UNITS[2], 2, { bulk: true, on: true, noActs: true, cls: 'sel', an: an(4) }).replace('</div></div>`', '') + `<div class="lrow sel" style="display:block;border-top:0;padding-top:0" role="form" aria-label="Edit Unit">
@@ -686,8 +689,8 @@ function unitReview(state, extra = {}) {
   const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}${MORE_APPROVED.map((u, i) => unitRow(u, 10 + i, { bulk: true })).join('')}</div>`;
   const detail = `<div class="detail-pane card nb"><div class="rowhead"><b>Unit detail</b><span class="sp"></span>${btn(ic('x'), 'ghost')}</div>
     <div class="h3">Normalized summary</div><div>${UNITS[0].s}</div>
-    <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (iOS/tvOS/web) — cut app startup time by 38% across 12M MAU.</div>
-    <div class="h3">Signals</div><div class="meta">${chip('Video playback')}${chip('Platform strategy')}${chip('ExoPlayer', 'line')}${chip('AVFoundation', 'line')}${chip('startup time −38%', 'grn')}</div>
+    <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (AVFoundation on iOS/tvOS, MSE on web) — cut app startup time by 38% across 12M MAU.</div>
+    <div class="h3">Signals</div><div class="meta">${chip('Video playback')}${chip('Platform strategy')}${UNITS[0].tl.map(t => chip(t, 'line')).join('')}${chip('startup time −38%', 'grn')}</div>
     <div class="h3">Provenance</div><div class="sm">resume · Beacon Streaming · pasted Oct 2 · confidence <span class="num">92%</span></div>
     <div class="h3">Canonical lines evidenced</div><div class="meta">${CANON.filter(l => l[3].includes('EU-14')).map(l => chip(l[0], 'acc')).join('')}</div>${an(6)}
     <div class="hr"></div><div class="btnrow">${btn('Approve', 'pri')}${btn('Flag', 'ghost')}${btn('Reject', 'ghost')}</div></div>`;
@@ -791,7 +794,7 @@ function roleShipped(state) {
   if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Failed to load Role: permission-denied</div>`);
   if (state === 'applications') {
     return shell('pipeline', head + `<div class="sm dim" style="margin-bottom:8px">Generate a resume from your approved matches under this Role.${an(5)}</div><div class="btnrow" style="margin-bottom:14px">${btn('Generate resume', 'pri')}</div>
-      <div class="list"><div class="lrow"><div class="grow"><div class="rowhead">${chip('interviewing', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-14T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
+      <div class="list"><div class="lrow ship"><div class="grow"><div class="rowhead">${chip('interviewing', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-14T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
   }
   if (state === 'nojd') {
     return shell('pipeline', head + `<div class="field"><span class="lbl">JD source <span class="dim">(paste JD text first)</span></span><div class="in ta ph" style="min-height:220px">Paste the full JD as plain text. Headers and bullet points are fine.</div></div>
@@ -885,8 +888,8 @@ function roleDetail(state) {
     <div class="list">
       <div class="lrow"><span class="rail">${ic('arrow-down-left')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>Priya N.</b><span class="dim">Oct 15 · received · “Next steps”</span></div><div class="verb" style="margin-top:4px">Great chatting yesterday! Dan would like to meet next week — I’ll send times. Comp is as posted ($190–240k) plus equity.</div></div></div>
       <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('PN')}<b>to Priya N.</b><span class="dim">Oct 15 · sent</span>${an(4)}</div><div class="verb" style="margin-top:4px">Thanks Priya — Thursday or Friday afternoon both work. Looking forward to meeting Dan.</div></div></div>
-      <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('MT')}<b>to Morgan T.</b><span class="dim">Oct 8 · sent · referral note</span></div><div class="sm dim">Collapsed · 6 lines ${ic('chevron-down')}</div></div></div>
       <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm"><b>Application submitted</b><span class="dim">Oct 9 · careers.northwind.example</span></div><div class="sm dim">Package v1 · résumé view (canonical v12) · 3 answers · attached verbatim ${ic('chevron-down')}</div></div></div></div></div>
+      <div class="lrow"><span class="rail">${ic('arrow-up-right')}</span><div style="flex:1;min-width:0"><div class="rowhead sm">${av('MT')}<b>to Morgan T.</b><span class="dim">Oct 8 · sent · referral note</span></div><div class="sm dim">Collapsed · 6 lines ${ic('chevron-down')}</div></div></div>
     <div><div class="card"><b>On the record</b>${an(5)}<div class="sm dim" style="margin:4px 0 8px">What has already been said to this company. Prep briefs and drafts check against it so later messages stay consistent.</div>
       <div class="task">Comp: accepted band as posted (Oct 15)</div><div class="task">Availability: 2 weeks’ notice (Oct 14 screen)</div><div class="task">Start: not discussed</div></div></div></div>`;
   return shell('pipeline', body);
@@ -1039,7 +1042,7 @@ const GROUPS = [
       '<b>Bulk selection (proposed)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with a / f / r shortcuts. Reject asks once because rejected Units leave matching.',
       '<b>Right-pane detail (proposed, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
-        { id: 'ready', label: '23 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'All 23 non-rejected Units (20 approved, 1 flagged, 2 pending) plus the proposed detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Rows wrap: the action cluster moves under the one-line summary. The bulk bar sticks to the top of the scrolling list.' } },
+        { id: 'ready', label: '23 Units · editing one · 3 selected', kind: 'shipped', cap: { desk: 'All 23 non-rejected Units (20 approved, 1 flagged, 2 pending) plus the proposed detail pane for the focused row. The editing row expands in place under the list’s own border.', tab: 'Detail pane drops; the row’s Edit button opens the same inline form. The filter panel wraps.', ph: 'Shipped rows do not wrap (UnitRow.tsx has no breakpoint): the summary truncates and the action cluster keeps its width, its buttons text-only as shipped. The bulk bar sticks to the top of the scrolling list.' } },
         { id: 'nomatch', label: 'a filter matches nothing', kind: 'state', cap: { desk: 'Skill “Live streaming” with Status “Approved”: the only live-streaming Unit is flagged, so the panel shows “Clear filters” and the selected chip and pill, and below it the shipped “No Units match these filters.” region with its own Clear filters action, and no list.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'empty', label: 'no Units yet', kind: 'state', cap: { desk: 'A genuinely empty snapshot is still a ready state: “+ Add Unit”, the “0 of 20 approved” counter and the Filters panel (“No skills in the corpus yet.”) render above EmptyState’s copy and its one action; artifact upload is proposed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped bordered status region, “Loading Units…”; no counter, no Add Unit, no empty copy until the snapshot lands (#86’s loading / empty conflation).', tab: 'Unchanged.', ph: 'Unchanged.' } },
@@ -1088,7 +1091,7 @@ const GROUPS = [
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
         { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } },
-        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The row wraps its Open button under the metadata.' } },
+        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The shipped row stays one line: the id and metadata truncate beside Open (ApplicationsTab.tsx has no breakpoint).' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped “Loading Role…” text alone; no header, no tabs until the Role arrives.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Failed to load Role: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'editor', title: 'Application editor — output and evidence', sub: 'Where generated output becomes something you send. Shipped (<code>src/routes/ApplicationEditor/</code>): two panes, <code>ClaimAnnotation</code> underlines with a popover, inline edit with autosave and undo, add / remove / reorder bullets, the export gate on the server attestation (#502), re-run validation. Drawn and marked not built: claim-rule hits as a third flag kind.', screens: [
