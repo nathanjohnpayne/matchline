@@ -565,7 +565,7 @@ const MORE_APPROVED = [
 ].map(([s, ut, src, c]) => ({ s, ut, src, c, sk: [], tl: [], st: 'ok' }));
 const GROUND = [UNITS[0], UNITS[1], MORE_APPROVED[1], MORE_APPROVED[15], MORE_APPROVED[3], MORE_APPROVED[4], MORE_APPROVED[12], MORE_APPROVED[16], MORE_APPROVED[17]];
 const SRC_UNITS = GROUND.map(u => u.s);
-// every match on the sample Role: Unit, the seven axis values, approval state, unevaluated axes, rationale, surface evidence
+// every match on the sample Role (matching reads approved Units only): Unit, the seven axis values, approval state, unevaluated axes, rationale, surface evidence
 const MATCHES = {
   1: [
     { u: GROUND[0], vals: [1, 1, 1, 1, 1, 0.95, 0.88], st: 'approved', na: [3], why: 'The Unit describes leading the playback SDK across three platforms, which answers the playback half of the clause; the device-certification half is not in this Unit.', ev: 'Led the move of the playback SDK to one player across iOS, tvOS and web' },
@@ -573,14 +573,12 @@ const MATCHES = {
     { u: GROUND[2], vals: [0.9, 0.92, 1, 0.8, 0.9, 0.85, 0.9], st: 'approved', na: [], why: 'A certification scorecard adopted by partners is roadmap-level ownership of the certification half of the clause.', ev: 'the device-partner certification scorecard adopted by 40+ OEMs' },
     { u: GROUND[3], vals: [0.86, 0.9, 1, 0.8, 0.9, 0.8, 0.9], st: 'approved', na: [], why: 'An RFC adopted as the partner standard shows the Unit set certification direction, not just ran it.', ev: 'the device-certification RFC adopted as the partner standard' }],
   2: [
-    { u: GROUND[4], vals: [0.8, 0.7, 1, 0.7, 0.9, 0.8, 0.9], st: 'approved', na: [], why: 'Shipping across three platforms in one quarter is senior product work inside video; the Unit does not state a year count, so only the seniority and domain signals line up.', ev: 'Launched the tvOS and Roku apps within one quarter of the web player rewrite' },
-    { u: UNITS[2], vals: [0.62, 0.55, 0.7, 0.5, 0.8, 0.6, 0.9], st: 'none', na: [], why: 'The Unit shows product leadership in video but states no years of experience, so only the domain and seniority signals line up with the clause.', ev: 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline' }],
+    { u: GROUND[4], vals: [0.8, 0.7, 1, 0.7, 0.9, 0.8, 0.9], st: 'approved', na: [], why: 'Shipping across three platforms in one quarter is senior product work inside video; the Unit does not state a year count, so only the seniority and domain signals line up.', ev: 'Launched the tvOS and Roku apps within one quarter of the web player rewrite' }],
   3: [
     { u: GROUND[5], vals: [0.92, 0.88, 0.95, 0.85, 0.9, 0.9, 1], st: 'approved', na: [], why: 'A partner API roadmap used by six OEM integrations is direct evidence of working with device OEMs.', ev: 'the partner API roadmap used by six OEM integrations' },
     { u: GROUND[6], vals: [0.9, 0.85, 0.9, 0.8, 0.9, 0.85, 0.8], st: 'approved', na: [], why: 'Coordinating a launch with five hardware partners is the OEM partnership the clause names, at a smaller count.', ev: 'the set-top launch with five hardware partners' }],
   4: [
-    { u: GROUND[7], vals: [0.84, 0.8, 0.95, 0.8, 0.8, 0.8, 1], st: 'approved', na: [], why: 'Startup buffering on living-room devices is a latency problem in playback; the clause asks for familiarity with low-latency delivery.', ev: 'Reduced startup buffering on living-room devices by 22%' },
-    { u: UNITS[2], vals: [0.86, 0.8, 0.9, 0.85, 0.7, 0.8, 1], st: 'none', na: [], why: 'Low-latency live delivery is the Unit’s subject; the clause asks for familiarity with it.', ev: 'a low-latency live pipeline (under 3 s glass to glass)' }],
+    { u: GROUND[7], vals: [0.84, 0.8, 0.95, 0.8, 0.8, 0.8, 1], st: 'approved', na: [], why: 'Startup buffering on living-room devices is a latency problem in playback; the clause asks for familiarity with low-latency delivery.', ev: 'Reduced startup buffering on living-room devices by 22%' }],
   5: [
     { u: GROUND[8], vals: [0.88, 0.85, 0.9, 0.9, 0.8, 0.8, 1], st: 'approved', na: [], why: 'A developer portal with API docs and sample apps is developer-facing delivery; the clause asks for shipped developer SDKs.', ev: 'a partner developer portal with API docs and sample apps' }],
 };
@@ -705,7 +703,7 @@ function canonical(state) {
     <div class="sm dim" style="margin:4px 0 8px">Every package is checked against these.${an(4)}</div>
     ${RULES.map(r => `<div class="step" style="align-items:flex-start"><span class="rail" style="width:auto">§</span><span><span class="sm">${r[1]}</span><br>${chip(r[0].replace(/_/g, ' '))}</span></div>`).join('')}</div>
     <div class="card" style="margin-top:12px"><div class="rowhead"><b>Tailored views</b>${chip('3', 'line')}</div><div class="sm dim" style="margin:4px 0 8px">Each is a selection and order of canonical lines, pinned to a version.${an(5)}</div>
-    <div class="task over"><span>Northwind Media · Senior PM</span><span class="due">v12 · 2 lines behind</span></div>
+    <div class="task over"><span>Northwind Media · Senior PM</span><span class="due">v12 · 1 line behind</span></div>
     <div class="task"><span>Lumen Labs · Staff PM</span><span class="due">v14 · current</span></div>
     <div class="task"><span>Harbor Analytics · Group PM</span><span class="due">v13 · 1 exception</span></div>
     <div class="btnrow" style="margin-top:8px">${btn(ic('refresh-cw') + ' Rebase stale views', 'nb')}</div></div>`;
@@ -762,7 +760,7 @@ function roleHeader(opts = {}) {
       <div class="meta">${chip(noJd ? 'Saved' : 'Interviewing', 'ink')}<span class="sm dim num">${noJd ? '2' : '6'} days in stage</span>${noJd ? '' : chip('$190–240k as posted', 'line')}${chip(noJd ? 'referral · Morgan T.' : 'applied Oct 9', 'line')}</div></div>
     <div class="btnrow nb">${btn('Update stage ' + ic('chevron-down'))}${btn(noJd ? 'Paste JD' : 'Generate ' + ic('chevron-down'), 'pri')}${btn('Export ' + ic('chevron-down'), noJd ? 'off' : '')}</div></div>
     <div class="where nb"><div class="card tight"><div class="eyebrow">Where things stand</div>
-      <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 23. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
+      <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 22. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
       <div class="card tight"><div class="eyebrow">Next action</div>
       <div class="rowhead"><span class="cb"></span><span>${noJd ? 'Ask Morgan for the posting link' : 'Finish the prep brief for Dan K.'}</span><span class="chip red num">${noJd ? 'due yesterday' : 'due today'}</span>${an(2)}</div></div></div>`;
 }
@@ -848,7 +846,7 @@ function roleDetail(state) {
   }
   if (state === 'package') {
     const body = roleHeader() + roleTabs('Package') + `<div class="seg" style="margin-bottom:10px"><span class="on">Résumé view</span><span>Cover letter</span><span>Answers · 3</span><span>Referral note</span></div>${an(3)}
-      <div class="warn">Built from canonical <b>v12</b>; canonical is now <b>v14</b> — 2 lines changed (L-010, L-012). ${btn(ic('refresh-cw') + ' Rebase to v14')} ${btn('Keep v12', 'ghost')}${an(4)}</div>
+      <div class="warn">Built from canonical <b>v12</b>; canonical is now <b>v14</b> — 1 selected line changed (L-010). ${btn(ic('refresh-cw') + ' Rebase to v14')} ${btn('Keep v12', 'ghost')}${an(4)}</div>
       <div class="two"><div class="list section-lines">
         <div class="lrow secrow"><span class="eyebrow">headline · summary</span></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-001</span><div style="flex:1">${CANON[0][2]}</div></div>
@@ -868,7 +866,7 @@ function roleDetail(state) {
       <div class="rowhead" style="margin-bottom:6px"><b>Rounds</b>${chip('3', 'line')}<span class="sp"></span>${btn(ic('plus') + ' Add round')}</div>
       <div class="list rounds">
         <div class="lrow"><span class="rail ok">${ic('circle-check')}</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Recruiter screen</b>${av('PN')}<span class="sm dim">Priya N. · Oct 14 · 30 min</span>${chip('warm', 'grn')}</div><div class="meta">${chip(ic('check') + ' prep brief', 'line')}${chip(ic('check') + ' debrief · from transcript', 'line')}${chip(ic('check') + ' thank-you sent', 'line')}</div><div class="sm dim clamp2" style="margin-top:4px">Debrief: comp band confirmed as posted; HM cares most about device partners; ads question did not come up.</div></div><div class="acts">${btn('Open', 'ghost')}</div></div>
-        <div class="lrow focus"><span class="rail" style="color:var(--acc)">${ic('calendar')}</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Hiring manager</b>${av('DK')}<span class="sm dim">Dan K. · Thu Oct 23 · 45 min</span>${chip('next', 'acc')}</div><div class="meta">${chip('prep brief · draft', 'amb')}${chip('runbook', 'line')}${chip('flashcards · 12', 'line')}</div><div class="sm dim" style="margin-top:4px">Prep brief: 2 of 5 sections drafted · runbook and flashcards ready.${an(3)}</div></div><div class="acts">${btn('Finish prep', 'pri')}</div></div>
+        <div class="lrow focus"><span class="rail" style="color:var(--acc)">${ic('calendar')}</span><div style="flex:1;min-width:0"><div class="rowhead"><b>Hiring manager</b>${av('DK')}<span class="sm dim">Dan K. · Thu Oct 22 · 45 min</span>${chip('next', 'acc')}</div><div class="meta">${chip('prep brief · draft', 'amb')}${chip('runbook', 'line')}${chip('flashcards · 12', 'line')}</div><div class="sm dim" style="margin-top:4px">Prep brief: 2 of 5 sections drafted · runbook and flashcards ready.${an(3)}</div></div><div class="acts">${btn('Finish prep', 'pri')}</div></div>
         <div class="lrow dimmed"><span class="rail">—</span><div style="flex:1"><div class="rowhead"><b>Panel</b><span class="sm dim">not scheduled</span></div><div class="meta">${chip('prep opens when scheduled', 'line')}</div></div></div></div>
       <div class="h3">Scorecard${an(4)}</div>
       <table class="tbl"><tr><th>Round</th><th>Signal</th><th class="opt">What they probed</th><th class="opt">What to carry forward</th></tr>
@@ -973,7 +971,7 @@ function scan(state) {
       <div class="warn">Harbor Analytics’ board returned 403 twice. Last week’s roles stay open with a verification note.${an(6)}</div>
       <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Playback SDK (L-010), CDN vendors (L-020)', 'Posting leads with ads measurement; no approved live-pipeline evidence yet', true, 'dimmed')}</div>`);
   }
-  const body = `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Week of Oct 20 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 27</div></div><div class="btnrow">${btn(ic('link') + ' Boards · 14')}${btn(ic('radar') + ' Run now', 'pri')}</div></div>
+  const body = `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Week of Oct 19 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 26</div></div><div class="btnrow">${btn(ic('link') + ' Boards · 14')}${btn(ic('radar') + ' Run now', 'pri')}</div></div>
     <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Role in Applied is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
     <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ' + ic('chevron-down'), 'line')}${chip('Remote ' + ic('chevron-down'), 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
     <div class="h3">Tier 1 — apply this week${an(2)}</div>
@@ -1130,7 +1128,7 @@ const GROUPS = [
       '<b>First run</b> asks for boards, not for preferences; the user names the careers pages they would check by hand.',
       '<b>A board that fails</b> keeps last week’s roles as “still open” with a note rather than closing them — never infer a closure from an error.'],
       states: [
-        { id: 'results', label: 'week of Oct 20 · 6 new', kind: 'prd', cap: { desk: 'Rows are a four-column grid: role, lines up, exposed, action.', tab: 'Three columns; the action row spans the bottom of each result.', ph: 'Each result is a card: role, then lines up, then exposed, then the action.' } },
+        { id: 'results', label: 'week of Oct 19 · 6 new', kind: 'prd', cap: { desk: 'Rows are a four-column grid: role, lines up, exposed, action.', tab: 'Three columns; the action row spans the bottom of each result.', ph: 'Each result is a card: role, then lines up, then exposed, then the action.' } },
         { id: 'running', label: 'run in progress · one board failing', kind: 'state', cap: { desk: 'Per-board progress with the stage list; last week’s results stay readable below, dimmed.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'first', label: 'first run · no boards', kind: 'state', cap: { desk: 'Empty state asks for the first board URL.', tab: 'Unchanged.', ph: 'Input goes full width.' } }] }] },
   { id: 'system', title: 'System states — splash, update prompt, not found, command palette', sub: 'Surfaces every screen inherits. Shipped: the auth splash, the update-reload prompt with its busy-lease suppression and unsaved-work confirmation (<code>specs/matchline.md</code> § Update prompt, #456), and the anti-enumeration not-found copy. Proposed: the command palette (ui-guidance rule 5).', screens: [
