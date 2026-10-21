@@ -268,7 +268,7 @@
   .empty .h2{color:var(--ink)}
   .cols{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
   .boardwrap{display:flex;gap:16px;align-items:flex-start}
-  .col{padding:4px;border:2px solid transparent;border-radius:8px;margin:-4px}
+  .col{padding:2px;border:2px solid transparent;border-radius:8px}
   .col.over{border-color:#18181b}
   .colh{display:flex;gap:6px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:0 0 8px;align-items:center}
   .colh .num{color:var(--mut)}
@@ -364,6 +364,7 @@
     .boardwrap .side{order:-1;width:100%}
     .boardwrap > div{width:100%}
     .cols{gap:8px}
+    .colh{flex-wrap:wrap;row-gap:2px}
     .detail-pane{display:none}
     .scan-row{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr);}
     .scan-row .act{grid-column:1 / -1}
@@ -372,6 +373,15 @@
     .filters-hidden{display:none}
     .rulegrid{grid-template-columns:1fr 1fr}
     .auth .card{width:380px}
+  }
+  /* ---------- below the shipped md breakpoint (Tailwind md = 768px): the editor's two panes and the
+     Pipeline's seven columns stack, and the column header becomes the shipped pill ---------- */
+  @container frame (max-width: 767px){
+    .ed{grid-template-columns:minmax(0,1fr)}
+    .cols{display:flex;flex-direction:column;gap:14px;overflow:visible;align-items:stretch}
+    .cols .col{flex:none}
+    .colh{font-size:11px;text-transform:none;letter-spacing:0}
+    .colh .stage{background:var(--chip);border-radius:999px;padding:1px 9px;color:var(--mut);font-weight:500}
   }
   /* ---------- phone: ≤ 600px container ---------- */
   @container frame (max-width: 600px){
@@ -393,17 +403,13 @@
     .three .srcs{flex-direction:row;overflow-x:auto;flex-wrap:nowrap}
     .three .src{flex:0 0 150px}
     .two{grid-template-columns:1fr}
-    .split,.ed{grid-template-columns:1fr}
+    .split{grid-template-columns:1fr}
     .phseg{display:inline-flex;margin:0 0 10px}
     .ph-hide{display:none !important}
     .ph-only{display:block !important}
     .stbar.ph-only{display:flex !important;margin:12px -14px -20px;padding:10px 14px}
     .side{width:auto}
     .sidewrap{display:block}
-    .cols{display:flex;flex-direction:column;gap:14px;overflow:visible;align-items:stretch}
-    .cols .col{flex:none;margin:0}
-    .colh{font-size:11px;text-transform:none;letter-spacing:0}
-    .colh .stage{background:var(--chip);border-radius:999px;padding:1px 9px;color:var(--mut);font-weight:500}
     .lrow:not(.ship){flex-wrap:wrap}
     .lrow:not(.ship) .acts{margin-left:0;width:100%;justify-content:flex-start;padding-left:0;flex-wrap:wrap;gap:6px;margin-top:4px}
     .lrow.ship .grow{min-width:0}
@@ -436,7 +442,7 @@
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
 <p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844) canvas — drawn as a macOS window, an iPad and an iPhone respectively, with the device chrome outside the canvas so the container width stays exact; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
-<p class="sub">Sources: <code>specs/matchline.md</code> remains the repository's authoritative product spec, and every frame chipped <b>shipped</b> is checked against it and the routes. Frames chipped <b>PRD v0.2</b> draw the PRD's draft <b>"job-search dossier" revision</b> (October 2026) as <i>proposals</i>: that draft lives in the owner's private docs repository and is not in this tree — the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1 — so nothing here treats it as a winning source; a PRD v0.2 frame becomes a specification claim only once the revision is mirrored and the spec updated. What is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search.</p>
+<p class="sub">Sources: <code>specs/matchline.md</code> remains the repository's authoritative product spec, and every frame chipped <b>shipped</b> is checked against it and the routes. Frames chipped <b>PRD v0.2</b> draw the PRD's draft <b>"job-search dossier" revision</b> (October 2026) as <i>proposals</i>: that draft lives in the owner's private docs repository and is not in this tree — the mirror at <code>docs/projects/matchline/prds/matchline.md</code> is still v0.1 — so nothing here treats it as a winning source; a PRD v0.2 frame becomes a specification claim only once the revision is mirrored and the spec updated. What is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search. The snapshot is <b>Tue Oct 20, 2026</b> (America/Los_Angeles): days in stage, “due today / yesterday”, weekday labels and the scan’s week and next run all count from that date.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
 <br>· <b>Chips above a frame</b> name the width and whether the frame is <span class="fchip shipped" style="vertical-align:middle">shipped</span> (matches the built route), <span class="fchip prd" style="vertical-align:middle">PRD v0.2</span> (proposed, not yet built) or a <span class="fchip state" style="vertical-align:middle">state</span> (empty / loading / error / validation variant of a screen).
@@ -538,11 +544,11 @@ function shell(active, body, opts = {}) {
 // Sample data — invented. Companies, people and résumé lines are placeholders.
 // ---------------------------------------------------------------------------
 const UNITS = [
-  { s: 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ut: 'project', sk: ['Video playback', 'Platform strategy'], tl: ['AVFoundation', 'MSE'], c: 92, src: 'resume · Beacon Streaming', st: 'ok' },
-  { s: 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ut: 'ownership', sk: ['Device certification', 'Partner management'], tl: ['TestRail'], c: 88, src: 'resume · Beacon Streaming', st: 'ok' },
-  { s: 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', ut: 'leadership', sk: ['Live streaming', 'Team leadership'], tl: ['HLS', 'WebRTC'], c: 81, src: 'long_form · 2024 retro', st: 'flag' },
-  { s: 'Built an LLM-assisted support triage flow; the open backlog dropped 60% in two quarters.', ut: 'achievement', sk: ['AI workflows', 'Support ops'], tl: ['Claude API', 'Zendesk'], c: 74, src: 'manual', st: 'pend' },
-  { s: 'Presented the playback roadmap at two partner summits.', ut: 'leadership', sk: ['Partner management'], tl: [], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
+  { s: 'Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.', ut: 'project', sk: ['Video playback', 'Platform strategy'], tl: ['AVFoundation', 'MSE'], dm: ['Streaming video'], c: 92, src: 'resume · Beacon Streaming', st: 'ok' },
+  { s: 'Owned device certification for 40+ partner platforms, from test plan to partner sign-off.', ut: 'ownership', sk: ['Device certification', 'Partner management'], tl: ['TestRail'], dm: ['Streaming video', 'Consumer devices'], c: 88, src: 'resume · Beacon Streaming', st: 'ok' },
+  { s: 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', ut: 'leadership', sk: ['Live streaming', 'Team leadership'], tl: ['HLS', 'WebRTC'], dm: ['Streaming video'], c: 81, src: 'long_form · 2024 retro', st: 'flag' },
+  { s: 'Built an LLM-assisted support triage flow; the open backlog dropped 60% in two quarters.', ut: 'achievement', sk: ['AI workflows', 'Support ops'], tl: ['Claude API', 'Zendesk'], dm: ['Support ops'], c: 74, src: 'manual', st: 'pend' },
+  { s: 'Presented the playback roadmap at two partner summits.', ut: 'leadership', sk: ['Partner management'], tl: [], dm: ['Streaming video'], c: 66, src: 'resume · Cobalt Devices', st: 'pend' },
 ];
 const UNIT_STATE = { ok: ['Approved', 'ink'], pend: ['Pending', ''], flag: ['Flagged', 'amb'] };
 // eighteen more approved Units, so the ready list carries the 20 the counter reports plus 1 flagged and 2 pending
@@ -565,7 +571,10 @@ const MORE_APPROVED = [
   ['Wrote the device-certification RFC adopted as the partner standard.', 'technical_decision', 'resume · Beacon Streaming', 88],
   ['Reduced startup buffering on living-room devices by 22%.', 'achievement', 'resume · Beacon Streaming', 85],
   ['Launched a partner developer portal with API docs and sample apps.', 'project', 'manual', 79],
-].map(([s, ut, src, c]) => ({ s, ut, src, c, sk: [], tl: [], st: 'ok' }));
+].map(([s, ut, src, c]) => ({ s, ut, src, c, sk: [], tl: [], dm: [], st: 'ok' }));
+// the non-rejected corpus and its distinct facet values (UnitReviewView.tsx seeds the filter chips the same way)
+const CORPUS = [...UNITS, ...MORE_APPROVED];
+const facet = k => [...new Set(CORPUS.flatMap(u => u[k]))];
 const GROUND = [UNITS[0], UNITS[1], MORE_APPROVED[1], MORE_APPROVED[15], MORE_APPROVED[3], MORE_APPROVED[4], MORE_APPROVED[12], MORE_APPROVED[16], MORE_APPROVED[17]];
 const SRC_UNITS = GROUND.map(u => u.s);
 // every match on the sample Role (matching reads approved Units only): Unit, the seven axis values, approval state, unevaluated axes, rationale, surface evidence
@@ -601,6 +610,8 @@ const CANON = [
   ['L-021', 'Cobalt Devices · 2014–2019', 'Coordinated the set-top launch with five hardware partners.', ['EU-21']],
   ['L-030', 'skills', 'Video playback · Platform strategy · Device certification · Partner management · CDN vendor contracts', ['EU-14', 'EU-15', 'EU-19']],
 ];
+// the v12 wording of the one selected line canonical changed since (v13 added the startup-time figure)
+const CANON_V12 = { 'L-010': 'Led the move of the playback SDK to one player across iOS, tvOS and web.' };
 const RULES = [
   ['never_claim', 'Never quote the CDN savings figure; it was retired after the FY24 restatement.', 'retired figure'],
   ['attribute_only_to', 'The unified-player launch stays attributed to Beacon Streaming only.', 'Beacon Streaming'],
@@ -672,17 +683,17 @@ function unitReview(state, extra = {}) {
     return shell('evidence', head + fpanel([], [], []) + `<div class="empty" style="padding:36px 20px;margin-top:10px"><div class="h2">No Experience Units yet.</div><div style="margin:4px 0 14px">Paste a resume in Onboarding to extract Units automatically, or add one by hand.</div>
       <div class="btnrow" style="justify-content:center">${btn(ic('plus') + ' Add Unit manually', 'pri')}${btn(ic('upload') + ' Upload an artifact', 'nb')}</div></div>`, { width: 'w5' });
   }
-  if (state === 'nomatch') return shell('evidence', head + fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['AVFoundation', 'MSE', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops'], 'Live streaming', 'Approved') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
+  if (state === 'nomatch') return shell('evidence', head + fpanel(facet('sk'), facet('tl'), facet('dm'), 'Live streaming', 'Approved') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
   if (state === 'loading') return shell('evidence', head + `<div class="info" role="status">Loading Units…</div>`, { width: 'w5' });
   if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: permission-denied</div>`, { width: 'w5' });
-  const filters = fpanel(['Video playback', 'Device certification', 'Live streaming', 'AI workflows', 'Platform strategy'], ['AVFoundation', 'MSE', 'TestRail', 'HLS', 'WebRTC'], ['Streaming video', 'Developer tools', 'Support ops']);
+  const filters = fpanel(facet('sk'), facet('tl'), facet('dm'));
   const bulk = `<div class="card tight bulkbar nb"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const f = (l, v, cls = '') => `<div class="field"><span class="lbl">${l}</span><div class="in ${cls}">${v}</div></div>`;
   const editing = unitRow(UNITS[2], 2, { bulk: true, on: true, noActs: true, cls: 'sel', an: an(4) }).replace('</div></div>`', '') + `<div class="lrow sel" style="display:block;border-top:0;padding-top:0" role="form" aria-label="Edit Unit">
     <div class="pair" style="gap:0 8px"><div style="grid-column:1/-1">${f('Raw text', 'Ran the 12-person live-streaming squad; we got glass-to-glass under 3 seconds.')}</div>
     <div style="grid-column:1/-1">${f('Normalized summary', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', 'focus')}</div>
     ${f('Source type', 'long_form ' + ic('chevron-down'))}${f('Unit type', 'leadership ' + ic('chevron-down'))}${f('Evidence type', 'inferred ' + ic('chevron-down'))}${f('Source ref', '2024 retro')}
-    ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', 'Streaming video')}${f('Seniority signals', 'ran a 12-person team')}${f('Scope signals', 'org-wide live pipeline')}${f('Business outcomes', 'sub-3 s glass to glass')}${f('Start date', '2023-03')}${f('End date', '2024-02')}${f('Confidence (0-1)', '0.81')}</div>
+    ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', UNITS[2].dm.join('<br>'))}${f('Seniority signals', 'ran a 12-person team')}${f('Scope signals', 'org-wide live pipeline')}${f('Business outcomes', 'sub-3 s glass to glass')}${f('Start date', '2023-03')}${f('End date', '2024-02')}${f('Confidence (0-1)', '0.81')}</div>
     <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">high ${ic('chevron-down')}</span>${btn('Remove', 'ghost')}</div>
     <div class="btnrow" style="margin-top:4px">${btn(ic('plus') + ' Add metric', 'ghost')}</div>
     <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}</div></div>`;
@@ -856,7 +867,7 @@ function roleDetail(state) {
         <div class="lrow exc"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-002′</span><div style="flex:1">Platform product manager for playback and device partners: one player across iOS, tvOS and web, and certification for 40+ partner platforms.<div class="meta">${chip('exception · rewritten for this role', 'amb')}<span class="xs dim">reason: lead with the posting’s platform scope</span>${an(5)}</div></div></div>
         <div class="lrow secrow"><span class="eyebrow">Beacon Streaming · 2019–2026</span></div>
         <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-011</span><div style="flex:1">${CANON[3][2]}</div></div>
-        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">${CANON[2][2]}<div class="meta">${chip('canonical changed in v13', 'line')}</div></div></div>
+        <div class="lrow"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-010</span><div style="flex:1">${CANON_V12['L-010']}<div class="meta">${chip('canonical changed in v13', 'line')}<span class="xs dim">the view still carries the v12 wording; rebase to pick up “startup time fell 38%”</span></div></div></div>
         <div class="lrow dimmed"><span class="drag">${ic('grip-vertical')}</span><span class="lid">L-012</span><div style="flex:1"><s>Ran a 12-person cross-functional team…</s><div class="meta">${chip('not selected for this view')}<span class="xs dim">its Unit (EU-16) is flagged, so the line cannot pass traceability</span></div></div></div>
         <div class="lrow" style="min-height:0">${btn(ic('plus') + ' Pick canonical lines', 'ghost')}</div></div>
       <div><div class="card" style="margin-bottom:10px"><b>Validation</b>${an(6)}<div class="task"><span class="rail ok">${ic('check')}</span>Traceability · every line maps to an approved Unit</div><div class="task"><span class="rail ok">${ic('check')}</span>Claim rules · 4 checked, 0 hits</div><div class="task"><span class="rail ok">${ic('check')}</span>Specificity · no vague claims</div><div class="task"><span class="rail flag">${ic('triangle-alert')}</span>Stale against canonical v14 (warning, not blocking)</div></div>
