@@ -764,7 +764,7 @@ function roleHeader(opts = {}) {
     <div class="where nb"><div class="card tight"><div class="eyebrow">Where things stand</div>
       <div>${noJd ? 'Lead from Morgan T.; no posting yet. Waiting on the JD before any requirements or matches exist.' : 'Recruiter screen done (warm). Hiring-manager round with Dan K. on Thu Oct 23. Package sent Oct 9; fit brief says apply, exposed on ads-tech.'}${an(1)}</div></div>
       <div class="card tight"><div class="eyebrow">Next action</div>
-      <div class="rowhead"><span class="cb"></span><span>${noJd ? 'Ask Morgan for the posting link' : 'Finish the prep brief for Dan K.'}</span><span class="chip ${noJd ? '' : 'red'} num">${noJd ? 'due Fri' : 'due today'}</span>${an(2)}</div></div></div>`;
+      <div class="rowhead"><span class="cb"></span><span>${noJd ? 'Ask Morgan for the posting link' : 'Finish the prep brief for Dan K.'}</span><span class="chip red num">${noJd ? 'due yesterday' : 'due today'}</span>${an(2)}</div></div></div>`;
 }
 const ROLE_TABS = ['Fit brief', 'Requirements & matches', 'Package', 'Process', 'Correspondence'];
 const REQS = [['must', 'Experience with ad-supported streaming', 'domain', 'high'], ['must', 'Lead the roadmap for playback and device certification', 'scope', 'high'], ['must', '7+ years in product management, 3+ in video', 'experience', 'medium'], ['nice', 'Partner with 20+ device OEMs', 'scope', 'medium'], ['nice', 'Familiarity with low-latency live', 'domain', 'low'], ['nice', 'Experience shipping developer SDKs', 'tooling', 'low']];
@@ -813,7 +813,7 @@ const roleTabs = on => `<div class="tabs">${ROLE_TABS.map(t => `<span class="${t
 
 function roleDetail(state) {
   if (state === 'nojd') {
-    const body = roleHeader({ noJd: true }) + roleTabs('Fit brief') + `<div class="empty" style="padding:30px 20px"><div class="h2">No JD yet</div><div style="margin:4px 0 14px">A fit brief needs the posting. Paste the JD to parse its requirements and match them against your 27 approved Units.${an(3)}</div>
+    const body = roleHeader({ noJd: true }) + roleTabs('Fit brief') + `<div class="empty" style="padding:30px 20px"><div class="h2">No JD yet</div><div style="margin:4px 0 14px">A fit brief needs the posting. Paste the JD to parse its requirements and match them against your 20 approved Units.${an(3)}</div>
       <div class="in ta ph" style="text-align:left;min-height:110px">Paste the job description…</div><div class="btnrow" style="justify-content:flex-end;margin-top:8px">${btn('Save JD', 'pri')}</div></div>`;
     return shell('pipeline', body);
   }
@@ -897,6 +897,7 @@ function roleDetail(state) {
 function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="sm dim" role="status">Loading Application…</div>`);
   if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Couldn’t load Application: permission-denied</div>`);
+  if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Application not found, or not owned by you.</div>`);
   if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="ed"><div><div class="empty" style="padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div></div>
     <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
@@ -970,14 +971,14 @@ function scan(state) {
       <div class="card" style="margin:12px 0"><div class="rowhead sm"><b>Checking 14 boards</b><span class="dim num">9 done · 2 new roles so far</span></div><div class="bar" style="margin:6px 0"><i style="width:64%"></i></div>
         <div class="step"><i class="done"></i>9 boards done · 2 new roles ${ic('chevron-down')}</div><div class="step now"><i class="now"></i>Vantage Stream · fetching</div><div class="step todo"><i></i>Meridian Labs</div><div class="step todo"><i></i>… 3 more</div></div>
       <div class="warn">Harbor Analytics’ board returned 403 twice. Last week’s roles stay open with a verification note.${an(6)}</div>
-      <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true, 'dimmed')}</div>`);
+      <div class="h3">Last week’s results stay available</div><div class="list">${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Playback SDK (L-010), CDN vendors (L-020)', 'Posting leads with ads measurement; no approved live-pipeline evidence yet', true, 'dimmed')}</div>`);
   }
   const body = `<div class="pagehead"><div><div class="ttl">Weekly scan</div><div class="sub">Week of Oct 20 · 14 boards · <span class="num">6 new · 3 still open · 2 closed</span> · next run Mon Oct 27</div></div><div class="btnrow">${btn(ic('link') + ' Boards · 14')}${btn(ic('radar') + ' Run now', 'pri')}</div></div>
     <div class="card" style="margin-bottom:12px;border-color:#fde68a"><b>Corrections to the record</b>${an(1)}<div class="task"><span>Quill Systems · “Product Lead, Playback” closed Oct 17 — your Role in Applied is marked closed on the employer board.</span></div><div class="task"><span>Orbit Video · comp band changed from $170–210k to $180–220k as posted; the Role’s field was updated and the change logged.</span></div></div>
     <div class="filters">${chip('New 6', 'on')}${chip('Still open 3')}${chip('Closed 2')}<span class="adv">${chip('Tier 1 ' + ic('chevron-down'), 'line')}${chip('Remote ' + ic('chevron-down'), 'line')}${chip('Verified only', 'line')}</span>${btn('Filters', 'morebtn')}</div>
     <div class="h3">Tier 1 — apply this week${an(2)}</div>
     <div class="list">${row(1, 'Brightline Media', 'Staff Product Manager, Playback Platform · Remote (US)', true, '$210–260k', 'SDK ownership (L-010), partner program (L-021)', 'Two years short on the seniority line', false)}
-      ${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Live pipeline (L-012), CDN vendors (L-020)', 'Posting leads with ads measurement', true)}</div>
+      ${row(1, 'Vantage Stream', 'Senior PM, Live Infrastructure · SF hybrid', true, '$180–220k', 'Playback SDK (L-010), CDN vendors (L-020)', 'Posting leads with ads measurement; no approved live-pipeline evidence yet', true)}</div>
     <div class="h3">Tier 2 — worth a look</div>
     <div class="list">${row(2, 'Meridian Labs', 'Product Manager, AI Workflows · Remote', true, '', 'LLM triage flow (EU-18)', 'Scope reads mid-level; comp not posted', false)}
       ${row(2, 'Northgate Video', 'Director of Product, Media · NYC', false, '$240–300k', 'Team leadership, playback', 'Not on the employer board — aggregator only; do not apply from the aggregator link', false)}${an(3)}
@@ -1104,7 +1105,8 @@ const GROUPS = [
         { id: 'ready', label: 'hovering a claim · 4 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
         { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Two panes, as from md up.', ph: 'Panes stack.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Couldn’t load Application: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
+        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Couldn’t load Application: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'notfound', label: 'not found', kind: 'state', cap: { desk: 'The shipped anti-enumeration sentence alone: missing and not-yours collapse to “Application not found, or not owned by you.”', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511; <code>src/routes/Pipeline/</code>): seven columns, three-line cards, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors. Proposed (dashed): the next-action chip (#512), the next scheduled round chip (PRD), and the tasks sidebar (#34).', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
       '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. Empty columns keep their teaching copy. A fatal read shows only the alert; partial enrichment keeps the board and marks the affected cards. The page-level New Role button is proposed: the shipped header is the title and the move hint, and New Role lives in the shell navigation.',
