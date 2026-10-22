@@ -3,7 +3,7 @@ spec_id: matchline
 name: Matchline V1
 status: draft
 tested: false
-reason: Spec authored before implementation; tests land per-surface starting in Sprint 1.
+reason: Whole-product spec; behavior is covered by per-surface unit, DOM and integration tests rather than one spec-level suite.
 derived_from: ../../docs/projects/matchline/prds/matchline.md
 ---
 
@@ -20,12 +20,25 @@ The authoritative PRD lives in the `docs` sibling repo at
 repo-local derivation. On conflict, the PRD wins; file a plan entry to
 reconcile.
 
+This spec tracks PRD v0.3 (2026-10-22). Statements describe shipped
+behavior unless marked **Target** (approved, not built) or **Deferred**
+(out of this release by decision), as the PRD defines them. Target
+requirements are summarized here only where they constrain shipped
+code; the PRD's "Target interface" and "Core requirements and
+enhancements" sections are the full list.
+
 ## Non-goals
 
 - Not an ATS keyword stuffer.
 - Not a generative writer — no claim ships that the user hasn't confirmed.
 - Not a job board, mass-apply tool, coaching product, or team product.
+  Two exceptions are **Target**: a scheduled scan of employer boards
+  the user names, and interview preparation and debriefs. The scan
+  never scrapes aggregators, and an aggregator-only result stays an
+  unverified lead until the employer's posting confirms it.
 - Not a replacement for networks. The Network Layer is V2+.
+- Not a native mobile app. V1 is a responsive web app; phone layouts
+  for agreed workflows are **Target**.
 
 ## Core loop
 
@@ -36,13 +49,20 @@ Career → Experience Units → Matching → Application
 The loop has four steps. Each must satisfy its own acceptance criteria;
 the loop as a whole must satisfy the end-to-end criteria below.
 
+**Target:** the PRD's revised loop, `Evidence → Role → Fit brief →
+Package → Process`, contains these four steps and extends them through
+the interview process.
+
 ### Step 1 — Career into Experience Units
 
 Acceptance criteria:
 
-- The user can import their career via at least one of: pasted resume
-  text, pasted LinkedIn profile HTML (browser view-source), pasted or
-  typed long-form career context.
+- The user can import their career by pasting resume text.
+  **Deferred** (PRD decision 3): LinkedIn profile HTML (#28), long-form
+  career context (#29), and artifact upload (#87). The `artifact`
+  `source_type` and the `artifact://` `source_ref` format (#592) are a
+  data-model change only, with no upload, storage, or parsing behind
+  them.
 - Extraction produces structured Experience Units conforming to the
   `ExperienceUnit` schema in `## Data model`.
 - Extraction generates embeddings for every Unit's `normalized_summary`
@@ -60,7 +80,8 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- The user can paste a JD as plain text into a Role.
+- The user can paste a JD as plain text into a Role, either when
+  creating it or later for a Role saved with only a title (#431).
 - Parsing produces `JobRequirementUnit` records conforming to the schema
   in `## Data model`, including `priority`, `must_have`, `category`, and
   `extracted_from`.
@@ -102,16 +123,21 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- Generation accepts a target format (`resume`, `cover_letter`,
-  `outreach`) and produces output grounded only in approved Experience
-  Units and their approved matches.
+- Generation produces a resume grounded only in approved Experience
+  Units and their approved matches. **Target:** cover letters (#30) and
+  the other package artifacts (application answers, referral note,
+  outreach), under the same grounding and validation. `AssetRef.kind`
+  already reserves `cover_letter` and `outreach`; no writer produces
+  them yet.
 - Before the output is shown, the validation layer (see
   `## Validation layer`) attaches a claim-to-Unit map. Any claim that
   does not trace to an approved Unit is flagged.
 - The Application Editor blocks export while any validation flag is
   unresolved.
 - A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
-- Exports are available as PDF, DOCX, and plain text.
+- **Target:** export to PDF, DOCX, and plain text (#33), from the
+  Package. Today the Export control enforces the gate above, but its
+  action is a stub.
 
 ### End-to-end acceptance
 
@@ -135,9 +161,13 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `Person { id, name, role, company_id, relationship_type, last_contacted_at?, notes? }`
 - `Company { id, name, industry?, size?, priority, url?, notes? }`
 - `Role { id, company_id, title, jd_raw, jd_url?, location?, remote_policy?, comp_range?, discovered_at }`
+  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`. New Role stamps a placeholder `company_id` because there is no Company UI yet; persisting the form's Company and Source fields is Target work.
   - `jd_raw` may be the empty string. A Role can be saved with only a title, as a lead whose JD arrives later (#431). Parsing, matching and generation stay gated on the JD: an empty `jd_raw` yields no Requirements, matching does not run without Requirements, and generation needs approved matches.
 - `Application { id, role_id, stage, applied_at?, last_activity_at, generated_assets[], approved_unit_ids[] }`
+  - `stage` is one of seven values: `saved`, `drafting`, `applied`, `interviewing`, `offer`, `rejected`, `withdrawn`. These stay for this release (PRD decision 1); finer process steps belong to the dossier, not to `stage`.
+  - An Application is created when the user generates a resume for a Role, in `drafting`. A Role with no Application does not appear on the Pipeline.
 - `Interaction { id, person_id, application_id?, type, direction, summary, occurred_at }`
+  - Companies, People and Interactions have service-layer readers and writers but no entry UI; the Pipeline reads People and Interactions only to show a key contact.
 - `Task { id, application_id, title, due_at?, completed, created_at }` (#34): a follow-up reminder on an Application. Completing one also stamps the Application's `last_activity_at`. V1 sends nothing; tasks are reminders the human acts on.
 
 ### Capability Graph
@@ -174,6 +204,30 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
     absent, readers must assume nothing was measured: pre-existing
     records store the same neutrals without marking them.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
+
+### Dossier objects (Target)
+
+The PRD's § Dossier objects sketches `CanonicalResume`, `ResumeLine`,
+`TailoredResume`, `ClaimRule`, `FitBrief`, `InterviewRound`,
+`Correspondence` and `ScanResult`. None is persisted. Invariants the
+build must keep:
+
+- A `TailoredResume` pins `canonical_version`. It changes only through
+  an explicit Rebase; Keep leaves it pinned. Staleness against the
+  current canonical is a visible, non-blocking warning. Nothing
+  rewrites a tailored view, or a package already sent, without that
+  choice (PRD decision 2).
+- A `ClaimRule` violation blocks export, as an untraceable claim does.
+- A `ScanResult` records its discovery source apart from the
+  employer's posting. One not verified on the employer's board cannot
+  become a Role or count as a verified opportunity (PRD decision 6).
+- Next actions are the shipped `Task`; there is no separate
+  `NextAction` object.
+
+The fit-brief generator (`functions/src/generation/fitBrief.ts`, #581)
+emits the `FitBrief` fields, citing verbatim evidence quotes rather
+than line ids. It is eval-only: no callable, route, or persisted
+document uses it.
 
 ### Invariants
 
@@ -328,6 +382,14 @@ Before any generated output reaches the user:
 The validation layer is a hard constraint. No generated output may be
 presented to the user without a completed traceability pass.
 
+**Target:**
+
+- A claim-rule check runs every generated artifact against the user's
+  claim rules. A violation blocks export.
+- A tailored resume's staleness against the canonical is reported
+  beside the validation results and never blocks export. Traceability
+  and claim-rule failures always block.
+
 The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
 
 ## AI pipeline
@@ -347,9 +409,13 @@ Real-time:
 
 Model strategy:
 
-- Frontier model (Claude Sonnet or GPT-4o class) for extraction,
-  rationale generation, and validation.
-- Cheaper model (Haiku or GPT-4o-mini class) for bulk generation.
+- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6
+  for extraction, rationale, and validation; Claude Haiku 4.5 for
+  requirement parsing and generation. Embeddings use OpenAI
+  `text-embedding-3-small`.
+- The Claude 5.5 models are wired for evaluation runs only (#579). A
+  production default changes only through its own approved change,
+  informed by #495.
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
 
@@ -448,25 +514,44 @@ Reliability:
 
 ## V1 surfaces
 
-The V1 product has exactly five screens. Nothing ships that isn't
-directly serving matching or generation.
+The shipped product has five screens behind sign-in. Nothing ships
+that isn't directly serving matching or generation.
 
-1. **Onboarding** — one-time; import resume / LinkedIn / long-form
-   career text; lands in Unit Review.
+1. **Onboarding** — one-time; paste resume text, with streamed
+   progress; lands in Unit Review. The four-source import picker is
+   **Deferred**.
 2. **Unit Review** — list of Experience Units, filterable by skill,
-   tool, domain, date range, approval status; inline editing;
-   approve / reject / flag; "Add Unit manually" action.
-3. **Role Detail** — header (company, title, JD URL, stage, dates) +
-   three tabs (Requirements, Matches, Applications) + persistent
-   action bar (Generate resume, Generate cover letter, Export, Update
-   stage).
+   tool, domain, date range, and approval status (approved, pending,
+   flagged); inline editing that re-embeds the Unit; approve / reject /
+   flag; rejected Units reviewable separately; "Add Unit manually"
+   action. **Target:** a source-type filter. **Deferred:** artifact
+   upload.
+3. **Role Detail** — header (title and Role id) + three tabs
+   (Requirements, Matches, Applications); resume generation lives in
+   the Applications tab. This is the current implementation,
+   superseded in the target design by the five-tab dossier (Fit brief,
+   Requirements & matches, Package, Process, Correspondence). The
+   header details and persistent action bar described in PRD v0.1 were
+   never built.
 4. **Application Editor** — two-pane view (output ↔ approved Units),
-   inline traceability annotations, validation flag badges, blocked
-   export until flags resolve.
+   inline traceability annotations, validation flag badges, inline
+   editing with undo, re-run validation, and blocked export until flags
+   resolve. **Transitional** (PRD decision 5): the Package tab becomes
+   the home for editing, validation, and export, and any expanded
+   editor is another view of the same package.
 5. **Pipeline** — kanban by application stage
    (Saved, Drafting, Applied, Interviewing, Offer, Rejected,
-   Withdrawn); cards show company, title, days in stage, next action,
-   key contact; right sidebar for tasks and follow-up reminders.
+   Withdrawn), with drag-and-drop and arrow-key moves; cards show
+   company, title, days in stage, next action (the first open task),
+   and key contact; a collapsible sidebar with Due today, Upcoming, and
+   Follow-ups (Applied or Interviewing, quiet for more than 7 days, no
+   open task).
+
+**Target:** the navigation, dossier, Evidence (canonical resume and
+claim rules), Package, Process, Correspondence, and Scan surfaces in
+the PRD's "Target interface," and responsive layouts down to phone
+widths for the agreed workflows (PRD decision 8). Today only the
+Pipeline board and the Application Editor stack below 768 px.
 
 ## Technical principles
 
@@ -478,7 +563,8 @@ directly serving matching or generation.
   its reasoning.
 - **Fail visibly.** No silent fallbacks; surface the gap instead.
 - **One user at a time.** No sharing, collaboration, or team features.
-- **Capability Graph is portable.** JSON export is a V1 feature.
+- **Capability Graph is portable.** JSON export is a V1 feature
+  (**Target**, #35).
 - **Cost is a feature.** The per-application budget is a hard
   constraint, not a target.
 
@@ -505,6 +591,8 @@ V1:
 - LLMs: Anthropic + OpenAI; keys in Firebase secrets
 - Embeddings: OpenAI `text-embedding-3-small`, stored on Firestore
   documents
+- Firebase Storage is not configured. It is **Target** for export
+  files (#521) and **Deferred** with artifact upload (#519).
 
 Data-model discipline (even on Firestore):
 
@@ -527,9 +615,13 @@ Deferred to V2+ (do not scaffold or build):
 - Learning Layer (outcome-driven tuning)
 - Network Layer (relationship graph, referral suggestions)
 - Browser extension for JD / profile import
-- Mobile app
+- LinkedIn import, long-form context import, and artifact upload
+  (deferred by PRD decision 3)
+- Native mobile apps, offline support, or a separate mobile feature
+  set (V1 is responsive web)
 - Any generalization beyond the single V1 user
 - Multi-user, sharing, or team features
-- Integrations with job boards or ATS systems
+- Integrations with job boards or ATS systems, including aggregator
+  scraping
 
 See the PRD § V2+ layers for the longer list.
