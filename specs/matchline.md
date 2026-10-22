@@ -542,12 +542,7 @@ that isn't directly serving matching or generation.
 1. **Onboarding** — one-time; paste resume text, with streamed
    progress; lands in Unit Review. The four-source import picker is
    **Deferred**.
-2. **Unit Review** — list of Experience Units, filterable by skill,
-   tool, domain, date range, and approval status (approved, pending,
-   flagged); inline editing that re-embeds the Unit; approve / reject /
-   flag; rejected Units reviewable separately; "Add Unit manually"
-   action. **Target:** a source-type filter. **Deferred:** artifact
-   upload.
+2. **Unit Review** — list of Experience Units, filterable by skill, tool, domain, date range, and approval status (approved, pending, flagged); inline editing that marks the Unit `reembed_pending`, which keeps it out of matching until it is re-embedded; approve / reject / flag; "Add Unit manually" action. Rejected Units drop out of the list. **Target:** a source-type filter; a client call to `reembedExperienceUnit` after an edit, so the re-embed runs (today the callable has no client call site and no trigger); a separate view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller). **Deferred:** artifact upload.
 3. **Role Detail** — header (title and Role id) + three tabs
    (Requirements, Matches, Applications); resume generation lives in
    the Applications tab. This is the current implementation,
