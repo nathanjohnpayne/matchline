@@ -45,7 +45,8 @@ Every change in this repository goes through the policy in
 [`REVIEW_POLICY.md`](REVIEW_POLICY.md), including a self-peer review by the
 authoring agent's reviewer identity and, for changes that cross the
 threshold or touch protected paths, automated external review via the
-OpenAI Codex GitHub app (Phase 4a) or a manual CLI fallback (Phase 4b).
+OpenAI Codex GitHub app (Phase 4a) or Phase 4b: an automated cross-agent
+review (`scripts/phase-4b-review.sh`) that falls back to a manual CLI handoff.
 
 ## Key Files
 
