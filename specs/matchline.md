@@ -153,9 +153,14 @@ Acceptance criteria:
   generate + validate) is under $1 at p95; target $0.75. Per-call cost
   is attributed by task since #483; no per-application p95 has been
   reported against this target yet.
-- **Zero fabrication.** Every claim in every shipped output traces to
-  an approved Experience Unit. This is an invariant, not a metric; the
-  validation layer and the export gate enforce it today.
+- **Zero fabrication.** Every claim in every exported or sent output
+  traces to an approved Experience Unit. This is an invariant, not a
+  metric. Today it is enforced at the export gate, which requires a
+  passing, server-attested validation; export itself is not built yet
+  (#33). A freshly generated draft is shown before validation runs
+  (see Validation layer), so it can carry an untraced claim until the
+  user validates it. **Target:** validation completes before generated
+  output is first shown.
 
 ## Data model
 
@@ -576,8 +581,10 @@ that isn't directly serving matching or generation.
 **Target:** the navigation, dossier, Evidence (canonical resume and
 claim rules), Package, Process, Correspondence, and Scan surfaces in
 the PRD's "Target interface," and responsive layouts down to phone
-widths for the agreed workflows (PRD decision 8). Today only the
-Pipeline board and the Application Editor stack below 768 px.
+widths for the agreed workflows (PRD decision 8). Today the Pipeline
+board and the Application Editor stack below 768 px, and New Role's
+short fields drop from two columns to one below 640 px. The top
+navigation and the other screens have no breakpoint-specific layout.
 
 ## Technical principles
 
