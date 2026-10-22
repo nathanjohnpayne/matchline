@@ -141,8 +141,10 @@ coderabbit:
 # review as `chatgpt-codex-connector[bot]`.
 #
 # This replaces the human-shuttled Phase 4 external review on the happy path.
-# On timeout, disagreement, or runaway, the flow falls back to the manual
-# CLI path described in REVIEW_POLICY.md § Phase 4b.
+# On a timeout or a spent request ceiling the flow enters Phase 4b, where
+# scripts/phase-4b-review.sh runs first (automated Phase 4b is enabled
+# here); the manual CLI path in REVIEW_POLICY.md § Phase 4b applies only
+# when that run falls back. Disagreement and runaway go to the human.
 #
 # Prerequisite: the ChatGPT Codex Connector GitHub App must be installed on
 # the repository with Code Review enabled at
@@ -160,10 +162,12 @@ coderabbit:
 #      `max_blocking_reviews` budget (exit 7, kind "blocking-reviews") or a
 #      repeat-after-rebuttal escalates to the human per REVIEW_POLICY.md
 #      § Disagreements and Tiebreaking.
-#   4. On timeout (silence within `review_timeout_seconds`), the script
-#      exits with code 4 (FALLBACK_REQUIRED). The agent then falls back
-#      to the manual handoff in REVIEW_POLICY.md § Phase 4b, targeting
-#      `cli_login` below.
+#   4. On timeout (silence within `review_timeout_seconds`) or an account or
+#      connection block (`blocked_reason` usage_limit or not_connected), the
+#      script exits with code 4 (FALLBACK_REQUIRED). The agent then runs
+#      `scripts/phase-4b-review.sh <PR#>` from a trusted main checkout and
+#      uses the manual handoff in REVIEW_POLICY.md § Phase 4b, targeting
+#      `cli_login` below, only when that run falls back.
 #   5. Before merging, run `scripts/codex-review-check.sh <PR#>` to verify
 #      the merge gate. All of the following must hold:
 #        a) required CI checks are green
@@ -196,31 +200,37 @@ codex:
   # Phase 4b handoff. Must be a member of `available_reviewers` above.
   cli_login: nathanpayne-codex
 
-  # The per-PR Codex request ceiling: the 21st request is refused (exit 7,
+  # The per-PR Codex request ceiling: the 11th request is refused (exit 7,
   # kind "request-ceiling"). Normal termination is either approval,
   # disagreement (repeat-after-rebuttal), or timeout → Phase 4b fallback.
-  # Raised 2 -> 20 by the owner on 2026-10-20 to match the mergepath hub,
-  # after #581 hit the 2-request cap with Codex still finding real defects.
   # This is the request CEILING (cost), not the runaway meter: the
-  # blocking-review budget below is. A spent ceiling runs automated Phase 4b,
-  # whose barrier stops for the human (exit 8) when a human stop holds
-  # (REVIEW_POLICY.md, Disagreements and Tiebreaking).
-  max_review_rounds: 20
+  # blocking-review budget below is. A spent ceiling enters the Phase 4b
+  # barrier, which dispatches automated Phase 4b only when no human stop
+  # holds and otherwise stops for the human (exit 8). A verified CodeRabbit
+  # rate-limit failover trigger spends no slot (REVIEW_POLICY.md,
+  # Disagreements and Tiebreaking). Set to 10 fleetwide by mergepath#2665
+  # (epic mergepath#2657); previously 20.
+  max_review_rounds: 10
 
   # Blocking-review budget. Before every new request the requester counts the
   # PR's SOLICITED Codex responses that are blocking (a finding at p0 or a
   # feedback_policy-required tier), unknown-tier, or conflicting, across every
   # head, and refuses the request once that count reaches this budget (exit 7,
   # kind "blocking-reviews"). Clean and discretionary-only rounds spend
-  # nothing. Checked BEFORE max_review_rounds. Absent, it defaults to 10; set
-  # explicitly here so the runaway meter is visible next to the ceiling.
+  # nothing. Checked BEFORE max_review_rounds, so when both are spent the
+  # blocking-budget stop (human-tiebreaker route) wins. Absent, it defaults to
+  # 10; set explicitly by mergepath#2665 so the runaway meter is visible.
   max_blocking_reviews: 10
 
   # Poll timeout per round, in seconds, for `codex-review-request.sh`.
   # If Codex has not posted a review within this window, treat as timeout
   # and exit with code 4. Silence is NEVER treated as implicit approval;
   # see issue #27 for the explicit-review-required decision.
-  review_timeout_seconds: 600
+  #
+  # 1800s is the hub's measured window (mergepath#1550: trigger→first Codex
+  # response p95 982s, max 1723s, none after 1800s) and the mergepath#2657
+  # active-run ceiling. Set fleetwide by mergepath#2665; previously 600s.
+  review_timeout_seconds: 1800
 
   # When true, `codex-review-check.sh` requires all required CI checks to
   # report green before allowing merge. Strongly recommended; do not disable
@@ -271,3 +281,36 @@ feedback_archive:
     - {login: nathanpayne-claude, provider: reviewer, status: active}
     - {login: nathanpayne-cursor, provider: reviewer, status: active}
     - {login: nathanpayne-codex, provider: reviewer, status: active}
+
+# Automated Phase 4b (scripts/phase-4b-review.sh). Enabled by mergepath#2665
+# (epic mergepath#2657). Enabling automates the EXISTING Phase 4b path; it does
+# not make Phase 4b required for every PR. external_review_threshold,
+# external_review_paths and the needs-external-review label still decide
+# routing, unchanged.
+phase_4b_automation:
+  # Master switch. When true, scripts/phase-4b-review.sh runs the reviewer CLI
+  # instead of emitting the manual handoff. Adapter-side fail-closed paths—a
+  # non-conformant verdict, an adapter timeout—fall back to the manual
+  # handoff; hard stops (head drift, unaccounted feedback, input integrity)
+  # exit without one and need their own remediation.
+  enabled: true
+
+  # Execution model. 'local' = the authoring agent's session shells out to the
+  # reviewer CLI on the same machine, reusing op-preflight and the gh reviewer
+  # wrapper. 'manual' defers to the human handoff.
+  mode: local
+
+  # Enforced cap on completed automated Phase 4b rounds per PR
+  # (mergepath#2663, installed here by the mergepath@b99ad73 sync). Read from
+  # the governing base policy: a slot is reserved in the per-PR Git-ref round
+  # ledger (refs/mergepath/p4b-rounds/pr-<N>) before any adapter run, and a
+  # 4th completed round is refused for an owner decision. Enforcement covers
+  # only publishers that reserve through the ledger; the manual handoff does
+  # not. A slot stays occupied from its reservation onward, including after a
+  # crash or an uncertain review POST, so fewer than 3 posted reviews can spend
+  # the cap. Set to 3 by mergepath#2665 (epic mergepath#2657).
+  max_review_rounds: 3
+
+  # Fail-closed handling is unconditional (there is no switch for it): an
+  # ambiguous or non-schema-conformant adapter verdict never becomes an
+  # APPROVED, and the orchestrator falls back to the manual handoff instead.
