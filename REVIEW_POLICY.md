@@ -363,7 +363,8 @@ Phase 4b is invoked when Phase 4a escalates to disagreement or runaway, times ou
   │  ┌─ no unaddressed P0/P1 findings → clearance           │
   │  ├─ P0/P1 findings → fix or reply; round += 1; repeat   │
   │  ├─ repeat-after-rebuttal → ESCALATE (Disagreements)    │
-  │  ├─ round > max_review_rounds → ESCALATE (Disagreements)│
+  │  ├─ blocking budget spent → ESCALATE (Disagreements)    │
+  │  ├─ request ceiling spent → Phase 4b barrier            │
   │  └─ timeout (exit code 4) → FALL BACK to Phase 4b       │
   └──────────────┬───────────────────────┬──────────────────┘
                  │ clearance              │ escalate / fallback
@@ -446,7 +447,7 @@ In Phase 4a, the agent escalates to the human when either of the following fires
 
 1. **Repeat-after-rebuttal.** The agent posted a reply to a Codex inline finding explaining why the finding does not apply. Codex's next review re-flags the same or substantively-equivalent finding. The agent treats this as a disagreement: Codex is not convinced by the rebuttal, and the agent stops trying to change Codex's mind autonomously. Continuing the loop past this point is rude to the reviewer and wastes API calls.
 
-2. **Runaway rounds.** The round counter exceeds `codex.max_review_rounds` (default: 2). The 3rd `@codex review` request trips this guard. This catches cases where Codex keeps finding new, distinct issues on each pass without the review converging. Even if each individual finding is valid, three rounds of novel issues is a signal that the PR scope is too broad and a human should weigh in.
+2. **Runaway rounds.** A review keeps drawing blocking findings without converging. `codex.max_review_rounds` is the per-PR request ceiling (10 here, set by mergepath#2665), not this signal: the 11th request is refused, and a spent ceiling enters the Phase 4b barrier. The runaway meter is the blocking-review budget, `codex.max_blocking_reviews` (10 here): once that many solicited Codex responses are blocking, the requester refuses the next request and the review escalates to the human. At a spent ceiling, the Phase 4b barrier also stops for the human when every request the ceiling allowed drew a blocking review whose findings were not all fixed. A round whose blocking findings were all fixed is the review working, not a runaway. The canonical statement is [Mergepath REVIEW_POLICY.md § Disagreements and Tiebreaking](https://github.com/nathanjohnpayne/mergepath/blob/main/REVIEW_POLICY.md#disagreements-and-tiebreaking).
 
 **Timeout is NOT a disagreement signal.** A Codex response timeout (`codex-review-request.sh` exit code `4` = `FALLBACK_REQUIRED`) routes the PR directly to Phase 4b per step 15a above. It is a fallback trigger, not a tiebreaker trigger. Phase 4b itself mediates via the human through the manual handoff, so there is nothing for the disagreement detector to add on top.
 
@@ -543,8 +544,9 @@ codex:
   enabled: true
   bot_login: "chatgpt-codex-connector[bot]"   # REST API form, with [bot] suffix
   cli_login: nathanpayne-codex                # manual CLI fallback (Phase 4b)
-  max_review_rounds: 2                        # runaway guard; 3rd round escalates
-  review_timeout_seconds: 600                 # per-round poll timeout
+  max_review_rounds: 10                       # request ceiling; the 11th request is refused and routes through the Phase 4b barrier
+  max_blocking_reviews: 10                    # blocking-review budget; a request is refused once 10 solicited blocking reviews exist (mergepath#1560)
+  review_timeout_seconds: 1800                # per-round poll timeout (measured response p95/max, mergepath#1550)
   require_ci_green: true                      # merge gate
 ```
 
