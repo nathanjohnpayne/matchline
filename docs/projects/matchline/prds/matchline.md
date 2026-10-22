@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: 27d31c79de6fe7493e749706bec4bab4edf66493
+source_ref: 783caf3b4ce7cae4c8d05cd8f44c4b8e4924bc99
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -217,7 +217,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 **Shipped** (on `main` as of October 22, 2026):
 - Sign-in with Google or email and password, with no self-service sign-up; access is limited to an owner allowlist enforced in every callable and in the Firestore rules.
 - Career ingestion from a pasted résumé, with streamed progress, into Experience Units.
-- Unit Review: filters, inline editing with re-embedding, approve, flag and reject, a rejected-Units review, and manual Unit entry.
+- Unit Review: filters, inline editing, approve, flag and reject, and manual Unit entry. An edited Unit is marked `reembed_pending` and stays out of matching until it is re-embedded; nothing in the client triggers that re-embed yet.
 - New Role, including Roles saved with only a title (#431).
 - Job Requirement parsing with priority and must-have flags, editable inline.
 - The matching engine with explainable scores, rationales, gaps and unverifiable matches, and re-run.
@@ -240,6 +240,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 - The weekly scan of employer boards the user names, with employer-board verification and tiering (decision 6).
 - Workflow automations: prep briefs opened for scheduled rounds, debriefs drafted from transcripts, thank-you notes drafted from debriefs.
 - Responsive web layouts for these workflows, down to phone widths (decision 8).
+- Unit Review completion: re-embed a Unit after an inline edit (the `reembedExperienceUnit` callable exists but has no client call site or trigger), and a view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller).
 
 **Target, enhancements** (approved, never release-blocking): see [Core requirements and enhancements](#core-requirements-and-enhancements).
 
@@ -778,8 +779,8 @@ Success criterion for this screen: the user completes onboarding with at least 2
 
 The primary interface for maintaining the Capability Graph. The user spends time here during onboarding and whenever they add new career inputs.
 
-- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, with corrections re-running that Unit's embedding; approve, flag and reject, with rejected Units kept but excluded from matching and reviewable separately; and "Add Unit manually."
-- **Target, not built:** a filter by source type.
+- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, which marks the Unit `reembed_pending` and keeps it out of matching until it is re-embedded; approve, flag and reject, with rejected Units dropping out of the list and out of matching; and "Add Unit manually."
+- **Target, not built:** a filter by source type; a client call to re-embed a Unit after an inline edit; and a separate view for reviewing and restoring rejected Units.
 - **Deferred** (decision 3): the "Upload an artifact" entry and the artifact provenance line (for example, `artifact · retro-q3.pdf · page 2`) that round-trips to the uploaded file.
 - **Target (enhancement):** bulk selection with keyboard shortcuts, and a detail pane beside the list.
 
