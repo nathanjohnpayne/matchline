@@ -50,13 +50,13 @@ case "$1" in
   repos/owner/repo/rules/branches/main) printf '%s\n' '[]' ;;
   repos/owner/repo/contents/.github/workflows/repo_lint_local.yml*) echo 'HTTP 404: fixture annex absent' >&2; exit 1 ;;
   repos/owner/repo/issues/comments/123/reactions) [ "$ACK_READ" != error ] || exit 1; cat "$FIXTURES/ack" ;;
-  repos/owner/repo/issues/comments/124/reactions) echo '[]' ;;
+  repos/owner/repo/issues/comments/124/reactions) cat "$FIXTURES/new-ack" ;;
   repos/owner/repo/issues/99/reactions) printf '%s\n' "$ISSUE_REACTIONS" ;;
   repos/owner/repo/issues/99/timeline) [ "${TIMESTAMP_READS_FAIL:-0}" != 1 ] || exit 1; echo '[]' ;;
   repos/owner/repo/pulls/99/comments) [ "${INLINE_COMMENTS_FAIL:-0}" != 1 ] || exit 1; printf '%s\n' "${INLINE_COMMENTS_JSON:-[]}" ;;
   graphql)
     case "$*" in
-      *requiredStatusCheckContexts*) printf '%s\n' '{"data":{"repository":{"ref":{"refUpdateRule":{"requiredStatusCheckContexts":["Build"]}}}}}' ;;
+      *requiredStatusCheckContexts*) printf '%s\n' '{"data":{"repository":{"isInOrganization":false,"viewerPermission":"WRITE","ref":{"refUpdateRule":{"requiredStatusCheckContexts":["Build"]}}}}}' ;;
       *statusCheckRollup*) printf '%s\n' '{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[{"__typename":"StatusContext","context":"Build","state":"FAILURE","createdAt":"2026-09-14T00:03:00Z","isRequired":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}]}}}}}' ;;
       *) echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}' ;;
     esac ;;
@@ -66,6 +66,9 @@ GH
 chmod +x "$DIR/bin/gh"
 TRIGGER='{"id":123,"user":{"login":"nathanjohnpayne"},"created_at":"2026-09-14T00:01:00Z","body":"@codex review"}'
 LATER_MENTION='{"id":124,"user":{"login":"nathanjohnpayne"},"created_at":"2026-09-14T00:03:00Z","body":"Status: @codex review was already requested."}'
+UPPER_TRIGGER='{"id":124,"user":{"login":"nathanjohnpayne"},"created_at":"2026-09-14T00:03:00Z","body":"@CODEX REVIEW"}'
+UPPER_QUOTE='{"id":125,"user":{"login":"nathanjohnpayne"},"created_at":"2026-09-14T00:05:00Z","body":"> @CODEX REVIEW"}'
+UPPER_PROSE='{"id":126,"user":{"login":"nathanjohnpayne"},"created_at":"2026-09-14T00:06:00Z","body":"Status: @CODEX REVIEW was already requested."}'
 EYES='[{"user":{"login":"chatgpt-codex-connector[bot]"},"content":"eyes","created_at":"2026-09-14T00:02:00Z"}]'
 # shellcheck disable=SC2016 # Literal Markdown commit cell, not shell substitution.
 RUNNING='{"id":456,"user":{"login":"chatgpt-codex-connector[bot]"},"created_at":"2026-09-14T00:02:00Z","body":"<!-- codex-pull-request-review-summary -->\n| 📝 **Code Review** | **Running** | `abcdef0` | Manual |"}'
@@ -103,12 +106,17 @@ else
   exit 1
 fi
 
-while IFS='|' read -r name comments ack reviews mode opted expected pattern reads; do
+while IFS='|' read -r name comments ack reviews mode opted expected pattern reads selected_trigger; do
   case "$comments" in
     trigger) comments="[$TRIGGER]" ;;
     wrong-id) comments="[${TRIGGER/123/124}]" ;;
     mention-only) comments="[$LATER_MENTION]" ;;
     trigger-then-mention) comments="[$TRIGGER,$LATER_MENTION]" ;;
+    lower-then-upper) comments="[$TRIGGER,$UPPER_TRIGGER]" ;;
+    upper-then-quote) comments="[$TRIGGER,$UPPER_TRIGGER,$UPPER_QUOTE]" ;;
+    upper-then-prose) comments="[$TRIGGER,$UPPER_TRIGGER,$UPPER_PROSE]" ;;
+    upper-quote-only) comments="[$UPPER_QUOTE]" ;;
+    upper-prose-only) comments="[$UPPER_PROSE]" ;;
     mention-running) comments="[$LATER_MENTION,$RUNNING]" ;;
     future) comments="[${TRIGGER/2026-09-14T00:01:00Z/2077-09-14T00:01:00Z}]" ;;
     stale) comments="[${TRIGGER/2026-09-14T00:01:00Z/2026-09-13T00:01:00Z}]" ;;
@@ -122,18 +130,30 @@ while IFS='|' read -r name comments ack reviews mode opted expected pattern read
     running-after-block) comments="[$TRIGGER,$QUOTA,$RUNNING]" ;;
     *) comments='[]' ;;
   esac
-  case "$ack" in eyes) ack="$EYES" ;; foreign) ack="${EYES/chatgpt-codex-connector\[bot\]/someone}" ;; *) ack='[]' ;; esac
+  new_ack='[]'
+  case "$ack" in
+    eyes) ack="$EYES" ;;
+    new-eyes) new_ack="${EYES/2026-09-14T00:02:00Z/2026-09-14T00:04:00Z}"; ack='[]' ;;
+    foreign) ack="${EYES/chatgpt-codex-connector\[bot\]/someone}" ;;
+    *) ack='[]' ;;
+  esac
   case "$reviews" in
     review) reviews="$REVIEW" ;;
     approved) reviews='[{"user":{"login":"nathanpayne-claude"},"state":"APPROVED","commit_id":"abcdef0123456789000000000000000000000000","submitted_at":"2026-09-14T00:02:00Z"}]' ;;
   esac
   printf '%s\n' "$comments" >"$DIR/comments"
   printf '%s\n' "$ack" >"$DIR/ack"
+  printf '%s\n' "$new_ack" >"$DIR/new-ack"
   printf '%s\n' "$reviews" >"$DIR/reviews"
   : >"$DIR/calls"
   cp "$DIR/default-policy.yml" "$DIR/policy.yml"
   [ "$name" != unknown-budget ] || sed -i.bak 's/review_timeout_seconds:.*/review_timeout_seconds: unavailable/' "$DIR/policy.yml"
   [ "$name" != default-budgets ] || sed -i.bak '/review_timeout_seconds:/d; /ack_wait_seconds:/d' "$DIR/policy.yml"
+  if [ "$name" = uppercase-configured-author ]; then
+    sed -i.bak 's/author_identity:.*/author_identity: diagnostic-author/' "$DIR/policy.yml"
+    comments="${comments//nathanjohnpayne/diagnostic-author}"
+    printf '%s\n' "$comments" >"$DIR/comments"
+  fi
   pr_body='Authoring-Agent: codex'; pr_author=nathanjohnpayne; issue_reactions='[]'
   if [ "$name" = rerun ] || [ "$name" = terminal-unapproved ]; then
     # An external contributor has no same-agent approval fallback. Preserve
@@ -143,6 +163,12 @@ while IFS='|' read -r name comments ack reviews mode opted expected pattern read
   if [ "$name" = thumbs-unapproved ]; then
     pr_body=''; pr_author=contributor; issue_reactions="${EYES/eyes/+1}"
   fi
+  case "$name" in
+    # #2550: the authoring agent's own approval is discounted, and the
+    # message names it and the threshold-aware gate rather than claiming
+    # that no approval exists.
+    same-agent-*) pr_body='Authoring-Agent: claude' ;;
+  esac
   rc=0
   PATH="$DIR/bin:$PATH" GH_TOKEN=stub FIXTURES="$DIR" CALLS="$DIR/calls" ACK_READ="$name" \
     PR_BODY="$pr_body" PR_AUTHOR="$pr_author" ISSUE_REACTIONS="$issue_reactions" \
@@ -155,6 +181,14 @@ while IFS='|' read -r name comments ack reviews mode opted expected pattern read
     if ! grep -q 'freshness-qualified author trigger #123 at 2026-09-14T00:01:00Z' "$DIR/out" \
       || grep -q 'freshness-qualified author trigger #124' "$DIR/out"; then
       cat "$DIR/out"; echo 'FAIL trigger-then-mention did not bind exact request #123'; exit 1
+    fi
+  fi
+  # #1430: the newest complete command owns both its diagnostic and the
+  # acknowledgement read; older request eyes cannot be borrowed.
+  if [ -n "$selected_trigger" ]; then
+    if ! grep -Fq "freshness-qualified author trigger #$selected_trigger at" "$DIR/out" \
+       || ! grep -Fxq "repos/owner/repo/issues/comments/$selected_trigger/reactions" "$DIR/calls"; then
+      cat "$DIR/out"; echo "FAIL $name did not select request #$selected_trigger and its acknowledgement"; exit 1
     fi
   fi
   if [ "$name" = requested ]; then
@@ -192,6 +226,13 @@ while IFS='|' read -r name comments ack reviews mode opted expected pattern read
 done <<'CASES'
 missing|none|none|[]||1|1|no freshness-qualified author trigger|0
 requested|trigger|eyes|[]||1|1|linked eyes acknowledgement=true|1
+uppercase-own-ack|lower-then-upper|new-eyes|[]||1|1|linked eyes acknowledgement=true|1|124
+uppercase-old-ack|lower-then-upper|eyes|[]||1|1|linked eyes acknowledgement=false|1|124
+uppercase-configured-author|lower-then-upper|new-eyes|[]||1|1|linked eyes acknowledgement=true|1|124
+uppercase-then-quote|upper-then-quote|new-eyes|[]||1|1|linked eyes acknowledgement=true|1|124
+uppercase-then-prose|upper-then-prose|new-eyes|[]||1|1|linked eyes acknowledgement=true|1|124
+uppercase-quote-only|upper-quote-only|new-eyes|[]||1|1|no freshness-qualified author trigger|0
+uppercase-prose-only|upper-prose-only|new-eyes|[]||1|1|no freshness-qualified author trigger|0
 no-ack|trigger|none|[]||1|1|linked eyes acknowledgement=false|1
 wrong-comment|wrong-id|eyes|[]||1|1|linked eyes acknowledgement=false|1
 mention-only|mention-only|eyes|[]||1|1|no freshness-qualified author trigger|0
@@ -212,6 +253,8 @@ completed-gate-c|completed|none|approved||1|1|completed summary observed.*inspec
 thumbs-unapproved|none|none|[]||1|1|no freshness-qualified author trigger|0
 gate-c|trigger|eyes|approved||1|1|linked eyes acknowledgement=true|1
 not-opted|trigger|eyes|[]||0|1|no reviewer identity|0
+same-agent-approved|none|none|approved||0|1|no qualifying reviewer approval cleared gate (b): the latest-state APPROVED review from the authoring agent.s own reviewer identity (nathanpayne-claude) is discounted.*run scripts/merge-clearance-gate.sh.*--require-codex-on-head|0
+same-agent-unapproved|none|none|[]||0|1|no reviewer identity in available_reviewers has a latest-state APPROVED review, and same-agent|0
 readiness|trigger|eyes|[]|--approval-readiness-only|1|1|no reviewer identity|0
 diagnostic|trigger|eyes|[]|--diagnostic-signal-only|1|1|Codex has not produced|0
 renewed-provider-block|old-block|none|[]|--require-codex-on-head|0|1|no reviewer identity|0
@@ -346,7 +389,94 @@ _hs=$(crqe_pr_head_set "$(jq -nc --arg b "$FO_HB" '[{sha: $b}, {sha: "short"}]')
   || { echo "FAIL: failover: an exempt trigger left the request generation" >&2; exit 1; }
 ! crqe_failover_marker_body abc 10 >/dev/null && ! crqe_failover_marker_body "$FO_HA" 0 >/dev/null \
   || { echo "FAIL: failover: a marker was built from an abbreviated head or a zero id" >&2; exit 1; }
-echo "PASS: failover markers exempt only the requester's own just-posted trigger, on a head the PR had (#2534, #2553)"
+# #2591: a force-push's before and after commits come from GraphQL, because the
+# REST event names neither; they join the head set as a fourth input.
+FO_HZ=5555555555555555555555555555555555555555
+[ "$(crqe_pr_head_set '[]' '[]' "$FO_HA" "$(jq -nc --arg z "$FO_HZ" '[$z, "short", null]')")" = "$(jq -nc --arg a "$FO_HA" --arg z "$FO_HZ" '[$a, $z] | sort')" ] \
+  || { echo "FAIL: failover: force-push heads were not added to the head set" >&2; exit 1; }
+! crqe_pr_head_set '[]' '[]' "$FO_HA" '{"not":"array"}' >/dev/null \
+  || { echo "FAIL: failover: a malformed force-push head list was accepted" >&2; exit 1; }
+_fo_mark_z=$(printf '%s\n' "$T1" "$(fo_c 11 nathanjohnpayne 2026-10-01T00:00:05Z "$(fo_m 10 "$FO_HZ")")" | jq -sc .)
+[ "$(crqe_failover_trigger_ids "$_fo_mark_z" nathanjohnpayne "$(crqe_pr_head_set '[]' '[]' "$FO_HA" "[\"$FO_HZ\"]")")" = '[10]' ] \
+  && [ "$(crqe_failover_trigger_ids "$_fo_mark_z" nathanjohnpayne "$(crqe_pr_head_set '[]' '[]' "$FO_HA")")" = '[]' ] \
+  || { echo "FAIL: failover: a marker on a force-pushed-away head must count only with the GraphQL heads" >&2; exit 1; }
+# #2600 BEGIN: keep every unbounded history off external command argv.
+# The shell-function shim reproduces Linux's per-argument limit on other OSes.
+(
+  jq() {
+    local argument
+    for argument in "$@"; do
+      if [ "${#argument}" -ge 131072 ]; then
+        return 91
+      fi
+    done
+    command jq "$@"
+  }
+  hs_commits=$(jq -nc --arg h "$FO_HB" '[range(0;4000) | {sha:$h}]')
+  hs_timeline=$(jq -nc --arg h "$FO_HY" '[{event:"committed",sha:$h}, {event:"commented",body:("x" * 150000)}]')
+  hs_force=$(jq -nc --arg h "$FO_HZ" '[range(0;4000) | $h]')
+  hs_expected=$(jq -nc --arg a "$FO_HA" --arg b "$FO_HB" --arg y "$FO_HY" --arg z "$FO_HZ" '[$a,$b,$y,$z] | sort')
+  # Prove the limit shim is live without executing an oversized argv.
+  if jq -n --argjson c "$hs_commits" '$c' >/dev/null; then
+    echo "FAIL: head set argument-limit control did not reject oversized argv" >&2
+    exit 1
+  fi
+  hs_actual=$(crqe_pr_head_set "$hs_commits" "$hs_timeline" "$FO_HA" "$hs_force") \
+    && [ "$hs_actual" = "$hs_expected" ] \
+    || { echo "FAIL: oversized histories lost PR heads" >&2; exit 1; }
+  # Each document must independently be exactly one array. Do not combine
+  # documents and let an empty input compensate for an adjacent extra one.
+  for hs_bad in '' '[] []' 'null' '{}' '["unterminated' '[] garbage'; do
+    for hs_slot in commits timeline force; do
+      hs_c='[]'; hs_t='[]'; hs_f='[]'
+      case "$hs_slot" in
+        commits) hs_c=$hs_bad ;;
+        timeline) hs_t=$hs_bad ;;
+        force) hs_f=$hs_bad ;;
+      esac
+      if crqe_pr_head_set "$hs_c" "$hs_t" "$FO_HA" "$hs_f" >"$DIR/head-set-invalid"; then
+        echo "FAIL: head set accepted malformed $hs_slot input" >&2
+        exit 1
+      fi
+      [ ! -s "$DIR/head-set-invalid" ] \
+        || { echo "FAIL: malformed head set emitted partial output" >&2; exit 1; }
+    done
+  done
+  if crqe_pr_head_set '[] []' '' "$FO_HA" '[]' >"$DIR/head-set-invalid" \
+     || crqe_pr_head_set '[' ']' "$FO_HA" '[]' >"$DIR/head-set-invalid"; then
+    echo "FAIL: head set accepted cross-input document compensation" >&2
+    exit 1
+  fi
+  [ ! -s "$DIR/head-set-invalid" ] || exit 1
+)
+echo "PASS: oversized PR histories stream independently and malformed documents fail closed (#2600)"
+# #2600 END
+
+# crqe_force_push_heads reads every page through gh's GraphQL pagination,
+# which needs the $endCursor variable, and fails on a failed or shapeless read.
+FP_DIR=$(mktemp -d)
+cat >"$FP_DIR/gh" <<'GH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$FP_LOG"
+[ "${FP_MODE:-ok}" != fail ] || exit 1
+if [ "${FP_MODE:-ok}" = shapeless ]; then printf '{"data":{"repository":null}}\n'; exit 0; fi
+printf '%s\n' '{"data":{"repository":{"pullRequest":{"timelineItems":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[{"beforeCommit":{"oid":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"afterCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}}}}}'
+printf '%s\n' '{"data":{"repository":{"pullRequest":{"timelineItems":{"pageInfo":{"hasNextPage":false,"endCursor":"c2"},"nodes":[{"beforeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"afterCommit":null},{}]}}}}}'
+GH
+chmod +x "$FP_DIR/gh"
+_fp=$(PATH="$FP_DIR:$PATH" FP_LOG="$FP_DIR/log" crqe_force_push_heads owner/repo 7)
+[ "$_fp" = '["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","cccccccccccccccccccccccccccccccccccccccc"]' ] \
+  || { echo "FAIL: failover: force-push heads across pages were $_fp" >&2; exit 1; }
+grep -q -- '--paginate' "$FP_DIR/log" && grep -q 'endCursor' "$FP_DIR/log" && grep -q 'owner=owner' "$FP_DIR/log" \
+  && grep -q 'name=repo' "$FP_DIR/log" && grep -q 'number=7' "$FP_DIR/log" \
+  || { echo "FAIL: failover: the force-push read is not a paginated query for owner/repo#7: $(cat "$FP_DIR/log")" >&2; exit 1; }
+for _m in fail shapeless; do
+  if PATH="$FP_DIR:$PATH" FP_LOG="$FP_DIR/log" FP_MODE=$_m crqe_force_push_heads owner/repo 7 >/dev/null; then
+    echo "FAIL: failover: a $_m force-push read was accepted" >&2; exit 1
+  fi
+done
+rm -rf "$FP_DIR"
+echo "PASS: failover markers exempt only the requester's own just-posted trigger, on a head the PR had, force-pushed heads included (#2534, #2553, #2591)"
 
 # #1598: a Codex request the configured author posts AFTER a Phase 4b
 # substitute approval supersedes it, so gate (c) does not clear on that
