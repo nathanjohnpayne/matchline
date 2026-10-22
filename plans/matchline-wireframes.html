@@ -348,6 +348,15 @@
     .homei{display:block;height:18px}
     .homei::after{width:150px;margin-left:-75px;bottom:6px}
   }
+  /* Pipeline tasks sidebar: stacks above the board below lg (1024 px), as PipelineView.tsx does */
+  @container frame (max-width: 1023px){
+    .side{width:auto}
+    .side .card{margin-bottom:0}
+    .sidewrap{display:block;margin-bottom:12px}
+    .boardwrap{flex-direction:column}
+    .boardwrap .side{order:-1;width:100%}
+    .boardwrap > div{width:100%}
+  }
   @container frame (max-width: 900px){
     .main{padding:14px 16px 20px}
     .nav{gap:12px;font-size:12px}
@@ -357,12 +366,6 @@
     .three .src{flex:1 1 160px}
     .two{grid-template-columns:1fr}
     .split{grid-template-columns:1fr}
-    .side{width:auto}
-    .side .card{margin-bottom:0}
-    .sidewrap{display:block;margin-bottom:12px}
-    .boardwrap{flex-direction:column}
-    .boardwrap .side{order:-1;width:100%}
-    .boardwrap > div{width:100%}
     .cols{gap:8px}
     .colh{flex-wrap:wrap;row-gap:2px}
     .detail-pane{display:none}
@@ -947,10 +950,10 @@ function pipeline(state) {
   const EMPTY = { Saved: 'No applications in Saved. Roles you’re tracking but haven’t started on sit here.', Drafting: 'No applications in Drafting. This is where a resume is being tailored before you send it.', Applied: 'No applications in Applied. Sent applications wait here until you hear back.', Interviewing: 'No applications in Interviewing. This is where live processes land when you hear back.', Offer: 'No applications in Offer. Offers land here.', Rejected: 'No applications in Rejected. Closed-out applications are kept here for the record.', Withdrawn: 'No applications in Withdrawn. Applications you pull out of end up here.' };
   const card = (co, title, d, next, round, who, k = '') => `<div class="kc ${k}"><div class="ellip ${co === 'Unknown company' ? 'ph-it' : ''}"><b>${co}</b></div><div class="ellip dim sm ${title === 'Role unavailable' ? 'ph-it' : ''}">${title}</div><div class="meta">${chip(d + 'd').replace('<span class="chip "', `<span class="chip " title="${d} days in stage"`)}${next ? chip(next) : ''}${round ? chip(round, 'acc nb') : ''}${who ? av(who) : ''}</div></div>`;
   const cards = {
-    Saved: card('Harbor Analytics', 'Group Product Manager', 2, 'Ask for the JD', '', 'MT') + card('Pike & Co', 'PM, AI Workflows', 9, '', '', ''),
+    Saved: card('Harbor Analytics', 'Group Product Manager', 2, 'Ask Morgan for the JD', '', 'MT') + card('Pike & Co', 'PM, AI Workflows', 9, '', '', ''),
     Drafting: card('Lumen Labs', 'Staff Product Manager, Developer Tools', 3, 'Finish cover letter', '', ''),
-    Applied: card('Orbit Video', 'Senior PM, Streaming Infrastructure', 8, 'Follow up — 8d quiet', '', 'JL', 'focus') + card('Quill Systems', 'Product Lead, Playback', 4, '', '', ''),
-    Interviewing: card('Northwind Media', 'Senior Product Manager, Video Platform', 6, 'Prep brief for Dan K.', 'HM · Thu', 'PN') + card('Tidewater Health', 'Senior PM, Platform', 12, '', 'Panel · Oct 28', 'DK'),
+    Applied: card('Orbit Video', 'Senior PM, Streaming Infrastructure', 8, '', '', 'JL', 'focus') + card('Quill Systems', 'Product Lead, Playback', 4, '', '', ''),
+    Interviewing: card('Northwind Media', 'Senior Product Manager, Video Platform', 6, 'Prep brief for Dan K.', 'HM · Thu', 'PN') + card('Tidewater Health', 'Senior PM, Platform', 12, 'Panel prep', 'Panel · Oct 28', 'DK'),
     Offer: '', Rejected: card('Summit Robotics', 'Principal PM', 20, '', '', ''), Withdrawn: card('Granite Labs', 'Director of Product', 31, '', '', ''),
   };
   const col = ([s, n], i) => `<section class="col ${state === 'ready' && s === 'Interviewing' ? 'over' : ''}"><div class="colh"><span class="stage">${s}</span><span class="num">${state === 'ready' ? n : 0}</span>${state === 'ready' && s === 'Interviewing' ? an(3) : ''}</div>
@@ -1125,7 +1128,9 @@ const GROUPS = [
         { id: 'notfound', label: 'not found', kind: 'state', cap: { desk: 'The shipped anti-enumeration sentence alone: missing and not-yours collapse to “Application not found, or not owned by you.”', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511, #512, #34; <code>src/routes/Pipeline/</code>): seven columns, three-line cards with the next-action chip and key contact, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors, and the collapsible tasks sidebar. Proposed (dashed): the next scheduled round chip (PRD target) and the page-level New Role button.', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
-      '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. Empty columns keep their teaching copy. A fatal read shows only the alert; partial enrichment keeps the board and marks the affected cards. The page-level New Role button is proposed: the shipped header is the title and the move hint, and New Role lives in the shell navigation.',
+      '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. The day chip is titled “days in stage” but counts days since the Application’s last activity, which completing a task also resets (<code>buildPipelineBoard.ts</code>); true time in stage needs a stage-entry timestamp.'
+      + ' Card chips and the sidebar come from one task set: a card’s next action is its Application’s first open task, and an Application with an open task never appears in Follow-ups.'
+      + ' Empty columns keep their teaching copy. A fatal read shows only the alert; partial enrichment keeps the board and marks the affected cards. The page-level New Role button is proposed: the shipped header is the title and the move hint, and New Role lives in the shell navigation.',
       '<b>Moves are optimistic</b> and announced only in a visually hidden polite live region — no banner, no undo; a rejected write rolls the card back exactly and surfaces the error inline.',
       '<b>Drop target</b>: the column under a dragged card gets a 2 px border; the border is always present (transparent) so nothing shifts.',
       '<b>Keyboard</b>: the header’s hint is shipped copy — a focused card moves one stage with the Left / Right arrow key; focus follows the card into its new column.',
@@ -1142,7 +1147,7 @@ const GROUPS = [
       '<b>Corrections to the record first</b>: roles that closed, comp that changed, facts that turned out wrong — each already applied to the Role and logged.',
       '<b>Tiers</b>: 1 apply this week, 2 worth a look, 3 on record. Each row shows the verification note, comp exactly as posted, what lines up (with the line and Unit ids that make it so) and where the candidate is exposed.',
       '<b>Unverified results are kept but marked</b> — an aggregator discovery is a lead the scan retains pending employer-board verification, never a source of truth: its discovery source is recorded apart from the authoritative source, the employer’s posting. It is not a verified opportunity: it is never silently promoted, the copy says not to apply from the aggregator link, and “Turn into Role” stays disabled until the employer’s board confirms it.',
-      '<b>One action</b>: “Turn into Role” captures the JD from the verified posting, records the Role’s origin as a scan and the posting as its source, and lands the Role in Saved with the scan’s notes as the seed of the fit brief.',
+      '<b>One action</b>: “Turn into Role” captures the JD from the verified posting, records the Role’s origin as a scan and the posting as its source, creates the Role’s Application in Saved so it appears on the Pipeline at once with the scan’s notes as the seed of the fit brief.',
       '<b>First run</b> asks for boards, not for preferences; the user names the careers pages they would check by hand.',
       '<b>A board that fails</b> keeps last week’s roles as “still open” with a note rather than closing them — never infer a closure from an error.'],
       states: [

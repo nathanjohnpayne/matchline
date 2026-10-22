@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: ac544c68a8bb78a7f2a0fab2da4d4ea4203db549
+source_ref: 27d31c79de6fe7493e749706bec4bab4edf66493
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -162,7 +162,7 @@ A new user (me) opens Matchline for the first time. Within the first session, th
 
 4. **Generate an application.** A tailored résumé and optional cover letter, grounded only in approved Experience Units, with every claim traceable to a source. Nothing generated that isn't backed by an actual unit of experience. *Résumé generation and validation are shipped; cover letters and export are target.*
 
-5. **Track the application.** Stage, days in stage, the next action, and the key contact. CRM-lite from day one. *Shipped on the Pipeline board.* Who's involved depends on People and Interactions, which have no entry UI yet.
+5. **Track the application.** Stage, how long since the last activity, the next action, and the key contact. CRM-lite from day one. *Shipped on the Pipeline board.* Who's involved depends on People and Interactions, which have no entry UI yet.
 
 The first-session success criterion: the user generates one application they would actually send in under fifteen minutes, without editing out any fabricated claims. That's the V1 bar. It cannot be met yet, because export is not built, and the measured full flow is slower than the target (see [Execution targets](#execution-targets)).
 
@@ -223,7 +223,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 - The matching engine with explainable scores, rationales, gaps and unverifiable matches, and re-run.
 - Résumé generation grounded in approved matches.
 - Validation: claim extraction, traceability and specificity checks, inline annotations, and an export gate that requires the server's attestation (#502).
-- The Pipeline board: seven stages, drag-and-drop and keyboard moves, days in stage, the next action, the key contact, and the tasks and follow-ups sidebar (#510–#512, #34).
+- The Pipeline board: seven stages, drag-and-drop and keyboard moves, days since the last activity (labeled "days in stage"), the next action, the key contact, and the tasks and follow-ups sidebar (#510–#512, #34).
 - Cost attribution per LLM call (#483).
 
 **Target, core** (approved and required for this release):
@@ -244,7 +244,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 **Target, enhancements** (approved, never release-blocking): see [Core requirements and enhancements](#core-requirements-and-enhancements).
 
 **Deferred:**
-- LinkedIn import (#28), long-form context import (#29), and artifact upload (#87 and its children #519–#528).
+- LinkedIn import (#28), long-form context import (#29), and artifact upload (#87 and its children #519, #520, #522, #524, #526 and #528). Export's children (#517, #521, #523, #525, #527) belong to #33 and are not deferred.
 - Outcome learning system (needs more data than one user generates)
 - Network graph and referral engine (requires integrations that slow V1)
 - Decision engine / "should I apply" scoring (nice-to-have, not core loop)
@@ -279,7 +279,7 @@ Four steps. Each one is a component with a clear input, output, and quality bar.
 
 **Step 3: Match Units to Requirements.** The matching engine scores each Experience Unit against each Job Requirement Unit and produces a ranked set of matches plus a gap list. The output is a view that the user can approve or reject. The engine's job is not to impress the user with AI; it's to make the user's existing evidence visible and navigable.
 
-**Step 4: Generate an application.** Using only matches the user has approved, the generation engine produces a tailored résumé and, as a target, a cover letter. Every claim in the output traces to an approved Experience Unit. The validation layer flags anything that isn't traceable before the user sees it. The user edits if needed, exports (target), and sends.
+**Step 4: Generate an application.** Using only matches the user has approved, the generation engine produces a tailored résumé and, as a target, a cover letter. Every claim in the output traces to an approved Experience Unit. The validation layer flags anything that isn't traceable, and export stays blocked until validation passes. The user edits if needed, exports (target), and sends.
 
 That's the product. Four steps, one loop, and a hard constraint on fabrication at every step. If this loop meets the quality bar set by the V1 success metrics, Matchline is already worth using.
 
@@ -527,7 +527,7 @@ ResumeLine {
 TailoredResume {
   id: string,
   application_id: string,
-  canonical_version: string,    // the pinned version; changes only on an explicit Rebase
+  canonical_version: string,    // the pinned version; changes only on an explicit Rebase, and never once sent
   line_ids: string[],           // selection and order
   exceptions: { line_id?: string, text: string, reason: string }[]  // deliberate rewrites, tracked
 }
@@ -628,7 +628,7 @@ final_score = confidence_score × (
 
 Each component is normalized to 0-1 before weighting. The final score gets multiplied by the Experience Unit's confidence score, which means low-confidence units can never produce high-confidence matches. This is intentional: the system should never offer a strong match based on weak evidence.
 
-An axis the Requirement doesn't constrain currently contributes a neutral 0.5 placeholder rather than a measurement, and the score breakdown labels it "not evaluated." #433 proposes dropping such axes and renormalizing the weights instead.
+The formula and weights above are shipped. Each axis has its own fallback when the Requirement doesn't constrain it: skill, tool and domain overlap score a neutral 0.5; seniority alignment and scope alignment score 1.0; recency scores 0.5 for a Unit with no usable date. None of these is a measurement, and the score breakdown labels an unevaluated axis "not evaluated." #433 proposes dropping such axes and renormalizing the weights instead.
 
 ### Component definitions
 
@@ -636,8 +636,8 @@ An axis the Requirement doesn't constrain currently contributes a neutral 0.5 pl
 - **Skill overlap.** Jaccard similarity on the canonical skill sets. Requires a skill ontology (see below).
 - **Domain overlap.** Same, for domains. Streaming video infrastructure, developer tools, ML platforms, etc.
 - **Tool overlap.** Same, for specific tools. React, Kubernetes, Snowflake, etc.
-- **Seniority alignment.** Penalty function, not a similarity score. If the Requirement asks for "staff-level" and the Unit's seniority signals read "senior," the score drops, but isn't zero. If the gap is more than one level, the score goes to zero.
-- **Scope alignment.** Similar penalty function for scope (team size, budget, customer reach).
+- **Seniority alignment.** Penalty function, not a similarity score. If the Requirement asks for "staff-level" and the Unit's seniority signals read "senior," the score drops to 0.5. If the gap is more than one level, the score goes to zero. A Unit with no seniority signals scores zero; one whose signals don't map to the ladder scores 0.5.
+- **Scope alignment.** *Shipped:* a Requirement whose category isn't `scope` scores 1.0 (no constraint). For a scope Requirement, the score is the Jaccard overlap between the Unit's scope signals and the Requirement's keywords, with the same empty-set rules as skill overlap. *Target:* a penalty function over scope levels (team size, budget, customer reach), like seniority's; it needs a scope ladder, which does not exist yet.
 - **Recency.** Exponential decay on the Unit's end date. A Unit from five years ago counts less than one from last year. Capped so ancient-but-relevant experience doesn't fall off entirely.
 
 ### Skill ontology
@@ -668,7 +668,7 @@ The pipeline is six stages, some real-time and some async. The split matters for
 
 4. **Matching.** Given a Unit set and a Requirement set, score, and rank. Mostly vector math plus rule-based scoring; minimal LLM calls. Should feel instant. *Shipped.*
 5. **Generation.** Given approved matches and a target format, generate output grounded in approved evidence. Uses a "controlled generation" prompt pattern: the model receives the approved Units as ground truth and is instructed to only use what's provided. *Shipped:* the résumé. *Target:* cover letter, application answers, referral note, outreach, and the fit brief as a product surface.
-6. **Validation.** LLM claim extraction and traceability, plus a deterministic specificity check, verify that every claim in the output traces to an approved Unit. Flags anything that doesn't before the user sees the output. *Shipped.*
+6. **Validation.** LLM claim extraction and traceability, plus a deterministic specificity check, verify that every claim in the output traces to an approved Unit, and flag anything that doesn't. *Shipped*, but it runs after the draft is shown, not before: see [Validation layer](#validation-layer).
 
 ### Model strategy
 
@@ -703,14 +703,16 @@ Caching is critical. Experience Unit embeddings are cached forever. Job Requirem
 
 This is the component that makes "zero fabrication" a hard constraint rather than a wish.
 
-Before any generated output is shown to the user, it goes through validation. Steps 1–4 are **shipped**:
+Validation runs four steps, all **shipped**:
 
 1. **Claim extraction.** Parse the generated output into discrete claims. A resume bullet like "Led migration of Disney+ playback stack to 64-bit NCP, reducing memory footprint 30%" contains three claims: led a migration, worked on the Disney+ playback stack on NCP, and achieved a 30% memory reduction.
 2. **Traceability check.** For each claim, verify it maps to an approved Experience Unit. Claims that don't map get flagged.
 3. **Specificity check.** Flag generic language ("collaborated cross-functionally to drive results") that doesn't tie to any specific Unit.
 4. **Surface to user.** Flagged issues appear as inline annotations on the generated output. The user resolves by either editing, removing, or adding a supporting Unit.
 
-The bar: the user should never see an output with an un-sourced claim. If the model generates one, validation catches it before the user does.
+**When it runs (shipped).** Generation saves the résumé with validation pending and opens it in the Application Editor at once, so the user sees an unvalidated draft. Validation runs when the user edits the draft or chooses "Re-run validation," and export stays blocked until it passes. The guarantee that holds today is that nothing unvalidated can be exported, not that nothing unvalidated is ever shown.
+
+**The bar (target, not met).** The user should never see an output with an un-sourced claim: if the model generates one, validation catches it before the user does. That needs validation to run automatically between generation and display.
 
 **Export gate (shipped).** The verdict is attested by the server, not by the asset (#502). Export is enabled only when the server's attestation for the asset's current content says it passed, and every Unit that content cites is still at the version validation read. An edit makes the content unvalidated until validation runs again.
 
@@ -808,7 +810,7 @@ The surface where generated output becomes something the user sends. **Transitio
 The CRM-lite view that keeps the user from needing a spreadsheet. **Shipped** (#510–#512, #34):
 
 - Kanban-style columns by application stage: Saved, Drafting, Applied, Interviewing, Offer, Rejected, Withdrawn. These seven stay for this release (decision 1).
-- Each card shows company, title, days in the current stage, the next action (the Application's first open task), and the key contact.
+- Each card shows company, title, a day count, the next action (the Application's first open task), and the key contact. The count is labeled "days in stage," but it measures days since the Application's `last_activity_at`, which a completed task also updates; there is no stage-entry timestamp. *Target:* true time in stage, which needs a stage-entry timestamp.
 - Cards move by drag-and-drop or, when focused, with the Left and Right arrow keys; moves are optimistic and roll back on a failed write.
 - Click through to the role detail for each application.
 - A collapsible sidebar with Due today (overdue included), Upcoming (the next 7 days, then undated tasks), and Follow-ups (Applied or Interviewing Applications quiet for more than 7 days with no open task). Tasks complete with one click.
@@ -831,7 +833,7 @@ These are the approved target surfaces from v0.2's interface additions, settled 
 - **Pipeline cards** add the next scheduled round, and overdue next actions surface first.
 - **Evidence** gains the canonical résumé editor, with line ids visible, and a list of tailored views with their pinned versions, behind-current ones first. It also gains the claim-rules list: short, user-written, always visible when editing.
 - **New Role** adds Company and Source fields (decision 7).
-- **Scan.** Board management, a weekly run every Monday plus "Run now," and an inbox for each run: corrections to the record first, then new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. "Turn into Role" captures the JD from the verified posting and lands the Role in Saved. Aggregator-only results stay as unverified leads, with "Turn into Role" disabled (decision 6). A board that fails keeps last week's roles open with a note rather than closing them.
+- **Scan.** Board management, a weekly run every Monday plus "Run now," and an inbox for each run: corrections to the record first, then new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. "Turn into Role" captures the JD from the verified posting, creates the Role, and creates its Application in Saved, so it appears on the Pipeline at once. Aggregator-only results stay as unverified leads, with "Turn into Role" disabled (decision 6). A board that fails keeps last week's roles open with a note rather than closing them.
 - **Responsive layouts** (decision 8). Every agreed V1 workflow works at desktop, tablet and phone widths in the browser. Shipped surfaces are only partly there: the Pipeline board and the Application Editor stack below 768 px, while the app's navigation, Unit Review rows and the Role detail tabs have no phone layout yet.
 
 ### Core requirements and enhancements
@@ -937,7 +939,7 @@ What the user has decided never to claim, or to claim only one way, is written d
 
 ### Never rewrite what was sent (added October 2026)
 
-A tailored view pins the canonical version it was built from, and a sent package is a record. Changes to the canonical reach a view only through an explicit Rebase, and never reach a sent package at all.
+A tailored view pins the canonical version it was built from, and a sent package is a record. Changes to the canonical reach an unsent view only through an explicit Rebase. Rebase does not apply to a sent package: it stays as sent, and a correction to it is logged as a linked record.
 
 ### Correct the record (added October 2026)
 
@@ -1032,6 +1034,7 @@ Five open questions shaped the V1 design, and v0.3 settled eight more (see [Deci
 - **Units or canonical lines as generation evidence.** matchline#495 Phase 3 compares a fit brief generated from Units with one generated from the canonical résumé.
 - **How aggregator-only leads enter Scan.** Decision 6 keeps them as unverified leads and rules out scraping aggregators, so a lead must come from something the user provides or from an employer board that links out. The mechanism is not designed.
 - **Non-URL Role sources.** A Role found through a referral or an event has no URL. Whether `source_url` is enough or Role provenance needs a short label is open; decision 7 asks for the minimum.
+- **Manual leads on the Pipeline.** A Role created from Scan gets a Saved Application (see Target interface). A Role entered by hand gets no Application until a résumé is generated, so a lead saved with only a title stays off the Pipeline. Whether New Role should also create a Saved Application is open.
 - **Where an expanded editor lives.** Decision 5 allows an expanded editor as another view of the Package. Whether that is a full-screen mode of the tab or a separate route is a design question; either way it edits the same package.
 
 ---

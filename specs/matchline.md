@@ -132,9 +132,10 @@ Acceptance criteria:
   outreach), under the same grounding and validation. `AssetRef.kind`
   already reserves `cover_letter` and `outreach`; no writer produces
   them yet.
-- Before the output is shown, the validation layer (see
-  `## Validation layer`) attaches a claim-to-Unit map. Any claim that
-  does not trace to an approved Unit is flagged.
+- The validation layer (see `## Validation layer`) attaches a
+  claim-to-Unit map and flags any claim that does not trace to an
+  approved Unit. It runs on edit or on an explicit re-run, after the
+  draft is shown; running it before the draft is shown is **Target**.
 - The Application Editor blocks export while any validation flag is
   unresolved.
 - A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
@@ -219,11 +220,12 @@ The PRD's § Dossier objects sketches `CanonicalResume`, `ResumeLine`,
 `Correspondence` and `ScanResult`. None is persisted. Invariants the
 build must keep:
 
-- A `TailoredResume` pins `canonical_version`. It changes only through
-  an explicit Rebase; Keep leaves it pinned. Staleness against the
-  current canonical is a visible, non-blocking warning. Nothing
-  rewrites a tailored view, or a package already sent, without that
-  choice (PRD decision 2).
+- A `TailoredResume` pins `canonical_version`. An unsent view changes
+  only through an explicit Rebase; Keep leaves it pinned. Staleness
+  against the current canonical is a visible, non-blocking warning
+  (PRD decision 2).
+- A sent package is immutable. Rebase does not apply to it, and a
+  correction to it is logged as a linked record rather than an edit.
 - A `ClaimRule` violation blocks export, as an untraceable claim does.
 - A `ScanResult` records its discovery source apart from the
   employer's posting. One not verified on the employer's board cannot
@@ -276,9 +278,14 @@ final_score = confidence_score × (
 Acceptance criteria:
 
 - Each component is normalized to `[0, 1]` before weighting.
-- Seniority alignment and scope alignment are penalty functions, not
-  similarity scores. A gap of more than one level drives the score to
-  zero.
+- Seniority alignment is a penalty function, not a similarity score:
+  a one-level gap scores 0.5, and a gap of more than one level drives
+  the score to zero.
+- Scope alignment scores 1.0 for a Requirement whose category is not
+  `scope`. For a scope Requirement it is the Jaccard overlap between
+  the Unit's `scope_signals` and the Requirement's `keywords`, with the
+  directional empty-set rule below. **Target:** a scope-level penalty
+  function like seniority's, which needs a scope ladder.
 - Recency is exponential decay on the Unit's end date, floored so
   ancient-but-relevant experience still contributes.
 - Skill, tool, and domain overlaps use Jaccard similarity on canonical
@@ -378,7 +385,7 @@ While a Role is incomplete and no run is in progress in the tab, the Matches tab
 
 ## Validation layer
 
-Before any generated output reaches the user:
+Validation runs these steps:
 
 1. Parse the output into discrete claims.
 2. For each claim, verify it maps to an approved Experience Unit.
@@ -386,8 +393,13 @@ Before any generated output reaches the user:
 4. Surface flagged issues as inline annotations in the Application
    Editor. The editor blocks export while any flag is unresolved.
 
-The validation layer is a hard constraint. No generated output may be
-presented to the user without a completed traceability pass.
+The validation layer is a hard constraint on export: nothing exports
+without a passing, server-attested traceability pass. Generation saves
+the asset with `validation_status: "pending"` and the Application
+Editor opens it at once, so the user sees an unvalidated draft;
+validation runs when the user edits it or chooses "Re-run
+validation." **Target:** validation completes before generated output
+is first shown.
 
 **Target:**
 
@@ -552,7 +564,10 @@ that isn't directly serving matching or generation.
 5. **Pipeline** — kanban by application stage
    (Saved, Drafting, Applied, Interviewing, Offer, Rejected,
    Withdrawn), with drag-and-drop and arrow-key moves; cards show
-   company, title, days in stage, next action (the first open task),
+   company, title, a day count labeled "days in stage" that measures
+   days since `last_activity_at` (a completed task resets it; true
+   time in stage, which needs a stage-entry timestamp, is **Target**),
+   next action (the first open task),
    and key contact; a collapsible sidebar with Due today, Upcoming, and
    Follow-ups (Applied or Interviewing, quiet for more than 7 days, no
    open task).
