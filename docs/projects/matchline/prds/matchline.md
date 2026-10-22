@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: de4b144
+source_ref: a67353bee3fcc4aa16be40c130e68e30c8ac7344
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -17,11 +17,13 @@ sync_direction: central-to-repo
 
 # Matchline — Product Requirements Document
 
-Version: v0.1
+Version: v0.2 (draft)
 Author: Nathan Payne
-Last updated: October 5, 2026
+Last updated: October 19, 2026
 
-**Status (2026-10-05):** Paused pre-launch since 2026-07-31. V1 was built through the core loop on the stack below (dev instance: `matchline-dev.web.app`) but did not ship by the July 2026 target; the result of record is 48.4% extraction and 19.1% match accuracy against the 80% bars, with p95 latency 236 s (matchline#177). Not yet built from the V1 scope below: LinkedIn and long-form context import, artifact upload, cover letters, and PDF/DOCX export. As of September 2026 the job search it was built for has resumed, so revisiting is under consideration (nathanpayne.com project page). Implementation detail: the repo's `specs/matchline.md` and `plans/matchline-implementation-plan.md`.
+**Status (2026-10-19):** Unpaused. V1 was built through the core loop on the stack below (dev instance: `matchline-dev.web.app`) but did not ship by the July 2026 target. The result of record is still 48.4% extraction and 19.1% match accuracy against the 80% bars, with p95 latency 236 s (matchline#177). Not yet built from the V1 scope below: LinkedIn and long-form context import, artifact upload, cover letters, and PDF/DOCX export. Work resumed in October 2026 on three fronts: a bounded, credit-funded evaluation window through November 3 (matchline#495), cost attribution (matchline#483), and the first pipeline features (matchline#431, #510). The product direction was revised in this version—see [Revision: the job-search dossier](#revision-the-job-search-dossier-october-2026). Implementation detail: the repo's `specs/matchline.md` and `plans/matchline-implementation-plan.md`.
+
+**Status history:** paused pre-launch 2026-07-31; revisiting considered from September 2026, when the job search it was built for resumed (nathanpayne.com project page).
 
 ---
 Matchline is a Career CRM + Capability Graph + AI Application Engine.
@@ -34,6 +36,7 @@ Favicon: m|
 ## Contents
 
 - [What Matchline is](#what-matchline-is)
+- [Revision: the job-search dossier (October 2026)](#revision-the-job-search-dossier-october-2026)
 - [Why this exists](#why-this-exists)
 - [Who V1 is for](#who-v1-is-for)
 - [What the V1 experience is](#what-the-v1-experience-is)
@@ -54,6 +57,7 @@ Favicon: m|
 - [Pricing model](#pricing-model)
 - [Resolved questions](#resolved-questions)
 - [What ships first](#what-ships-first)
+- [What ships next (October 2026)](#what-ships-next-october-2026)
 - [Appendix: what's not in this document](#appendix-whats-not-in-this-document)
 - [Closing](#closing)
 
@@ -64,6 +68,40 @@ Favicon: m|
 Matchline is a career operating system for one person running a serious job search. It turns your actual work history into structured, reusable evidence, maps that evidence against specific job requirements, and generates tailored applications grounded in what you've actually done. It is not a resume builder, an ATS optimizer, or a generative writer. It is a system for making a job search legible, disciplined, and honest—with yourself and with the people reading your applications.
 
 The core thesis: most job-search tools treat each application as a document-writing problem. Matchline treats it as an evidence problem. You already have the evidence; the work is structuring it, matching it to the right opportunities, and presenting it credibly. The AI helps with all three, but never invents what isn't there.
+
+## Revision: the job-search dossier (October 2026)
+
+While Matchline was paused, the search it was built for went on by hand. From September 2026 that work lived in a private folder of Markdown files, one subfolder per company, kept current with an AI assistant and a few scripts. It has become the clearest specification Matchline has: it shows what one serious search actually produces and what quality bar those artifacts meet. This revision makes that folder the reference product. Where the V1 sections below conflict with this one, this one wins.
+
+### What the reference shows
+
+Each opportunity produces a **dossier**, not a résumé. A typical one grows through the process:
+
+- **Before applying:** the captured JD; a **fit brief**; a résumé tailored from the canonical one; a cover letter; answers to application questions; a referral plan or note.
+- **During the process:** a prep brief per interviewer, sometimes with a minute-by-minute runbook or flashcards; a debrief after each conversation, written from the transcript; an org map; a running scorecard of the whole loop; a leveling brief before compensation talks.
+- **Throughout:** a correspondence log that keeps every sent message verbatim, so what is said later stays consistent with what is already on the record; and a folder index whose first line is "where things stand" and the next action.
+
+Around the dossiers sit a **weekly market scan**, networking call briefs, and event prep.
+
+The **fit brief** is the center of the dossier. It gives a bottom line, maps strengths to specific JD clauses with the evidence behind each, says plainly where the candidate is exposed, sets the positioning and any level strategy, lists homework and questions to ask, and ends with **what this package does not claim**. The résumé, cover letter, and interview prep are all derived from it.
+
+### Three mechanisms behind the quality
+
+1. **One canonical résumé; tailored versions are views of it.** Tailoring keeps canonical bullets verbatim and changes emphasis, order, and selection. Lines rewritten for one company are tracked as deliberate exceptions, and a script reports tailored versions that have gone stale against the canonical. Generation from scratch is the exception, not the method.
+2. **Standing claim rules.** A short, durable list of things never to claim or to claim only one way: figures that have been retired, accomplishments that must stay attributed to a specific employer, projects that must not be described as shipped, numbers never to quote. Every package is checked against it, and every fit brief says what it deliberately does not claim.
+3. **Primary sources and a corrected record.** Facts about people and companies are checked against transcripts and employers' own pages, not memory or aggregators. When a fact turns out wrong it is corrected everywhere it appears, and the correction is logged. Scans verify every role on the employer's own board and open with "corrections to the record."
+
+### What changes in Matchline
+
+- **The unit of work becomes the dossier.** The core loop no longer ends at a generated résumé. It runs from evidence through the fit brief to a package, and on through the interview process. See [The core loop](#the-core-loop).
+- **Tailored résumés become views of a canonical résumé**, with tracked exceptions. That makes "stale tailored résumé" impossible by construction instead of a report. Experience Units remain the evidence model, and the canonical résumé becomes their primary, user-maintained source. Whether generation should read Units or the canonical lines directly is an open question that matchline#495 tests.
+- **Claim rules become data** that the validation layer enforces alongside traceability.
+- **The pipeline gains interview rounds, people, correspondence, and next actions**, because that is where most of the search's time actually goes after the application is sent.
+- **Two non-goals are reversed:** the market scan and interview preparation. See [What Matchline is not](#what-matchline-is-not).
+
+### Constraint: the owner's data stays private
+
+The Matchline repository is public. The reference folder, and every dossier Matchline produces, is not. Evaluation against the owner's real artifacts reads them at run time from a private location and reports only aggregate results. Nothing from them is ever committed as a fixture, example, or test expectation.
 
 ## Why this exists
 
@@ -103,9 +141,9 @@ Stating non-goals explicitly so they don't sneak back in as features:
 
 - **Not an ATS keyword stuffer.** If the system suggests a keyword, it's because the user has genuine experience with it, not because the JD asked for it.
 - **Not a generative writer.** The AI assembles and rephrases; it never introduces claims the user hasn't confirmed.
-- **Not a job board.** No scraping listings, no "jobs you might like." The user brings the roles.
-- **Not a mass-apply tool.** Matchline is for people applying to fewer roles with more care, not more roles with less.
-- **Not a coaching product.** No interview prep, no career advice, no "should you leave your current role." The product's scope is the application itself.
+- **Not a job board.** No scraping of aggregator listings, no feed of "jobs you might like." *Revised October 2026:* Matchline does run a scheduled **scan of employer boards the user names**. It verifies each role on the employer's own posting, sorts results into tiers against the user's evidence, and states every gap. The user still decides which roles exist for them; the scan saves the weekly legwork of checking those boards. This was a stated non-goal in v0.1 and is reversed because the manual weekly scan proved to be one of the highest-value recurring tasks of the search.
+- **Not a mass-apply tool.** Matchline is for people applying to fewer roles with more care, not more roles with less. It drafts and logs submissions; it never submits an application or sends a message without the user's explicit action.
+- **Not a coaching product.** No generic career advice, no "should you leave your current role." *Revised October 2026:* **interview preparation and debriefs are in scope**, grounded in the same evidence and the same claim rules as the application. v0.1 limited the scope to the application itself. In practice, most of the search's effort and most of its risk come after the application: prep for each interviewer, staying consistent with what is already on the record, and capturing what each conversation revealed.
 - **Not a team or enterprise product.** Single-user, personal data, no sharing or collaboration in V1.
 - **Not a replacement for networks.** The network graph (V2+) augments outreach; it doesn't replace real relationships.
 
@@ -125,6 +163,15 @@ V1 is a single-user tool, so traditional product metrics don't apply. Instead:
 - Per-application cost under one dollar, including all LLM calls.
 
 **Search outcome metrics.** Ultimately, does the user get interviews and offers for roles that matter? This is noisy at N=1, but it's the real test. A version of this tool that generates beautiful applications that never convert is a failed tool.
+
+**Artifact quality metrics (added October 2026).** Component accuracy says whether the parts work; these say whether the output is worth using. Measured against the owner's own approved fit briefs, privately (matchline#495):
+
+- **Grounding:** zero claims about the candidate that don't trace to the canonical résumé or approved evidence. A hard gate, like zero fabrication.
+- **Claim rules:** zero violations. A hard gate.
+- **Coverage:** the strengths and gaps the owner's reference brief identifies, each tied to a JD clause, are found in the generated brief. Model-graded, with the grader named in every report.
+- **Owner preference:** in a blind side-by-side review, the generated brief is rated as useful as the owner's own.
+
+**Replacement test.** The revised primary metric: for new opportunities, the owner stops maintaining dossiers by hand and runs them in Matchline instead.
 
 ## What's in scope vs. deferred
 
@@ -178,6 +225,20 @@ Four steps. Each one is a component with a clear input, output, and quality bar.
 **Step 4: Generate an application.** Using only matches the user has approved, the generation engine produces a tailored resume and, optionally, a cover letter. Every claim in the output traces to an approved Experience Unit. The validation layer flags anything that isn't traceable before the user sees it. The user exports, edits if needed, and sends.
 
 That's the product. Four steps, one loop, and a hard constraint on fabrication at every step. If this loop meets the quality bar set by the V1 success metrics, Matchline is already worth using.
+
+### The core loop, revised (October 2026)
+
+```
+Evidence → Role → Fit brief → Package → Process
+```
+
+- **Evidence.** The canonical résumé (user-maintained, line-addressable), the Experience Units extracted from it and from other sources, a story bank, and the claim rules.
+- **Role.** The captured JD, parsed into Requirement Units, with company, comp band, location, and source. Roles arrive by paste or from the scan.
+- **Fit brief.** The decision document. It covers the bottom line, strengths tied to JD clauses with evidence, where the candidate is exposed, positioning and level strategy, homework, questions to ask, and what the package does not claim. Matching (step 3 above) now serves this step: approved matches are the brief's evidence.
+- **Package.** A tailored résumé as a view of the canonical, a cover letter, application answers, and a referral note, each positioned by the fit brief, validated for traceability and against the claim rules, and exported.
+- **Process.** Correspondence, interview rounds (prep brief, then debrief), a running scorecard, and the leveling brief, each grounded in the dossier so far.
+
+Steps 1–4 of the original loop still exist inside this one. What changed is where the loop ends: at the end of the process, not at an exported résumé.
 
 ### Layers on top of the core loop
 
@@ -359,6 +420,103 @@ UnitCluster {
 }
 ```
 
+### Dossier objects (added October 2026)
+
+Sketches, not final schemas. Field names follow the existing conventions.
+
+```json
+CanonicalResume {
+  id: string,
+  version: string,              // bumps on every edit; tailored views pin one
+  lines: ResumeLine[]           // stable ids, so a view can reference a line
+}
+
+ResumeLine {
+  id: string,
+  section: string,              // "headline" | "summary" | "<employer>" | "skills" | ...
+  text: string,
+  experience_unit_ids: string[] // the Units this line evidences
+}
+
+TailoredResume {
+  id: string,
+  application_id: string,
+  canonical_version: string,    // the version this view was built from
+  line_ids: string[],           // selection and order
+  exceptions: { line_id?: string, text: string, reason: string }[]  // deliberate rewrites, tracked
+}
+
+ClaimRule {
+  id: string,
+  kind: "never_claim" | "attribute_only_to" | "never_imply_shipped" | "retired_figure" | "phrasing",
+  statement: string,            // the rule as the user wrote it
+  applies_to?: string,          // e.g. the employer an accomplishment must stay attributed to
+  added_at: timestamp
+}
+
+FitBrief {
+  id: string,
+  application_id: string,
+  bottom_line: string,
+  strengths: { jd_clause: string, evidence_line_ids: string[], argument: string }[],
+  exposures: { jd_clause: string, gap: string, handling: string }[],
+  positioning: string,
+  level_strategy?: string,
+  homework: string[],
+  questions_to_ask: string[],
+  does_not_claim: string[],
+  verdict: "apply" | "hold" | "referral_needed" | "skip"
+}
+
+InterviewRound {
+  id: string,
+  application_id: string,
+  kind: "recruiter_screen" | "hiring_manager" | "panel" | "leadership" | "leveling" | "other",
+  interviewer_person_ids: string[],
+  scheduled_at?: timestamp,
+  prep_brief?: string,
+  transcript_ref?: string,       // e.g. a meeting-notes source; transcripts stay with the user
+  debrief?: string,
+  signal?: "warm" | "neutral" | "cool" | "unknown"
+}
+
+Correspondence {
+  id: string,
+  application_id?: string,
+  person_ids: string[],
+  direction: "inbound" | "outbound",
+  status: "drafted" | "sent" | "received",
+  subject?: string,
+  body_verbatim: string,         // what was actually sent, kept exactly
+  occurred_at: timestamp
+}
+
+NextAction {
+  id: string,
+  application_id?: string,
+  person_id?: string,
+  description: string,           // "text the referrer if no recruiter by Thursday"
+  due_at?: timestamp,
+  done: boolean
+}
+
+ScanResult {
+  id: string,
+  scan_run_id: string,
+  company_id: string,
+  title: string,
+  posting_url: string,
+  verified_on_employer_board: boolean,
+  comp_as_posted?: string,
+  tier: 1 | 2 | 3,
+  lines_up: string[],
+  exposed: string[],
+  referral_needed: boolean
+}
+```
+
+`Application` gains `fit_brief_id`, `tailored_resume_id`, and a `stage` vocabulary aligned with real processes: saved, researching, referral_requested, applied, screening, interviewing, leveling, offer, closed (with a reason). `Interaction` is superseded by `Correspondence` for messages and by `InterviewRound` for conversations.
+
 ### One note on the model
 
 What ties this together is the distinction between Experience Units (facts about the user) and UnitMatches (relationships to specific jobs). Experience Units are permanent—they belong to the user and persist across every application. UnitMatches are per-application and ephemeral. This means every new job the user targets is a fresh matching problem against a stable base of evidence. It also means the capability graph gets richer over time without bloating, because new Units get added, but old Units don't need to be rewritten for each new role.
@@ -453,6 +611,8 @@ Before any generated output is shown to the user, it goes through validation:
 4. **Surface to user.** Flagged issues appear as inline annotations on the generated output. The user resolves by either editing, removing, or adding a supporting Unit.
 
 The bar: the user should never see an output with an un-sourced claim. If the model generates one, validation catches it before the user does.
+
+**Claim-rule check (added October 2026).** A fourth check runs every generated artifact against the user's ClaimRules: fit briefs, résumé exceptions, cover letters, answers, prep briefs, and drafted messages. A violation blocks export like an untraceable claim does. Traceability asks "is this backed by evidence?"; the claim-rule check asks "is this a thing the user has decided never to say, or to say only one way?" Both are needed. A true, traceable claim can still be one the user has retired.
 
 ---
 
@@ -552,19 +712,40 @@ The CRM-lite view that keeps the user from needing a spreadsheet.
 
 V1 ends here. No dashboard with charts, no analytics view, no "insights" section. The pipeline is enough to see the state of the search at a glance.
 
+### Interface additions (October 2026)
+
+- **Role detail becomes the dossier.** Its header reads "where things stand" and the next action, as each reference folder index does. The tabs become: **Fit brief** (the default), Requirements & matches, **Package** (résumé view, cover letter, answers, referral note), **Process** (rounds with prep and debrief, scorecard, leveling), and **Correspondence** (verbatim, in order).
+- **Pipeline cards** show stage, days in stage, the next action, and the next scheduled round. Overdue next actions surface first.
+- **Evidence** gains the canonical résumé editor, with line ids visible, and a list of tailored views that are behind the current canonical version. It also gains the claim-rules list: short, user-written, always visible when editing.
+- **Scan inbox.** Each weekly run lists new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. One action turns a result into a Role with its JD captured.
+
 ---
 
 ## V2+ layers
 
 These are the extensions that build on the core loop. They're deliberately deferred, not because they're unimportant, but because V1 has to prove the loop works before the layers matter.
 
+*October 2026: parts of the first two layers below move forward into the revised scope. What moves is marked; the rest stays deferred.*
+
 ### CRM expansion
 
 Richer Person and Company objects. Relationship tracking that surfaces who's connected to which roles. Interaction threading that ties emails and messages to specific applications. Integrations with Gmail and Calendar to auto-populate Interactions.
 
+**Pulled forward:**
+- Correspondence threaded to applications, with outbound messages drafted in Matchline, sent from the user's own mail client, and logged verbatim.
+- Meeting transcripts from the user's notes tool feeding round debriefs.
+- People attached to rounds and referrals.
+
 ### Workflow automation
 
 Follow-up cadence suggestions based on stage age and interaction history. Stage-transition automations (applied → interview triggers an interview prep reminder). Template library for common outreach patterns.
+
+**Pulled forward:**
+- Next actions with due dates.
+- The weekly scan as a scheduled job.
+- A scheduled round automatically opening a prep-brief draft.
+- A finished round automatically opening a debrief draft from its transcript.
+- A thank-you note drafted from the debrief.
 
 ### Decision engine
 
@@ -615,6 +796,14 @@ V1 is explicitly single-user. No sharing, no collaboration, no team features. Th
 ### Capability Graph is portable
 
 The user's Experience Units belong to the user. Export to JSON is a V1 feature, not V2. If someone wants to leave Matchline, they should be able to take their structured career with them.
+
+### Claims are policy, not memory (added October 2026)
+
+What the user has decided never to claim, or to claim only one way, is written down once as a claim rule and enforced on every artifact. It is never left to a prompt's recall or to the user's vigilance on the fifth application of the week.
+
+### Correct the record (added October 2026)
+
+When a fact in the dossier is found to be wrong, the fix reaches every artifact that repeats it. The correction is logged, with what was wrong and how it was found. A fact checked against a primary source (a transcript, the employer's own posting) outranks one that wasn't, and the artifact says which kind it is.
 
 ### Cost is a feature
 
@@ -739,6 +928,45 @@ A sequenced build plan, not a promise.
 **Milestone:** Nathan ships ten serious applications through Matchline.
 
 After Sprint 3, V1 is done. V2 starts when either Nathan's search ends successfully or when real users other than Nathan enter the picture.
+
+## What ships next (October 2026)
+
+The revised order. Phase A is fixed by an expiring API-credit window; the rest is sequenced by what each step unblocks. Issue numbers are in the matchline repository.
+
+### Phase A: measure before building (through 2026-11-03)
+
+- Cost attribution, so every model comparison is priced correctly (#483).
+- A fresh baseline and a Claude 5.5 model sweep for extraction and JD parsing (#495, Phases 1–2).
+- A **fit-brief generator prototype**, evaluated privately against the owner's own briefs, comparing models and comparing Units against the canonical résumé as evidence (#495, Phase 3).
+
+**Exit:** a keep / change / defer decision on fit-brief generation, and an answer to whether Units are sufficient evidence for it.
+
+### Phase B: the evidence the package depends on
+
+- Canonical résumé as line-addressable data, with tailored résumés as views and tracked exceptions.
+- Claim rules as data, enforced by the validation layer.
+- Fit brief as a first-class artifact on the Role, built on Phase A's decision.
+
+**Exit:** a package for a new role (fit brief, tailored résumé, cover letter) that passes traceability and claim rules and that the owner sends with only light edits.
+
+### Phase C: the dossier and the pipeline
+
+- Pipeline board, card details, and the next-action sidebar (#510–#512, #34).
+- Roles saved before a JD is available (#431).
+- Interview rounds with people, the verbatim correspondence log, and "where things stand" on every dossier.
+- Export to PDF, DOCX, and text (#33), and cover letters (#30), which now sit on the package rather than the old Applications tab.
+
+**Exit:** one live process run entirely in Matchline from application through every round.
+
+### Phase D: workflows
+
+- The weekly scan as a scheduled job over employer boards the user names, with employer-board verification and tiering.
+- Prep briefs opened automatically for scheduled rounds; debriefs drafted from transcripts; thank-you notes drafted from debriefs.
+- Messages drafted in Matchline and sent by the user, then logged verbatim.
+
+**Exit:** the replacement test in [Success metrics](#success-metrics-for-v1). New opportunities stop getting hand-built folders.
+
+Still deferred: LinkedIn and long-form import (#28, #29), artifact upload (#87), outcome learning, the network graph, and anything multi-user.
 
 ---
 
