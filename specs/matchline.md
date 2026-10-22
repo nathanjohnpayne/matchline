@@ -20,9 +20,12 @@ The authoritative PRD lives in the `docs` sibling repo at
 repo-local derivation. On conflict, the PRD wins; file a plan entry to
 reconcile.
 
-This spec tracks PRD v0.3 (2026-10-22). Statements describe shipped
-behavior unless marked **Target** (approved, not built) or **Deferred**
-(out of this release by decision), as the PRD defines them. Target
+This spec tracks PRD v0.3 (2026-10-22). Descriptive statements
+reflect shipped behavior unless marked **Target** (approved, not built
+or not yet met) or **Deferred** (out of this release by decision), as
+the PRD defines them. Acceptance criteria and execution targets are
+requirements; where shipped behavior does not meet one yet, it is
+marked **Target** with the measured result. Target
 requirements are summarized here only where they constrain shipped
 code; the PRD's "Target interface" and "Core requirements and
 enhancements" sections are the full list.
@@ -141,13 +144,17 @@ Acceptance criteria:
 
 ### End-to-end acceptance
 
-- **Full flow.** From a populated Capability Graph, a user can paste
-  a JD and produce a validated, exportable resume in under 20 seconds
-  at p95.
-- **Cost.** Per-application LLM spend (parse + match + generate +
-  validate) is under $1 at p95; target $0.75.
+- **Full flow (Target, not met).** From a populated Capability Graph,
+  a user can paste a JD and produce a validated, exportable resume in
+  under 20 seconds at p95. Measured: 236 s at p95 (#177), and export is
+  not built (#33).
+- **Cost (Target).** Per-application LLM spend (parse + match +
+  generate + validate) is under $1 at p95; target $0.75. Per-call cost
+  is attributed by task since #483; no per-application p95 has been
+  reported against this target yet.
 - **Zero fabrication.** Every claim in every shipped output traces to
-  an approved Experience Unit. This is an invariant, not a metric.
+  an approved Experience Unit. This is an invariant, not a metric; the
+  validation layer and the export gate enforce it today.
 
 ## Data model
 
@@ -482,6 +489,9 @@ Leases are per invocation rather than per named operation: a fixed key lets one 
 Guarding *unsaved editor content* is a related but separate contract, tracked in #456: a busy lease suppresses the prompt outright, whereas unsaved work gates the reload behind a confirmation the user can override.
 
 ## Execution targets
+
+These are **Target** values. Measured today: resume extraction about
+108 s, and the full flow 236 s at p95 (#177).
 
 Latency (p50 / p95):
 

@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: 6434f55c0731b1cb53de28b1fc1dc0c54facd967
+source_ref: ac544c68a8bb78a7f2a0fab2da4d4ea4203db549
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -131,7 +131,7 @@ The owner settled eight questions that v0.2 left in conflict. Each is applied th
 4. **Exit test.** The replacement test replaces "ten serious applications": new opportunities run in Matchline instead of in hand-built dossier folders. Two intermediate tests come first: a grounded, claim-rule-compliant package sent with only light edits, then one live process managed through every round. Owner-preference review is a manual acceptance step, not a capability of the evaluation harness.
 5. **Application Editor vs. Package.** The Package tab is the home for editing, validation and export. An expanded editor can be another view of the same package, never a separate artifact or workflow. The shipped Application Editor is transitional.
 6. **Aggregator results in Scan.** A role found only on an aggregator stays in Scan as an unverified lead. It cannot become a scan-created Role, or count as a verified opportunity, until it is confirmed against the employer's own posting. The discovery source (where a lead was seen) is recorded separately from the authoritative source (the employer's posting). This does not authorize scraping aggregators.
-7. **Role provenance.** The target Role schema gains minimal provenance: whether the Role was entered by hand or created from a scan, and a source URL when one is available. New Role keeps its Company and Source fields; persisting them is implementation work.
+7. **Role provenance.** The target Role schema gains minimal provenance: whether the Role was entered by hand or created from a scan, and a source URL when one is available. The target New Role form has Company and Source fields, as the wireframes draw it. The shipped form has neither, so adding and persisting them is implementation work.
 8. **Phone layouts.** Agreed V1 workflows get responsive web layouts down to phone widths. This adds no native apps, no offline support, and no separate mobile feature set.
 
 ## Why this exists
@@ -365,7 +365,7 @@ Role {
 }
 ```
 
-`origin` is `scan` only for a Role created from a scan result that was verified on the employer's posting; that posting is the Role's `jd_url`. New Role keeps a **Company** field and a **Source** field. Neither persists today; wiring them to `company_id` and `source_url` is implementation work. A non-URL source, such as a referral, has no field in this schema; see [Open questions](#open-questions).
+`origin` is `scan` only for a Role created from a scan result that was verified on the employer's posting; that posting is the Role's `jd_url`. The target New Role form has a **Company** field and a **Source** field. The shipped form has neither: it stamps a placeholder `company_id` and records no source. Adding both fields and persisting them to `company_id` and `source_url` is implementation work. A non-URL source, such as a referral, has no field in this schema; see [Open questions](#open-questions).
 
 ```json
 Application {
@@ -1055,6 +1055,7 @@ Some Phase C work shipped first, out of this order: the Pipeline board (#510, #5
 - Canonical résumé as line-addressable, versioned data, with tailored résumés as views that pin a version, tracked exceptions, Rebase or Keep, and a non-blocking staleness warning (decision 2).
 - Claim rules as data, enforced as a blocking check by the validation layer.
 - Fit brief as a first-class artifact on the Role, built on Phase A's decision.
+- Cover letters (#30) and export to PDF, DOCX, and text (#33), from the Package (decision 5), because the exit below sends a package.
 
 **Exit (intermediate test 1):** a package for a new role (fit brief, tailored résumé, cover letter) that passes traceability and claim rules and that the owner sends with only light edits.
 
@@ -1063,7 +1064,7 @@ Some Phase C work shipped first, out of this order: the Pipeline board (#510, #5
 - Pipeline board, card details, and the next-action sidebar (#510–#512, #34). *Shipped.* The next scheduled round on cards remains.
 - Roles saved before a JD is available (#431). *Shipped.*
 - The dossier: "where things stand," the next action, and the five tabs.
-- The Package as the home for editing, validation and export, with export to PDF, DOCX, and text (#33) and cover letters (#30); the Application Editor's behavior moves here (decision 5).
+- The rest of the Package as the home for editing and validation (application answers and the referral note); the Application Editor's behavior moves here (decision 5).
 - Interview rounds with people, the scorecard, the leveling brief, and the verbatim correspondence log.
 - Company and People entry, and Role provenance persisted from New Role (decision 7).
 - The target navigation, and responsive layouts for every surface this phase touches (decision 8).
