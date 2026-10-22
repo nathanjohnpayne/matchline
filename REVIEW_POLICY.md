@@ -198,7 +198,7 @@ Trusted per-head CodeRabbit status selection uses numeric status IDs, including 
 Phase 4 has two sub-phases that together cover the two ways external review can run:
 
 - **Phase 4a — Automated external review** via the ChatGPT Codex Connector GitHub App. This is the default happy path. The authoring agent drives the review loop without human intervention until Codex signals clearance, then runs a merge-gate check and merges.
-- **Phase 4b — Manual CLI fallback** via a different agent's CLI session (e.g., Codex CLI as `nathanpayne-codex`, or Cursor, or Claude Code). This is the escape hatch when 4a escalates (disagreement or runaway), times out, or is unavailable because `codex.enabled: false`. The human mediates the handoff.
+- **Phase 4b — External review** by a different agent's reviewer CLI (e.g., Codex CLI as `nathanpayne-codex`, or Claude Code). It applies when 4a times out, spends its request ceiling, or is unavailable because `codex.enabled: false`. Automated Phase 4b (`scripts/phase-4b-review.sh`) runs first in this repository; the human-mediated manual handoff applies only when that run falls back. Phase 4a disagreement and runaway do not enter Phase 4b: they go to the human (see [Disagreements and Tiebreaking](#disagreements-and-tiebreaking)).
 
 An agent proceeds to 4a first. If 4a escalates, times out, or is disabled, the agent falls back to 4b and surfaces the handoff to the human per [Handoff Message Format](#handoff-message-format).
 
@@ -295,6 +295,8 @@ Readiness validation is event-driven rather than runner-polled. Three triggers r
 
 #### Phase 4b: Manual CLI Fallback (Human Handoff)
 
+**Automated Phase 4b runs first in this repository** (`phase_4b_automation.enabled: true`, `mode: local`, since mergepath#2665). Whenever a PR reaches Phase 4b (a Codex timeout, exit `4`; a spent request ceiling, exit `7` with `kind: "request-ceiling"`; or Phase 4a being unavailable), run `scripts/phase-4b-review.sh <PR#> --repo <owner/repo>` before anything in this section, from a trusted `main`-ref checkout, never from the checkout of the PR under review (mergepath#628). Exit `0` posts an `APPROVED` review pinned to the reviewed HEAD. Exit `1` posts `CHANGES_REQUESTED`: a completed round to address and rerun. `phase_4b_automation.max_review_rounds` (3) caps completed rounds per PR through the round ledger (mergepath#2663), and a spent cap escalates to the human rather than falling through to the manual handoff. A hold (exit `6`, including a barrier wait to rerun after its `retry_after`) is not a failure, and a tripwire or tiebreaker stop (exit `8`) goes to the human. The manual handoff steps below apply only when the orchestrator falls back to them (`fell_back_to_manual: true`) or is missing from disk. Canonical contract: [Mergepath REVIEW_POLICY.md § Phase 4b](https://github.com/nathanjohnpayne/mergepath/blob/main/REVIEW_POLICY.md#phase-4b-manual-cli-fallback-human-handoff).
+
 **Deterministic egregious-case escalation (#1757).** Model-authoritative Phase 4b remains the ordinary path, with the owner-accepted hostile-diff residual. After existing provider/feedback barriers permit continuation, the trusted orchestrator checks the complete immutable PR input on posting and retained-evidence paths for literal reviewer/verdict instructions and the authorization/review-policy/required-publisher/credential-handling path inventory, before dispatching the Phase 4b adapter. Earlier provider requests, stops and manual fallbacks remain possible; existing disagreement, runaway and human-stop signals retain their earlier barriers. A matched tripwire stops for human-mediated review with exit8, without Phase 4b adapter execution or approval publication. Pure previews retain their existing behavior. Report the fixed reason codes from `barrier.tripwire.tripwires` when escalating this stop. A clear result is not proof of resistance to hostile instructions. The exact finite alarms, conservative path inventory, residuals and tests are specified in [Deterministic Phase 4b escalation](https://github.com/nathanjohnpayne/mergepath/blob/main/specs/phase_4b_escalation.md).
 
 Phase 4b is invoked when Phase 4a escalates to disagreement or runaway, times out (single timeout, exit code `4` from `codex-review-request.sh`), or when `codex.enabled: false` in the repo. It preserves the cross-agent review flow that existed before the Codex GitHub App integration and provides a human-mediated escape hatch.
@@ -370,11 +372,11 @@ Phase 4b is invoked when Phase 4a escalates to disagreement or runaway, times ou
                  │ clearance              │ escalate / fallback
                  ▼                        ▼
   ┌──────────────────────────┐  ┌────────────────────────────┐
-  │  MERGE GATE:             │  │  PHASE 4b: MANUAL CLI      │
-  │  codex-review-check.sh   │  │  FALLBACK                  │
+  │  MERGE GATE:             │  │  PHASE 4b: AUTOMATED FIRST │
+  │  codex-review-check.sh   │  │  (phase-4b-review.sh);     │
   │                          │  │                            │
-  │  • gh pr checks = green  │  │  Post handoff message;     │
-  │  • internal reviewer     │  │  alert human.              │
+  │  • gh pr checks = green  │  │  on fallback only: post    │
+  │  • internal reviewer     │  │  handoff; alert human.     │
   │    identity APPROVED     │  │                            │
   │  • Codex cleared on HEAD │  │  Human takes handoff to    │
   │    via COMMENTED-no-P0/1 │  │  different agent CLI       │
