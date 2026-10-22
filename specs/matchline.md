@@ -169,7 +169,7 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
 - `Person { id, name, role, company_id, relationship_type, last_contacted_at?, notes? }`
 - `Company { id, name, industry?, size?, priority, url?, notes? }`
 - `Role { id, company_id, title, jd_raw, jd_url?, location?, remote_policy?, comp_range?, discovered_at }`
-  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`. New Role stamps a placeholder `company_id` because there is no Company UI yet; persisting the form's Company and Source fields is Target work.
+  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`. New Role stamps a placeholder `company_id` because there is no Company UI yet; adding Company and Source fields to the form, and persisting them, is Target work.
   - `jd_raw` may be the empty string. A Role can be saved with only a title, as a lead whose JD arrives later (#431). Parsing, matching and generation stay gated on the JD: an empty `jd_raw` yields no Requirements, matching does not run without Requirements, and generation needs approved matches.
 - `Application { id, role_id, stage, applied_at?, last_activity_at, generated_assets[], approved_unit_ids[] }`
   - `stage` is one of seven values: `saved`, `drafting`, `applied`, `interviewing`, `offer`, `rejected`, `withdrawn`. These stay for this release (PRD decision 1); finer process steps belong to the dossier, not to `stage`.
@@ -536,7 +536,7 @@ Reliability:
 
 ## V1 surfaces
 
-The shipped product has five screens behind sign-in. Nothing ships
+The shipped product has six screens behind sign-in. Nothing ships
 that isn't directly serving matching or generation.
 
 1. **Onboarding** — one-time; paste resume text, with streamed
@@ -566,6 +566,12 @@ that isn't directly serving matching or generation.
    and key contact; a collapsible sidebar with Due today, Upcoming, and
    Follow-ups (Applied or Interviewing, quiet for more than 7 days, no
    open task).
+6. **New Role** (`/roles/new`, the "+ New Role" nav entry) — a form
+   with a required title and optional job description, JD URL,
+   location, remote policy, and comp range; the draft persists across
+   reloads until saved or cancelled. Saving creates the Role, even
+   with only a title (#431), and opens its Role Detail. **Target**
+   (PRD decision 7): Company and Source fields, persisted on the Role.
 
 **Target:** the navigation, dossier, Evidence (canonical resume and
 claim rules), Package, Process, Correspondence, and Scan surfaces in
