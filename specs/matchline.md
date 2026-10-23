@@ -92,8 +92,8 @@ Acceptance criteria:
   `normalized_requirement`, cached per Role.
 - Parsed Requirements are listed read-only on the Role Detail →
   Requirements tab; changing them means editing the JD and re-parsing.
-  **Target:** inline editing (the rules and `upsertRequirement()` allow
-  it; no UI calls it).
+  **Target enhancement:** inline editing (the rules and `upsertRequirement()`
+  allow it; no UI calls it).
 
 ### Step 3 — Match Units to Requirements
 
@@ -132,10 +132,10 @@ Acceptance criteria:
 
 - Generation produces a resume grounded only in approved Experience
   Units and their approved matches. **Target:** cover letters (#30) and
-  the other package artifacts (application answers, referral note,
-  outreach), under the same grounding and validation. `AssetRef.kind`
-  already reserves `cover_letter` and `outreach`; no writer produces
-  them yet.
+  the other package artifacts (application answers, referral note),
+  under the same grounding and validation. Outreach drafting is
+  **Deferred**. `AssetRef.kind` already reserves `cover_letter` and
+  `outreach`; no writer produces them yet.
 - The validation layer (see `## Validation layer`) attaches a
   claim-to-Unit map and flags any claim that does not trace to an
   approved Unit. It runs when the user saves a bullet's text or
@@ -144,7 +144,7 @@ Acceptance criteria:
 - The export gate (today in the Application Editor; **Target:** the
   Package, PRD decision 5) blocks export while any validation flag is
   unresolved.
-- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
+- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
 - **Target:** export to PDF, DOCX, and plain text (#33), from the
   Package. Today the Export control enforces the gate above, but its
   action is a stub.
@@ -153,10 +153,10 @@ Acceptance criteria:
 
 - **Full flow (Target, not met).** From a populated Capability Graph,
   a user can paste a JD and produce a validated, exportable resume in
-  under 20 seconds at p95. Measured: 236 s at p95 (#177), and export is
+  under 20 s at p95. Measured: 236 s at p95 (#177), and export is
   not built (#33).
 - **Cost (Target).** Per-application LLM spend (parse + match +
-  generate + validate) is under $1 at p95; target $0.75. Per-call cost
+  generate + validate) is under $1, with a p95 target of $0.75. Per-call cost
   is attributed by task since #483; no per-application p95 has been
   reported against this target yet.
 - **Zero fabrication.** Every claim in every exported or sent output
@@ -185,7 +185,7 @@ omitted from the shapes below.
 - `Person { id, name, role, company_id, relationship_type, last_contacted_at?, notes? }`
 - `Company { id, name, industry?, size?, priority, url?, notes? }`
 - `Role { id, company_id, title, jd_raw, jd_url?, location?, remote_policy?, comp_range?, discovered_at }`
-  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`. New Role stamps a placeholder `company_id` because there is no Company UI yet; adding Company and Source fields to the form, and persisting them, is Target work.
+  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`; `source_url` keeps where the lead was seen (the result's `discovery_url`). New Role stamps a placeholder `company_id` because there is no Company UI yet; adding Company and Source fields to the form, and persisting them, is Target work.
   - `jd_raw` may be the empty string. A Role can be saved with only a title, as a lead whose JD arrives later (#431). Parsing, matching and generation stay gated on the JD: an empty `jd_raw` yields no Requirements, matching does not run without Requirements, and generation needs approved matches.
 - `Application { id, role_id, stage, applied_at?, last_activity_at, generated_assets[], approved_unit_ids[] }`
   - `stage` is one of seven values: `saved`, `drafting`, `applied`, `interviewing`, `offer`, `rejected`, `withdrawn`. These stay for this release (PRD decision 1); finer process steps belong to the dossier, not to `stage`.
@@ -233,7 +233,7 @@ omitted from the shapes below.
 
 The PRD's § Dossier objects sketches `CanonicalResume`, `ResumeLine`,
 `TailoredResume`, `ClaimRule`, `FitBrief`, `InterviewRound`,
-`Correspondence` and `ScanResult`. None is persisted. Invariants the
+`Correspondence`, `ScanResult` and `Correction`. None is persisted. Invariants the
 build must keep:
 
 - A `TailoredResume` pins `canonical_version`. An unsent view's pinned
@@ -242,8 +242,16 @@ build must keep:
   tracked exceptions stay editable until the package is sent. Staleness
   against the current canonical is a visible, non-blocking warning
   (PRD decision 2).
-- A sent package is immutable. Rebase does not apply to it, and a
-  correction to it is logged as a linked record rather than an edit.
+- A package is sent when its `TailoredResume.sent_at` is set. A sent
+  package is immutable, and its fit brief freezes with it. Rebase does
+  not apply to it, and a correction to it is logged as a linked
+  `Correction` rather than an edit.
+- A fact found wrong is fixed once, at its source (a canonical line, a
+  Unit or a Role field). Unsent views pick the fix up through the
+  staleness warning and an explicit Rebase; nothing rewrites them
+  silently.
+- A `FitBrief` is keyed by `role_id`, so a Role entered by hand can
+  have a brief before it has an Application.
 - A `ClaimRule` violation blocks export, as an untraceable claim does.
   Adding supporting evidence repairs traceability but never clears a
   claim-rule hit: the text must change, or the user must explicitly
@@ -548,7 +556,7 @@ Latency (p50 / p95):
 | Resume generation | 3s | 8s |
 | Cover letter generation | 4s | 10s |
 | Validation | 1s | 3s |
-| Full flow (paste JD → validated resume) | 6s | 18s |
+| Full flow (paste JD → validated resume) | 6s | 20s |
 
 Cost:
 
@@ -574,7 +582,7 @@ Reliability:
 The shipped product has six screens behind sign-in. Nothing ships
 that isn't serving the core loop or the pipeline around it.
 
-1. **Onboarding** — paste resume text (reachable any time from the nav), with streamed
+1. **Onboarding** — paste resume text (reachable any time from the nav; **Target:** as Evidence → Import), with streamed
    progress; lands in Unit Review. The four-source import picker is
    **Deferred**.
 2. **Unit Review** — list of Experience Units, filterable by skill, tool, domain, date range, and approval status (approved, pending, flagged); inline editing, where an edit to `raw_text` or `normalized_summary` marks the Unit `reembed_pending`, which keeps it out of matching until it is re-embedded; approve / reject / flag; "Add Unit manually" action, whose Unit is born `reembed_pending` with no embedding and so cannot match today. Rejected Units drop out of the list. **Target:** a source-type filter; a client call to `reembedExperienceUnit` after an edit or a manual add, so the embedding is computed (today the callable has no client call site and no trigger); a separate view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller). **Deferred:** artifact upload.
@@ -598,7 +606,8 @@ that isn't serving the core loop or the pipeline around it.
    `company_id`), title, a day count labeled "days in stage" that measures
    days since `last_activity_at` (a completed task resets it; true
    time in stage, which needs a stage-entry timestamp, is **Target**),
-   next action (the first open task),
+   next action (the first open task; surfacing overdue ones first is a
+   **Target enhancement**),
    and key contact; a collapsible sidebar with Due today, Upcoming, and
    Follow-ups (Applied or Interviewing, quiet for more than 7 days, no
    open task).
