@@ -5,6 +5,18 @@ Last updated: 2026-04-22
 PRD: [`~/GitHub/docs/projects/matchline/prds/matchline.md`](../../docs/projects/matchline/prds/matchline.md)
 Repo-local spec: [`specs/matchline.md`](../specs/matchline.md)
 
+> **Historical (as of 2026-10-22).** This plan follows the PRD's April
+> sprint sequence, which the October 2026 dossier revision replaced.
+> It no longer directs work. The current order is the PRD's "What ships
+> next" section (PRD v0.3, mirrored at
+> [`docs/projects/matchline/prds/matchline.md`](../docs/projects/matchline/prds/matchline.md)).
+> Two things below are superseded: Phase 2's LinkedIn, long-form and
+> artifact imports are deferred (PRD v0.3, decision 3), and Phase 3's
+> "ten serious applications" milestone is replaced by the replacement
+> test (decision 4). Some Phase 2 Pipeline work shipped ahead of the
+> PRD's Phase A (#510–#512, #34). The plan is kept for the record of
+> how V1 was built.
+
 ---
 
 ## Framing
