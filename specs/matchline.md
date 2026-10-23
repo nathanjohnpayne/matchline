@@ -175,10 +175,14 @@ model. For each object, the repo ships TypeScript types in
 `src/types/` that must match the JSON shape below. Foreign keys use
 UUIDs; timestamps are ISO 8601 strings in the documents below.
 Exceptions: `llm_calls` (auto ids, server `createdAt`) and validation
-attestations (keyed by asset id and content fingerprint). Every
-persisted object also carries `owner_uid` (the Firebase Auth uid),
-stamped by the service layer and enforced by `firestore.rules`; it is
-omitted from the shapes below.
+attestations (keyed by asset id and content fingerprint). Every CRM
+and Capability Graph object also carries `owner_uid` (the Firebase
+Auth uid), stamped by the service layer and enforced by
+`firestore.rules`; it is omitted from the shapes below. Validation
+attestations carry `owner_uid` too, stamped by `validateAsset`. The
+server-only `llm_calls` ledger does not: `firestore.rules` denies all
+client access to it, and it records an optional camel-case `ownerUid`
+(`functions/src/llm/cost.ts`).
 
 ### CRM objects
 

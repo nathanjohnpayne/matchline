@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: 93cc2db9caeacd446f9a0d5e36ca4713ba2d319f
+source_ref: a7b0c72c1a692a5529b247a2650d961e436d6b09
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -319,7 +319,7 @@ The rest of this document focuses on the core loop. The layers get their own sec
 
 The data model has two halves: CRM objects (the pipeline) and the Capability Graph (the evidence). They connect through Applications.
 
-Every shipped document also carries `owner_uid`, stamped by the service layer and enforced by the Firestore rules. The schemas below omit it. The repo's `specs/matchline.md` and the TypeScript types are authoritative for shipped fields.
+Every shipped CRM and Capability Graph document also carries `owner_uid`, stamped by the service layer and enforced by the Firestore rules. The server-only `llm_calls` cost ledger is the exception: clients cannot read or write it at all, and it records an optional `ownerUid` instead. The schemas below omit it. The repo's `specs/matchline.md` and the TypeScript types are authoritative for shipped fields.
 
 ### CRM objects
 
