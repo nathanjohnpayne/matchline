@@ -140,8 +140,9 @@ Acceptance criteria:
   claim-to-Unit map and flags any claim that does not trace to an
   approved Unit. It runs when the user saves a bullet's text or
   chooses "Re-run validation," after the draft is shown; adding or
-  removing a bullet marks the draft stale without running it; running it before the draft is shown is **Target**.
-- The Application Editor blocks export while any validation flag is
+  removing a bullet marks the draft unvalidated (`validation_status: "stale"`, unrelated to staleness against the canonical) without running it; running it before the draft is shown is **Target**.
+- The export gate (today in the Application Editor; **Target:** the
+  Package, PRD decision 5) blocks export while any validation flag is
   unresolved.
 - A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
 - **Target:** export to PDF, DOCX, and plain text (#33), from the
@@ -235,13 +236,18 @@ The PRD's § Dossier objects sketches `CanonicalResume`, `ResumeLine`,
 `Correspondence` and `ScanResult`. None is persisted. Invariants the
 build must keep:
 
-- A `TailoredResume` pins `canonical_version`. An unsent view changes
-  only through an explicit Rebase; Keep leaves it pinned. Staleness
+- A `TailoredResume` pins `canonical_version`. An unsent view's pinned
+  version, and any canonical text it carries, changes only through an
+  explicit Rebase; Keep leaves it pinned. Its selection, order and
+  tracked exceptions stay editable until the package is sent. Staleness
   against the current canonical is a visible, non-blocking warning
   (PRD decision 2).
 - A sent package is immutable. Rebase does not apply to it, and a
   correction to it is logged as a linked record rather than an edit.
 - A `ClaimRule` violation blocks export, as an untraceable claim does.
+  Adding supporting evidence repairs traceability but never clears a
+  claim-rule hit: the text must change, or the user must explicitly
+  change the rule.
 - A `ScanResult` records its discovery source apart from the
   employer's posting. One not verified on the employer's board cannot
   become a Role or count as a verified opportunity (PRD decision 6).
@@ -304,8 +310,10 @@ Acceptance criteria:
 - Recency is exponential decay on the Unit's end date, floored so
   ancient-but-relevant experience still contributes.
 - Skill, tool, and domain overlaps use Jaccard similarity on canonical
-  vocabularies, normalized at match time (`functions/src/matching/normalize.ts`);
-  stored Units keep the extracted strings. The empty-set case is
+  vocabularies. Extraction asks the model for canonical forms, and
+  matching applies deterministic normalization at match time
+  (`functions/src/matching/normalize.ts`); stored Units keep the
+  extracted strings. The empty-set case is
   **directional**: when the Requirement side carries nothing the
   canonical vocabulary recognizes, the axis places no evaluable
   constraint and scores a neutral `0.5`; when the Requirement side is
@@ -409,7 +417,8 @@ Validation runs these steps:
 2. For each claim, verify it maps to an approved Experience Unit.
 3. Flag generic non-specific language that cannot be tied to any Unit.
 4. Surface flagged issues as inline annotations in the Application
-   Editor. The editor blocks export while any flag is unresolved.
+   Editor. The editor blocks export while any flag is unresolved
+   (**Target:** the Package hosts this gate, PRD decision 5).
 
 The validation layer is a hard constraint on export: nothing exports
 without a passing, server-attested traceability pass. Generation saves
@@ -425,10 +434,11 @@ is first shown.
 - A claim-rule check runs every generated artifact against the user's
   claim rules. A violation blocks export.
 - A tailored resume's staleness against the canonical is reported
-  beside the validation results and never blocks export. Traceability
+  beside the validation results and never blocks export. Rebase is
+  offered only on unsent views; a sent package is read-only. Traceability
   and claim-rule failures always block.
 
-The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
+The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. This `stale` means the asset changed since its last validation run, and it blocks export; it is unrelated to staleness against the canonical, which is a non-blocking warning. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
 
 ## AI pipeline
 
@@ -443,7 +453,8 @@ Real-time:
 4. Matching (vector + rules, deterministic rationales; no LLM call)
 5. Generation (controlled-generation prompt using approved Units as
    ground truth)
-6. Validation (LLM claim-to-Unit check, or deterministic where possible)
+6. Validation (LLM claim extraction, traceability and specificity; the
+   deny-list is a hint to the specificity model, not a verdict)
 
 Model strategy:
 
@@ -561,7 +572,7 @@ Reliability:
 ## V1 surfaces
 
 The shipped product has six screens behind sign-in. Nothing ships
-that isn't directly serving matching or generation.
+that isn't serving the core loop or the pipeline around it.
 
 1. **Onboarding** — paste resume text (reachable any time from the nav), with streamed
    progress; lands in Unit Review. The four-source import picker is
@@ -665,14 +676,16 @@ without forcing it.
 
 ## Out of scope for V1
 
-Deferred to V2+ (do not scaffold or build):
+Out of this release (do not build further):
 
 - Decision Engine (should-I-apply scoring)
 - Learning Layer (outcome-driven tuning)
 - Network Layer (relationship graph, referral suggestions)
 - Browser extension for JD / profile import
 - LinkedIn import, long-form context import, and artifact upload
-  (deferred by PRD decision 3)
+  (Deferred by PRD decision 3, out of this release; the `artifact`
+  source type and `artifact://` format from #592 are a data-model
+  change only)
 - Native mobile apps, offline support, or a separate mobile feature
   set (V1 is responsive web)
 - Any generalization beyond the single V1 user
