@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: b714d034a7212dac5fa3bc1bf4c564a0a7a8393e
+source_ref: b3d586dfea4ce442393e78c163b6ab1f93bda5bd
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -21,7 +21,7 @@ Version: v0.3 (draft)
 Author: Nathan Payne
 Last updated: October 22, 2026
 
-**Status (2026-10-22):** Unpaused. V1 was built through the core loop on the stack below (dev instance: `matchline-dev.web.app`) but did not ship by the July 2026 target. The quality result of record is still 48.4% extraction and 19.1% match accuracy against the 80% bars, with p95 full-flow latency of 236 s (matchline#177). Since work resumed in October 2026, the Pipeline board (#510, #511), the follow-ups sidebar (#34), next actions on Pipeline cards (#512), forward-only task completion (#588, #589), Roles saved without a JD (#431), cost attribution (#483), and the export gate's server attestation (#502) have shipped. The fit-brief generator and its private evaluation harness are merged but eval-only (#581). The artifact source type exists in the data model only (#592). The credit-funded evaluation window (matchline#495) runs through November 3; its code has merged, and its paid runs wait on owner approval. Export, cover letters, the canonical résumé, claim rules, the dossier tabs and the weekly scan are not built. LinkedIn import, long-form import and artifact upload are deferred. v0.3 separates what has shipped from the approved target and from deferred work, and it records eight product decisions; see [How to read this document](#how-to-read-this-document) and [Decisions in v0.3](#decisions-in-v03-october-2026). Implementation detail: the repo's `specs/matchline.md`. The repo's `plans/matchline-implementation-plan.md` is historical.
+**Status (2026-10-22):** Unpaused. V1 was built through the core loop on the stack below (dev instance: `matchline-dev.web.app`) but did not ship by the July 2026 target. The quality result of record is still 48.4% extraction and 19.1% match accuracy against the 80% bars, with p95 full-flow latency of 236 s (matchline#177). Since work resumed in October 2026, the Pipeline board (#510, #511), the follow-ups sidebar (#34), next actions on Pipeline cards (#512), forward-only task completion (#588), follow-ups that come due during the day (#589), Roles saved without a JD (#431), cost attribution (#483), and the export gate's server attestation (#502) have shipped. The fit-brief generator and its private evaluation harness are merged but eval-only (#581). The artifact source type exists in the data model only (#592). The credit-funded evaluation window (matchline#495) runs through November 3; its code has merged, and its paid runs wait on owner approval. Export, cover letters, the canonical résumé, claim rules, the dossier tabs and the weekly scan are not built. LinkedIn import, long-form import and artifact upload are deferred. v0.3 separates what has shipped from the approved target and from deferred work, and it records eight product decisions; see [How to read this document](#how-to-read-this-document) and [Decisions in v0.3](#decisions-in-v03-october-2026). Implementation detail: the repo's `specs/matchline.md`. The repo's `plans/matchline-implementation-plan.md` is historical.
 
 **Status history:** paused pre-launch 2026-07-31; revisiting considered from September 2026, when the job search it was built for resumed (nathanpayne.com project page); unpaused October 2026 with the dossier revision (v0.2, October 19); shipped, target and deferred separated (v0.3, October 22).
 
@@ -217,9 +217,9 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 **Shipped** (on `main` as of October 22, 2026):
 - Sign-in with Google or email and password, with no self-service sign-up; access is limited to an owner allowlist enforced in every callable and in the Firestore rules.
 - Career ingestion from a pasted résumé, with streamed progress, into Experience Units.
-- Unit Review: filters, inline editing, approve, flag and reject, and manual Unit entry. An edited Unit is marked `reembed_pending` and stays out of matching until it is re-embedded; nothing in the client triggers that re-embed yet.
+- Unit Review: filters, inline editing, approve, flag and reject, and manual Unit entry. A manually entered Unit, or one whose raw text or summary is edited, is marked `reembed_pending` and stays out of matching until it is embedded; nothing in the client triggers that yet.
 - New Role, including Roles saved with only a title (#431).
-- Job Requirement parsing with priority and must-have flags, editable inline.
+- Job Requirement parsing with priority and must-have flags. The JD can be edited and re-parsed; parsed Requirements can't be edited one by one.
 - The matching engine with explainable scores, rationales, gaps and unverifiable matches, and re-run.
 - Résumé generation grounded in approved matches.
 - Validation: claim extraction, traceability and specificity checks, inline annotations, and an export gate that requires the server's attestation (#502).
@@ -240,7 +240,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 - The weekly scan of employer boards the user names, with employer-board verification and tiering (decision 6).
 - Workflow automations: prep briefs opened for scheduled rounds, debriefs drafted from transcripts, thank-you notes drafted from debriefs.
 - Responsive web layouts for these workflows, down to phone widths (decision 8).
-- Unit Review completion: re-embed a Unit after an inline edit (the `reembedExperienceUnit` callable exists but has no client call site or trigger), and a view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller).
+- Unit Review completion: embed a Unit after an inline edit or a manual add (the `reembedExperienceUnit` callable exists but has no client call site or trigger), and a view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller).
 
 **Target, enhancements** (approved, never release-blocking): see [Core requirements and enhancements](#core-requirements-and-enhancements).
 
@@ -276,7 +276,7 @@ Four steps. Each one is a component with a clear input, output, and quality bar.
 
 **Step 1: Career into Experience Units.** The user inputs their career and the system produces a structured graph of atomic, verifiable claims. Each Unit is a discrete piece of evidence—a shipped project, an owned metric, a technical decision, a managed team—with associated skills, tools, domains, and confidence. The user reviews and corrects. This is the single most important component in the product; everything downstream depends on the quality of these Units. *Shipped input:* a pasted résumé. *Deferred inputs* (decision 3): LinkedIn import, long-form prose, and artifact upload. Each would capture a different facet of the same career: resumes and LinkedIn compress history into sanitized bullets, long-form prose lets the user narrate context that never made it to a document, and artifacts preserve the specifics—metrics, scope, ownership signals, tradeoff framing—that resume bullets flatten out.
 
-**Step 2: Job into Requirement Units.** The user pastes a job description, and the system parses it into structured requirements with priority, must-have flags, and signals (seniority, scope, domain). This step is mostly deterministic parsing plus light LLM classification. It's the easiest part of the pipeline, but critical to get right—if the requirements are wrong, the matches are wrong.
+**Step 2: Job into Requirement Units.** The user pastes a job description, and the system parses it into structured requirements with priority, must-have flags, and signals (seniority, scope, domain). This step is a single LLM parse of the whole JD into structured Requirements, followed by embedding. It's the easiest part of the pipeline, but critical to get right—if the requirements are wrong, the matches are wrong.
 
 **Step 3: Match Units to Requirements.** The matching engine scores each Experience Unit against each Job Requirement Unit and produces a ranked set of matches plus a gap list. The output is a view that the user can approve or reject. The engine's job is not to impress the user with AI; it's to make the user's existing evidence visible and navigable.
 
@@ -409,7 +409,7 @@ Task {
 
 ### Capability Graph
 
-This is the half of the model that makes Matchline different from every other job-search tool. Experience Units are the atomic evidence; Job Requirement Units are the atomic asks; UnitMatches connect them. All of these are **shipped**.
+This is the half of the model that makes Matchline different from every other job-search tool. Experience Units are the atomic evidence; Job Requirement Units are the atomic asks; UnitMatches connect them. All of these are **shipped**. `UnitCluster`, below, is declared as a type and in the Firestore rules, but nothing writes or reads it yet.
 
 ```json
 ExperienceUnit {
@@ -442,7 +442,7 @@ ExperienceUnit {
 }
 ```
 
-Only `resume` and `manual` Units have a writer today. The `linkedin`, `long_form` and `artifact` source types are reserved for deferred inputs; the `artifact://` format and its parser shipped with #592 as a data-model change, with no upload, storage or extraction behind them. The shipped Unit also carries `rejected` and `flagged` flags alongside `user_approved`.
+Only résumé extraction and manual entry create Units today. The `linkedin`, `long_form` and `artifact` source types are reserved for deferred inputs, though the Unit Review editor still lets the user set any of the five on an existing Unit; the `artifact://` format and its parser shipped with #592 as a data-model change, with no upload, storage or extraction behind them. The shipped Unit also carries `rejected` and `flagged` flags alongside `user_approved`, plus its stored `embedding` and a `reembed_pending` flag that keeps it out of matching until the embedding is current. Every persisted object, in this section and the CRM one, also carries an `owner_uid`.
 
 ```json
 Metric {
@@ -494,7 +494,7 @@ UnitMatch {
 }
 ```
 
-The shipped `UnitMatch` also records per-axis `components`, whether each axis was actually evaluated (`component_applicability`), whether the pair has `structural_evidence`, and a `schema_version`. The spec defines how readers must treat them.
+The shipped `UnitMatch` also carries its `role_id`, since matches are stored per Role, and records per-axis `components`, whether each axis was actually evaluated (`component_applicability`), whether the pair has `structural_evidence`, and a `schema_version`. The spec defines how readers must treat them.
 
 ```json
 UnitCluster {
@@ -650,7 +650,7 @@ Non-goal: building a universal skill taxonomy. The product only needs to be righ
 ### What the matching engine does not do
 
 - **Does not auto-approve matches.** The engine surfaces matches with scores and rationales; the user approves or rejects. Generation only uses approved matches.
-- **Does not hide low-quality matches entirely.** Gaps are surfaced explicitly in a separate view. If the user has no Experience Unit that matches a must-have Requirement, the system indicates as much. A must-have whose only match can't be verified is reported separately from one with no match.
+- **Does not hide low-quality matches entirely.** The Matches tab shows each Requirement's top five matches, low scores included. Gaps are surfaced explicitly in a separate view: if the user has no Experience Unit that matches a must-have Requirement, the system indicates as much. Nice-to-have Requirements are not listed there. A must-have whose only match can't be verified is reported separately from one with no match.
 - **Does not pretend to be certain.** Every match includes a confidence component and a surfaced piece of evidence. If the rationale is weak, the user should see that it's weak.
 
 ---
@@ -661,15 +661,15 @@ The pipeline is six stages, some real-time and some async. The split matters for
 
 ### Async (happens once per Unit or per Role, cached)
 
-1. **Experience Unit extraction.** The user's career inputs are processed by an LLM with a strict schema to produce structured Units. Runs once per input, with incremental updates when the user adds new material. Generates embeddings for semantic search. *Shipped* for pasted résumés, measured at about 108 s per extraction, with progress streamed to the client. *Deferred* (decision 3): artifact uploads (PDF / DOCX / PPTX) converted to text by format-specific parsers and passed through an extraction prompt tuned for prose-heavy sources, with image-only PDFs failing loudly.
+1. **Experience Unit extraction.** The user's career inputs are processed by an LLM with a strict schema to produce structured Units. Runs once per pasted input; each new paste adds a fresh set of Units, with no merge or de-duplication against existing ones. Generates embeddings for semantic search. *Shipped* for pasted résumés, measured at about 108 s per extraction, with progress streamed to the client. *Deferred* (decision 3): artifact uploads (PDF / DOCX / PPTX) converted to text by format-specific parsers and passed through an extraction prompt tuned for prose-heavy sources, with image-only PDFs failing loudly.
 2. **Job Requirement parsing.** Each JD gets parsed once into structured Requirements. Cheaper than Unit extraction because JDs are shorter and more structured than resumes. *Shipped.*
-3. **Embedding generation.** All normalized summaries get embedded with OpenAI `text-embedding-3-small`. Embeddings are stored and reused. *Shipped.*
+3. **Embedding generation.** Extracted Units and parsed Requirements are embedded with OpenAI `text-embedding-3-small`. Embeddings are stored and reused. *Shipped.* A manually added or text-edited Unit has no current embedding and stays out of matching until a re-embed caller exists.
 
 ### Real-time (happens per match or per generation)
 
 4. **Matching.** Given a Unit set and a Requirement set, score, and rank. Vector math plus rule-based scoring, with rationales from a deterministic template; no LLM calls. Should feel instant. *Shipped.*
 5. **Generation.** Given approved matches and a target format, generate output grounded in approved evidence. Uses a "controlled generation" prompt pattern: the model receives the approved Units as ground truth and is instructed to only use what's provided. *Shipped:* the résumé. *Target:* cover letter, application answers, referral note, outreach, and the fit brief as a product surface.
-6. **Validation.** LLM claim extraction and traceability, plus a deterministic specificity check, verify that every claim in the output traces to an approved Unit, and flag anything that doesn't. *Shipped*, but it runs after the draft is shown, not before: see [Validation layer](#validation-layer).
+6. **Validation.** LLM claim extraction, traceability and specificity checks (the specificity check also passes the model a deny-list hint for vague PM phrases) verify that every claim in the output traces to an approved Unit, and flag anything that doesn't. *Shipped*, but it runs after the draft is shown, not before: see [Validation layer](#validation-layer).
 
 ### Model strategy
 
@@ -707,11 +707,11 @@ This is the component that makes "zero fabrication" a hard constraint rather tha
 Validation runs four steps, all **shipped**:
 
 1. **Claim extraction.** Parse the generated output into discrete claims. A resume bullet like "Led migration of Disney+ playback stack to 64-bit NCP, reducing memory footprint 30%" contains three claims: led a migration, worked on the Disney+ playback stack on NCP, and achieved a 30% memory reduction.
-2. **Traceability check.** For each claim, verify it maps to an approved Experience Unit. Claims that don't map get flagged.
+2. **Traceability check.** For each claim, verify it maps to an approved Experience Unit among the Units its bullet cites. Claims that don't map get flagged.
 3. **Specificity check.** Flag generic language ("collaborated cross-functionally to drive results") that doesn't tie to any specific Unit.
-4. **Surface to user.** Flagged issues appear as inline annotations on the generated output. The user resolves by either editing, removing, or adding a supporting Unit.
+4. **Surface to user.** Flagged issues appear as inline annotations on the generated output. Today the user resolves a flag by removing the bullet or undoing the change. Editing a bullet clears its cited Units, so an edited or added bullet is flagged as untraceable when validation runs again, and "Add a supporting Unit" creates a Unit without attaching it to the bullet. *Target:* edits that keep or re-establish traceability, and attaching a new Unit to the bullet it supports.
 
-**When it runs (shipped).** Generation saves the résumé with validation pending and opens it in the Application Editor at once, so the user sees an unvalidated draft. Validation runs when the user edits the draft or chooses "Re-run validation," and export stays blocked until it passes. The guarantee that holds today is that nothing unvalidated can be exported, not that nothing unvalidated is ever shown.
+**When it runs (shipped).** Generation saves the résumé with validation pending and opens it in the Application Editor at once, so the user sees an unvalidated draft. Validation runs when the user saves a text edit or chooses "Re-run validation"; removing or adding a bullet marks the draft stale until validation is re-run. Export stays blocked until it passes. The guarantee that holds today is that nothing unvalidated can be exported, not that nothing unvalidated is ever shown.
 
 **The bar (target, not met).** The user should never see an output with an un-sourced claim: if the model generates one, validation catches it before the user does. That needs validation to run automatically between generation and display.
 
@@ -751,7 +751,7 @@ Artifact extraction ($0.50 per uploaded document at p95) is deferred with artifa
 
 ### Reliability
 
-- Structured output failures (malformed JSON, schema violations) retry with stricter prompts up to twice, then surface to user as "needs manual review."
+- Structured output failures (malformed JSON, schema violations) retry with stricter prompts up to twice, then surface to the user as "needs manual review" for extraction, parsing and generation. *Target:* the same for validation; the Application Editor shows a generic "Validation couldn't run" today.
 - Validation failures never auto-regenerate. They always surface to the user for explicit approval.
 - No silent fallbacks. If the system can't produce a confident result, it says so.
 
@@ -763,7 +763,7 @@ Artifact extraction ($0.50 per uploaded document at p95) is deferred with artifa
 
 The original V1 product had five screens. Each one earns its place in the core loop. This section records each as **shipped**, then names what the target design changes. Sign-in also ships; it is the only surface before the app knows who the user is, and it has no sign-up.
 
-#### 1. Onboarding (one-time)
+#### 1. Onboarding
 
 First-session flow that takes the user from zero to a populated Capability Graph.
 
@@ -771,7 +771,7 @@ First-session flow that takes the user from zero to a populated Capability Graph
 - **Deferred** (decision 3): the four-source picker (LinkedIn profile HTML, long-form career context, and artifact upload alongside résumé paste) and the per-stage upload progress for artifacts.
 - **Target (enhancement):** Units appearing in the page as they are extracted. The shipped route waits for the whole pipeline, then lands in Unit Review.
 
-After extraction, the user lands in **Unit review** to approve, correct, or reject each extracted Unit before it is added to the graph. This step is non-skippable; the product's integrity depends on it.
+After extraction, the user lands in **Unit review** to approve, correct, or reject each extracted Unit before it is added to the graph. Navigation doesn't force this step; the approval gate does: no Unit enters matching until the user approves it. The product's integrity depends on it. Onboarding stays in the navigation, so the user can paste more material later.
 
 Success criterion for this screen: the user completes onboarding with at least 20 approved Experience Units and a clear understanding of what a Unit is.
 
@@ -779,8 +779,8 @@ Success criterion for this screen: the user completes onboarding with at least 2
 
 The primary interface for maintaining the Capability Graph. The user spends time here during onboarding and whenever they add new career inputs.
 
-- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, which marks the Unit `reembed_pending` and keeps it out of matching until it is re-embedded; approve, flag and reject, with rejected Units dropping out of the list and out of matching; and "Add Unit manually."
-- **Target, not built:** a filter by source type; a client call to re-embed a Unit after an inline edit; and a separate view for reviewing and restoring rejected Units.
+- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, where an edit to the raw text or summary marks the Unit `reembed_pending` and keeps it out of matching until it is re-embedded, and edits to other fields apply to matching immediately; approve, flag and reject, with rejected Units dropping out of the list and out of matching; and "Add Unit manually," whose Unit has no embedding and stays out of matching for the same reason.
+- **Target, not built:** a filter by source type; a client call to embed a Unit after an inline edit or a manual add; and a separate view for reviewing and restoring rejected Units.
 - **Deferred** (decision 3): the "Upload an artifact" entry and the artifact provenance line (for example, `artifact · retro-q3.pdf · page 2`) that round-trips to the uploaded file.
 - **Target (enhancement):** bulk selection with keyboard shortcuts, and a detail pane beside the list.
 
@@ -790,7 +790,7 @@ The per-role workspace. One of these exists for every job the user adds.
 
 **Current implementation, superseded in the target design.** The shipped Role detail has a header with the title and the Role's id, and three tabs:
 
-- **Requirements:** the JD editor and the parsed Job Requirement Units with priority and must-have flags, editable inline. For a Role saved without a JD, this is where the JD gets pasted and parsed.
+- **Requirements:** the JD editor and the parsed Job Requirement Units with their priority, must-have flag, category, keywords, tools and domains, read-only; changing them means editing the JD and re-parsing. For a Role saved without a JD, this is where the JD gets pasted and parsed.
 - **Matches:** each Requirement with its match cards, scores and rationales. Gaps and unverifiable must-haves are surfaced first, and matching can be re-run. This is the primary decision surface today, and the tab every Role opens on, including a new one; without a JD it points to the Requirements tab.
 - **Applications:** "Generate resume" (enabled once a match is approved) and the Role's Applications, each opening in the Application Editor.
 
@@ -811,7 +811,7 @@ The surface where generated output becomes something the user sends. **Transitio
 The CRM-lite view that keeps the user from needing a spreadsheet. **Shipped** (#510–#512, #34):
 
 - Kanban-style columns by application stage: Saved, Drafting, Applied, Interviewing, Offer, Rejected, Withdrawn. These seven stay for this release (decision 1).
-- Each card shows company, title, a day count, the next action (the Application's first open task), and the key contact. The count is labeled "days in stage," but it measures days since the Application's `last_activity_at`, which a completed task also updates; there is no stage-entry timestamp. *Target:* true time in stage, which needs a stage-entry timestamp.
+- Each card shows company, title, a day count, the next action (the Application's first open task), and the key contact. Nothing in the app creates Companies, People or Interactions yet, so cards read "Unknown company" and show no contact. The count is labeled "days in stage," but it measures days since the Application's `last_activity_at`, which a completed task also updates; there is no stage-entry timestamp. *Target:* true time in stage, which needs a stage-entry timestamp.
 - Cards move by drag-and-drop or, when focused, with the Left and Right arrow keys; moves are optimistic and roll back on a failed write.
 - Click through to the role detail for each application.
 - A collapsible sidebar with Due today (overdue included), Upcoming (the next 7 days, then undated tasks), and Follow-ups (Applied or Interviewing Applications quiet for more than 7 days with no open task). Tasks complete with one click.
@@ -835,7 +835,7 @@ These are the approved target surfaces from v0.2's interface additions, settled 
 - **Evidence** gains the canonical résumé editor, with line ids visible, and a list of tailored views with their pinned versions, behind-current ones first. It also gains the claim-rules list: short, user-written, always visible when editing.
 - **New Role** adds Company and Source fields (decision 7).
 - **Scan.** Board management, a weekly run every Monday plus "Run now," and an inbox for each run: corrections to the record first, then new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. "Turn into Role" captures the JD from the verified posting, creates the Role, and creates its Application in Saved, so it appears on the Pipeline at once. Aggregator-only results stay as unverified leads, with "Turn into Role" disabled (decision 6). A board that fails keeps last week's roles open with a note rather than closing them.
-- **Responsive layouts** (decision 8). Every agreed V1 workflow works at desktop, tablet and phone widths in the browser. Shipped surfaces are only partly there: the Pipeline board and the Application Editor stack below 768 px, and the New Role form drops its short fields from two columns to one below 640 px. The app's navigation, Unit Review rows and the Role detail tabs have no phone layout yet.
+- **Responsive layouts** (decision 8). Every agreed V1 workflow works at desktop, tablet and phone widths in the browser. Shipped surfaces are only partly there: the Pipeline board and the Application Editor stack below 768 px, the Pipeline's task sidebar moves beside the board only at 1024 px and up, and the New Role form drops its short fields from two columns to one below 640 px. The app's navigation, Unit Review rows and the Role detail tabs have no phone layout yet.
 
 ### Core requirements and enhancements
 
@@ -978,10 +978,10 @@ V1 runs on the stack the author already uses daily. Cost of staying is near zero
 
 Even on Firestore, the V1 data model follows Postgres-compatible conventions:
 
-- UUIDs for all primary keys
+- UUIDs for all entity primary keys (telemetry and attestation records use Firestore auto-ids and composite keys)
 - Explicit foreign key fields on every relationship
 - No business logic embedded in Firestore queries
-- Clean separation between Experience Units (permanent) and UnitMatches (per-application)
+- Clean separation between Experience Units (permanent) and UnitMatches (per Role)
 - All write paths go through a typed service layer, not direct Firestore calls from the UI
 
 This discipline makes a future migration possible without forcing it. If V2 demands Postgres (vector search, graph queries, predictable scaling), the storage swap is a backend change, not a rewrite.
@@ -1035,7 +1035,7 @@ Five open questions shaped the V1 design, and v0.3 settled eight more (see [Deci
 - **Units or canonical lines as generation evidence.** matchline#495 Phase 3 compares a fit brief generated from Units with one generated from the canonical résumé.
 - **How aggregator-only leads enter Scan.** Decision 6 keeps them as unverified leads and rules out scraping aggregators, so a lead must come from something the user provides or from an employer board that links out. The mechanism is not designed.
 - **Non-URL Role sources.** A Role found through a referral or an event has no URL. Whether `source_url` is enough or Role provenance needs a short label is open; decision 7 asks for the minimum.
-- **Manual leads on the Pipeline.** A Role created from Scan gets a Saved Application (see Target interface). A Role entered by hand gets no Application until a résumé is generated, so a lead saved with only a title stays off the Pipeline. Whether New Role should also create a Saved Application is open.
+- **Manual leads on the Pipeline.** A Role created from Scan gets a Saved Application (see Target interface). A Role entered by hand gets no Application until the user clicks "Generate resume," which creates it in Drafting even if generation then fails, so a lead saved with only a title stays off the Pipeline. Whether New Role should also create a Saved Application is open.
 - **Where an expanded editor lives.** Decision 5 allows an expanded editor as another view of the Package. Whether that is a full-screen mode of the tab or a separate route is a design question; either way it edits the same package.
 
 ---
@@ -1135,7 +1135,7 @@ After Sprint 3, V1 is done. V2 starts when either Nathan's search ends successfu
 
 Things that belong in separate documents, not this one:
 
-- **Prompt library.** The extraction, parsing, matching-rationale, generation, and validation prompts are a living artifact that will change often. They belong in a repo, not a PRD.
+- **Prompt library.** The extraction, parsing, generation (résumé and fit brief), and validation prompts are a living artifact that will change often. They belong in a repo, not a PRD.
 - **Evaluation harness.** How extraction quality and match accuracy are measured, with test sets and thresholds. Lives in the code (`tests/eval/`, and `tests/eval/fitBrief/` for the private fit-brief harness).
 - **UI mockups.** Text descriptions of screens live here; the wireframes live in the matchline repository at `plans/matchline-wireframes.html` (#584), drawn at desktop, tablet and phone widths. They mark each frame as shipped or target. Where they conflict with this document, this document wins.
 - **Go-to-market plan.** V1 has no GTM. V2 GTM is its own document when the time comes.
