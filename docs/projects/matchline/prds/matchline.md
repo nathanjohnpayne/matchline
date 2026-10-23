@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: dbfe93eba4614e7cdbd9ae0ff1cdb91b33901f7e
+source_ref: 5cef92d0a921435f364fc37d75a21d212d07befd
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -835,7 +835,7 @@ These are the approved target surfaces from v0.2's interface additions, settled 
 - **Evidence** gains the canonical résumé editor, with line ids visible, and a list of tailored views with their pinned versions, behind-current ones first. It also gains the claim-rules list: short, user-written, always visible when editing.
 - **New Role** adds Company and Source fields (decision 7).
 - **Scan.** Board management, a weekly run every Monday plus "Run now," and an inbox for each run: corrections to the record first, then new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. "Turn into Role" captures the JD from the verified posting, creates the Role, and creates its Application in Saved, so it appears on the Pipeline at once. Aggregator-only results stay as unverified leads, with "Turn into Role" disabled (decision 6). A board that fails keeps last week's roles open with a note rather than closing them.
-- **Responsive layouts** (decision 8). Every agreed V1 workflow works at desktop, tablet and phone widths in the browser. Shipped surfaces are only partly there: the Pipeline board and the Application Editor stack below 768 px, while the app's navigation, Unit Review rows and the Role detail tabs have no phone layout yet.
+- **Responsive layouts** (decision 8). Every agreed V1 workflow works at desktop, tablet and phone widths in the browser. Shipped surfaces are only partly there: the Pipeline board and the Application Editor stack below 768 px, and the New Role form drops its short fields from two columns to one below 640 px. The app's navigation, Unit Review rows and the Role detail tabs have no phone layout yet.
 
 ### Core requirements and enhancements
 
