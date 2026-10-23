@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: f0ae737426eb95508e5b37c1cbd8032c553192ec
+source_ref: b714d034a7212dac5fa3bc1bf4c564a0a7a8393e
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -667,7 +667,7 @@ The pipeline is six stages, some real-time and some async. The split matters for
 
 ### Real-time (happens per match or per generation)
 
-4. **Matching.** Given a Unit set and a Requirement set, score, and rank. Mostly vector math plus rule-based scoring; minimal LLM calls. Should feel instant. *Shipped.*
+4. **Matching.** Given a Unit set and a Requirement set, score, and rank. Vector math plus rule-based scoring, with rationales from a deterministic template; no LLM calls. Should feel instant. *Shipped.*
 5. **Generation.** Given approved matches and a target format, generate output grounded in approved evidence. Uses a "controlled generation" prompt pattern: the model receives the approved Units as ground truth and is instructed to only use what's provided. *Shipped:* the résumé. *Target:* cover letter, application answers, referral note, outreach, and the fit brief as a product surface.
 6. **Validation.** LLM claim extraction and traceability, plus a deterministic specificity check, verify that every claim in the output traces to an approved Unit, and flag anything that doesn't. *Shipped*, but it runs after the draft is shown, not before: see [Validation layer](#validation-layer).
 
@@ -679,7 +679,7 @@ Each stage's model is configuration, not code. The **shipped** production defaul
 |---|---|
 | Extraction | Claude Sonnet 4.6 |
 | Requirement parsing | Claude Haiku 4.5 |
-| Match rationale | Claude Sonnet 4.6 |
+| Match rationale | None: a deterministic template (`generateRationale()`, #100). The config's `rationale` entry (Sonnet 4.6) is set but unused. |
 | Generation | Claude Haiku 4.5 |
 | Validation | Claude Sonnet 4.6 |
 | Embeddings | OpenAI `text-embedding-3-small` |
