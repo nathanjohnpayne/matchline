@@ -177,6 +177,7 @@
     background:var(--panel);font-size:12px;font-weight:500;color:var(--ink);white-space:nowrap;line-height:1.2}
   .btn.pri{background:#18181b;color:#fafafa;border-color:#18181b}
   .btn.ghost{border-color:transparent;background:transparent;color:var(--mut)}
+  .btn.ok{background:var(--grn);color:#fff;border-color:var(--grn)}
   .btn.danger{color:var(--red);border-color:#fecaca}
   .btn.off{opacity:.5}
   .btn.block{display:flex;justify-content:center;width:100%}
@@ -254,7 +255,7 @@
   .verb{font-family:ui-monospace,Menlo,monospace;font-size:11px;white-space:pre-wrap;background:#fafafa;border:1px solid var(--line);
     border-radius:6px;padding:8px 10px;color:var(--ink);line-height:1.45}
   .u{text-decoration:underline;text-decoration-color:rgba(24,24,27,.35);text-underline-offset:3px}
-  .u.hover{background:var(--accbg);text-decoration-color:var(--acc)}
+  .u.hover{background:#f4f4f5;text-decoration-color:#71717a}
   .u.red{text-decoration-color:var(--red);text-decoration-thickness:1.5px}
   .u.amb{text-decoration-color:#f59e0b;text-decoration-thickness:1.5px}
   .u.rule{text-decoration-color:var(--red);text-decoration-style:double}
@@ -326,7 +327,7 @@
   .auth .center{flex-direction:column;gap:18px}
   .auth .wm{font-size:30px}
   .auth .tag{color:var(--dim);font-size:13px;margin-top:-10px}
-  .auth .card{width:360px;max-width:100%}
+  .auth .card{width:384px;max-width:100%}
   .or{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:11px;margin:12px 0}
   .or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
   .where{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
@@ -375,7 +376,6 @@
     .filters .morebtn{display:inline-flex}
     .filters-hidden{display:none}
     .rulegrid{grid-template-columns:1fr 1fr}
-    .auth .card{width:380px}
   }
   /* ---------- below the shipped md breakpoint (Tailwind md = 768px): the editor's two panes and the
      Pipeline's seven columns stack, and the column header becomes the shipped pill ---------- */
@@ -445,7 +445,7 @@
 
 <h1 id="sec-intro"><span class="wm">match<b>|</b>line</span> — wireframes, every screen at three widths</h1>
 <p class="sub">One product, one source per screen, drawn three times. Each frame renders the same markup inside a desktop (1280×800), tablet (834×1112) and phone (390×844) canvas — drawn as a macOS window, an iPad and an iPhone respectively, with the device chrome outside the canvas so the container width stays exact; the layout re-flows per width with container queries, so a tablet or phone frame shows the responsive proposal, not a shrunken desktop. Every frame carries a stable anchor of the form <code>#fx-&lt;screen&gt;-&lt;state&gt;-&lt;width&gt;</code> (<code>desk</code> / <code>tab</code> / <code>ph</code>). Captions under the desktop frame describe the state; captions under the tablet and phone frames describe only what changes at that width.</p>
-<p class="sub">Sources: <code>specs/matchline.md</code> remains the repository's authoritative product spec, and every frame chipped <b>shipped</b> is checked against it and the routes. Frames chipped <b>PRD target</b> draw approved but unbuilt behaviour from <b>PRD v0.3</b> (October 22, 2026), mirrored at <code>docs/projects/matchline/prds/matchline.md</code>. They illustrate the PRD and add no requirements of their own: where a frame and the PRD disagree, the PRD wins and the frame is corrected, and a detail the PRD lists under “Core requirements and enhancements” as an enhancement never blocks a release. What is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves, the tasks sidebar and next-action chips), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search. The snapshot is <b>Tue Oct 20, 2026</b> (America/Los_Angeles): days in stage, “due today / yesterday”, weekday labels and the scan’s week and next run all count from that date.</p>
+<p class="sub">Sources: <code>specs/matchline.md</code> remains the repository's authoritative product spec, and every frame chipped <b>shipped</b> is checked against it and the routes. Frames chipped <b>PRD target</b> draw approved but unbuilt behaviour from <b>PRD v0.3</b> (October 22, 2026), mirrored at <code>docs/projects/matchline/prds/matchline.md</code>. They illustrate the PRD and add no requirements of their own: where a frame and the PRD disagree, the PRD wins and the frame is corrected, and a detail the PRD lists under “Core requirements and enhancements” as an enhancement never blocks a release. What is <b>shipped in <code>src/routes/**</code></b> (Sign in, Onboarding, Unit Review, Role Detail, Application Editor, New Role, Pipeline with stage moves, the tasks sidebar and next-action chips), <code>BRAND.md</code>, <code>docs/design/ui-guidance.md</code> (Attio-like: monochrome, one accent, dense, inline over modal, keyboard-first, fail visibly) and <code>specs/matchline.md</code>. All sample data — companies, people, résumé lines, figures — is invented. Nothing is taken from any real search. The snapshot is <b>Tue Oct 20, 2026</b> (America/Los_Angeles): days in stage, the sidebar’s due dates (shipped as plain dates such as “Oct 20”), the PRD frames’ “due today / yesterday” and weekday labels, and the scan’s week and next run all count from that date.</p>
 
 <p class="sub callout"><b>How to read a frame.</b>
 <br>· <b>Chips above a frame</b> name the width and whether the frame is <span class="fchip shipped" style="vertical-align:middle">shipped</span> (matches the built route), <span class="fchip prd" style="vertical-align:middle">PRD target</span> (approved in PRD v0.3, not yet built) or a <span class="fchip state" style="vertical-align:middle">state</span> (empty / loading / error / validation variant of a screen).
@@ -602,9 +602,10 @@ const MATCHES = {
 };
 // the nine approved Units that ground the sample Application (UnitsPane renders every one)
 const unitRow = (u, i, o = {}) => `<div class="lrow ship ${o.cls || ''}">${o.bulk ? `<span class="cb ${o.on ? 'on' : ''}"></span>` : ''}
-  <div class="grow"><div class="ellip ${u.st === 'pend' ? 'mut' : ''}" title="${u.s}">${u.s}${o.an || ''}</div>
-    <div class="meta"><span class="xs dim">${u.ut} · ${u.src}</span>${chip(UNIT_STATE[u.st][0], UNIT_STATE[u.st][1])}<span class="xs dim num">${u.c}%</span></div></div>
-  ${o.noActs ? '' : `<div class="acts">${btn(ic('check') + ' Approve', u.st === 'ok' ? 'off' : '')}${btn(ic('flag') + ' Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn(ic('x') + ' Reject', 'ghost')}${btn(ic('pencil') + ' Edit', 'ghost')}</div>`}</div>`;
+  <div class="grow"><div class="ellip" title="${u.s}">${u.s}${o.an || ''}</div>
+    <div class="meta"><span class="xs dim"><span style="text-transform:uppercase;letter-spacing:.04em">${u.ut}</span> · ${u.src}</span></div></div>
+  ${chip(UNIT_STATE[u.st][0], UNIT_STATE[u.st][1])}<span class="xs dim num" style="flex:0 0 auto;padding-top:2px">${u.c}%</span>
+  ${o.noActs ? '' : `<div class="acts">${btn('Approve', u.st === 'ok' ? 'ghost off' : 'ghost')}${btn('Flag', u.st === 'flag' ? 'ghost off' : 'ghost')}${btn('Reject', 'ghost')}${btn('Edit', 'ghost')}</div>`}</div>`;
 
 const CANON = [
   ['L-001', 'headline', 'Product Manager — video playback and device partnerships', ['EU-14', 'EU-15']],
@@ -658,12 +659,13 @@ function onboarding(state) {
   </div>${an(1)}`;
   const content = `<div>
     ${err ? `<div class="alert" role="alert">extracting your resume took longer than expected and timed out. Try again. Trimming it to the roles most relevant to your target market usually helps.${an(5)}</div>` : ''}
-    ${extracting ? `<div class="card tight" style="margin-bottom:10px"><div class="sm" role="status">Reading your resume…</div>
-      <div class="bar ind" style="margin:6px 0"><i></i></div>
-      <div class="xs dim num">1:12 · This usually takes about 108 seconds.${an(3)}</div></div>` : ''}
+    ${extracting ? `<div style="margin-bottom:10px"><div class="bar ind" style="margin:0 0 6px"><i></i></div>
+      <div class="rowhead xs" style="justify-content:space-between"><span class="mut" role="status">Reading your resume…</span><span class="dim num">1:12</span></div>
+      <div class="xs dim">This usually takes about 110 seconds.${an(3)}</div></div>` : ''}
     <span class="lbl">Resume text</span>
     <div class="in ta ${extracting ? 'mut' : ''}" style="min-height:${extracting ? 220 : 300}px">${err || extracting || state === 'ready' ? '# Sam Okafor\nSenior Product Manager — video platforms\n\n## Beacon Streaming · 2019–2026\n- Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.\n- Owned device certification for 40+ partner platforms…\n\n## Cobalt Devices · 2014–2019\n- Negotiated multi-vendor CDN contracts…' : '<span class="dim">Paste your resume — Markdown renders (# headers, **bold**, - bullet lists). We’ll structure it.</span>'}</div>
-    <div class="rowhead sm dim" style="margin-top:6px;justify-content:space-between"><span class="num">${extracting || err ? '4,812' : '0'} characters</span>${btn('Extract Units' + an(2), (extracting || state === 'idle') ? 'pri off' : 'pri')}</div>
+    <div class="xs dim" style="margin-top:6px"><span class="num">${extracting || err ? '4,812' : '0'} characters</span></div>
+    <div class="btnrow" style="margin-top:8px;justify-content:flex-end">${btn('Extract Units' + an(2), (extracting || state === 'idle') ? 'pri off' : 'pri')}</div>
   </div>`;
   const units = `<div class="nb"><div class="h3" style="margin-top:0">Units as they land ${extracting ? chip('3 so far', 'acc') : ''}${an(4)}</div>
     ${extracting ? UNITS.slice(0, 3).map((u, i) => `<div class="unitin ${i === 0 ? 'new' : ''}"><div class="clamp2">${u.s}</div><div class="meta">${u.sk.slice(0, 2).map(s => chip(s)).join('')}<span class="xs dim num">${u.c}%</span></div></div>`).join('') + `<div class="unitin dim">…more arriving</div>`
@@ -677,7 +679,7 @@ function onboarding(state) {
 function unitReview(state, extra = {}) {
   const ready = state === 'ready' || state === 'empty' || state === 'nomatch';
   const head = `<div class="pagehead"><div><div class="ttl">Unit Review</div><div class="sub">Approve, correct, or reject every extracted Experience Unit. No Unit enters matching until you approve it.</div></div>
-    ${ready ? `<div class="btnrow">${btn(ic('plus') + ' Add Unit')}${state === 'empty' ? chip('0 of 20 approved') : chip('20 approved — onboarding complete', 'ink') + (state === 'ready' ? an(1) : '')}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
+    ${ready ? `<div class="btnrow">${btn('+ Add Unit', 'pri')}${state === 'empty' ? chip('0 of 20 approved') : chip('20 approved — onboarding complete', 'ink') + (state === 'ready' ? an(1) : '')}${btn(ic('upload') + ' Upload artifact', 'nb')}<span class="kbd nb">?</span></div>` : ''}</div>`;
   const pill = (t, on) => `<span class="pill ${on ? 'on' : ''}" style="${on ? 'background:#18181b;color:#fafafa' : 'background:transparent;border:1px solid var(--line)'}">${t}</span>`;
   const fpanel = (skills, tools, domains, active, activeStatus) => `<div class="card tight" role="region"><div class="rowhead sm"><b>Filter</b>${active ? '<span class="sp"></span>' + btn('Clear filters', 'ghost') : ''}${state === 'ready' ? an(2) : ''}</div>
     <div class="frow"><span class="flbl">Skills</span>${skills.length ? skills.map(t => chip(t, t === active ? 'on' : 'line')).join('') : '<span class="xs dim">No skills in the corpus yet.</span>'}</div>
@@ -691,19 +693,21 @@ function unitReview(state, extra = {}) {
   }
   if (state === 'nomatch') return shell('evidence', head + fpanel(facet('sk'), facet('tl'), facet('dm'), 'Live streaming', 'Approved') + `<div class="empty" style="margin-top:10px" role="region" aria-label="No filter matches"><div>No Units match these filters.</div><div class="btnrow" style="justify-content:center;margin-top:8px">${btn('Clear filters')}</div></div>`, { width: 'w5' });
   if (state === 'loading') return shell('evidence', head + `<div class="info" role="status">Loading Units…</div>`, { width: 'w5' });
-  if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: permission-denied</div>`, { width: 'w5' });
+  if (state === 'error') return shell('evidence', head + `<div class="alert" role="alert">Couldn’t load Units: Missing or insufficient permissions.</div>`, { width: 'w5' });
   const filters = fpanel(facet('sk'), facet('tl'), facet('dm'));
   const bulk = `<div class="card tight bulkbar nb"><span class="sm"><b>3 selected</b></span>${btn(ic('check') + ' Approve ' + kbd('a'))}${btn(ic('flag') + ' Flag ' + kbd('f'), 'ghost')}${btn(ic('x') + ' Reject ' + kbd('r'), 'ghost')}<span class="sp"></span><span class="sm dim esc">Esc clears</span>${an(5)}</div>`;
   const f = (l, v, cls = '') => `<div class="field"><span class="lbl">${l}</span><div class="in ${cls}">${v}</div></div>`;
   const editing = unitRow(UNITS[2], 2, { bulk: true, on: true, noActs: true, cls: 'sel', an: an(4) }).replace('</div></div>`', '') + `<div class="lrow sel" style="display:block;border-top:0;padding-top:0" role="form" aria-label="Edit Unit">
-    <div class="pair" style="gap:0 8px"><div style="grid-column:1/-1">${f('Raw text', 'Ran the 12-person live-streaming squad; we got glass-to-glass under 3 seconds.')}</div>
-    <div style="grid-column:1/-1">${f('Normalized summary', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', 'focus')}</div>
-    ${f('Source type', 'long_form ' + ic('chevron-down'))}${f('Unit type', 'leadership ' + ic('chevron-down'))}${f('Evidence type', 'inferred ' + ic('chevron-down'))}${f('Source ref', '2024 retro')}
-    ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', UNITS[2].dm.join('<br>'))}${f('Seniority signals', 'ran a 12-person team')}${f('Scope signals', 'org-wide live pipeline')}${f('Business outcomes', 'sub-3 s glass to glass')}${f('Start date', '2023-03')}${f('End date', '2024-02')}${f('Confidence (0-1)', '0.81')}</div>
-    <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">high ${ic('chevron-down')}</span>${btn('Remove', 'ghost')}</div>
-    <div class="btnrow" style="margin-top:4px">${btn(ic('plus') + ' Add metric', 'ghost')}</div>
-    <div class="btnrow" style="margin-top:8px">${btn('Save', 'pri')}${btn('Cancel', 'ghost')}</div></div>`;
-  const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true, cls: 'dimmed' })}${unitRow(UNITS[4], 4, { bulk: true })}${MORE_APPROVED.map((u, i) => unitRow(u, 10 + i, { bulk: true })).join('')}</div>`;
+    ${f('Raw text', 'Ran the 12-person live-streaming squad; we got glass-to-glass under 3 seconds.')}
+    ${f('Normalized summary', 'Ran a 12-person cross-functional team that shipped a low-latency live pipeline (under 3 s glass to glass).', 'focus')}
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 8px">${f('Source type', 'long_form ' + ic('chevron-down'))}${f('Unit type', 'leadership ' + ic('chevron-down'))}${f('Evidence type', 'inferred ' + ic('chevron-down'))}</div>
+    ${f('Source ref', '2024 retro')}
+    ${f('Skills', 'Live streaming<br>Team leadership')}${f('Tools', 'HLS<br>WebRTC')}${f('Domains', UNITS[2].dm.join('<br>'))}${f('Seniority signals', 'ran a 12-person team')}${f('Scope signals', 'org-wide live pipeline')}${f('Business outcomes', 'sub-3 s glass to glass')}
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 8px">${f('Start date', '2023-03-01')}${f('End date (blank = ongoing)', '2024-02-29')}${f('Confidence (0-1)', '0.81')}</div>
+    <span class="lbl">Metrics</span><div class="frow"><span class="in sm">glass-to-glass latency</span><span class="in sm">3</span><span class="in sm">s</span><span class="in sm">down ${ic('chevron-down')}</span><span class="in sm">high ${ic('chevron-down')}</span>${btn('×', 'ghost')}</div>
+    <div class="btnrow" style="margin-top:4px">${btn('+ Add metric')}</div>
+    <div class="btnrow" style="margin-top:8px;justify-content:flex-end">${btn('Cancel', 'ghost')}${btn('Save', 'pri')}</div></div>`;
+  const list = `<div class="list" aria-label="Experience Units">${unitRow(UNITS[0], 0, { bulk: true, on: true, an: an(3) })}${unitRow(UNITS[1], 1, { bulk: true, on: true })}${editing}${unitRow(UNITS[3], 3, { bulk: true })}${unitRow(UNITS[4], 4, { bulk: true })}${MORE_APPROVED.map((u, i) => unitRow(u, 10 + i, { bulk: true })).join('')}</div>`;
   const detail = `<div class="detail-pane card nb"><div class="rowhead"><b>Unit detail</b><span class="sp"></span>${btn(ic('x'), 'ghost')}</div>
     <div class="h3">Normalized summary</div><div>${UNITS[0].s}</div>
     <div class="h3">Raw source</div><div class="verb">Led migration of the playback SDK to a unified player (AVFoundation on iOS/tvOS, MSE on web) — cut app startup time by 38% across 12M MAU.</div>
@@ -756,13 +760,13 @@ function roleNew(state) {
   const lead = state === 'lead';
   const errS = state === 'error';
   const opt = '<span class="dim"> (optional)</span>';
-  const body = `<div style="max-width:720px">
+  const body = `<div style="max-width:672px">
     <div class="ttl">New Role</div><div class="dim sm" style="margin-bottom:12px">Start tracking a Role with just a title. Paste the JD now or later: once it’s in, the next step parses the requirements + matches them against your approved Experience Units.</div>
     ${lead ? `<div class="info nb">Draft restored from this browser. Cancel discards it; creating the Role clears it.${an(4)}</div>` : ''}
     ${errS ? `<div class="alert" role="alert">Title is required.${an(5)}</div>` : ''}
     <div class="field"><span class="lbl">Title <span class="req">*</span></span><div class="in ${errS ? 'focus ph' : ''}">${errS ? 'Senior Software Engineer' : lead ? 'Group Product Manager' : 'Senior Product Manager, Video Platform'}</div></div>
     <div class="field"><span class="lbl">Job description${opt}${an(2)}</span><div class="in ta ${lead ? 'ph' : ''}" style="min-height:${lead ? 90 : 170}px">${lead ? 'Paste the full JD as plain text, or add it later from the Role page.' + an(3) : 'Northwind Media is hiring a Senior Product Manager for its video platform. You will own playback quality across web, mobile and living-room devices…\n\nWhat you’ll do\n- Lead the roadmap for playback and device certification\n- Partner with 20+ device OEMs\n\nWhat we look for\n- 7+ years in product management, 3+ in video\n- Experience with ad-supported streaming (must have)'}</div></div>
-    <div class="pair"><div class="field"><span class="lbl">URL${opt}</span><div class="in ${lead ? 'ph' : ''}">${lead ? 'https://…' : 'https://careers.northwind.example/jobs/4821'}</div></div>
+    <div class="pair"><div class="field"><span class="lbl">JD URL${opt}</span><div class="in ${lead ? 'ph' : ''}">${lead ? 'https://…' : 'https://careers.northwind.example/jobs/4821'}</div></div>
       <div class="field"><span class="lbl">Location${opt}</span><div class="in ${lead ? '' : ''}">${lead ? 'Remote (US)' : 'San Francisco, CA'}</div></div>
       <div class="field"><span class="lbl">Remote policy${opt}</span><div class="in">${lead ? 'remote' : 'hybrid'} ${ic('chevron-down')}</div></div>
       <div class="field"><span class="lbl">Comp range${opt}</span><div class="in ${lead ? 'ph' : ''}">${lead ? '$200k–$280k' : '$190,000 – $240,000'}</div></div>
@@ -802,29 +806,29 @@ const matchCard = (u, vals, st, tip, na = [], why = '', evidence = '') => {
     <div class="xs" style="margin-top:4px">Unit confidence multiplier: ×${conf.toFixed(2)}</div><div class="xs dim">Final score = Σ(score × weight) × confidence.</div></div>` : ''}
   <div class="sm" style="margin-top:4px"><b>Why:</b> ${why}</div>
   <div class="sm dim"><b>Evidence:</b> “${evidence}”</div>
-  <div class="btnrow" style="margin-top:6px">${st === 'approved' ? btn(ic('check') + ' Approved ✓', 'pri') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`;
+  <div class="btnrow" style="margin-top:6px">${st === 'approved' ? btn('Approved ✓', 'ok') : btn('Approve')}${btn('Reject')}</div></div>`;
 };
 function roleShipped(state) {
   const head = `<div class="ttl">Senior Product Manager, Video Platform</div><div class="sm dim">Role: 4d2c18a7-9b3e-4f52-8c1d-0a6e5b2f7d31</div>
     <div class="tabs" role="tablist"><span class="${state === 'nojd' ? 'on' : ''}">Requirements</span><span class="${state === 'matches' ? 'on' : ''}">Matches</span><span class="${state === 'applications' ? 'on' : ''}">Applications</span></div>`;
   if (state === 'loading') return shell('pipeline', `<div class="sm dim">Loading Role…</div>`);
-  if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Failed to load Role: permission-denied</div>`);
+  if (state === 'error') return shell('pipeline', `<div class="sm" style="color:var(--red)">Failed to load Role: Missing or insufficient permissions.</div>`);
   if (state === 'applications') {
-    return shell('pipeline', head + `<div class="sm dim" style="margin-bottom:8px">Generate a resume from your approved matches under this Role.${an(5)}</div><div class="btnrow" style="margin-bottom:14px">${btn('Generate resume', 'pri')}</div>
-      <div class="list"><div class="lrow ship"><div class="grow"><div class="rowhead">${chip('interviewing', 'ink')}<span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-14T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div></div>`);
+    return shell('pipeline', head + `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px"><span class="sm mut">Generate a resume from your approved matches under this Role.${an(5)}</span>${btn('Generate resume', 'pri')}</div>
+      <div class="list"><div class="lrow ship" style="display:block"><div style="display:flex;gap:10px;align-items:flex-start"><div class="grow"><div class="rowhead"><span class="chip" style="background:#f5f3ff;color:#6d28d9">interviewing</span><span class="xs dim num">7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</span></div><div class="xs dim">1 asset · last activity <span class="num">2026-10-14T17:12:00Z</span></div></div><div class="acts">${btn('Open')}</div></div><div style="margin-top:4px">${btn('+ task', 'ghost')}</div></div></div>`);
   }
   if (state === 'nojd') {
     return shell('pipeline', head + `<div class="field"><span class="lbl">JD source <span class="dim">(paste JD text first)</span></span><div class="in ta ph" style="min-height:220px">Paste the full JD as plain text. Headers and bullet points are fine.</div></div>
-      <div class="btnrow">${btn('Parse JD', 'pri off')}</div>
+      <div class="btnrow" style="justify-content:flex-end">${btn('Parse JD', 'pri off')}</div>
       <div class="sm dim" style="margin-top:10px">No JD yet. Paste it above to parse requirements.${an(1)}</div>`);
   }
-  const gaps = `<div class="card" style="border-color:#fde68a;margin-bottom:10px"><b>Gaps · 1 unmet must-have requirement</b>${an(2)}<div class="sm dim" style="margin:2px 0 6px">No Experience Unit qualifies for these. Consider adding context to your Capability Graph before generating.</div><div class="task"><div><div>Experience with ad-supported streaming</div><div class="xs dim">domain · priority: high</div></div></div></div>
-    <div class="card" style="margin-bottom:10px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task"><div><div>7+ years in product management, 3+ in video</div><div class="xs dim">experience · priority: medium</div><div class="xs" style="color:var(--amb)">Could not verify: the linked Experience Unit has no usable embedding</div></div></div></div>
+  const gaps = `<div class="card" style="border-color:#fde68a;background:var(--ambbg);margin-bottom:10px"><b>Gaps · 1 unmet must-have requirement</b>${an(2)}<div class="sm dim" style="margin:2px 0 6px">No Experience Unit qualifies for these. Consider adding context to your Capability Graph before generating.</div><div class="task"><div><div>Experience with ad-supported streaming</div><div class="xs dim">domain · priority: high</div></div></div>
+    <div style="margin-top:12px"><b>Unverified · 1 must-have requirement</b><div class="sm dim" style="margin:2px 0 6px">These have a match, but its evidence could not be checked. Treat them as unproven rather than as gaps.</div><div class="task"><div><div>7+ years in product management, 3+ in video</div><div class="xs dim">experience · priority: medium</div><div class="xs mut">Could not verify: the linked Experience Unit has no usable embedding.</div></div></div></div></div>
     <div class="card tight" style="margin-bottom:12px"><div class="rowhead">${btn(ic('refresh-cw') + ' Re-running matching…', 'off')}${an(3)}</div><div class="xs dim" style="margin-top:6px">Rebuilds this Role’s matches against its current requirements. Approve and reject decisions carry forward only for requirements that have not changed — if the job description was re-parsed, its requirements are new and will need reviewing again.</div></div>`;
   const group = (r, cards) => `<div style="margin-bottom:14px"><div><b>${r[1]}</b></div><div class="xs dim">${r[2]} • priority: ${r[3]}${r[0] === 'must' ? ' • <span style="color:var(--amb);font-weight:500">must-have</span>' : ''}</div>${cards || '<div class="sm dim" style="margin:6px 0">No matches found.</div>'}</div>`;
   const cards = k => MATCHES[k].map((m, i) => matchCard(m.u, m.vals, m.st, k === 1 && i === 0, m.na, m.why, m.ev)).join('');
-  const body = head + `<div class="warn" role="status">Computing matches…</div>` + gaps
-    + group(REQS[1], cards(1) + an(4)) + group(REQS[2], cards(2)) + group(REQS[0], '') + group(REQS[3], cards(3)) + group(REQS[4], cards(4)) + group(REQS[5], cards(5));
+  const body = head + `<div class="info" role="status" style="border-color:#bfdbfe;background:#eff6ff;color:#1e40af">Computing matches…</div>` + gaps
+    + group(REQS[1], cards(1) + an(4)) + group(REQS[0], '') + group(REQS[2], cards(2)) + group(REQS[3], cards(3)) + group(REQS[4], cards(4)) + group(REQS[5], cards(5));
   return shell('pipeline', body);
 }
 const roleTabs = on => `<div class="tabs">${ROLE_TABS.map(t => `<span class="${t === on ? 'on' : ''}${t === 'Requirements & matches' ? '' : ' nb'}">${t}</span>`).join('')}</div>`;
@@ -855,12 +859,12 @@ function roleDetail(state) {
   if (state === 'reqs') {
     const n = k => (MATCHES[k] || []).length;
     const status = i => i === 0 ? chip('gap', 'amb') + an(4) : i === 2 ? chip(`${n(i)} matches`, 'line') + chip('unverifiable', 'line') + an(6) : chip(`${n(i)} match${n(i) === 1 ? '' : 'es'}`, 'line');
-    const body = roleHeader() + roleTabs('Requirements & matches') + `<div class="warn">Computing matches…${an(3)}</div>
+    const body = roleHeader() + roleTabs('Requirements & matches') + `<div class="info" role="status" style="border-color:#bfdbfe;background:#eff6ff;color:#1e40af">Computing matches…${an(3)}</div>
       <div class="split"><div><div class="rowhead" style="margin-bottom:6px"><b>Requirements</b>${chip('6', 'line')}<span class="sp"></span>${btn('Edit JD', 'ghost')}${btn('Re-run matching', 'ghost')}</div>
         <div class="list">${REQS.map((r, i) => `<div class="lrow ${i === 1 ? 'sel' : ''}" style="min-height:0"><span class="rail">${r[0] === 'must' ? '!' : '·'}</span><div style="flex:1;min-width:0"><div>${r[1]}</div><div class="meta">${chip(r[0] === 'must' ? 'must have' : 'nice to have', r[0] === 'must' ? 'ink' : '')}${status(i)}</div></div></div>`).join('')}</div>
         <div class="card tight" style="margin-top:10px;border-color:#fde68a"><b>Gaps</b> · 1 unmet must-have, 1 unverifiable, 0 stranded. You can still generate; the fit brief will list the gap under “exposed”.</div></div>
       <div><div class="rowhead" style="margin-bottom:6px"><b>Candidates for “${REQS[1][1]}”</b></div>
-        <div class="list">${MATCHES[1].map(m => `<div class="lrow"><span class="rail ${m.st === 'approved' ? 'ok' : ''}">${m.st === 'approved' ? ic('check') : ic('circle-dashed')}</span><div style="flex:1;min-width:0"><div class="clamp2">${m.u.s}</div><div class="sm dim clamp2"><b>Why:</b> ${m.why}</div><div class="xs dim">Evidence: “${m.ev}”</div></div><span class="score num">${(scoreOf(m) * 100).toFixed(1)}</span>${an(5)}<div class="acts">${m.st === 'approved' ? btn(ic('check') + ' Approved ✓', 'pri') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`).join('')}</div>
+        <div class="list">${MATCHES[1].map(m => `<div class="lrow"><span class="rail ${m.st === 'approved' ? 'ok' : ''}">${m.st === 'approved' ? ic('check') : ic('circle-dashed')}</span><div style="flex:1;min-width:0"><div class="clamp2">${m.u.s}</div><div class="sm dim clamp2"><b>Why:</b> ${m.why}</div><div class="xs dim">Evidence: “${m.ev}”</div></div><span class="score num">${(scoreOf(m) * 100).toFixed(1)}</span>${an(5)}<div class="acts">${m.st === 'approved' ? btn('Approved ✓', 'ok') : btn(ic('check') + ' Approve')}${btn(ic('x') + ' Reject', 'ghost')}</div></div>`).join('')}</div>
         </div></div>`;
     return shell('pipeline', body);
   }
@@ -914,25 +918,31 @@ function roleDetail(state) {
 
 function editor(state) {
   if (state === 'loading') return shell('pipeline', `<div class="sm dim" role="status">Loading Application…</div>`);
-  if (state === 'error') return shell('pipeline', `<div class="alert" role="alert">Couldn’t load Application: permission-denied</div>`);
+  if (state === 'error') return shell('pipeline', `<div class="sm" role="alert" style="color:var(--red)">Couldn’t load Application: Missing or insufficient permissions.</div>`);
   if (state === 'notfound') return shell('pipeline', `<div class="sm dim">Application not found, or not owned by you.</div>`);
   if (state === 'empty') return shell('pipeline', `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="ed"><div><div class="empty" style="padding:36px 20px">No generated resume yet. Generate a resume from the Role to start editing.${an(6)}</div></div>
     <div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
     <div class="list">${SRC_UNITS.map(t => `<div class="lrow" style="min-height:0" title="${t}"><div class="grow ellip">${t}</div></div>`).join('')}</div></div></div></div>`);
   const left = `<div><div class="card" style="position:relative;line-height:1.6">
-      <div class="exportrow"><span>Resolve 5 validation flags before exporting.${an(6)}</span>${btn(ic('refresh-cw') + ' Re-run validation')}${btn(ic('download') + ' Export', 'pri off')}</div>
+      <div class="exportrow" style="justify-content:flex-end;border-bottom:1px solid var(--line);padding-bottom:8px"><span style="font-style:italic">Resolve 5 validation flags before exporting.${an(6)}</span>${btn('Re-run validation')}<span class="btn" style="background:#f4f4f5;color:#a1a1aa;border-color:#f4f4f5">Export</span></div>
       <div class="h3" style="margin-top:0">Summary</div>
       <div><span class="u">Product manager for video playback and device partnerships: one player across iOS, tvOS and web, and certification for 40+ partner platforms.</span></div>
       <div class="h3">Experience</div>
-      <div>• <span class="u hover">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.</span>${an(1)}</div>
-      <div>• <span class="u">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</span></div>
-      <div>• <span class="u red">Drove significant improvements to streaming reliability.</span>${an(3)}</div>
-      <div>• <span class="u amb rule nb">Saved $1.2M a year by renegotiating CDN contracts across three providers.</span>${an(4)}</div>
+      <div><span class="drag">⋮⋮</span> <span class="u hover">Led the move of the playback SDK to one player across iOS, tvOS and web; startup time fell 38%.</span>${an(1)}</div>
+      <div><span class="drag">⋮⋮</span> <span class="u">Owned device certification for 40+ partner platforms, from test plan to partner sign-off.</span></div>
+      <div><span class="drag">⋮⋮</span> <span class="u red">Drove significant improvements to streaming reliability.</span>${an(3)}</div>
+      <div><span class="drag">⋮⋮</span> <span class="u amb rule nb">Saved $1.2M a year by renegotiating CDN contracts across three providers.</span>${an(4)}</div>
       <div class="pop nb" style="right:12px;top:150px"><div class="h2">Claim rule hit</div><div class="sm">§ never claim · “Never quote the CDN savings figure; it was retired after the FY24 restatement.”</div><div class="hr"></div><div class="sm"><b>Resolve</b></div><div class="task">Edit this bullet…</div><div class="task">Remove this bullet</div><div class="task">Add a supporting Unit…</div><div class="task dim">Edit the rule (Evidence → Claim rules)</div></div>
-      <div>• <span class="u amb rule nb">Shipped the recommendations engine to 2M households.</span>${an(2)}</div>
-      <div>• <span class="u">Coordinated the set-top launch with five hardware partners.</span></div>
-      <div style="margin-top:8px">${btn(ic('plus') + ' Add bullet', 'ghost')}</div></div></div>`;
+      <div><span class="drag">⋮⋮</span> <span class="u amb rule nb">Shipped the recommendations engine to 2M households.</span>${an(2)}</div>
+      <div><span class="drag">⋮⋮</span> <span class="u">Coordinated the set-top launch with five hardware partners.</span></div>
+      <div style="margin-top:4px">${btn('+ Add bullet', 'ghost')}</div>
+      <div class="h3">Skills</div>
+      <div><span class="drag">⋮⋮</span> <span class="u">Video playback</span></div>
+      <div><span class="drag">⋮⋮</span> <span class="u">Device certification</span></div>
+      <div style="margin-top:4px">${btn('+ Add skill', 'ghost')}</div>
+      <div class="h3">Education</div>
+      <div>${btn('+ Add education entry', 'ghost')}</div></div></div>`;
   const srcRow = (t, sel) => `<div class="lrow ${sel ? 'sel' : ''}" style="min-height:0" tabindex="0" title="${t}"><div class="grow ellip">${t}</div></div>`;
   const right = `<div class="evid"><div class="card"><div class="h2">Source Units</div><div class="sm dim" style="margin-bottom:8px">9 approved Units were used to ground this Application.</div>
     <div class="list">${SRC_UNITS.map((t, i) => srcRow(t, i === 0)).join('')}</div>
@@ -941,14 +951,14 @@ function editor(state) {
   const body = `<div class="pagehead"><div><div class="ttl">Application Editor</div><div class="sub">Application: 7f3a91c2-5e8d-4b06-a1f4-3c9d2e7b8a50</div></div></div>
     <div class="seg phseg nb"><span class="on">Output · 5 flags</span><span>Evidence · 9</span></div>
     <div class="ed">${left}${right}</div>
-    <div style="margin-top:12px">${btn(ic('undo-2') + ' Undo edit ' + kbd('⌘Z'), 'ghost')}</div>`;
+    <div style="margin-top:12px;display:flex;justify-content:flex-end">${btn('↶ Undo edit <span class="dim">(⌘Z)</span>', 'ghost')}</div>`;
   return shell('pipeline', body);
 }
 
 function pipeline(state) {
   const STAGES = [['Saved', 2], ['Drafting', 1], ['Applied', 2], ['Interviewing', 2], ['Offer', 0], ['Rejected', 1], ['Withdrawn', 1]];
   const EMPTY = { Saved: 'No applications in Saved. Roles you’re tracking but haven’t started on sit here.', Drafting: 'No applications in Drafting. This is where a resume is being tailored before you send it.', Applied: 'No applications in Applied. Sent applications wait here until you hear back.', Interviewing: 'No applications in Interviewing. This is where live processes land when you hear back.', Offer: 'No applications in Offer. Offers land here.', Rejected: 'No applications in Rejected. Closed-out applications are kept here for the record.', Withdrawn: 'No applications in Withdrawn. Applications you pull out of end up here.' };
-  const card = (co, title, d, next, round, who, k = '') => `<div class="kc ${k}"><div class="ellip ${co === 'Unknown company' ? 'ph-it' : ''}"><b>${co}</b></div><div class="ellip dim sm ${title === 'Role unavailable' ? 'ph-it' : ''}">${title}</div><div class="meta">${chip(d + 'd').replace('<span class="chip "', `<span class="chip " title="${d} days in stage"`)}${next ? chip(next) : ''}${round ? chip(round, 'acc nb') : ''}${who ? av(who) : ''}</div></div>`;
+  const card = (co, title, d, next, round, who, k = '') => `<div class="kc ${k}" style="padding-right:26px"><span class="mut" title="Add task" style="position:absolute;right:7px;top:5px;font-size:14px;line-height:1">+</span><div class="ellip ${co === 'Unknown company' ? 'ph-it' : ''}"><b>${co}</b></div><div class="ellip dim sm ${title === 'Role unavailable' ? 'ph-it' : ''}">${title}</div><div class="meta">${chip(d + 'd').replace('<span class="chip "', `<span class="chip " title="${d} days in stage"`)}${next ? chip(next) : ''}${round ? chip(round, 'acc nb') : ''}${who ? av(who) : ''}</div></div>`;
   const cards = {
     Saved: card('Harbor Analytics', 'Group Product Manager', 2, 'Ask Morgan for the JD', '', 'MT') + card('Pike & Co', 'PM, AI Workflows', 9, '', '', ''),
     Drafting: card('Lumen Labs', 'Staff Product Manager, Developer Tools', 3, 'Finish cover letter', '', ''),
@@ -958,16 +968,18 @@ function pipeline(state) {
   };
   const col = ([s, n], i) => `<section class="col ${state === 'ready' && s === 'Interviewing' ? 'over' : ''}"><div class="colh"><span class="stage">${s}</span><span class="num">${state === 'ready' ? n : 0}</span>${state === 'ready' && s === 'Interviewing' ? an(3) : ''}</div>
     ${state === 'ready' && cards[s] ? cards[s] : `<div class="sm dim">${EMPTY[s]}</div>`}</section>`;
+  const sh = (t, n, a = '') => `<div class="rowhead xs mut" style="text-transform:uppercase;letter-spacing:.06em"><b>${t}</b><span class="dim num">${n}</span>${a}</div>`;
+  const trow = (t, l, d) => `<div class="task"><span class="cb"></span><div style="min-width:0;flex:1"><div class="ellip">${t}</div><div class="xs dim ellip">${l} · ${d}</div></div></div>`;
   const sideEmpty = `<aside class="side"><div class="sidewrap"><div class="card tight">
-    <div class="rowhead sm">${ic('list-checks')}<b>Tasks</b><span class="dim num">0</span><span class="sp"></span>${ic('chevron-down')}</div>
-    <div class="sidesec"><div class="rowhead sm"><b>Due today</b>${chip('0')}</div><div class="sm dim">Nothing due today.</div></div>
-    <div class="sidesec"><div class="rowhead sm"><b>Upcoming</b>${chip('0')}</div><div class="sm dim">Nothing due in the next 7 days.</div></div>
-    <div class="sidesec"><div class="rowhead sm">${ic('history')}<b>Follow-ups</b>${chip('0')}</div><div class="sm dim">No applied or interviewing application has gone quiet for over a week.</div></div></div></div></aside>`;
+    <div class="rowhead sm"><b>Tasks</b><span class="dim num">0</span><span class="sp"></span><span class="xs dim">Hide</span></div>
+    <div class="sidesec">${sh('Due today', 0)}<div class="sm dim">Nothing due today.</div></div>
+    <div class="sidesec">${sh('Upcoming', 0)}<div class="sm dim">Nothing due in the next 7 days.</div></div>
+    <div class="sidesec">${sh('Follow-ups', 0)}<div class="sm dim">No applied or interviewing application has gone quiet for over a week.</div></div></div></div></aside>`;
   const side = `<aside class="side"><div class="sidewrap"><div class="card tight">
-    <div class="rowhead sm">${ic('list-checks')}<b>Tasks</b><span class="dim num">5 open · 1 follow-up</span><span class="sp"></span>${ic('chevron-down')}</div>
-    <div class="sidesec"><div class="rowhead sm"><b>Due today</b>${chip('2')}${state === 'ready' ? an(5) : ''}</div><div class="task"><span class="cb"></span><span>Prep brief for Dan K. · Northwind</span><span class="due">today</span></div><div class="task"><span class="cb"></span><span>Ask Morgan for the JD · Harbor</span><span class="due">yesterday</span></div></div>
-    <div class="sidesec"><div class="rowhead sm"><b>Upcoming</b>${chip('3')}</div><div class="task"><span class="cb"></span><span>Finish cover letter · Lumen</span><span class="due">Wed</span></div><div class="task"><span class="cb"></span><span>Thank-you to Dan K.</span><span class="due">Fri</span></div><div class="task"><span class="cb"></span><span>Panel prep · Tidewater</span><span class="due">Oct 27</span></div></div>
-    <div class="sidesec"><div class="rowhead sm">${ic('history')}<b>Follow-ups</b>${chip('1', 'amb')}${state === 'ready' ? an(6) : ''}</div><div class="task"><span>Orbit Video · 8 days quiet in Applied</span><span class="due">${btn('Add task', 'ghost')}</span></div></div></div></div></aside>`;
+    <div class="rowhead sm"><b>Tasks</b><span class="dim num">5 · 1 follow-up</span><span class="sp"></span><span class="xs dim">Hide</span></div>
+    <div class="sidesec">${sh('Due today', 2, state === 'ready' ? an(5) : '')}${trow('Prep brief for Dan K.', 'Northwind Media: Senior Product Manager, Video Platform', 'Oct 20')}${trow('Ask Morgan for the JD', 'Harbor Analytics: Group Product Manager', 'Oct 19')}</div>
+    <div class="sidesec">${sh('Upcoming', 3)}${trow('Finish cover letter', 'Lumen Labs: Staff Product Manager, Developer Tools', 'Oct 21')}${trow('Thank-you to Dan K.', 'Northwind Media: Senior Product Manager, Video Platform', 'Oct 23')}${trow('Panel prep', 'Tidewater Health: Senior PM, Platform', 'Oct 27')}</div>
+    <div class="sidesec">${sh('Follow-ups', 1, state === 'ready' ? an(6) : '')}<div class="task" style="display:block"><div class="ellip">Orbit Video: Senior PM, Streaming Infrastructure</div><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span class="xs dim">8 days quiet in Applied</span>${btn('Add task', 'ghost')}</div></div></div></div></div></aside>`;
   const head = `<div class="pagehead"><div><div class="ttl">Pipeline</div><div class="sub">Every application by stage. Open a card to see its Role.${state === 'ready' ? an(2) : ''} Drag a card to another column, or focus it and press the Left or Right arrow key to move it one stage.${state === 'ready' ? an(4) : ''}</div></div><div class="btnrow">${btn(ic('plus') + ' New Role', 'pri nb')}</div></div>`;
   let body;
   if (state === 'loading') body = head + `<div class="sm dim" role="status">Loading pipeline…</div>`;
@@ -1043,7 +1055,7 @@ const GROUPS = [
       '<b>No create-account mode</b> (#439). The boundary is the owner allowlist in every callable and in <code>firestore.rules</code>, not the UI.',
       '<b>Errors inline, never a toast</b> (ui-guidance rule 10): rendered after the fields and before Sign in, as <code>SignIn.tsx</code> does, with <code>friendlyAuthError</code>’s copy — wrong password, unknown user and invalid credential all collapse to “Email or password didn’t match. Try again.” The route does not move focus after a failure.'],
       states: [
-        { id: 'default', label: 'default', kind: 'shipped', cap: { desk: 'Centered card, wordmark top-center, tagline one line below. The card never grows past 360 px on any width.', tab: 'Same card, the canvas just has more margin. Nothing re-flows.', ph: 'Card goes full-width inside a 16 px gutter; the status bar and home indicator are the only additions.' } },
+        { id: 'default', label: 'default', kind: 'shipped', cap: { desk: 'Centered card, wordmark top-center, tagline one line below. The card never grows past 384 px (<code>max-w-sm</code>) on any width.', tab: 'Same card, the canvas just has more margin. Nothing re-flows.', ph: 'Card goes full-width inside a 16 px gutter; the status bar and home indicator are the only additions.' } },
         { id: 'error', label: 'wrong password', kind: 'state', cap: { desk: 'Inline alert between the fields and Sign in, where SignIn.tsx renders it; nothing else moves, and focus stays wherever the submit came from (the route does not refocus the field).', tab: 'Unchanged from desktop.', ph: 'Unchanged; the card stays within the viewport without scrolling.' } }] }] },
   { id: 'onboarding', title: 'Onboarding — importing a career', sub: 'First-session flow from zero to a populated Capability Graph (PRD § 1 Onboarding; ui-guidance § Onboarding’s three panes). Shipped: the paste-résumé path with the thin progress bar and the ~108 s extraction (<code>src/routes/Onboarding.tsx</code>, <code>OperationProgress</code>). Drawn and marked deferred (PRD v0.3, decision 3): LinkedIn HTML (#28), long-form (#29), artifact upload (#87).', screens: [
     { id: 'import', title: 'Career import', fn: onboarding, legend: [
@@ -1054,14 +1066,14 @@ const GROUPS = [
       '<b>Timeout and failure copy</b> comes from <code>friendlyCallableError</code>: “extracting your resume took longer than expected and timed out. Try again.” plus the route’s hint about trimming; no exact duration is claimed (the deadline is 570 s client-side). The pasted text is kept.'],
       states: [
         { id: 'idle', label: 'before extraction', kind: 'shipped', cap: { desk: 'The shipped column (title, copy, Resume text editor, character count, Extract Units) with the deferred picker left and the proposed Units pane right, both dashed.', tab: 'Panes stack: the source picker becomes a row of four cards above the content; Units follow below.', ph: 'Source cards scroll horizontally; the textarea is the screen. Units appear below once extraction runs.' } },
-        { id: 'extracting', label: 'extracting · 1:12', kind: 'state', cap: { desk: 'Progress card above the (now read-only) text; Units landing on the right with the newest highlighted.', tab: 'Progress card first, text under it, Units below — the user scrolls to watch them land.', ph: 'The progress card is what the user watches; the Units list sits under the text.' } },
+        { id: 'extracting', label: 'extracting · 1:12', kind: 'state', cap: { desk: 'Progress block (bar, then the stage line with elapsed time, then the expectation) above the (now read-only) text; Units landing on the right with the newest highlighted.', tab: 'Progress block first, text under it, Units below — the user scrolls to watch them land.', ph: 'The progress block is what the user watches; the Units list sits under the text.' } },
         { id: 'error', label: 'timed out', kind: 'state', cap: { desk: 'Inline alert with the shipped copy; the text is preserved and Extract Units is enabled at once — the shipped button is disabled only while a call is in flight or the text is empty.', tab: 'Unchanged.', ph: 'Alert wraps; still above the text, never a toast.' } }] }] },
   { id: 'evidence', title: 'Evidence — Units, canonical résumé, claim rules', sub: 'The integrity-defining surfaces. Unit Review ships (<code>src/routes/UnitReview/</code>: filters synced to the URL, inline edit, approve / flag / reject, manual add). The canonical résumé editor with visible line ids, the list of tailored views with their pinned versions, and the claim-rules list are PRD targets (v0.3 § Target interface) and have no shipped surface.', screens: [
     { id: 'units', title: 'Unit Review', fn: unitReview, legend: [
       '<b>Global approved counter</b> over the whole snapshot, not the filtered view (<code>ApprovalCounter.tsx</code>): below 20 approved it counts toward the onboarding milestone; at 20 or more it reads “N approved — onboarding complete”. It never uses the total as a denominator and does not rubber-band with filters.',
       '<b>Filter panel</b> (<code>Filters.tsx</code>): Skills, Tools and Domains as chip multi-selects seeded from values that actually appear in the Units, Status pills, From / To dates, and “Clear filters” once anything is active. Filters AND across axes and live in the URL; none is active in this frame, so the list shows every non-rejected Unit. The panel wraps at narrow widths; nothing folds.',
-      '<b>Row anatomy</b> (<code>UnitRow.tsx</code>): a one-line summary (truncated; the full text is the row’s title tooltip), then <code>unit_type · source_type · source_ref</code>, the state pill (Approved / Pending / Flagged), confidence as a tabular percentage, and the action cluster Approve / Flag / Reject + Edit. The action for the row’s current state is disabled. Reject opens an inline confirmation because rejected Units leave matching. Pending rows are slightly dimmed.',
-      '<b>Inline edit</b>, never a modal (<code>InlineEditForm.tsx</code>): the row keeps its preview (summary, state, confidence) and the form opens beneath it — Raw text, Normalized summary, Source / Unit / Evidence type, Source ref, Skills / Tools / Domains and Seniority / Scope signals and Business outcomes one per line, dates, Confidence (0-1), Metrics as claim / value / unit with Direction and Confidence selects, Remove per metric and “Add metric” — Save commits, Cancel reverts, and saving re-runs the Unit’s embedding. The <code>?</code> help popover and the a / f / r / e shortcuts are proposed per ui-guidance § Unit Review. An open draft gates the update-reload banner behind a confirmation (#456).',
+      '<b>Row anatomy</b> (<code>UnitRow.tsx</code>): a one-line summary (truncated; the full text is the row’s title tooltip), then <code>unit_type · source_type · source_ref</code>, the state pill (Approved / Pending / Flagged), confidence as a tabular percentage, and the action cluster Approve / Flag / Reject + Edit. The action for the row’s current state is disabled. Reject opens an inline confirmation because rejected Units leave matching. Pending rows are not dimmed; only the Pending pill is muted.',
+      '<b>Inline edit</b>, never a modal (<code>InlineEditForm.tsx</code>): the row keeps its preview (summary, state, confidence) and the form opens beneath it — Raw text, Normalized summary, Source / Unit / Evidence type, Source ref, Skills / Tools / Domains and Seniority / Scope signals and Business outcomes one per line, dates, Confidence (0-1), Metrics as claim / value / unit with Direction and Confidence selects, Remove (×) per metric and “+ Add metric” — Save commits and Cancel reverts. Saving a changed Raw text or Normalized summary only sets <code>reembed_pending</code>: the row shows an amber “re-embed pending” and matching skips the Unit until it is re-embedded, but nothing in the app calls the re-embed callable yet. The <code>?</code> help popover and the a / f / r / e shortcuts are proposed per ui-guidance § Unit Review. A changed draft, not merely an open editor, gates the update-reload banner behind a confirmation (#456).',
       '<b>Bulk selection (proposed enhancement)</b>: the shipped list acts per row; this adds checkboxes and a sticky action bar with a / f / r shortcuts. Reject asks once because rejected Units leave matching.',
       '<b>Right-pane detail (proposed enhancement, desktop only)</b> keeps the list in context: raw source, signals, provenance, and the canonical lines this Unit evidences. ui-guidance § Unit Review asks for it; nothing has built it.'],
       states: [
@@ -1083,13 +1095,13 @@ const GROUPS = [
         { id: 'rules', label: 'claim rules · adding one', kind: 'prd', cap: { desk: 'The full list with an inline add form (kind, statement, applies-to). Short, user-written, no prose.', tab: 'Add form wraps to two rows.', ph: 'Add form stacks; rows wrap the kind chip under the statement.' } }] }] },
   { id: 'roles', title: 'Roles — new Role and the dossier', sub: 'A Role arrives by paste or from the scan; it can be saved with only a title (#431). Its detail page is the dossier: a header that reads “where things stand” plus the next action, then Fit brief (default) · Requirements &amp; matches · Package · Process · Correspondence (PRD v0.3 § Target interface). Shipped today: the New Role form, and the Requirements / Matches / Applications tabs — the current implementation, superseded in the target design — with gaps, scores, approve / reject, “Computing matches…”, re-run.', screens: [
     { id: 'rolenew', title: 'New Role', fn: roleNew, legend: [
-      '<b>Only Title is required.</b> Fields in the shipped order: Title, Job description, URL, Location, Remote policy, Comp range, every one but Title marked optional with the shipped placeholders. Create saves the Role and opens Role detail on its default tab, Matches (<code>RoleDetail</code> starts on Matches for every Role); the user’s next step, Parse JD, is on the Requirements tab, and nothing parses or matches automatically. Company and Source are PRD targets (decision 7): the shipped form has no Company UI yet and stamps a placeholder company id (<code>src/routes/RoleNew.tsx</code>), and nothing stores a source. The target Role records its origin (manual or scan) and a source URL when there is one; the drawn values (an employer board, a referral) are placeholders while the PRD’s open question on non-URL sources stands.',
+      '<b>Only Title is required.</b> Fields in the shipped order: Title, Job description, JD URL, Location, Remote policy, Comp range, every one but Title marked optional with the shipped placeholders. Create saves the Role and opens Role detail on its default tab, Matches (<code>RoleDetail</code> starts on Matches for every Role); the user’s next step, Parse JD, is on the Requirements tab, and nothing parses or matches automatically. Company and Source are PRD targets (decision 7): the shipped form has no Company UI yet and stamps a placeholder company id (<code>src/routes/RoleNew.tsx</code>), and nothing stores a source. The target Role records its origin (manual or scan) and a source URL when there is one; the drawn values (an employer board, a referral) are placeholders while the PRD’s open question on non-URL sources stands.',
       '<b>The JD is the second field</b>, right under Title, with its placeholder saying it can be added later from the Role page; pasting it here only saves it with the Role.',
       '<b>Without a JD</b> the placeholder says so; Create Role still creates the Role from the title alone, and Role detail opens on Matches, which says “No JD yet. Paste it on the Requirements tab to parse requirements; matching starts once they exist.”',
       '<b>Draft persistence</b>: the form is saved to this browser as you type and restored on reload (<code>src/lib/formDraft.ts</code>); Cancel discards, creating clears, sign-out clears all. The “Draft restored” notice is proposed — the shipped route restores silently.',
       '<b>Validation is the browser’s</b>: Title is a required input and Create Role stays disabled until it is filled, so no click can reach the route’s defensive “Title is required.” alert; there is no blank-title state to draw.'],
       states: [
-        { id: 'jd', label: 'with a JD', kind: 'shipped', cap: { desk: 'Single-column form, 720 px max; the JD follows the title, the short fields sit two-up.', tab: 'Unchanged.', ph: 'Short fields go one-up; the JD textarea keeps a tall minimum so pasting feels natural.' } },
+        { id: 'jd', label: 'with a JD', kind: 'shipped', cap: { desk: 'Single-column form, 672 px max (<code>max-w-2xl</code>); the JD follows the title, the short fields sit two-up.', tab: 'Unchanged.', ph: 'Short fields go one-up; the JD textarea keeps a tall minimum so pasting feels natural.' } },
         { id: 'lead', label: 'title only · draft restored', kind: 'shipped', cap: { desk: 'Proposed restored-draft notice on top; the JD placeholder explains the lead path; the primary stays “Create Role”.', tab: 'Unchanged.', ph: 'Unchanged.' } }] },
     { id: 'role', title: 'Role detail — the dossier', fn: roleDetail, legend: [
       '<b>“Where things stand”</b> is the first thing on every dossier, as the first line of each reference folder index: two or three sentences, hand-editable, regenerated on request from the process so far. The header’s action row (Update stage, Generate, Export) is proposed too: the shipped header carries only the title and Role id, and generation lives inside the Applications tab. Export here opens the Package’s export; the Package is the only home for export (PRD v0.3, decision 5).',
@@ -1109,31 +1121,31 @@ const GROUPS = [
       '<b>Requirements tab without a JD</b> (<code>RequirementsTab.tsx</code>): the JD source editor with its placeholder, Parse JD disabled until text is pasted, and the state line “No JD yet. Paste it above to parse requirements.” Save JD appears once the draft is dirty; Re-parse asks for an inline confirmation when requirements already exist.',
       '<b>Gaps first</b> (<code>GapsView.tsx</code>): unmet must-haves in amber with the shipped explanation, then unverified must-haves (a match exists but its evidence could not be checked), each with its “Could not verify: …” reason — a missing or unapproved Unit, a Unit or requirement without a usable embedding; each row carries the requirement’s category and priority. With no gaps the panel says “✓ Every must-have requirement has a qualifying match.”',
       '<b>Re-run matching</b> with its explanation sits above the list; while a run is in flight the status line reads “Computing matches…” and the control is disabled and relabelled “Re-running matching…” so runs cannot overlap.',
-      '<b>Applications tab</b> (<code>ApplicationsTab.tsx</code>): the generation line (“Generate a resume from your approved matches under this Role.”, or “Approve at least one match first.” with the button disabled), the Generate resume button, then existing Applications newest-activity first — stage badge, id, asset count, last activity, Open. With none: “No Applications yet. Click Generate resume to create the first.”',
+      '<b>Applications tab</b> (<code>ApplicationsTab.tsx</code>): the generation line (“Generate a resume from your approved matches under this Role.”, or “Approve at least one match first.” with the button disabled), the Generate resume button, then existing Applications newest-activity first — stage badge (coloured per stage), id, asset count, last activity, Open, and a “+ task” quick-add under each row. With none: “No Applications yet. Click Generate resume to create the first.”',
       '<b>Every Requirement owns its match cards</b> (<code>MatchesTab.tsx</code>, <code>MatchCard.tsx</code>): the requirement with category • priority • must-have, then cards with the Unit summary, the score badge (<code>MatchScoreBadge.tsx</code>: the 0–100 scale with one decimal; the seven-axis breakdown from <code>scoreBreakdown.ts</code> — Semantic 0.30, Skill 0.20, Domain 0.15, Tool 0.10, Seniority 0.10, Scope 0.10, Recency 0.05 — and the Unit confidence multiplier only in its hover / focus tooltip, shown on the first card, whose rows multiply to the badge’s number; an axis the engine did not evaluate reads “not evaluated” and its neutral placeholder contribution is disclosed separately), the “Why:” rationale, the “Evidence:” surface string, and Approve / Reject where an approved card shows the active “Approved ✓” toggle. Empty requirements read “No matches found.”'],
       states: [
         { id: 'matches', label: 'Matches tab · computing · gaps', kind: 'shipped', cap: { desk: 'Title, Role id, three tabs. Gaps panel, re-run control, then the grouped list.', tab: 'Unchanged; cards take the full width.', ph: 'Unchanged; the score sits at the right edge of each card’s first line.' } },
         { id: 'nojd', label: 'Requirements tab · no JD yet', kind: 'shipped', cap: { desk: 'The JD source editor, a disabled Parse JD, and the no-JD state line.', tab: 'Unchanged.', ph: 'Unchanged; the editor is full width.' } },
-        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line and button above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'The shipped row stays one line: the id and metadata truncate beside Open (ApplicationsTab.tsx has no breakpoint).' } },
+        { id: 'applications', label: 'Applications tab · one generated', kind: 'shipped', cap: { desk: 'The generation line with its button on the same row, above the list of existing Applications; Open leads to the Application editor.', tab: 'Unchanged.', ph: 'No breakpoint (ApplicationsTab.tsx): Open keeps its place at the right, and the id and metadata wrap beside it rather than truncate.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped “Loading Role…” text alone; no header, no tabs until the Role arrives.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Failed to load Role: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
+        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped red error line, “Failed to load Role: …”, alone: plain text, not a boxed alert, and without role=alert.', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'editor', title: 'Application editor — output and evidence', sub: 'Where generated output becomes something you send. Shipped (<code>src/routes/ApplicationEditor/</code>): two panes, <code>ClaimAnnotation</code> underlines with a popover, inline edit with autosave and undo, add / remove / reorder bullets, the export gate on the server attestation (#502), re-run validation. Export itself is not built (#33): the button is gated, but its action is a stub. Drawn and marked not built: claim-rule hits as a third flag kind. <b>Transitional</b> (PRD v0.3, decision 5): the Package tab becomes the home for editing, validation and export, and an expanded editor is another view of the same package, not a separate artifact or workflow.', screens: [
     { id: 'editor', title: 'Application editor', fn: editor, legend: [
-      '<b>Traced claim</b>: a 1 px low-opacity underline. Hovering it highlights its source Unit on the right; the hovered claim gets the accent wash.',
+      '<b>Traced claim</b>: a 1 px low-opacity underline. Hovering it darkens the underline, highlights its source Units on the right and gives every bullet citing them a neutral zinc tint (not the accent); hovering a Unit row on the right tints the bullets that cite it.',
       '<b>Untraceable claim</b> (amber underline, “no source Unit”): the claim has no approved Unit behind it. <code>ClaimAnnotation.tsx</code> maps untraceable to amber and specificity to red — the reverse of ui-guidance § Application Editor; the frame follows the code, and both block export. This one is also a claim-rule hit (the engine reached beta, never shipped), so it carries the double underline too.',
       '<b>Specificity flag</b> (red underline, “vague claim”): the claim is too vague to verify. When a claim carries both flags the red wins.',
       '<b>Claim-rule hit</b> (double underline, proposed): the popover names the rule and offers the same three resolution paths plus a link to the rule itself. Blocking, like traceability. The CDN bullet carries it together with the amber untraceable mark: no grounding Unit states the saving.',
       '<b>Source Units pane</b> (<code>UnitsPane</code>): “N approved Units were used to ground this Application.” and the Units as plain rows; the hovered claim’s source is highlighted, and a claim’s popover lists its Source Units to scroll to. Approval happens in Unit Review, not here.',
       '<b>Export sits at the top of the output pane</b> (<code>ExportButton</code>): the gate’s reason (“Resolve N validation flags before exporting.”, or the stale / never-validated reasons), “Re-run validation” when re-validating is the fix, and a disabled Export whose tooltip repeats the reason. The count here is 5: two untraceable claims (the CDN saving and the recommendations engine — neither is in the nine grounding Units), one vague claim, and the two proposed claim-rule hits on those same two bullets — the proposal adds rule hits to the same gate. The empty state sends the user back to the Role to generate — there is no generate action in the editor.'],
       states: [
-        { id: 'ready', label: 'hovering a claim · 5 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output, Summary then Experience. The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
+        { id: 'ready', label: 'hovering a claim · 5 flags · export blocked', kind: 'shipped', cap: { desk: 'Output takes the width, the Source Units pane is fixed at 360 px (the shipped md grid): export gate on top of the output (right-aligned), then Summary, Experience, Skills and Education, every row below Summary with a ⋮⋮ reorder handle (drag, or ArrowUp / ArrowDown on the handle). The claim-rule popover is proposed.', tab: 'The two panes stay side by side — the shipped grid holds from md (768 px) up — with the evidence pane still 360 px.', ph: 'The shipped grid simply stacks output over evidence; the Output / Evidence switcher at the top is proposed, with the flag counts in its labels.' } },
         { id: 'empty', label: 'no résumé generated yet', kind: 'state', cap: { desk: 'The two-pane layout stays: the empty résumé pane says generation happens on the Role; the Source Units pane still lists the linked Units.', tab: 'Two panes, as from md up.', ph: 'Panes stack.' } },
         { id: 'loading', label: 'loading', kind: 'state', cap: { desk: 'The shipped loading text alone (role=status); nothing else renders until the snapshot lands.', tab: 'Unchanged.', ph: 'Unchanged.' } },
-        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Couldn’t load Application: …”, alone.', tab: 'Unchanged.', ph: 'Unchanged.' } },
+        { id: 'error', label: 'load failed', kind: 'state', cap: { desk: 'The shipped alert, “Couldn’t load Application: …”, alone: plain red text in a role=alert region, not a boxed alert.', tab: 'Unchanged.', ph: 'Unchanged.' } },
         { id: 'notfound', label: 'not found', kind: 'state', cap: { desk: 'The shipped anti-enumeration sentence alone: missing and not-yours collapse to “Application not found, or not owned by you.”', tab: 'Unchanged.', ph: 'Unchanged.' } }] }] },
   { id: 'pipeline', title: 'Pipeline — the board and the sidebar', sub: 'CRM-lite kanban by stage. Shipped (#510, #511, #512, #34; <code>src/routes/Pipeline/</code>): seven columns, three-line cards with the next-action chip and key contact, click-through, native drag-and-drop with a 2 px drop-target border, ArrowLeft / ArrowRight moves, optimistic state with exact rollback, inline load and partial-failure errors, and the collapsible tasks sidebar. Proposed (dashed): the next scheduled round chip (PRD target) and the page-level New Role button.', screens: [
     { id: 'pipeline', title: 'Pipeline board', fn: pipeline, legend: [
-      '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. The day chip is titled “days in stage” but counts days since the Application’s last activity, which completing a task also resets (<code>buildPipelineBoard.ts</code>); true time in stage needs a stage-entry timestamp.'
+      '<b>Columns</b>: muted header with stage name and count; each card is company, title, metadata row — three lines, never more. Each card carries a “+” at its top right that opens an inline task quick-add. The day chip is titled “days in stage” but counts days since the Application’s last activity, which completing a task also resets (<code>buildPipelineBoard.ts</code>); true time in stage needs a stage-entry timestamp.'
       + ' Card chips and the sidebar come from one task set: a card’s next action is its Application’s first open task, and an Application with an open task never appears in Follow-ups.'
       + ' Empty columns keep their teaching copy. A fatal read shows only the alert; partial enrichment keeps the board and marks the affected cards. The page-level New Role button is proposed: the shipped header is the title and the move hint, and New Role lives in the shell navigation.',
       '<b>Moves are optimistic</b> and announced only in a visually hidden polite live region — no banner, no undo; a rejected write rolls the card back exactly and surfaces the error inline.',
@@ -1162,7 +1174,7 @@ const GROUPS = [
   { id: 'system', title: 'System states — splash, update prompt, not found, command palette', sub: 'Surfaces every screen inherits. Shipped: the auth splash, the update-reload prompt with its busy-lease suppression and unsaved-work confirmation (<code>specs/matchline.md</code> § Update prompt, #456), and the anti-enumeration not-found copy. Proposed: the command palette (ui-guidance rule 5).', screens: [
     { id: 'system', title: 'System surfaces', fn: system, legend: [
       '<b>Update prompt</b> is a bottom banner (<code>src/components/UpdatePrompt.tsx</code>), never a modal or a toast; it is hidden outright while extraction, generation or a save holds a busy lease.',
-      '<b>Unsaved work</b> (an open inline edit, a pasted résumé, a New Role draft) turns the first Reload click into the banner’s confirming state: the copy becomes “Reloading will discard your unsaved changes on this page.”, Reload becomes an amber “Reload anyway”, and the dismiss becomes “Keep editing”. One extra click, no blocking dialog.',
+      '<b>Unsaved work</b> (a changed inline edit, a pasted résumé, a New Role draft, an unsaved JD or bullet edit, a filled manual-add form) turns the first Reload click into the banner’s confirming state: the copy becomes “Reloading will discard your unsaved changes on this page.”, Reload becomes an amber “Reload anyway”, and the dismiss becomes “Keep editing”. One extra click, no blocking dialog.',
       '<b>Not found and not yours collapse</b> to one sentence so the UI cannot be used to enumerate ids.',
       '<b>Command palette</b> (<code>⌘K</code>): Roles, actions and navigation in one list; arrow keys and Enter, Esc closes. Every mouse-reachable action is listed here.'],
       states: [
