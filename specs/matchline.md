@@ -426,7 +426,7 @@ Async (cached):
 
 Real-time:
 
-4. Matching (vector + rules, minimal LLM)
+4. Matching (vector + rules, deterministic rationales; no LLM call)
 5. Generation (controlled-generation prompt using approved Units as
    ground truth)
 6. Validation (LLM claim-to-Unit check, or deterministic where possible)
