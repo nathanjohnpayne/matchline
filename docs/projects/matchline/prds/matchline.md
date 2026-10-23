@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: b3d586dfea4ce442393e78c163b6ab1f93bda5bd
+source_ref: c8c962f1bac6bc0c306144542d9eddeef752c0e2
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -112,7 +112,7 @@ The **fit brief** is the center of the dossier. It gives a bottom line, maps str
 All of these are **target** behavior; none of them has shipped.
 
 - **The unit of work becomes the dossier.** The core loop no longer ends at a generated résumé. It runs from evidence through the fit brief to a package, and on through the interview process. See [The core loop, revised](#the-core-loop-revised-october-2026).
-- **Tailored résumés become views of a canonical résumé**, with tracked exceptions. Each tailored view pins the canonical version it was built from. When the canonical changes, the view shows a visible, non-blocking staleness warning and offers **Rebase** or **Keep**. Nothing silently rewrites a tailored view or a package that has been sent. Experience Units remain the evidence model, and the canonical résumé becomes their primary, user-maintained source. Whether generation should read Units or the canonical lines directly is an open question that matchline#495 tests.
+- **Tailored résumés become views of a canonical résumé**, with tracked exceptions. Each tailored view pins the canonical version it was built from. When the canonical changes, the view shows a visible, non-blocking staleness warning and offers **Rebase** or **Keep**; Rebase applies only to unsent views. Nothing silently rewrites a tailored view, and nothing rewrites a package that has been sent: it stays as sent, and a correction to it is a linked record. Experience Units remain the evidence model, and the canonical résumé becomes their primary, user-maintained source. Whether generation should read Units or the canonical lines directly is an open question that matchline#495 tests.
 - **Claim rules become data** that the validation layer enforces alongside traceability.
 - **The pipeline gains interview rounds, people, correspondence, and next actions**, because that is where most of the search's time actually goes after the application is sent. Next actions have shipped in a first form (tasks, #34 and #512); the rest is target.
 - **Two non-goals are reversed:** the market scan and interview preparation. See [What Matchline is not](#what-matchline-is-not).
@@ -126,7 +126,7 @@ The Matchline repository is public. The reference folder, and every dossier Matc
 The owner settled eight questions that v0.2 left in conflict. Each is applied throughout this document.
 
 1. **Pipeline stages.** The seven shipped stages stay for this release: Saved, Drafting, Applied, Interviewing, Offer, Rejected, Withdrawn. The nine-stage vocabulary proposed in v0.2 is withdrawn. Finer process steps (researching, referral requested, screening, leveling) live inside the dossier, as interview rounds, next actions and correspondence, not as board columns.
-2. **Stale tailored résumés.** A tailored résumé pins a canonical version. When the canonical moves, the view shows a visible, non-blocking staleness warning and offers Rebase or Keep. Nothing silently rewrites a tailored view or a sent package. Traceability and claim-rule failures stay blocking. This is target behavior until canonical versioning exists.
+2. **Stale tailored résumés.** A tailored résumé pins a canonical version. When the canonical moves, the view shows a visible, non-blocking staleness warning and offers Rebase or Keep; Rebase applies only to unsent views. Nothing silently rewrites a tailored view, and nothing rewrites a sent package: it is immutable, and a correction to it is a linked record. Traceability and claim-rule failures stay blocking. This is target behavior until canonical versioning exists.
 3. **Career imports.** LinkedIn import (#28), long-form import (#29) and artifact upload (#87) are deferred. The `artifact` source type and `artifact://` reference format (#592) are a data-model change only; they do not count as shipped upload or parsing.
 4. **Exit test.** The replacement test replaces "ten serious applications": new opportunities run in Matchline instead of in hand-built dossier folders. Two intermediate tests come first: a grounded, claim-rule-compliant package sent with only light edits, then one live process managed through every round. Owner-preference review is a manual acceptance step, not a capability of the evaluation harness.
 5. **Application Editor vs. Package.** The Package tab is the home for editing, validation and export. An expanded editor can be another view of the same package, never a separate artifact or workflow. The shipped Application Editor is transitional.
@@ -172,7 +172,7 @@ Stating non-goals explicitly so they don't sneak back in as features:
 
 - **Not an ATS keyword stuffer.** If the system suggests a keyword, it's because the user has genuine experience with it, not because the JD asked for it.
 - **Not a generative writer.** The AI assembles and rephrases; it never introduces claims the user hasn't confirmed.
-- **Not a job board.** No scraping of aggregator listings, no feed of "jobs you might like." *Revised October 2026:* Matchline does run a scheduled **scan of employer boards the user names** (target). It verifies each role on the employer's own posting, sorts results into tiers against the user's evidence, and states every gap. A role seen only on an aggregator can sit in Scan as an unverified lead, but it never becomes a Role or counts as a verified opportunity until the employer's posting confirms it (decision 6). That retention does not authorize scraping aggregators. The user still decides which roles exist for them; the scan saves the weekly legwork of checking those boards. This was a stated non-goal in v0.1 and is reversed because the manual weekly scan proved to be one of the highest-value recurring tasks of the search.
+- **Not a job board.** No scraping of aggregator listings, no feed of "jobs you might like." *Revised October 2026:* Matchline does run a scheduled **scan of employer boards the user names** (target). It verifies each role on the employer's own posting, sorts results into tiers against the user's evidence, and states every gap. A role seen only on an aggregator can sit in Scan as an unverified lead, but it never becomes a scan-created Role or counts as a verified opportunity until the employer's posting confirms it (decision 6). That retention does not authorize scraping aggregators. The user still decides which roles exist for them; the scan saves the weekly legwork of checking those boards. This was a stated non-goal in v0.1 and is reversed because the manual weekly scan proved to be one of the highest-value recurring tasks of the search.
 - **Not a mass-apply tool.** Matchline is for people applying to fewer roles with more care, not more roles with less. It drafts and logs submissions; it never submits an application or sends a message without the user's explicit action.
 - **Not a coaching product.** No generic career advice, no "should you leave your current role." *Revised October 2026:* **interview preparation and debriefs are in scope** (target), grounded in the same evidence and the same claim rules as the application. v0.1 limited the scope to the application itself. In practice, most of the search's effort and most of its risk come after the application: prep for each interviewer, staying consistent with what is already on the record, and capturing what each conversation revealed.
 - **Not a team or enterprise product.** Single-user, personal data, no sharing or collaboration in V1.
@@ -230,7 +230,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 - Export to PDF, DOCX and plain text (#33), from the Package.
 - Cover letter generation (#30), with the same grounding and validation as résumés.
 - Capability Graph JSON export (#35).
-- The canonical résumé as line-addressable, versioned data, with tailored views that pin a version, Rebase or Keep, and a non-blocking staleness warning (decision 2).
+- The canonical résumé as line-addressable, versioned data, with tailored views that pin a version, Rebase (unsent views only) or Keep, and a non-blocking staleness warning (decision 2).
 - Claim rules as data, enforced as a blocking validation check.
 - The fit brief as a first-class artifact on the Role.
 - The dossier: Role detail with "where things stand," the next action, and the five target tabs (Fit brief, Requirements & matches, Package, Process, Correspondence).
@@ -240,7 +240,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 - The weekly scan of employer boards the user names, with employer-board verification and tiering (decision 6).
 - Workflow automations: prep briefs opened for scheduled rounds, debriefs drafted from transcripts, thank-you notes drafted from debriefs.
 - Responsive web layouts for these workflows, down to phone widths (decision 8).
-- Unit Review completion: embed a Unit after an inline edit or a manual add (the `reembedExperienceUnit` callable exists but has no client call site or trigger), and a view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller).
+- Unit Review completion: a source-type filter; embed a Unit after an inline edit or a manual add (the `reembedExperienceUnit` callable exists but has no client call site or trigger), and a view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller).
 
 **Target, enhancements** (approved, never release-blocking): see [Core requirements and enhancements](#core-requirements-and-enhancements).
 
@@ -442,7 +442,7 @@ ExperienceUnit {
 }
 ```
 
-Only résumé extraction and manual entry create Units today. The `linkedin`, `long_form` and `artifact` source types are reserved for deferred inputs, though the Unit Review editor still lets the user set any of the five on an existing Unit; the `artifact://` format and its parser shipped with #592 as a data-model change, with no upload, storage or extraction behind them. The shipped Unit also carries `rejected` and `flagged` flags alongside `user_approved`, plus its stored `embedding` and a `reembed_pending` flag that keeps it out of matching until the embedding is current. Every persisted object, in this section and the CRM one, also carries an `owner_uid`.
+Only résumé extraction and manual entry create Units today. The `linkedin`, `long_form` and `artifact` source types are reserved for deferred inputs, though the Unit Review editor still lets the user set any of the five on an existing Unit; the `artifact://` `source_ref` format and its build and parse helpers shipped with #592 as a data-model change, with no upload, storage, document parsing or extraction behind them. The shipped Unit also carries `rejected` and `flagged` flags alongside `user_approved`, plus its stored `embedding` and a `reembed_pending` flag that keeps it out of matching until the embedding is current. Every persisted object, in this section and the CRM one, also carries an `owner_uid`.
 
 ```json
 Metric {
@@ -605,7 +605,7 @@ The wireframes draw an **org map** on the Process tab. It has no data model; it 
 
 ### One note on the model
 
-What ties this together is the distinction between Experience Units (facts about the user) and UnitMatches (relationships to specific jobs). Experience Units are permanent—they belong to the user and persist across every application. UnitMatches are per-application and ephemeral. This means every new job the user targets is a fresh matching problem against a stable base of evidence. It also means the capability graph gets richer over time without bloating, because new Units get added, but old Units don't need to be rewritten for each new role.
+What ties this together is the distinction between Experience Units (facts about the user) and UnitMatches (relationships to specific jobs). Experience Units are permanent—they belong to the user and persist across every application. UnitMatches are per Role and are regenerated on every matching run. This means every new job the user targets is a fresh matching problem against a stable base of evidence. It also means the capability graph gets richer over time without bloating, because new Units get added, but old Units don't need to be rewritten for each new role.
 
 ---
 
@@ -643,7 +643,7 @@ The formula and weights above are shipped. Each axis has its own fallback when t
 
 ### Skill ontology
 
-The matching engine depends on canonical skill/tool/domain vocabularies. V1 uses a seed ontology built from a corpus of tech PM job descriptions, with LLM-based normalization during extraction. V2 introduces user-specific ontology refinement based on correction patterns.
+The matching engine depends on canonical skill/tool/domain vocabularies. V1 uses a seed ontology built from a corpus of tech PM job descriptions. Extraction asks the model for canonical forms, and matching applies deterministic normalization at match time (`functions/src/matching/normalize.ts`); stored Units keep the extracted strings. V2 introduces user-specific ontology refinement based on correction patterns.
 
 Non-goal: building a universal skill taxonomy. The product only needs to be right for the V1 user's domain. A tech PM search doesn't need coverage of nursing terminology.
 
@@ -696,7 +696,7 @@ The cost targets from the original doc hold:
 
 Every LLM call is now priced on a shared rate table and attributed by task (#483), so these targets can be checked against measured spend.
 
-Caching is critical. Experience Unit embeddings are cached forever. Job Requirement embeddings are cached per role. Matching is nearly free once embeddings exist. Generation is the main per-application cost and scales linearly with output length.
+Caching is critical. Experience Unit embeddings are cached until the Unit's raw text or summary changes, which marks it `reembed_pending`. Job Requirement embeddings are cached per role. Matching is nearly free once embeddings exist. Generation is the main per-application cost and scales linearly with output length.
 
 ---
 
@@ -711,15 +711,15 @@ Validation runs four steps, all **shipped**:
 3. **Specificity check.** Flag generic language ("collaborated cross-functionally to drive results") that doesn't tie to any specific Unit.
 4. **Surface to user.** Flagged issues appear as inline annotations on the generated output. Today the user resolves a flag by removing the bullet or undoing the change. Editing a bullet clears its cited Units, so an edited or added bullet is flagged as untraceable when validation runs again, and "Add a supporting Unit" creates a Unit without attaching it to the bullet. *Target:* edits that keep or re-establish traceability, and attaching a new Unit to the bullet it supports.
 
-**When it runs (shipped).** Generation saves the résumé with validation pending and opens it in the Application Editor at once, so the user sees an unvalidated draft. Validation runs when the user saves a text edit or chooses "Re-run validation"; removing or adding a bullet marks the draft stale until validation is re-run. Export stays blocked until it passes. The guarantee that holds today is that nothing unvalidated can be exported, not that nothing unvalidated is ever shown.
+**When it runs (shipped).** Generation saves the résumé with validation pending and opens it in the Application Editor at once, so the user sees an unvalidated draft. Validation runs when the user saves a text edit or chooses "Re-run validation"; removing or adding a bullet marks the draft unvalidated (`validation_status: "stale"`, which is unrelated to staleness against the canonical) until validation is re-run. Export stays blocked until it passes. The guarantee that holds today is that nothing unvalidated can be exported, not that nothing unvalidated is ever shown.
 
 **The bar (target, not met).** The user should never see an output with an un-sourced claim: if the model generates one, validation catches it before the user does. That needs validation to run automatically between generation and display.
 
 **Export gate (shipped).** The verdict is attested by the server, not by the asset (#502). Export is enabled only when the server's attestation for the asset's current content says it passed, and every Unit that content cites is still at the version validation read. An edit makes the content unvalidated until validation runs again.
 
-**Claim-rule check (target).** A fourth check runs every generated artifact against the user's ClaimRules: fit briefs, résumé exceptions, cover letters, answers, prep briefs, and drafted messages. A violation blocks export like an untraceable claim does. Traceability asks "is this backed by evidence?"; the claim-rule check asks "is this a thing the user has decided never to say, or to say only one way?" Both are needed. A true, traceable claim can still be one the user has retired. Claim rules do not exist as data yet; today they reach only the fit-brief harness, as a private text file.
+**Claim-rule check (target).** A third check, beside traceability and specificity, runs every generated artifact against the user's ClaimRules: fit briefs, résumé exceptions, cover letters, answers, prep briefs, and drafted messages. A violation blocks export like an untraceable claim does. Adding supporting evidence repairs traceability but never clears a claim-rule hit: the text must change, or the user must explicitly change the rule. Traceability asks "is this backed by evidence?"; the claim-rule check asks "is this a thing the user has decided never to say, or to say only one way?" Both are needed. A true, traceable claim can still be one the user has retired. Claim rules do not exist as data yet; today they reach only the fit-brief harness, as a private text file.
 
-**Staleness against the canonical (target, non-blocking).** A tailored résumé built from an older canonical version passes or fails validation on its own content. Its staleness is reported as a visible warning next to the validation results, with Rebase and Keep, and never blocks export (decision 2). Traceability and claim-rule failures always block.
+**Staleness against the canonical (target, non-blocking).** A tailored résumé built from an older canonical version passes or fails validation on its own content. Its staleness is reported as a visible warning next to the validation results, with Rebase (unsent views only; a sent package keeps its pinned version) and Keep, and never blocks export (decision 2). Traceability and claim-rule failures always block.
 
 ---
 
@@ -761,7 +761,7 @@ Artifact extraction ($0.50 per uploaded document at p95) is deferred with artifa
 
 ### The five V1 screens
 
-The original V1 product had five screens. Each one earns its place in the core loop. This section records each as **shipped**, then names what the target design changes. Sign-in also ships; it is the only surface before the app knows who the user is, and it has no sign-up.
+The original V1 product had five screens. Each one earns its place in the core loop. New Role, shipped with #431, is a sixth, covered in Role detail and Target interface. This section records each as **shipped**, then names what the target design changes. Sign-in also ships; it is the only surface before the app knows who the user is, and it has no sign-up.
 
 #### 1. Onboarding
 
@@ -779,7 +779,7 @@ Success criterion for this screen: the user completes onboarding with at least 2
 
 The primary interface for maintaining the Capability Graph. The user spends time here during onboarding and whenever they add new career inputs.
 
-- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, where an edit to the raw text or summary marks the Unit `reembed_pending` and keeps it out of matching until it is re-embedded, and edits to other fields apply to matching immediately; approve, flag and reject, with rejected Units dropping out of the list and out of matching; and "Add Unit manually," whose Unit has no embedding and stays out of matching for the same reason.
+- **Shipped:** a list of all non-rejected Experience Units, filterable by skill, tool, domain, approval status (approved, pending, flagged) and date range, with filters kept in the URL; a global approved counter toward the 20-Unit milestone; each Unit's summary, type, source, state and confidence; inline editing of every field, where an edit to the raw text or summary marks the Unit `reembed_pending` and keeps it out of matching until it is re-embedded, and edits to other fields need no re-embedding and are used on the next matching run (existing scores and rationales change only when matching is re-run); approve, flag and reject, with rejected Units dropping out of the list and out of matching; and "Add Unit manually," whose Unit has no embedding and stays out of matching for the same reason.
 - **Target, not built:** a filter by source type; a client call to embed a Unit after an inline edit or a manual add; and a separate view for reviewing and restoring rejected Units.
 - **Deferred** (decision 3): the "Upload an artifact" entry and the artifact provenance line (for example, `artifact · retro-q3.pdf · page 2`) that round-trips to the uploaded file.
 - **Target (enhancement):** bulk selection with keyboard shortcuts, and a detail pane beside the list.
@@ -828,7 +828,7 @@ These are the approved target surfaces from v0.2's interface additions, settled 
 - **Navigation.** Pipeline · Evidence (Units, Canonical résumé, Claim rules) · Scan · + New Role, replacing the shipped top navigation (Onboarding · Unit Review · + New Role · Application Editor · Pipeline). On phones, a bottom tab bar.
 - **Role detail becomes the dossier.** Its header reads "where things stand" and the next action, as each reference folder index does. The tabs become: **Fit brief** (the default), **Requirements & matches**, **Package**, **Process**, and **Correspondence**.
 - **Fit brief.** Bottom line and verdict; strengths tied to JD clauses with their evidence; exposures with how the package handles each; positioning and level; homework; questions to ask; and what this package does not claim, citing the claim rules it reflects.
-- **Package.** Sub-views for the résumé view, cover letter, application answers and referral note. Validation shows traceability, claim rules and specificity as separate checks. The staleness warning against the canonical sits beside them, with Rebase and Keep, and does not block. Export records the canonical version it was cut from. This is the home for editing, validation and export (decision 5).
+- **Package.** Sub-views for the résumé view, cover letter, application answers and referral note. Validation shows traceability, claim rules and specificity as separate checks. The staleness warning against the canonical sits beside them, with Rebase (unsent views only) and Keep, and does not block. A sent package is read-only. Export records the canonical version it was cut from. This is the home for editing, validation and export (decision 5).
 - **Process.** Interview rounds with people, a prep brief and a debrief from the transcript per round, and a signal; the scorecard; and the leveling brief.
 - **Correspondence.** The verbatim log in order, "Log a message," and drafts that the user copies and sends, then marks sent, so Matchline logs them verbatim. An "on the record" summary keeps later messages consistent with what has been said.
 - **Pipeline cards** add the next scheduled round, and overdue next actions surface first.
@@ -845,8 +845,8 @@ The wireframes draw more than this release needs. A surface or detail listed as 
 |---|---|---|
 | Navigation | Every target surface reachable from the shell at every width | ⌘K command palette |
 | Onboarding | Paste résumé (shipped) | Units streaming into the page during extraction |
-| Unit Review | Shipped behavior; source-type filter | Bulk selection and shortcuts; detail pane |
-| Evidence | Canonical résumé editor; tailored-view list with Rebase; claim-rules list | Drag to reorder lines |
+| Unit Review | Shipped behavior; source-type filter; embed after an edit or a manual add; rejected-Units view | Bulk selection and shortcuts; detail pane |
+| Evidence | Canonical résumé editor; tailored-view list with Rebase (unsent) and Keep; claim-rules list | Drag to reorder lines |
 | New Role | Company and Source, persisted | "Draft restored" notice |
 | Fit brief | All sections listed above | Regenerate and hand-edit history |
 | Requirements & matches | Shipped Requirements and Matches behavior | Split view (requirements beside candidates) |
@@ -1056,7 +1056,7 @@ Some Phase C work shipped first, out of this order: the Pipeline board (#510, #5
 
 ### Phase B: the evidence the package depends on
 
-- Canonical résumé as line-addressable, versioned data, with tailored résumés as views that pin a version, tracked exceptions, Rebase or Keep, and a non-blocking staleness warning (decision 2).
+- Canonical résumé as line-addressable, versioned data, with tailored résumés as views that pin a version, tracked exceptions, Rebase (unsent views only) or Keep, and a non-blocking staleness warning (decision 2).
 - Claim rules as data, enforced as a blocking check by the validation layer.
 - Fit brief as a first-class artifact on the Role, built on Phase A's decision.
 - Cover letters (#30) and export to PDF, DOCX, and text (#33), from the Package (decision 5), because the exit below sends a package.
