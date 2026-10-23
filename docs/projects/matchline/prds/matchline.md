@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: 783caf3b4ce7cae4c8d05cd8f44c4b8e4924bc99
+source_ref: dbfe93eba4614e7cdbd9ae0ff1cdb91b33901f7e
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -160,7 +160,7 @@ A new user (me) opens Matchline for the first time. Within the first session, th
 
 3. **See the match.** A view showing which Experience Units map to which Requirements, which requirements are covered, and which are gaps. Gaps are surfaced honestly, not hidden. *Shipped.*
 
-4. **Generate an application.** A tailored résumé and optional cover letter, grounded only in approved Experience Units, with every claim traceable to a source. Nothing generated that isn't backed by an actual unit of experience. *Résumé generation and validation are shipped; cover letters and export are target.*
+4. **Generate an application.** A tailored résumé and optional cover letter, grounded only in approved Experience Units, with every claim traceable to a source. Nothing generated that isn't backed by an actual unit of experience. *Résumé generation and validation are shipped, but a new draft is shown before validation runs, so traceability is enforced at the export gate, not at display. Validation before display, cover letters and export are target.*
 
 5. **Track the application.** Stage, how long since the last activity, the next action, and the key contact. CRM-lite from day one. *Shipped on the Pipeline board.* Who's involved depends on People and Interactions, which have no entry UI yet.
 
@@ -280,7 +280,7 @@ Four steps. Each one is a component with a clear input, output, and quality bar.
 
 **Step 3: Match Units to Requirements.** The matching engine scores each Experience Unit against each Job Requirement Unit and produces a ranked set of matches plus a gap list. The output is a view that the user can approve or reject. The engine's job is not to impress the user with AI; it's to make the user's existing evidence visible and navigable.
 
-**Step 4: Generate an application.** Using only matches the user has approved, the generation engine produces a tailored résumé and, as a target, a cover letter. Every claim in the output traces to an approved Experience Unit. The validation layer flags anything that isn't traceable, and export stays blocked until validation passes. The user edits if needed, exports (target), and sends.
+**Step 4: Generate an application.** Using only matches the user has approved, the generation engine produces a tailored résumé and, as a target, a cover letter. Every claim in the output must trace to an approved Experience Unit. The validation layer flags anything that isn't traceable, and export stays blocked until validation passes. Today the draft is shown before validation runs, so the export gate is where traceability is enforced; validation before display is target. The user edits if needed, exports (target), and sends.
 
 That's the product. Four steps, one loop, and a hard constraint on fabrication at every step. If this loop meets the quality bar set by the V1 success metrics, Matchline is already worth using.
 
@@ -790,8 +790,8 @@ The per-role workspace. One of these exists for every job the user adds.
 
 **Current implementation, superseded in the target design.** The shipped Role detail has a header with the title and the Role's id, and three tabs:
 
-- **Requirements:** the JD editor and the parsed Job Requirement Units with priority and must-have flags, editable inline. A Role saved without a JD opens here, asking for the JD.
-- **Matches:** each Requirement with its match cards, scores and rationales. Gaps and unverifiable must-haves are surfaced first, and matching can be re-run. This is the primary decision surface today.
+- **Requirements:** the JD editor and the parsed Job Requirement Units with priority and must-have flags, editable inline. For a Role saved without a JD, this is where the JD gets pasted and parsed.
+- **Matches:** each Requirement with its match cards, scores and rationales. Gaps and unverifiable must-haves are surfaced first, and matching can be re-run. This is the primary decision surface today, and the tab every Role opens on, including a new one; without a JD it points to the Requirements tab.
 - **Applications:** "Generate resume" (enabled once a match is approved) and the Role's Applications, each opening in the Application Editor.
 
 The v0.1 header details (JD source URL, application stage, key dates) and the persistent action bar ("Generate resume," "Generate cover letter," "Export," "Update stage") were never built. Stage changes happen on the Pipeline board.
