@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: 5cef92d0a921435f364fc37d75a21d212d07befd
+source_ref: f0ae737426eb95508e5b37c1cbd8032c553192ec
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -629,7 +629,7 @@ final_score = confidence_score × (
 
 Each component is normalized to 0-1 before weighting. The final score gets multiplied by the Experience Unit's confidence score, which means low-confidence units can never produce high-confidence matches. This is intentional: the system should never offer a strong match based on weak evidence.
 
-The formula and weights above are shipped. Each axis has its own fallback when the Requirement doesn't constrain it: skill, tool and domain overlap score a neutral 0.5; seniority alignment and scope alignment score 1.0; recency scores 0.5 for a Unit with no usable date. None of these is a measurement, and the score breakdown labels an unevaluated axis "not evaluated." #433 proposes dropping such axes and renormalizing the weights instead.
+The formula and weights above are shipped. Each axis has its own fallback when the Requirement doesn't constrain it: skill, tool and domain overlap score a neutral 0.5; seniority alignment scores 1.0; scope alignment scores 1.0 for a Requirement outside the scope category and 0.5 for a scope Requirement with no keywords; recency scores 0.5 for a Unit with no usable date. None of these is a measurement, and the score breakdown labels an unevaluated axis "not evaluated." #433 proposes dropping such axes and renormalizing the weights instead.
 
 ### Component definitions
 
