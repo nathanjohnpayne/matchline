@@ -8,7 +8,7 @@ generated_by: scripts/project-doc-sync.sh
 do_not_edit: true
 source_repo: nathanjohnpayne/docs
 source_path: projects/matchline/prds/matchline.md
-source_ref: c8c962f1bac6bc0c306144542d9eddeef752c0e2
+source_ref: 93cc2db9caeacd446f9a0d5e36ca4713ba2d319f
 project: matchline
 document_class: prd
 document_slug: matchline
@@ -105,7 +105,7 @@ The **fit brief** is the center of the dossier. It gives a bottom line, maps str
 
 1. **One canonical résumé; tailored versions are views of it.** Tailoring keeps canonical bullets verbatim and changes emphasis, order, and selection. Lines rewritten for one company are tracked as deliberate exceptions, and a script reports tailored versions that have gone stale against the canonical. Generation from scratch is the exception, not the method.
 2. **Standing claim rules.** A short, durable list of things never to claim or to claim only one way: figures that have been retired, accomplishments that must stay attributed to a specific employer, projects that must not be described as shipped, numbers never to quote. Every package is checked against it, and every fit brief says what it deliberately does not claim.
-3. **Primary sources and a corrected record.** Facts about people and companies are checked against transcripts and employers' own pages, not memory or aggregators. When a fact turns out wrong it is corrected everywhere it appears, and the correction is logged. Scans verify every role on the employer's own board and open with "corrections to the record."
+3. **Primary sources and a corrected record.** Facts about people and companies are checked against transcripts and employers' own pages, not memory or aggregators. When a fact turns out wrong it is fixed once, at its source; unsent artifacts that repeat it are flagged until rebased, sent ones get a linked correction, and every correction is logged. Scans verify every role on the employer's own board and open with "corrections to the record."
 
 ### What changes in Matchline
 
@@ -185,7 +185,7 @@ V1 is a single-user tool, so traditional product metrics don't apply. Instead:
 
 **Primary metric: the replacement test (decision 4).** For new opportunities, the owner stops building dossier folders by hand and runs them in Matchline instead. Two intermediate tests come first, in order:
 
-1. **A sendable package.** A package for a new role (fit brief, tailored résumé, cover letter) that passes traceability and the claim rules, and that the owner sends with only light edits.
+1. **A fit brief and a sendable package.** For a new role, a fit brief and a package (tailored résumé, cover letter) that pass traceability and the claim rules, and that the owner sends with only light edits.
 2. **One live process.** One real process managed in Matchline through every round, from application to its outcome.
 
 The v0.1 measure, "used end to end for at least ten serious applications," is withdrawn. Issue #43 still carries that milestone and should be retitled to match.
@@ -198,8 +198,8 @@ The v0.1 measure, "used end to end for at least ten serious applications," is wi
 Ten résumés carry extraction labels, and four résumé-and-JD pairs carry match labels; the #177 run scored the four pairs. The 80% bars stand, and matchline#495 does not reset the baseline.
 
 **Speed metrics.**
-- Full flow (paste JD → generate resume) under twenty seconds at p95. Result of record: 236 s (#177).
-- Per-application cost under one dollar, including all LLM calls.
+- Full flow (paste JD → validated résumé) under 20 s at p95. Result of record: 236 s (#177).
+- Per-application cost under one dollar, including all LLM calls, with a p95 target of $0.75.
 
 **Search outcome metrics.** Ultimately, does the user get interviews and offers for roles that matter? This is noisy at N=1, but it's the real test. A version of this tool that generates beautiful applications that never convert is a failed tool.
 
@@ -246,6 +246,7 @@ The original V1 target was to ship to one user by July 2026; it was missed (see 
 
 **Deferred:**
 - LinkedIn import (#28), long-form context import (#29), and artifact upload (#87 and its children #519, #520, #522, #524, #526 and #528). Export's children (#517, #521, #523, #525, #527) belong to #33 and are not deferred.
+- A story bank, and outreach drafting (messages to people who are not yet part of an Application's process)
 - Outcome learning system (needs more data than one user generates)
 - Network graph and referral engine (requires integrations that slow V1)
 - Decision engine / "should I apply" scoring (nice-to-have, not core loop)
@@ -292,7 +293,7 @@ Evidence → Role → Fit brief → Package → Process
 
 This is the **target** loop. Matching, résumé generation and validation from the original loop are shipped inside it; the canonical résumé, claim rules, fit brief on the Role, Package, and Process are not.
 
-- **Evidence.** The canonical résumé (user-maintained, line-addressable, versioned), the Experience Units extracted from it and from other sources, a story bank, and the claim rules.
+- **Evidence.** The canonical résumé (user-maintained, line-addressable, versioned), the Experience Units extracted from it and from other sources, and the claim rules. A story bank is deferred.
 - **Role.** The captured JD, parsed into Requirement Units, with company, comp band, location, and provenance (decision 7). Roles arrive by manual entry or, once verified on the employer's posting, from the scan.
 - **Fit brief.** The decision document. It covers the bottom line, strengths tied to JD clauses with evidence, where the candidate is exposed, positioning and level strategy, homework, questions to ask, and what the package does not claim. Matching (step 3 above) now serves this step: approved matches are the brief's evidence.
 - **Package.** A tailored résumé as a view of the canonical, a cover letter, application answers, and a referral note, each positioned by the fit brief, validated for traceability and against the claim rules, and exported. The Package is where these artifacts are edited, validated and exported (decision 5).
@@ -366,7 +367,7 @@ Role {
 }
 ```
 
-`origin` is `scan` only for a Role created from a scan result that was verified on the employer's posting; that posting is the Role's `jd_url`. The target New Role form has a **Company** field and a **Source** field. The shipped form has neither: it stamps a placeholder `company_id` and records no source. Adding both fields and persisting them to `company_id` and `source_url` is implementation work. A non-URL source, such as a referral, has no field in this schema; see [Open questions](#open-questions).
+`origin` is `scan` only for a Role created from a scan result that was verified on the employer's posting; that posting is the Role's `jd_url`, and `source_url` keeps where the lead was seen (the scan result's `discovery_url`). The target New Role form has a **Company** field and a **Source** field. The shipped form has neither: it stamps a placeholder `company_id` and records no source. Adding both fields and persisting them to `company_id` and `source_url` is implementation work. A non-URL source, such as a referral, has no field in this schema; see [Open questions](#open-questions).
 
 ```json
 Application {
@@ -530,7 +531,8 @@ TailoredResume {
   application_id: string,
   canonical_version: string,    // the pinned version; changes only on an explicit Rebase, and never once sent
   line_ids: string[],           // selection and order
-  exceptions: { line_id?: string, text: string, reason: string }[]  // deliberate rewrites, tracked
+  exceptions: { line_id?: string, text: string, reason: string }[], // deliberate rewrites, tracked
+  sent_at?: timestamp           // set when the package is marked sent; read-only from then on
 }
 
 ClaimRule {
@@ -543,7 +545,8 @@ ClaimRule {
 
 FitBrief {
   id: string,
-  application_id: string,
+  role_id: string,              // a hand-entered Role can have a brief before it has an Application
+  frozen_at?: timestamp,        // set when the package is sent
   bottom_line: string,
   strengths: { jd_clause: string, evidence_line_ids: string[], argument: string }[],
   exposures: { jd_clause: string, gap: string, handling: string }[],
@@ -593,13 +596,22 @@ ScanResult {
   exposed: string[],
   referral_needed: boolean
 }
+
+Correction {
+  id: string,
+  target_ref: string,           // the record corrected: a canonical line, a Unit, a Role field, a sent package or message
+  what_was_wrong: string,
+  corrected_text: string,
+  found_via: string,            // how it was found, e.g. a transcript or the employer's posting
+  logged_at: timestamp
+}
 ```
 
 Next actions are the shipped `Task` (see CRM objects). The v0.2 `NextAction` sketch is folded into it; attaching a task to a person rather than an Application is a possible extension, not a requirement.
 
 A `ScanResult` with `verified_on_employer_board: false` is an unverified lead. It cannot be turned into a Role until `employer_posting_url` is set by verification (decision 6).
 
-`Application` gains `fit_brief_id` and `tailored_resume_id`. Its `stage` keeps the seven shipped values (decision 1); finer steps such as a requested referral, a recruiter screen or a leveling conversation are recorded as interview rounds, next actions and correspondence. `Interaction` is superseded by `Correspondence` for messages and by `InterviewRound` for conversations.
+`Application` gains `tailored_resume_id`; the fit brief hangs off the Role by `role_id`. A package is sent when its tailored résumé's `sent_at` is set; from then on the view and the fit brief are read-only, and a fix to either is a `Correction` linked to it. Its `stage` keeps the seven shipped values (decision 1); finer steps such as a requested referral, a recruiter screen or a leveling conversation are recorded as interview rounds, next actions and correspondence. `Interaction` is superseded by `Correspondence` for messages and by `InterviewRound` for conversations.
 
 The wireframes draw an **org map** on the Process tab. It has no data model; it is an enhancement, and it would be derived from People attached to the Application's rounds and correspondence.
 
@@ -668,7 +680,7 @@ The pipeline is six stages, some real-time and some async. The split matters for
 ### Real-time (happens per match or per generation)
 
 4. **Matching.** Given a Unit set and a Requirement set, score, and rank. Vector math plus rule-based scoring, with rationales from a deterministic template; no LLM calls. Should feel instant. *Shipped.*
-5. **Generation.** Given approved matches and a target format, generate output grounded in approved evidence. Uses a "controlled generation" prompt pattern: the model receives the approved Units as ground truth and is instructed to only use what's provided. *Shipped:* the résumé. *Target:* cover letter, application answers, referral note, outreach, and the fit brief as a product surface.
+5. **Generation.** Given approved matches and a target format, generate output grounded in approved evidence. Uses a "controlled generation" prompt pattern: the model receives the approved Units as ground truth and is instructed to only use what's provided. *Shipped:* the résumé. *Target:* cover letter, application answers, referral note, and the fit brief as a product surface. *Deferred:* outreach drafting.
 6. **Validation.** LLM claim extraction, traceability and specificity checks (the specificity check also passes the model a deny-list hint for vague PM phrases) verify that every claim in the output traces to an approved Unit, and flag anything that doesn't. *Shipped*, but it runs after the draft is shown, not before: see [Validation layer](#validation-layer).
 
 ### Model strategy
@@ -715,7 +727,7 @@ Validation runs four steps, all **shipped**:
 
 **The bar (target, not met).** The user should never see an output with an un-sourced claim: if the model generates one, validation catches it before the user does. That needs validation to run automatically between generation and display.
 
-**Export gate (shipped).** The verdict is attested by the server, not by the asset (#502). Export is enabled only when the server's attestation for the asset's current content says it passed, and every Unit that content cites is still at the version validation read. An edit makes the content unvalidated until validation runs again.
+**Export gate (shipped).** The verdict is attested by the server, not by the asset (#502). Export is enabled only when the server's attestation for the asset's current content says it passed, and every Unit that content cites is still at the version validation read. An edit makes the content unvalidated until validation runs again. *Target:* once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so a kept view stays exportable (decision 2).
 
 **Claim-rule check (target).** A third check, beside traceability and specificity, runs every generated artifact against the user's ClaimRules: fit briefs, résumé exceptions, cover letters, answers, prep briefs, and drafted messages. A violation blocks export like an untraceable claim does. Adding supporting evidence repairs traceability but never clears a claim-rule hit: the text must change, or the user must explicitly change the rule. Traceability asks "is this backed by evidence?"; the claim-rule check asks "is this a thing the user has decided never to say, or to say only one way?" Both are needed. A true, traceable claim can still be one the user has retired. Claim rules do not exist as data yet; today they reach only the fit-brief harness, as a private text file.
 
@@ -735,9 +747,9 @@ Validation runs four steps, all **shipped**:
 | Generation (resume) | 3s | 8s |
 | Generation (cover letter) | 4s | 10s |
 | Validation | 1s | 3s |
-| Full flow (paste JD → validated resume) | 6s | 18s |
+| Full flow (paste JD → validated résumé) | 6s | 20s |
 
-The full-flow p95 target of under 20 seconds is the user-facing latency commitment. Below that, the flow feels responsive. Above that, it feels like batch processing. Measured today: extraction about 108 s, and full flow 236 s at p95 (#177). Both are far over target, which is why progress is streamed and long calls hold off the update prompt.
+The full-flow p95 target of under 20 s, ending at a validated résumé, is the user-facing latency commitment. Below that, the flow feels responsive. Above that, it feels like batch processing. Measured today: extraction about 108 s, and full flow 236 s at p95 (#177). Both are far over target, which is why progress is streamed and long calls hold off the update prompt.
 
 ### Cost
 
@@ -817,7 +829,7 @@ The CRM-lite view that keeps the user from needing a spreadsheet. **Shipped** (#
 - A collapsible sidebar with Due today (overdue included), Upcoming (the next 7 days, then undated tasks), and Follow-ups (Applied or Interviewing Applications quiet for more than 7 days with no open task). Tasks complete with one click.
 - Below 768 px the board becomes a vertical stack of stages.
 
-*Target:* the next scheduled round on each card, with overdue next actions surfaced first.
+*Target:* the next scheduled round on each card. *Enhancement:* overdue next actions surfaced first.
 
 V1 ends here. No dashboard with charts, no analytics view, no "insights" section. The pipeline is enough to see the state of the search at a glance.
 
@@ -825,13 +837,13 @@ V1 ends here. No dashboard with charts, no analytics view, no "insights" section
 
 These are the approved target surfaces from v0.2's interface additions, settled by the v0.3 decisions. None has shipped unless it says so.
 
-- **Navigation.** Pipeline · Evidence (Units, Canonical résumé, Claim rules) · Scan · + New Role, replacing the shipped top navigation (Onboarding · Unit Review · + New Role · Application Editor · Pipeline). On phones, a bottom tab bar.
+- **Navigation.** Pipeline · Evidence (Units, Import, Canonical résumé, Claim rules) · Scan · + New Role, where Import is the shipped Onboarding paste flow, replacing the shipped top navigation (Onboarding · Unit Review · + New Role · Application Editor · Pipeline). On phones, a bottom tab bar.
 - **Role detail becomes the dossier.** Its header reads "where things stand" and the next action, as each reference folder index does. The tabs become: **Fit brief** (the default), **Requirements & matches**, **Package**, **Process**, and **Correspondence**.
-- **Fit brief.** Bottom line and verdict; strengths tied to JD clauses with their evidence; exposures with how the package handles each; positioning and level; homework; questions to ask; and what this package does not claim, citing the claim rules it reflects.
+- **Fit brief.** Bottom line and verdict; strengths tied to JD clauses with their evidence; exposures with how the package handles each; positioning and level; homework; questions to ask; and what this package does not claim, citing the claim rules it reflects. The brief freezes when the package is sent.
 - **Package.** Sub-views for the résumé view, cover letter, application answers and referral note. Validation shows traceability, claim rules and specificity as separate checks. The staleness warning against the canonical sits beside them, with Rebase (unsent views only) and Keep, and does not block. A sent package is read-only. Export records the canonical version it was cut from. This is the home for editing, validation and export (decision 5).
 - **Process.** Interview rounds with people, a prep brief and a debrief from the transcript per round, and a signal; the scorecard; and the leveling brief.
 - **Correspondence.** The verbatim log in order, "Log a message," and drafts that the user copies and sends, then marks sent, so Matchline logs them verbatim. An "on the record" summary keeps later messages consistent with what has been said.
-- **Pipeline cards** add the next scheduled round, and overdue next actions surface first.
+- **Pipeline cards** add the next scheduled round; surfacing overdue next actions first is an enhancement.
 - **Evidence** gains the canonical résumé editor, with line ids visible, and a list of tailored views with their pinned versions, behind-current ones first. It also gains the claim-rules list: short, user-written, always visible when editing.
 - **New Role** adds Company and Source fields (decision 7).
 - **Scan.** Board management, a weekly run every Monday plus "Run now," and an inbox for each run: corrections to the record first, then new and still-open roles by tier, with the verification note, comp as posted, what lines up, and where the candidate is exposed. "Turn into Role" captures the JD from the verified posting, creates the Role, and creates its Application in Saved, so it appears on the Pipeline at once. Aggregator-only results stay as unverified leads, with "Turn into Role" disabled (decision 6). A board that fails keeps last week's roles open with a note rather than closing them.
@@ -839,22 +851,23 @@ These are the approved target surfaces from v0.2's interface additions, settled 
 
 ### Core requirements and enhancements
 
-The wireframes draw more than this release needs. A surface or detail listed as an enhancement is approved but never blocks a phase exit.
+The wireframes draw more than this release needs. A surface or detail listed as an enhancement is approved but never blocks a phase exit. One marked *proposed* is drawn in the wireframes but not yet approved.
 
 | Surface | Core (required) | Enhancement (not release-blocking) |
 |---|---|---|
 | Navigation | Every target surface reachable from the shell at every width | ⌘K command palette |
 | Onboarding | Paste résumé (shipped) | Units streaming into the page during extraction |
 | Unit Review | Shipped behavior; source-type filter; embed after an edit or a manual add; rejected-Units view | Bulk selection and shortcuts; detail pane |
-| Evidence | Canonical résumé editor; tailored-view list with Rebase (unsent) and Keep; claim-rules list | Drag to reorder lines |
+| Evidence | Canonical résumé editor; tailored-view list with Rebase (unsent) and Keep; claim-rules list | Drag to reorder lines; *proposed:* Export canonical |
 | New Role | Company and Source, persisted | "Draft restored" notice |
+| Dossier header | Where things stand; next action | *Proposed:* Update stage, Generate and Export actions |
 | Fit brief | All sections listed above | Regenerate and hand-edit history |
-| Requirements & matches | Shipped Requirements and Matches behavior | Split view (requirements beside candidates) |
+| Requirements & matches | Shipped Requirements and Matches behavior | Inline Requirement editing; split view (requirements beside candidates) |
 | Package | Résumé view, cover letter, answers, referral note; validation; export; staleness warning | An expanded editor view of the same package |
 | Process | Rounds with prep brief and debrief; scorecard; leveling brief | **Org map, runbooks, flashcards** |
 | Correspondence | Verbatim log; Log a message; drafts marked sent; "on the record" | — |
 | Scan | Boards; weekly run; verification; tiers; corrections; Turn into Role | Import boards from a list |
-| Pipeline | Shipped behavior; next scheduled round | — |
+| Pipeline | Shipped behavior; next scheduled round | Overdue next actions surfaced first; *proposed:* a New Role button on the page |
 
 ---
 
@@ -944,7 +957,7 @@ A tailored view pins the canonical version it was built from, and a sent package
 
 ### Correct the record (added October 2026)
 
-When a fact in the dossier is found to be wrong, the fix reaches every artifact that repeats it. The correction is logged, with what was wrong and how it was found. A fact checked against a primary source (a transcript, the employer's own posting) outranks one that wasn't, and the artifact says which kind it is. Sent messages and submitted packages are not edited; the correction is logged against them instead.
+When a fact in the dossier is found to be wrong, it is fixed once, at its source: the canonical line, the Unit or the Role field that holds it. Unsent views that repeat it pick up the fix through the staleness warning and an explicit Rebase; nothing rewrites them silently. The correction is logged, with what was wrong and how it was found. A fact checked against a primary source (a transcript, the employer's own posting) outranks one that wasn't, and the artifact says which kind it is. Sent messages and sent packages are not edited; the correction is logged against them as a linked record.
 
 ### Cost is a feature
 
@@ -1059,15 +1072,15 @@ Some Phase C work shipped first, out of this order: the Pipeline board (#510, #5
 - Canonical résumé as line-addressable, versioned data, with tailored résumés as views that pin a version, tracked exceptions, Rebase (unsent views only) or Keep, and a non-blocking staleness warning (decision 2).
 - Claim rules as data, enforced as a blocking check by the validation layer.
 - Fit brief as a first-class artifact on the Role, built on Phase A's decision.
-- Cover letters (#30) and export to PDF, DOCX, and text (#33), from the Package (decision 5), because the exit below sends a package.
+- A first Package tab (decision 5): the résumé view, cover letters (#30), and export to PDF, DOCX, and text (#33), because the exit below sends a package.
 
-**Exit (intermediate test 1):** a package for a new role (fit brief, tailored résumé, cover letter) that passes traceability and claim rules and that the owner sends with only light edits.
+**Exit (intermediate test 1):** for a new role, a fit brief and a package (tailored résumé, cover letter) that pass traceability and claim rules and that the owner sends with only light edits.
 
 ### Phase C: the dossier and the pipeline
 
-- Pipeline board, card details, and the next-action sidebar (#510–#512, #34). *Shipped.* The next scheduled round on cards remains.
+- Pipeline board, card details, and the next-action sidebar (#510–#512, #34). *Shipped.* The next scheduled round on cards remains; overdue next actions surfaced first is an enhancement.
 - Roles saved before a JD is available (#431). *Shipped.*
-- The dossier: "where things stand," the next action, and the five tabs.
+- The dossier: "where things stand," the next action, and the remaining dossier tabs.
 - The rest of the Package as the home for editing and validation (application answers and the referral note); the Application Editor's behavior moves here (decision 5).
 - Interview rounds with people, the scorecard, the leveling brief, and the verbatim correspondence log.
 - Company and People entry, and Role provenance persisted from New Role (decision 7).
