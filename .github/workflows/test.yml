@@ -23,7 +23,11 @@ jobs:
         # Validates that the bumped vite v8 / vitest v4 toolchain works
         # on both the lowest-supported 20.x and the lowest-supported 22.x.
         # Added in response to CodeRabbit finding on #162.
-        node-version: ['20.19.0', '22.12.0']
+        # '24' tracks the Cloud Functions runtime (firebase.json
+        # functions[0].runtime = nodejs24): Cloud Run applies 24.x patch
+        # updates automatically, so the latest 24.x is the faithful pin
+        # for the functions build and the tests that import functions/src.
+        node-version: ['20.19.0', '22.12.0', '24']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -61,8 +65,9 @@ jobs:
       fail-fast: false
       matrix:
         # Same matrix as the unit job — validates rules-unit-testing v5
-        # + firebase v12 stack on both supported Node ranges.
-        node-version: ['20.19.0', '22.12.0']
+        # + firebase v12 stack on both supported Node ranges, plus the
+        # Cloud Functions runtime major (see the unit job).
+        node-version: ['20.19.0', '22.12.0', '24']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
