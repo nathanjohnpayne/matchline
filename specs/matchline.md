@@ -153,8 +153,10 @@ Acceptance criteria:
 
 - **Full flow (Target, not met).** From a populated Capability Graph,
   a user can paste a JD and produce a validated, exportable resume in
-  under 20 s at p95. Measured: 236 s at p95 (#177), and export is
-  not built (#33).
+  under 20 s at p95. Not yet measured end to end (#616): the 236 s
+  p95 from #177 timed résumé extraction through matching in the eval
+  harness, not this flow. JD parsing alone takes about 30 s in
+  production, so the target is not met. Export is not built (#33).
 - **Cost (Target).** Per-application LLM spend (parse + match +
   generate + validate) is under $1, with a p95 target of $0.75. Per-call cost
   is attributed by task since #483; no per-application p95 has been
@@ -547,8 +549,14 @@ Guarding *unsaved editor content* is a related but separate contract, tracked in
 
 ## Execution targets
 
-These are **Target** values. Measured today: resume extraction about
-108 s, and the full flow 236 s at p95 (#177).
+These are **Target** values. Measured in production (`npm run
+latency:report`, the 12 recorded calls from 2026-08-31 to 2026-09-03):
+resume extraction 125 s (n = 1), JD parsing p50 31.6 s and p95 31.9 s
+(n = 5, Haiku 4.5, about 4,000 output tokens per call), embeddings
+under 2.5 s. Resume generation and validation have no production
+calls, so the full flow is unmeasured (#616). The 236 s p95 in #177
+is an eval-harness figure that includes resume extraction and stops
+at matching; it is not the full flow.
 
 Latency (p50 / p95):
 
