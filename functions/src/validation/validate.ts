@@ -177,51 +177,12 @@ export async function validateAsset(
   const checkSpecificity = deps.checkSpecificity ?? checkSpecificityFn;
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date().toISOString());
-  // The budget runs from here, before the Firestore reads, so slow
-  // reads spend it rather than the deadline margin (CodeRabbit on #621).
+  // The budget runs from here, before the Firestore reads, and the
+  // reads race the same deadline as the model calls, so a slow read
+  // can't run the request into the platform's kill either (CodeRabbit
+  // on #621).
   const clockMs = deps.clockMs ?? Date.now;
   const startedAtMs = clockMs();
-
-  const { content } = await loadAsset(ctx);
-  // The validator skips an item whose text is not a string, but the
-  // editor still renders it, so a pass over malformed content would
-  // attest text no check ever read (#506 review). Refuse it outright:
-  // no verdict, no attestation.
-  if (!isAttestableContent(content)) {
-    throw new ValidateAssetMalformedContent(
-      `Asset ${ctx.assetId} has malformed generated_content; refusing to validate it.`,
-    );
-  }
-
-  // Validate every fact-bearing piece of the asset. All four
-  // section types share the same `GeneratedItem` shape (id +
-  // text + source_unit_ids) so the orchestrator iterates them
-  // uniformly. cursor caught prior versions that bypassed
-  // validation: summary as a plain string (#117 r1), skills/
-  // education as plain string arrays (#117 r2), and
-  // experience-section metadata as ungrounded fields the data
-  // model couldn't validate (#122 rounds 3+4). V1 is
-  // intentionally flat — no experience-section grouping.
-  //
-  // The order summary → bullets → skills → education isn't
-  // semantically meaningful (each item is independently
-  // validated); kept stable for deterministic flag-list
-  // ordering downstream.
-  const allBullets: GeneratedBullet[] = [
-    content.summary,
-    ...content.bullets,
-    ...content.skills,
-    ...(content.education ?? []),
-  ];
-
-  // Collect every Unit id referenced across the asset's bullets,
-  // then load Units once. The orchestrator's outer loop runs at
-  // bullet granularity; loading per-bullet would re-fetch the
-  // same Units repeatedly when bullets share source_unit_ids.
-  const allUnitIds = unique(allBullets.flatMap((b) => b.source_unit_ids));
-  const units = await loadUnits(allUnitIds, ctx.ownerUid);
-  const unitsById = new Map(units.map((u) => [u.id, u]));
-
   const pool = createCallPool({
     concurrency: deps.concurrency ?? VALIDATION_CONCURRENCY,
     clockMs,
@@ -230,17 +191,61 @@ export async function validateAsset(
         startedAtMs + Math.max(0, deps.budgetMs - VALIDATION_DEADLINE_MARGIN_MS),
     }),
   });
-  const checks = { extractClaims, checkTraceability, checkSpecificity };
+  const withinDeadline = <T>(work: Promise<T>): Promise<T> =>
+    Promise.race([work, pool.deadline]);
+
+  let content: GeneratedAssetContent;
+  let units: readonly ExperienceUnit[];
   let perBullet: ClaimVerdict[][];
   try {
+    ({ content } = await withinDeadline(loadAsset(ctx)));
+    // The validator skips an item whose text is not a string, but the
+    // editor still renders it, so a pass over malformed content would
+    // attest text no check ever read (#506 review). Refuse it outright:
+    // no verdict, no attestation.
+    if (!isAttestableContent(content)) {
+      throw new ValidateAssetMalformedContent(
+        `Asset ${ctx.assetId} has malformed generated_content; refusing to validate it.`,
+      );
+    }
+
+    // Validate every fact-bearing piece of the asset. All four
+    // section types share the same `GeneratedItem` shape (id +
+    // text + source_unit_ids) so the orchestrator iterates them
+    // uniformly. cursor caught prior versions that bypassed
+    // validation: summary as a plain string (#117 r1), skills/
+    // education as plain string arrays (#117 r2), and
+    // experience-section metadata as ungrounded fields the data
+    // model couldn't validate (#122 rounds 3+4). V1 is
+    // intentionally flat — no experience-section grouping.
+    //
+    // The order summary → bullets → skills → education isn't
+    // semantically meaningful (each item is independently
+    // validated); kept stable for deterministic flag-list
+    // ordering downstream.
+    const allBullets: GeneratedBullet[] = [
+      content.summary,
+      ...content.bullets,
+      ...content.skills,
+      ...(content.education ?? []),
+    ];
+
+    // Collect every Unit id referenced across the asset's bullets,
+    // then load Units once. The orchestrator's outer loop runs at
+    // bullet granularity; loading per-bullet would re-fetch the
+    // same Units repeatedly when bullets share source_unit_ids.
+    const allUnitIds = unique(allBullets.flatMap((b) => b.source_unit_ids));
+    units = await withinDeadline(loadUnits(allUnitIds, ctx.ownerUid));
+    const unitsById = new Map(units.map((u) => [u.id, u]));
+
+    const checks = { extractClaims, checkTraceability, checkSpecificity };
     // The deadline wins the race even if a cancelled call is slow to
     // settle; see callPool.ts.
-    perBullet = await Promise.race([
+    perBullet = await withinDeadline(
       settleInOrder(
         allBullets.map((bullet) => validateBullet(bullet, unitsById, ctx, checks, pool)),
       ),
-      pool.deadline,
-    ]);
+    );
   } finally {
     pool.close();
   }
