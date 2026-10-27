@@ -177,6 +177,10 @@ export async function validateAsset(
   const checkSpecificity = deps.checkSpecificity ?? checkSpecificityFn;
   const generateId = deps.generateId ?? randomUUID;
   const now = deps.now ?? (() => new Date().toISOString());
+  // The budget runs from here, before the Firestore reads, so slow
+  // reads spend it rather than the deadline margin (CodeRabbit on #621).
+  const clockMs = deps.clockMs ?? Date.now;
+  const startedAtMs = clockMs();
 
   const { content } = await loadAsset(ctx);
   // The validator skips an item whose text is not a string, but the
@@ -218,13 +222,12 @@ export async function validateAsset(
   const units = await loadUnits(allUnitIds, ctx.ownerUid);
   const unitsById = new Map(units.map((u) => [u.id, u]));
 
-  const clockMs = deps.clockMs ?? Date.now;
   const pool = createCallPool({
     concurrency: deps.concurrency ?? VALIDATION_CONCURRENCY,
     clockMs,
     ...(deps.budgetMs !== undefined && {
       deadlineAtMs:
-        clockMs() + Math.max(0, deps.budgetMs - VALIDATION_DEADLINE_MARGIN_MS),
+        startedAtMs + Math.max(0, deps.budgetMs - VALIDATION_DEADLINE_MARGIN_MS),
     }),
   });
   const checks = { extractClaims, checkTraceability, checkSpecificity };

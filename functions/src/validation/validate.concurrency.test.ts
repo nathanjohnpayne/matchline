@@ -318,6 +318,40 @@ describe("validateAsset bounded concurrency (#619)", () => {
     await expect(run).rejects.toThrow("real failure");
   });
 
+  it("counts the Firestore reads against the budget (CodeRabbit on #621)", async () => {
+    vi.useFakeTimers();
+    const budgetMs = CALLABLE_TIMEOUT_SECONDS.validateAsset * 1000;
+    const deadlineMs = budgetMs - VALIDATION_DEADLINE_MARGIN_MS;
+    const c = content(1, 0, 0);
+    const base = deps(c);
+    const start = Date.now();
+    const run = validateAsset(
+      CTX,
+      deps(c, {
+        budgetMs,
+        // The read leaves 10 s before the deadline; extraction takes 20 s.
+        // A clock started after the read would let the run finish.
+        loadAsset: async (ctx) => {
+          await sleep(deadlineMs - 10_000);
+          return base.loadAsset!(ctx);
+        },
+        extractClaims: async (_bullet, ctx) => {
+          await sleep(20_000);
+          return claimsFor(ctx.bulletId!, 1);
+        },
+        checkTraceability: async () => TRACED,
+        checkSpecificity: async () => SPEC_OK,
+      }),
+    ).then(
+      () => ({ error: undefined, at: Date.now() - start }),
+      (error: unknown) => ({ error, at: Date.now() - start }),
+    );
+    await vi.advanceTimersByTimeAsync(budgetMs);
+    const outcome = await run;
+    expect(outcome.error).toBeInstanceOf(ValidationDeadlineExceeded);
+    expect(outcome.at).toBe(deadlineMs);
+  });
+
   it("rejects a concurrency outside 1..MAX_VALIDATION_CONCURRENCY", () => {
     for (const concurrency of [0, MAX_VALIDATION_CONCURRENCY + 1, 1.5, Number.NaN]) {
       expect(() => createCallPool({ concurrency })).toThrow(RangeError);
