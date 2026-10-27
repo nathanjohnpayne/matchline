@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   byRun,
   byStage,
+  parseIsoDate,
   percentile,
   productCalls,
   renderMarkdown,
@@ -58,6 +59,35 @@ describe("latency report (#616)", () => {
     const runs = byRun(rows);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ calls: 3, sumLatencyMs: 6000, spanMs: 6000, startMs: 0 });
+  });
+
+  it("splits one Application's calls into separate runs after an idle gap", () => {
+    // Two one-second validations a day apart are two runs, not one
+    // day-long run (Codex on #617).
+    const day = 86_400_000;
+    const rows = [
+      row({ applicationId: "a", createdAtMs: 1000, latencyMs: 1000 }),
+      row({ applicationId: "a", createdAtMs: day + 1000, latencyMs: 1000 }),
+    ];
+    const runs = byRun(rows);
+    expect(runs).toHaveLength(2);
+    expect(runs.map((r) => r.spanMs)).toEqual([1000, 1000]);
+  });
+
+  it("keeps back-to-back calls in one run", () => {
+    const rows = [
+      row({ applicationId: "a", createdAtMs: 2000, latencyMs: 2000 }),
+      row({ applicationId: "a", createdAtMs: 40_000, latencyMs: 1000 }), // 37 s idle < RUN_GAP_MS
+    ];
+    expect(byRun(rows)).toHaveLength(1);
+  });
+
+  it("accepts ISO dates and rejects impossible or non-ISO ones", () => {
+    expect(parseIsoDate("since", "2026-10-01")).toBe(Date.UTC(2026, 9, 1));
+    expect(parseIsoDate("since", "2026-10-01T12:00:00Z")).toBe(Date.UTC(2026, 9, 1, 12));
+    expect(() => parseIsoDate("since", "2026-02-30")).toThrow(/calendar date/);
+    expect(() => parseIsoDate("since", "10/01/2026")).toThrow(/ISO date/);
+    expect(() => parseIsoDate("since", "2026-13-01")).toThrow();
   });
 
   it("renders without application ids", () => {

@@ -7,11 +7,18 @@
  * (`functions/src/llm/cost.ts`); this groups them per stage and per
  * application run. It makes no model calls and writes nothing.
  *
- * Usage (Application Default Credentials with read access to the
- * project's Firestore):
+ * Prerequisites: Application Default Credentials with read access to
+ * the project's Firestore, and the functions package's dependencies
+ * (`firebase-admin` is declared there only): `npm --prefix functions ci`.
+ *
+ * Usage:
  *   npm run latency:report                         # matchline-dev, last 90 days
- *   npm run latency:report -- --since 2026-10-01   # ISO date
+ *   npm run latency:report -- --since 2026-10-01   # ISO date (UTC midnight)
+ *   npm run latency:report -- --since 2026-08-31 --until 2026-09-04
  *   npm run latency:report -- --project <id> --json
+ *
+ * `--since` is inclusive and `--until` exclusive; both apply to
+ * `createdAt`, so a fixed window reproduces exactly.
  *
  * Output is Markdown with application ids replaced by ordinals, safe
  * to paste into a public issue. `--json` prints the raw grouped rows
@@ -20,7 +27,7 @@
 
 import { createRequire } from "node:module";
 
-import { byRun, byStage, productCalls, renderMarkdown, type CallRow } from "./report.ts";
+import { byRun, byStage, parseIsoDate, productCalls, renderMarkdown, type CallRow } from "./report.ts";
 
 // firebase-admin is a dependency of the functions package only.
 const requireFromFunctions = createRequire(new URL("../../functions/package.json", import.meta.url));
@@ -32,17 +39,24 @@ const { getFirestore, Timestamp } = requireFromFunctions(
 const LLM_CALLS_COLLECTION = "llm_calls";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** An option's operand; throws when the flag is present without one. */
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const value = process.argv[i + 1];
+  if (value === undefined || value === "" || value.startsWith("--")) {
+    throw new Error(`--${name} needs a value`);
+  }
+  return value;
 }
 
 async function main(): Promise<void> {
   const projectId = arg("project") ?? "matchline-dev";
-  const untilMs = Date.now();
+  const untilArg = arg("until");
+  const untilMs = untilArg ? parseIsoDate("until", untilArg) : Date.now();
   const sinceArg = arg("since");
-  const sinceMs = sinceArg ? Date.parse(sinceArg) : untilMs - 90 * DAY_MS;
-  if (Number.isNaN(sinceMs)) throw new Error(`--since is not a date: ${sinceArg}`);
+  const sinceMs = sinceArg ? parseIsoDate("since", sinceArg) : untilMs - 90 * DAY_MS;
+  if (sinceMs >= untilMs) throw new Error("--since must be before --until");
 
   // Bill the read to the target project, not whatever the local ADC
   // file names as its quota project.
@@ -52,6 +66,7 @@ async function main(): Promise<void> {
   const snap = await getFirestore()
     .collection(LLM_CALLS_COLLECTION)
     .where("createdAt", ">=", Timestamp.fromMillis(sinceMs))
+    .where("createdAt", "<", Timestamp.fromMillis(untilMs))
     .select("stage", "subtask", "model", "latencyMs", "createdAt", "applicationId", "runId", "attempt", "costUsd")
     .get();
 

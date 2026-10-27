@@ -13,6 +13,14 @@
  *     start to the last call's end. The span is what a serial pipeline
  *     costs the user; the sum shows how much of it is model time.
  *
+ * One Application collects calls from several invocations: a
+ * re-validation after an edit, or a retry the next day, reuses its
+ * `applicationId`. `llm_calls` carries no invocation id, so a run is
+ * a burst: a call that starts more than `RUN_GAP_MS` after the
+ * previous call for the same Application ended starts a new run.
+ * Without the split, two one-second validations a day apart would
+ * report as one day-long run (Codex on #617).
+ *
  * `createdAt` is the server timestamp written after a call returns, so
  * a call's start is estimated as `createdAt - latencyMs`.
  */
@@ -94,6 +102,13 @@ export function byStage(rows: readonly CallRow[]): StageRow[] {
     .sort((a, b) => b.p95Ms - a.p95Ms);
 }
 
+/**
+ * Idle time that ends a run. Calls within one invocation are serial
+ * and back to back (seconds apart); a user's edit-then-revalidate or a
+ * later retry leaves a longer gap.
+ */
+export const RUN_GAP_MS = 60_000;
+
 export function byRun(rows: readonly CallRow[]): RunRow[] {
   const groups = new Map<string, CallRow[]>();
   for (const r of rows) {
@@ -102,7 +117,22 @@ export function byRun(rows: readonly CallRow[]): RunRow[] {
     list.push(r);
     groups.set(r.applicationId, list);
   }
-  return [...groups.entries()]
+  const bursts: Array<[string, CallRow[]]> = [];
+  for (const [applicationId, list] of groups) {
+    const sorted = [...list].sort((a, b) => a.createdAtMs - a.latencyMs - (b.createdAtMs - b.latencyMs));
+    let current: CallRow[] = [];
+    let lastEndMs = -Infinity;
+    for (const r of sorted) {
+      if (current.length > 0 && r.createdAtMs - r.latencyMs - lastEndMs > RUN_GAP_MS) {
+        bursts.push([applicationId, current]);
+        current = [];
+      }
+      current.push(r);
+      lastEndMs = Math.max(lastEndMs, r.createdAtMs);
+    }
+    if (current.length > 0) bursts.push([applicationId, current]);
+  }
+  return bursts
     .map(([applicationId, list]) => {
       const startMs = Math.min(...list.map((r) => r.createdAtMs - r.latencyMs));
       const endMs = Math.max(...list.map((r) => r.createdAtMs));
@@ -117,6 +147,23 @@ export function byRun(rows: readonly CallRow[]): RunRow[] {
       };
     })
     .sort((a, b) => a.startMs - b.startMs);
+}
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+/**
+ * Parse an ISO date or date-time. `Date.parse` alone accepts other
+ * formats and rolls an impossible date such as 2026-02-30 forward, so
+ * the calendar date is checked against what it parsed to.
+ */
+export function parseIsoDate(name: string, value: string): number {
+  const m = ISO_DATE.exec(value);
+  const ms = m ? Date.parse(m[4] ? value : `${value}T00:00:00Z`) : Number.NaN;
+  if (!m || Number.isNaN(ms)) throw new Error(`--${name} must be an ISO date: ${value}`);
+  if (!m[4] && new Date(ms).toISOString().slice(0, 10) !== value) {
+    throw new Error(`--${name} is not a calendar date: ${value}`);
+  }
+  return ms;
 }
 
 const secs = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
