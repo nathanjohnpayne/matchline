@@ -67,6 +67,12 @@ export interface TraceabilityResult {
 }
 
 export interface TraceabilityContext {
+  /**
+   * Cancels the in-flight request and skips further retries: the
+   * orchestrator aborts it at its deadline or after another call fails
+   * (#619).
+   */
+  readonly signal?: AbortSignal;
   readonly ownerUid: string;
   /** Application whose asset is being validated; recorded on usage telemetry. */
   readonly applicationId?: string;
@@ -148,8 +154,11 @@ export async function checkTraceability(
         tool_choice: { type: "tool", name: TOOL_NAME },
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, { signal: ctx.signal });
     } catch (err) {
+      // An abort is the orchestrator's decision, not a transport
+      // fault: no retry, no backoff.
+      if (ctx.signal?.aborted) throw err;
       failures.push({
         attempt,
         kind: "transport_error",

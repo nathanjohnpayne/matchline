@@ -25,10 +25,10 @@
  * submits specificity. Flags are assembled afterwards in document
  * order (item, then claim), and only then stamped with ids and
  * timestamps, so the output is the same as a sequential run's. The
- * first failed call aborts the pool; nothing persists unless every
- * item validated. With a `budgetMs`, the pool stops starting calls
- * `VALIDATION_DEADLINE_MARGIN_MS` before it runs out and the
- * orchestrator throws `ValidationDeadlineExceeded`.
+ * first failed call aborts the pool and cancels the calls in flight;
+ * nothing persists unless every item validated. With a `budgetMs`, the
+ * pool aborts `VALIDATION_DEADLINE_MARGIN_MS` before it runs out and
+ * the orchestrator throws `ValidationDeadlineExceeded`.
  *
  * Asset-level status:
  *   - 0 untraceable + 0 specificity flags → `passed` (export OK).
@@ -158,9 +158,10 @@ export interface ValidationDeps {
 export const VALIDATION_CONCURRENCY = 6;
 
 /**
- * How long before `budgetMs` runs out the pool stops starting calls.
- * Covers the calls already in flight (one call's worst case, retries
- * included, is well over its p50) plus the persist transaction.
+ * How long before `budgetMs` runs out the pool aborts. Covers the
+ * persist transaction for a run that finishes just inside the deadline,
+ * plus the time between the platform's clock starting and this
+ * function's (cold start, auth).
  */
 export const VALIDATION_DEADLINE_MARGIN_MS = 45_000;
 
@@ -227,9 +228,19 @@ export async function validateAsset(
     }),
   });
   const checks = { extractClaims, checkTraceability, checkSpecificity };
-  const perBullet = await settleInOrder(
-    allBullets.map((bullet) => validateBullet(bullet, unitsById, ctx, checks, pool)),
-  );
+  let perBullet: ClaimVerdict[][];
+  try {
+    // The deadline wins the race even if a cancelled call is slow to
+    // settle; see callPool.ts.
+    perBullet = await Promise.race([
+      settleInOrder(
+        allBullets.map((bullet) => validateBullet(bullet, unitsById, ctx, checks, pool)),
+      ),
+      pool.deadline,
+    ]);
+  } finally {
+    pool.close();
+  }
 
   // Ids and timestamps are stamped here, in document order, so they
   // don't depend on which call finished first.
@@ -288,7 +299,7 @@ async function validateBullet(
     return [];
   }
 
-  const claims = await pool.run(() =>
+  const claims = await pool.run((signal) =>
     checks.extractClaims(
       { text: bullet.text, source_unit_ids: bullet.source_unit_ids },
       {
@@ -296,6 +307,7 @@ async function validateBullet(
         applicationId: ctx.applicationId,
         assetId: ctx.assetId,
         bulletId: bullet.id,
+        signal,
       },
     ),
   );
@@ -332,10 +344,11 @@ async function validateClaim(
 
   // Phase 1: traceability. A fabricated claim short-circuits —
   // its specificity is moot.
-  const trace = await pool.run(() =>
+  const trace = await pool.run((signal) =>
     checks.checkTraceability(claim, candidateUnits, {
       ownerUid: ctx.ownerUid,
       applicationId: ctx.applicationId,
+      signal,
     }),
   );
   if (!trace.supports) {
@@ -344,10 +357,11 @@ async function validateClaim(
 
   // Phase 2: specificity. The claim is supported but might be
   // vacuous.
-  const spec = await pool.run(() =>
+  const spec = await pool.run((signal) =>
     checks.checkSpecificity(claim, {
       ownerUid: ctx.ownerUid,
       applicationId: ctx.applicationId,
+      signal,
     }),
   );
   if (!spec.specific) {

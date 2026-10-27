@@ -12,16 +12,24 @@
  * traceability-before-specificity dependency is the caller's: it
  * awaits one before submitting the other.
  *
- * Two ways the pool stops starting work:
- *   - **Failure.** The first task that rejects aborts the pool; tasks
+ * Two ways the pool stops:
+ *   - **Failure.** The first task that rejects aborts the pool: tasks
  *     still queued reject with `CallPoolAborted` instead of spending
- *     calls on a validation that is already going to throw. Calls
- *     already in flight finish.
- *   - **Deadline.** A task due to start at or past `deadlineAtMs`
- *     rejects with `ValidationDeadlineExceeded` and aborts the pool, so
- *     the orchestrator throws a structured error before the platform
- *     kills the request (which the client only sees as a dropped
- *     connection).
+ *     calls on a validation that is already going to throw, and tasks
+ *     in flight are cancelled through their `AbortSignal`.
+ *   - **Deadline.** At `deadlineAtMs` the pool aborts the same way and
+ *     `deadline` rejects with `ValidationDeadlineExceeded`. The
+ *     orchestrator races its work against `deadline`, so it throws a
+ *     structured error on time even if a cancelled call is slow to
+ *     settle, before the platform kills the request (which the client
+ *     only sees as a dropped connection). Checking the deadline only
+ *     when a task starts would let a call that stalls near the cutoff
+ *     hold the run past it (Codex on #621).
+ *
+ * After the pool aborts, any task that rejects reports
+ * `CallPoolAborted`, not its own error: a cancelled call's abort error
+ * is a consequence, and must not be mistaken for the failure that
+ * caused it.
  *
  * Queued tasks start in submission order.
  */
@@ -38,9 +46,16 @@ export interface CallPoolOptions {
 }
 
 export interface CallPool {
-  run<T>(task: () => Promise<T>): Promise<T>;
+  run<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T>;
   /** Tasks that have started, for the deadline error's detail. */
   readonly started: number;
+  /**
+   * Rejects with `ValidationDeadlineExceeded` when the deadline passes;
+   * otherwise never settles.
+   */
+  readonly deadline: Promise<never>;
+  /** Stops the deadline timer. Call once the work has settled. */
+  close(): void;
 }
 
 /** A queued task skipped because an earlier task failed. */
@@ -75,10 +90,35 @@ export function createCallPool(options: CallPoolOptions): CallPool {
     );
   }
   const clockMs = options.clockMs ?? Date.now;
+  const controller = new AbortController();
   const queue: Array<() => void> = [];
   let active = 0;
   let started = 0;
   let abortError: Error | undefined;
+
+  const abort = (err: Error): void => {
+    if (abortError !== undefined) return;
+    abortError = err;
+    controller.abort(err);
+  };
+
+  let rejectDeadline: (err: Error) => void = () => {};
+  const deadline = new Promise<never>((_, reject) => {
+    rejectDeadline = reject;
+  });
+  // Raced, not awaited, so a run that ends first must not leave an
+  // unhandled rejection behind.
+  deadline.catch(() => {});
+  const expire = (): void => {
+    if (abortError !== undefined) return;
+    const err = new ValidationDeadlineExceeded(started);
+    abort(err);
+    rejectDeadline(err);
+  };
+  const timer =
+    options.deadlineAtMs === undefined
+      ? undefined
+      : setTimeout(expire, Math.max(0, options.deadlineAtMs - clockMs()));
 
   const next = (): void => {
     while (active < concurrency && queue.length > 0) {
@@ -90,23 +130,25 @@ export function createCallPool(options: CallPoolOptions): CallPool {
     get started() {
       return started;
     },
-    run<T>(task: () => Promise<T>): Promise<T> {
+    deadline,
+    close() {
+      clearTimeout(timer);
+    },
+    run<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         queue.push(() => {
+          if (abortError === undefined && options.deadlineAtMs !== undefined && clockMs() >= options.deadlineAtMs) {
+            expire();
+          }
           if (abortError !== undefined) {
             reject(new CallPoolAborted());
-            return;
-          }
-          if (options.deadlineAtMs !== undefined && clockMs() >= options.deadlineAtMs) {
-            abortError = new ValidationDeadlineExceeded(started);
-            reject(abortError);
             return;
           }
           active++;
           started++;
           // Wrapped so a task that throws synchronously still settles
           // through the pool instead of escaping it.
-          new Promise<T>((r) => r(task())).then(
+          new Promise<T>((r) => r(task(controller.signal))).then(
             (value) => {
               active--;
               resolve(value);
@@ -114,8 +156,12 @@ export function createCallPool(options: CallPoolOptions): CallPool {
             },
             (err: unknown) => {
               active--;
-              abortError ??= err instanceof Error ? err : new Error(String(err));
-              reject(err);
+              if (abortError !== undefined) {
+                reject(new CallPoolAborted());
+              } else {
+                abort(err instanceof Error ? err : new Error(String(err)));
+                reject(err);
+              }
               next();
             },
           );

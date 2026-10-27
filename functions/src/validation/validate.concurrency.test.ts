@@ -1,3 +1,4 @@
+import type Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CALLABLE_TIMEOUT_SECONDS } from "../callables/timeouts.ts";
@@ -13,6 +14,7 @@ import {
 } from "./callPool.ts";
 import type { Claim } from "./claimExtraction.ts";
 import { TraceabilityCheckError } from "./errors.ts";
+import { checkTraceability } from "./traceability.ts";
 import type { SpecificityResult } from "./specificity.ts";
 import type { TraceabilityResult } from "./traceability.ts";
 import {
@@ -259,6 +261,63 @@ describe("validateAsset bounded concurrency (#619)", () => {
     expect(Date.now() - sequentialStart).toBeLessThan(budgetMs);
   });
 
+  it("throws at the deadline even when an in-flight call stalls, and cancels it (Codex on #621)", async () => {
+    vi.useFakeTimers();
+    const budgetMs = CALLABLE_TIMEOUT_SECONDS.validateAsset * 1000;
+    let cancelled = 0;
+    const start = Date.now();
+    const run = validateAsset(
+      CTX,
+      deps(content(1, 0, 0), {
+        budgetMs,
+        extractClaims: async (_bullet, ctx) => claimsFor(ctx.bulletId!, 2),
+        // Stalls far past the platform's timeout; only an abort ends it.
+        checkTraceability: (_claim, _units, ctx) =>
+          new Promise<TraceabilityResult>((_resolve, reject) => {
+            ctx.signal?.addEventListener("abort", () => {
+              cancelled++;
+              reject(new Error("aborted"));
+            });
+            setTimeout(() => reject(new Error("never reached")), 10 * budgetMs);
+          }),
+        checkSpecificity: async () => SPEC_OK,
+      }),
+    ).then(
+      () => undefined,
+      (error: unknown) => ({ error, at: Date.now() - start }),
+    );
+    await vi.advanceTimersByTimeAsync(budgetMs);
+    const outcome = await run;
+    expect(outcome?.error).toBeInstanceOf(ValidationDeadlineExceeded);
+    expect(outcome?.at).toBe(budgetMs - VALIDATION_DEADLINE_MARGIN_MS);
+    // Both claims of both items were in flight and are cancelled.
+    expect(cancelled).toBe(4);
+  });
+
+  it("reports the real failure, not the abort errors of the calls it cancelled", async () => {
+    const run = validateAsset(
+      CTX,
+      deps(content(3, 0, 0), {
+        extractClaims: async (_bullet, ctx) => claimsFor(ctx.bulletId!, 2),
+        checkTraceability: (claim, _units, ctx) =>
+          new Promise<TraceabilityResult>((resolve, reject) => {
+            // Cancelled calls fail the way a check's retry budget does,
+            // with the same error class as the real failure.
+            ctx.signal?.addEventListener("abort", () =>
+              reject(new TraceabilityCheckError(`cancelled ${claim.id}`, [])),
+            );
+            if (claim.id === "b3-c1") {
+              setTimeout(() => reject(new TraceabilityCheckError("real failure", [])), 2);
+            } else {
+              setTimeout(() => resolve(TRACED), 50);
+            }
+          }),
+        checkSpecificity: async () => SPEC_OK,
+      }),
+    );
+    await expect(run).rejects.toThrow("real failure");
+  });
+
   it("rejects a concurrency outside 1..MAX_VALIDATION_CONCURRENCY", () => {
     for (const concurrency of [0, MAX_VALIDATION_CONCURRENCY + 1, 1.5, Number.NaN]) {
       expect(() => createCallPool({ concurrency })).toThrow(RangeError);
@@ -282,5 +341,24 @@ describe("settleInOrder", () => {
     });
     await expect(settleInOrder([Promise.reject(new Error("fast")), slow])).rejects.toThrow("fast");
     expect(finished).toBe(true);
+  });
+});
+
+describe("validation checks honor the orchestrator's abort", () => {
+  it("an aborted traceability call is not retried", async () => {
+    const controller = new AbortController();
+    const create = vi.fn(async (_params: unknown, options?: { signal?: AbortSignal }) => {
+      controller.abort();
+      expect(options?.signal).toBe(controller.signal);
+      throw new Error("Request was aborted.");
+    });
+    const run = checkTraceability(
+      { id: "c1", bullet_id: "b1", text: "x" },
+      [UNIT],
+      { ownerUid: "user-alice", signal: controller.signal },
+      { client: { messages: { create } } as unknown as Anthropic, record: async () => 0 },
+    );
+    await expect(run).rejects.toThrow("Request was aborted.");
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
