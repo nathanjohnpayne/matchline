@@ -19,6 +19,17 @@
  *      c. Otherwise, emit `traced` flag (informational; the
  *         editor uses it for hover-trace UX).
  *
+ * Concurrency (#619, #491): the calls above run through one bounded
+ * pool (`callPool.ts`), `VALIDATION_CONCURRENCY` at a time across all
+ * items and claims. Each claim still awaits traceability before it
+ * submits specificity. Flags are assembled afterwards in document
+ * order (item, then claim), and only then stamped with ids and
+ * timestamps, so the output is the same as a sequential run's. The
+ * first failed call aborts the pool; nothing persists unless every
+ * item validated. With a `budgetMs`, the pool stops starting calls
+ * `VALIDATION_DEADLINE_MARGIN_MS` before it runs out and the
+ * orchestrator throws `ValidationDeadlineExceeded`.
+ *
  * Asset-level status:
  *   - 0 untraceable + 0 specificity flags → `passed` (export OK).
  *   - any of either → `failed` (export blocked).
@@ -58,6 +69,7 @@ import {
   type TraceabilityResult,
 } from "./traceability.js";
 import { unitEvidenceVersion } from "./unitEvidenceVersion.js";
+import { createCallPool, settleInOrder, type CallPool } from "./callPool.js";
 import {
   VALIDATIONS_SUBCOLLECTION,
   assetContentVersion,
@@ -125,7 +137,32 @@ export interface ValidationDeps {
   readonly generateId?: () => string;
   /** Injectable clock. */
   readonly now?: () => string;
+  /** Model calls in flight at once. Default `VALIDATION_CONCURRENCY`. */
+  readonly concurrency?: number;
+  /**
+   * Wall-clock budget for this run, in ms (the callable passes its
+   * timeout). Omit for no deadline.
+   */
+  readonly budgetMs?: number;
+  /** Injectable epoch-ms clock for the deadline. Default `Date.now`. */
+  readonly clockMs?: () => number;
 }
+
+/**
+ * Model calls in flight at once. #616's run measured about 2.5 s per
+ * validation call (p50), so ~100 calls take ~40 s at 6 instead of
+ * ~250 s one at a time. The org's Anthropic rate limits (Scale tier)
+ * are far above 6 concurrent Sonnet calls, and 429s still back off
+ * inside each check's retry loop.
+ */
+export const VALIDATION_CONCURRENCY = 6;
+
+/**
+ * How long before `budgetMs` runs out the pool stops starting calls.
+ * Covers the calls already in flight (one call's worst case, retries
+ * included, is well over its p50) plus the persist transaction.
+ */
+export const VALIDATION_DEADLINE_MARGIN_MS = 45_000;
 
 export async function validateAsset(
   ctx: ValidateAssetContext,
@@ -180,22 +217,30 @@ export async function validateAsset(
   const units = await loadUnits(allUnitIds, ctx.ownerUid);
   const unitsById = new Map(units.map((u) => [u.id, u]));
 
-  const flags: ValidationFlag[] = [];
-  for (const bullet of allBullets) {
-    const bulletFlags = await validateBullet(
-      bullet,
-      unitsById,
-      ctx,
-      {
-        extractClaims,
-        checkTraceability,
-        checkSpecificity,
+  const clockMs = deps.clockMs ?? Date.now;
+  const pool = createCallPool({
+    concurrency: deps.concurrency ?? VALIDATION_CONCURRENCY,
+    clockMs,
+    ...(deps.budgetMs !== undefined && {
+      deadlineAtMs:
+        clockMs() + Math.max(0, deps.budgetMs - VALIDATION_DEADLINE_MARGIN_MS),
+    }),
+  });
+  const checks = { extractClaims, checkTraceability, checkSpecificity };
+  const perBullet = await settleInOrder(
+    allBullets.map((bullet) => validateBullet(bullet, unitsById, ctx, checks, pool)),
+  );
+
+  // Ids and timestamps are stamped here, in document order, so they
+  // don't depend on which call finished first.
+  const flags: ValidationFlag[] = perBullet.flatMap((verdicts) =>
+    verdicts.map((v) =>
+      makeFlag(ctx.assetId, v.bulletId, v.claimId, v.status, v.trace, v.spec, {
         generateId,
         now,
-      },
-    );
-    flags.push(...bulletFlags);
-  }
+      }),
+    ),
+  );
 
   const status = computeStatus(flags);
   const result: ValidateAssetResult = {
@@ -213,19 +258,29 @@ export async function validateAsset(
   return result;
 }
 
+/** One claim's outcome, before it is stamped into a flag. */
+interface ClaimVerdict {
+  readonly bulletId: string;
+  readonly claimId: string;
+  readonly status: ValidationFlag["status"];
+  readonly trace: TraceabilityResult;
+  readonly spec?: SpecificityResult;
+}
+
+interface ValidationChecks {
+  readonly extractClaims: typeof extractClaimsFn;
+  readonly checkTraceability: typeof checkTraceabilityFn;
+  readonly checkSpecificity: typeof checkSpecificityFn;
+}
+
 /** Per-bullet validation. Extracted for readability + testability. */
 async function validateBullet(
   bullet: GeneratedBullet,
   unitsById: ReadonlyMap<string, ExperienceUnit>,
   ctx: ValidateAssetContext,
-  deps: {
-    extractClaims: typeof extractClaimsFn;
-    checkTraceability: typeof checkTraceabilityFn;
-    checkSpecificity: typeof checkSpecificityFn;
-    generateId: () => string;
-    now: () => string;
-  },
-): Promise<ValidationFlag[]> {
+  checks: ValidationChecks,
+  pool: CallPool,
+): Promise<ClaimVerdict[]> {
   // Empty bullets — defensive: don't invoke claim extraction on
   // an empty string; #106's contract throws synchronously on
   // empty input. Skip silently.
@@ -233,14 +288,16 @@ async function validateBullet(
     return [];
   }
 
-  const claims = await deps.extractClaims(
-    { text: bullet.text, source_unit_ids: bullet.source_unit_ids },
-    {
-      ownerUid: ctx.ownerUid,
-      applicationId: ctx.applicationId,
-      assetId: ctx.assetId,
-      bulletId: bullet.id,
-    },
+  const claims = await pool.run(() =>
+    checks.extractClaims(
+      { text: bullet.text, source_unit_ids: bullet.source_unit_ids },
+      {
+        ownerUid: ctx.ownerUid,
+        applicationId: ctx.applicationId,
+        assetId: ctx.assetId,
+        bulletId: bullet.id,
+      },
+    ),
   );
 
   // Only the Units this bullet's generator said it grounded on
@@ -251,18 +308,11 @@ async function validateBullet(
     .map((id) => unitsById.get(id))
     .filter((u): u is ExperienceUnit => u !== undefined);
 
-  const flags: ValidationFlag[] = [];
-  for (const claim of claims) {
-    const flag = await validateClaim(
-      claim,
-      candidateUnits,
-      ctx,
-      bullet.id,
-      deps,
-    );
-    flags.push(flag);
-  }
-  return flags;
+  return settleInOrder(
+    claims.map((claim) =>
+      validateClaim(claim, candidateUnits, ctx, bullet.id, checks, pool),
+    ),
+  );
 }
 
 /** Per-claim validation. Two-phase: traceability → specificity. */
@@ -271,59 +321,41 @@ async function validateClaim(
   candidateUnits: readonly ExperienceUnit[],
   ctx: ValidateAssetContext,
   bulletId: string,
-  deps: {
-    checkTraceability: typeof checkTraceabilityFn;
-    checkSpecificity: typeof checkSpecificityFn;
-    generateId: () => string;
-    now: () => string;
-  },
-): Promise<ValidationFlag> {
+  checks: ValidationChecks,
+  pool: CallPool,
+): Promise<ClaimVerdict> {
+  const verdict = (
+    status: ValidationFlag["status"],
+    trace: TraceabilityResult,
+    spec?: SpecificityResult,
+  ): ClaimVerdict => ({ bulletId, claimId: claim.id, status, trace, spec });
+
   // Phase 1: traceability. A fabricated claim short-circuits —
   // its specificity is moot.
-  const trace = await deps.checkTraceability(claim, candidateUnits, {
-    ownerUid: ctx.ownerUid,
-    applicationId: ctx.applicationId,
-  });
+  const trace = await pool.run(() =>
+    checks.checkTraceability(claim, candidateUnits, {
+      ownerUid: ctx.ownerUid,
+      applicationId: ctx.applicationId,
+    }),
+  );
   if (!trace.supports) {
-    return makeFlag(
-      ctx.assetId,
-      bulletId,
-      claim.id,
-      "untraceable",
-      trace,
-      undefined,
-      deps,
-    );
+    return verdict("untraceable", trace);
   }
 
   // Phase 2: specificity. The claim is supported but might be
   // vacuous.
-  const spec = await deps.checkSpecificity(claim, {
-    ownerUid: ctx.ownerUid,
-    applicationId: ctx.applicationId,
-  });
+  const spec = await pool.run(() =>
+    checks.checkSpecificity(claim, {
+      ownerUid: ctx.ownerUid,
+      applicationId: ctx.applicationId,
+    }),
+  );
   if (!spec.specific) {
-    return makeFlag(
-      ctx.assetId,
-      bulletId,
-      claim.id,
-      "specificity",
-      trace,
-      spec,
-      deps,
-    );
+    return verdict("specificity", trace, spec);
   }
 
   // Both checks passed — informational `traced` flag.
-  return makeFlag(
-    ctx.assetId,
-    bulletId,
-    claim.id,
-    "traced",
-    trace,
-    spec,
-    deps,
-  );
+  return verdict("traced", trace, spec);
 }
 
 function makeFlag(
