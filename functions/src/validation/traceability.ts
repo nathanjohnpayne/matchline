@@ -133,6 +133,9 @@ export async function checkTraceability(
   const failures: ValidationAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Don't start an attempt the orchestrator has already cancelled,
+    // e.g. after a backoff that `sleep` cut short (Codex on #621).
+    ctx.signal?.throwIfAborted();
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = buildUserContent(prompt.userFewShot, claim, candidateUnits);
@@ -170,7 +173,7 @@ export async function checkTraceability(
       // backoff a single 429 quickly cascades into a window-spanning
       // burst. See functions/src/llm/retry.ts.
       if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(transportBackoffMs(attempt, err));
+        await sleep(transportBackoffMs(attempt, err), ctx.signal);
       }
       continue;
     }

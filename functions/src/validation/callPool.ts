@@ -18,7 +18,8 @@
  *     calls on a validation that is already going to throw, and tasks
  *     in flight are cancelled through their `AbortSignal`.
  *   - **Deadline.** At `deadlineAtMs` the pool aborts the same way and
- *     `deadline` rejects with `ValidationDeadlineExceeded`. The
+ *     `deadline` rejects with `ValidationDeadlineExceeded`, or with the
+ *     earlier failure if one already aborted the pool. The
  *     orchestrator races its work against `deadline`, so it throws a
  *     structured error on time even if a cancelled call is slow to
  *     settle, before the platform kills the request (which the client
@@ -50,8 +51,9 @@ export interface CallPool {
   /** Tasks that have started, for the deadline error's detail. */
   readonly started: number;
   /**
-   * Rejects with `ValidationDeadlineExceeded` when the deadline passes;
-   * otherwise never settles.
+   * Rejects when the deadline passes: with `ValidationDeadlineExceeded`,
+   * or with the failure that already aborted the pool. Otherwise never
+   * settles.
    */
   readonly deadline: Promise<never>;
   /** Stops the deadline timer. Call once the work has settled. */
@@ -109,9 +111,12 @@ export function createCallPool(options: CallPoolOptions): CallPool {
   // Raced, not awaited, so a run that ends first must not leave an
   // unhandled rejection behind.
   deadline.catch(() => {});
+  // Fires even when an earlier failure already aborted the pool: the
+  // orchestrator is still waiting for the cancelled calls to settle,
+  // and the deadline is what bounds that wait (Codex on #621). The
+  // earlier failure, when there is one, is the error reported.
   const expire = (): void => {
-    if (abortError !== undefined) return;
-    const err = new ValidationDeadlineExceeded(started);
+    const err = abortError ?? new ValidationDeadlineExceeded(started);
     abort(err);
     rejectDeadline(err);
   };

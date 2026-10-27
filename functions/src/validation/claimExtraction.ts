@@ -167,6 +167,9 @@ export async function extractClaims(
   const failures: ValidationAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Don't start an attempt the orchestrator has already cancelled,
+    // e.g. after a backoff that `sleep` cut short (Codex on #621).
+    ctx.signal?.throwIfAborted();
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = buildUserContent(prompt.userFewShot, bullet, ctx);
@@ -205,7 +208,7 @@ export async function extractClaims(
       // without backoff compounds fast. See
       // functions/src/llm/retry.ts.
       if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(transportBackoffMs(attempt, err));
+        await sleep(transportBackoffMs(attempt, err), ctx.signal);
       }
       continue;
     }

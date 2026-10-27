@@ -318,6 +318,34 @@ describe("validateAsset bounded concurrency (#619)", () => {
     await expect(run).rejects.toThrow("real failure");
   });
 
+  it("still ends at the deadline when a failure came first and a call won't settle (Codex on #621)", async () => {
+    vi.useFakeTimers();
+    const budgetMs = CALLABLE_TIMEOUT_SECONDS.validateAsset * 1000;
+    const start = Date.now();
+    const run = validateAsset(
+      CTX,
+      deps(content(1, 0, 0), {
+        budgetMs,
+        extractClaims: async (_bullet, ctx) => claimsFor(ctx.bulletId!, 1),
+        // The summary's claim fails at once; b1's ignores the abort and
+        // settles long after the platform's timeout.
+        checkTraceability: (claim) =>
+          claim.id === "summary-c1"
+            ? Promise.reject(new TraceabilityCheckError("real failure", []))
+            : new Promise<TraceabilityResult>((resolve) => setTimeout(() => resolve(TRACED), 10 * budgetMs)),
+        checkSpecificity: async () => SPEC_OK,
+      }),
+    ).then(
+      () => ({ error: undefined, at: Date.now() - start }),
+      (error: unknown) => ({ error, at: Date.now() - start }),
+    );
+    await vi.advanceTimersByTimeAsync(budgetMs);
+    const outcome = await run;
+    expect(outcome.error).toBeInstanceOf(TraceabilityCheckError);
+    expect((outcome.error as Error).message).toBe("real failure");
+    expect(outcome.at).toBe(budgetMs - VALIDATION_DEADLINE_MARGIN_MS);
+  });
+
   it("counts the Firestore reads against the budget (CodeRabbit on #621)", async () => {
     vi.useFakeTimers();
     const budgetMs = CALLABLE_TIMEOUT_SECONDS.validateAsset * 1000;
@@ -379,6 +407,33 @@ describe("settleInOrder", () => {
 });
 
 describe("validation checks honor the orchestrator's abort", () => {
+  it("an abort during backoff ends the wait and skips the next attempt", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const create = vi.fn(async () => {
+      // A 429 asking for a minute's wait.
+      const err = Object.assign(new Error("rate limited"), {
+        status: 429,
+        headers: { "retry-after": "60" },
+      });
+      throw err;
+    });
+    const run = checkTraceability(
+      { id: "c1", bullet_id: "b1", text: "x" },
+      [UNIT],
+      { ownerUid: "user-alice", signal: controller.signal },
+      { client: { messages: { create } } as unknown as Anthropic, record: async () => 0 },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    controller.abort(new Error("pool aborted"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await run).toBeInstanceOf(Error);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("an aborted traceability call is not retried", async () => {
     const controller = new AbortController();
     const create = vi.fn(async (_params: unknown, options?: { signal?: AbortSignal }) => {

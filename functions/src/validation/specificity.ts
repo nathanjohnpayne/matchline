@@ -165,6 +165,9 @@ async function runLlmFallback(
   const failures: ValidationAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Don't start an attempt the orchestrator has already cancelled,
+    // e.g. after a backoff that `sleep` cut short (Codex on #621).
+    ctx.signal?.throwIfAborted();
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     // Append the deny-list match as context when one occurred.
