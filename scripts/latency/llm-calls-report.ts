@@ -27,16 +27,16 @@
 
 import { createRequire } from "node:module";
 
-import { byRun, byStage, parseIsoDate, productCalls, renderMarkdown, type CallRow } from "./report.ts";
+import { loadCallRows } from "./load.ts";
+import { byRun, byStage, parseIsoDate, productCalls, renderMarkdown } from "./report.ts";
 
 // firebase-admin is a dependency of the functions package only.
 const requireFromFunctions = createRequire(new URL("../../functions/package.json", import.meta.url));
 const { initializeApp } = requireFromFunctions("firebase-admin/app") as typeof import("firebase-admin/app");
-const { getFirestore, Timestamp } = requireFromFunctions(
+const { getFirestore } = requireFromFunctions(
   "firebase-admin/firestore",
 ) as typeof import("firebase-admin/firestore");
 
-const LLM_CALLS_COLLECTION = "llm_calls";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** An option's operand; throws when the flag is present without one. */
@@ -63,30 +63,7 @@ async function main(): Promise<void> {
   process.env.GOOGLE_CLOUD_QUOTA_PROJECT ??= projectId;
   initializeApp({ projectId });
 
-  const snap = await getFirestore()
-    .collection(LLM_CALLS_COLLECTION)
-    .where("createdAt", ">=", Timestamp.fromMillis(sinceMs))
-    .where("createdAt", "<", Timestamp.fromMillis(untilMs))
-    .select("stage", "subtask", "model", "latencyMs", "createdAt", "applicationId", "runId", "attempt", "costUsd")
-    .get();
-
-  const rows: CallRow[] = [];
-  for (const doc of snap.docs) {
-    const d = doc.data();
-    const createdAt = d.createdAt as InstanceType<typeof Timestamp> | undefined;
-    if (!createdAt || typeof d.stage !== "string" || typeof d.latencyMs !== "number") continue;
-    rows.push({
-      stage: d.stage,
-      subtask: typeof d.subtask === "string" ? d.subtask : undefined,
-      model: typeof d.model === "string" ? d.model : "unknown",
-      latencyMs: d.latencyMs,
-      createdAtMs: createdAt.toMillis(),
-      applicationId: typeof d.applicationId === "string" ? d.applicationId : undefined,
-      runId: typeof d.runId === "string" ? d.runId : undefined,
-      attempt: typeof d.attempt === "number" ? d.attempt : undefined,
-      costUsd: typeof d.costUsd === "number" ? d.costUsd : undefined,
-    });
-  }
+  const rows = await loadCallRows(getFirestore(), { sinceMs, untilMs });
 
   if (process.argv.includes("--json")) {
     const product = productCalls(rows);

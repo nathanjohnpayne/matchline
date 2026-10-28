@@ -3,7 +3,7 @@
  *
  * Kept free of Firestore so it can be unit-tested; the CLI in
  * `llm-calls-report.ts` does the read-only query and hands the rows
- * here.
+ * here; `load.ts` holds that query so the emulator suite can test it.
  *
  * Two views:
  *   - per stage / subtask: n, p50, p95, max of `latencyMs`;
