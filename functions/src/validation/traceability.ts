@@ -158,7 +158,7 @@ export async function checkTraceability(
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
 
-  const prompt = loadPromptText("validation", "traceability");
+  const loadedPrompt = loadPromptText("validation", "traceability");
   const { provider, model } = modelFor(STAGE);
   if (provider !== "anthropic") {
     throw new Error(
@@ -176,6 +176,8 @@ export async function checkTraceability(
     baseMaxTokens: MAX_OUTPUT_TOKENS,
     effort: effortFor(STAGE),
   });
+  // The answer-by-tool suffix (empty on a forced-tool model) goes before any retry reminder.
+  const prompt = { ...loadedPrompt, system: loadedPrompt.system + request.systemSuffix };
 
   const toolSchema = zodToToolSchema(TraceabilityResponseV2Schema);
 
@@ -189,7 +191,7 @@ export async function checkTraceability(
     // e.g. after a backoff that `sleep` cut short (Codex on #621).
     ctx.signal?.throwIfAborted();
     const start = Date.now();
-    const systemWithReminder = prompt.system + request.systemSuffix + traceabilityRetryReminder(failures);
+    const systemWithReminder = prompt.system + traceabilityRetryReminder(failures);
 
     let response: Anthropic.Messages.Message;
     try {
