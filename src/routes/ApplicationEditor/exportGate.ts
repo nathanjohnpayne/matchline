@@ -1,6 +1,9 @@
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
-import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import {
+  UNIT_EVIDENCE_VERSION_PREFIX,
+  unitEvidenceVersion,
+} from "../../../functions/src/validation/unitEvidenceVersion.ts";
 import {
   assetContentVersion,
   type ValidationAttestation,
@@ -59,6 +62,12 @@ import {
  *     that kept `updated_at`, and is immune to client/server clock
  *     skew.
  *
+ * A recorded version with an older prefix than
+ * `UNIT_EVIDENCE_VERSION_PREFIX` was computed under an earlier
+ * evidence format (ev2 before #485), so the verdict no longer applies
+ * even though the Unit itself may be untouched. The gate says that
+ * validation has been updated rather than claiming the Unit changed.
+ *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
  * already loaded: no fan-out query across Applications, no extra
@@ -112,8 +121,9 @@ export function citedUnitIds(asset: AssetRef): ReadonlySet<string> {
 
 /**
  * Why a `passed` asset's grounding is no longer current, or `null` if
- * it still is. Precedence: missing > not approved > edited, so the
- * reason names the most severe problem.
+ * it still is. Precedence: missing > not approved > outdated (recorded
+ * under an older evidence format) > edited, so the reason names the
+ * most severe problem.
  */
 function citedEvidenceProblem(
   asset: AssetRef,
@@ -122,6 +132,7 @@ function citedEvidenceProblem(
 ): { readonly reason: string; readonly canRevalidate: boolean } | null {
   let missing = 0;
   let unapproved = 0;
+  let outdated = 0;
   let edited = 0;
   for (const id of citedUnitIds(asset)) {
     const unit = unitsById.get(id);
@@ -129,10 +140,18 @@ function citedEvidenceProblem(
       missing += 1;
     } else if (unit.user_approved !== true) {
       unapproved += 1;
-    } else if (versions[id] !== unitEvidenceVersion(unit)) {
-      // A cited Unit the validator did not load (absent key) was not
-      // evidence for this verdict either.
-      edited += 1;
+    } else {
+      const recorded = versions[id];
+      if (typeof recorded === "string" && !recorded.startsWith(UNIT_EVIDENCE_VERSION_PREFIX)) {
+        // Recorded under an earlier evidence format (#485): the Unit
+        // may be untouched, but the verdict was not reached on the text
+        // the validator reads now.
+        outdated += 1;
+      } else if (recorded !== unitEvidenceVersion(unit)) {
+        // A cited Unit the validator did not load (absent key) was not
+        // evidence for this verdict either.
+        edited += 1;
+      }
     }
   }
   const units = (n: number): string => (n === 1 ? "1 Unit" : `${n} Units`);
@@ -151,6 +170,14 @@ function citedEvidenceProblem(
         `This resume cites ${units(unapproved)} that ${verb(unapproved, "is", "are")} no longer approved. ` +
         "Re-approve them, or edit or remove the bullets that cite them.",
       canRevalidate: false,
+    };
+  }
+  if (outdated > 0) {
+    return {
+      reason:
+        "Validation has been updated since this resume was last checked, so that result no longer applies. " +
+        "Re-run validation before exporting.",
+      canRevalidate: true,
     };
   }
   if (edited > 0) {

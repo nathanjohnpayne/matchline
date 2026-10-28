@@ -1,15 +1,34 @@
 /**
- * How a candidate Unit is written into the traceability prompt, i.e.
- * exactly the evidence text the validator's model reads. Extracted from
- * `./traceability.ts` so `./unitEvidenceVersion.ts` can fingerprint
- * this same text: a cited Unit's evidence version then changes if and
- * only if what the validator would read changes, by construction
- * rather than by keeping a second field list in sync (#506 review,
- * after `null` vs omitted and `NaN` vs `null` metric values each
- * slipped through a hand-built encoding).
+ * The one evidence text for an Experience Unit: exactly what a model
+ * is shown about a Unit, wherever a model is shown one. It has three
+ * consumers, and they must never see different text:
  *
- * Dependency-free so the app can import it across the package boundary.
+ *   - generation (`../generation/resumeInput.ts`), which writes the
+ *     resume from it;
+ *   - traceability (`./traceability.ts`), which checks each claim
+ *     against it;
+ *   - the evidence version (`./unitEvidenceVersion.ts`), which hashes
+ *     it so a verdict stops counting the moment the text changes.
+ *
+ * Before #485 generation and traceability each had their own
+ * formatter, and they had drifted: generation showed tags and dates the
+ * validator never saw, and the validator showed metrics and signals
+ * generation never saw. Claims built from one side's fields could not
+ * be traced by the other.
+ *
+ * **Any change to the output changes every Unit's evidence version,**
+ * so it needs a new prefix in `./unitEvidenceVersion.ts`. The golden
+ * tests (`./unitPromptText.test.ts`, `./unitEvidenceVersion.test.ts`)
+ * fail until that happens.
+ *
+ * The formatter is not versioned with the prompts: an eval-harness
+ * override to an older prompt version reads the current Unit text.
+ *
+ * Dependency-free at runtime so the app can import it across the
+ * package boundary; the only import is type-only and erased.
  */
+
+import type { ExperienceUnit, Metric } from "../types/capability.js";
 
 /** A metric as the prompt renders it; values are printed as written. */
 export interface UnitPromptMetric {
@@ -17,6 +36,12 @@ export interface UnitPromptMetric {
   readonly value?: unknown;
   readonly unit?: string;
   readonly direction?: string;
+}
+
+/** A Unit's own dates, as the prompt renders them. */
+export interface UnitPromptDateRange {
+  readonly start?: string;
+  readonly end?: string;
 }
 
 /** The Unit fields the prompt renders. */
@@ -27,7 +52,61 @@ export interface UnitPromptFields {
   readonly metrics?: readonly UnitPromptMetric[];
   readonly seniority_signals?: readonly string[];
   readonly scope_signals?: readonly string[];
+  readonly skills?: readonly string[];
+  readonly tools?: readonly string[];
+  readonly domains?: readonly string[];
+  readonly date_range?: UnitPromptDateRange | null;
 }
+
+type FieldRole = "rendered" | `excluded: ${string}`;
+
+/**
+ * Every `ExperienceUnit` field, and whether the model sees it (#485).
+ *
+ * A compile-time drift guard: adding a field to `ExperienceUnit` fails
+ * typecheck here until someone decides whether generation and the
+ * validator read it. The reasons are the serialization-layer review's
+ * losslessness answer (`docs/agents/operating-rules.md`). Tests check
+ * that each `rendered` field changes the text and each excluded field
+ * does not.
+ */
+export const UNIT_FIELD_ROLES = {
+  id: "rendered",
+  raw_text: "rendered",
+  normalized_summary: "rendered",
+  metrics: "rendered",
+  seniority_signals: "rendered",
+  scope_signals: "rendered",
+  skills: "rendered",
+  tools: "rendered",
+  domains: "rendered",
+  date_range: "rendered",
+  business_outcomes:
+    "excluded: an extraction paraphrase of raw_text, not separately reviewed; rendering it adds a second, unvalidated source of outcome wording",
+  unit_type: "excluded: classification metadata about the record, not a fact about the candidate",
+  evidence_type: "excluded: classification metadata",
+  confidence_score: "excluded: extraction-model confidence; approval already gates use",
+  source_ref:
+    "excluded: provenance pointer (storage paths, hashes); not evidence, and a privacy risk in prompts",
+  source_type: "excluded: provenance",
+  owner_uid: "excluded: tenancy",
+  user_approved: "excluded: gated structurally by the loaders and the export gate",
+  rejected: "excluded: gated structurally",
+  flagged: "excluded: gated structurally",
+  reembed_pending: "excluded: plumbing",
+  embedding: "excluded: plumbing",
+  created_at: "excluded: timestamp",
+  updated_at: "excluded: timestamp",
+} as const satisfies Record<keyof ExperienceUnit, FieldRole>;
+
+/** Every `Metric` field, and whether the model sees it. See `UNIT_FIELD_ROLES`. */
+export const METRIC_FIELD_ROLES = {
+  claim: "rendered",
+  value: "rendered",
+  unit: "rendered",
+  direction: "rendered",
+  confidence: "excluded: extraction confidence, not a fact about the candidate",
+} as const satisfies Record<keyof Metric, FieldRole>;
 
 /**
  * Safely embed an arbitrary user-controlled string as a quoted
@@ -51,55 +130,77 @@ export function quote(value: string): string {
   return JSON.stringify(value);
 }
 
+/**
+ * An entity id as the prompt prints it: bare when it is safe (every
+ * UUID and every fixture id), JSON-quoted otherwise, so no id can
+ * break a line or forge a section delimiter.
+ */
+export function renderEntityId(id: string): string {
+  return typeof id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(id)
+    ? id
+    : (JSON.stringify(id) ?? "null");
+}
+
+/** A list field's line, or `null` when the field is absent, empty or malformed. */
+function listLine(name: string, field: unknown): string | null {
+  if (!Array.isArray(field) || field.length === 0) return null;
+  return `${name}: [${field.map((v) => JSON.stringify(v) ?? "null").join(", ")}]`;
+}
+
+/** The `date_range` line, or `null` when there is no string date to show. */
+function dateRangeLine(dr: unknown): string | null {
+  if (typeof dr !== "object" || dr === null) return null;
+  const { start, end } = dr as { start?: unknown; end?: unknown };
+  const members: string[] = [];
+  if (typeof start === "string") members.push(`start: ${quote(start)}`);
+  if (typeof end === "string") members.push(`end: ${quote(end)}`);
+  if (members.length === 0) return null;
+  return `date_range: { ${members.join(", ")} }`;
+}
+
+/**
+ * One Unit's evidence text. Deterministic, never throws on
+ * Firestore-shaped data, and every value is either JSON-quoted on a
+ * labelled line or an id through `renderEntityId`, so no value can
+ * start a line of its own.
+ *
+ * The Unit `id` is critical: both models answer with it
+ * (`source_unit_ids`, `supporting_unit_id`), and both callers check
+ * set membership on what comes back.
+ *
+ * Optional lists are emitted only when non-empty, and an absent list
+ * renders exactly like an empty one, which keeps the text tight on the
+ * common case.
+ */
 export function formatUnit(unit: UnitPromptFields): string {
-  // Deterministic, prompt-friendly formatting. Includes every
-  // field the prompt's hard rules reference:
-  //   - raw_text + normalized_summary (rules 1, 2, 5, 6)
-  //   - metrics (rule 1: "Numeric facts (percentages, counts,
-  //     durations) DO need to match within reasonable rounding")
-  //   - seniority_signals (rule 3: "role-level fact (lead, owner,
-  //     principal) and no Unit's seniority_signals or prose backs
-  //     that level → false") — Codex P2 round 1 on PR #111 caught
-  //     a prior version that omitted this field, leaving the
-  //     prompt rule unable to fire.
-  //   - scope_signals (rule 3 by analogy: scope claims need their
-  //     scope context, same shape as seniority).
-  // The Unit `id` is critical — the model's response uses it as
-  // `supporting_unit_id`, and the value-level guard in
-  // `finalizeResult` checks set membership.
-  //
-  // Every embedded string is run through `quote()` (= JSON.stringify)
-  // so embedded `"`, `\\`, newlines, etc. don't break the format.
-  // Codex P1 round 2 on PR #111.
   const metricsBlock =
-    unit.metrics && unit.metrics.length > 0
-      ? unit.metrics
-          .map((m) => formatMetric(m))
-          .join(",\n")
+    Array.isArray(unit.metrics) && unit.metrics.length > 0
+      ? unit.metrics.map((m) => formatMetric(m)).join(",\n")
       : "  (no metrics)";
   const lines: string[] = [
-    `[Unit ${unit.id}]`,
+    `[Unit ${renderEntityId(unit.id)}]`,
     `raw_text: ${quote(unit.raw_text)}`,
     `normalized_summary: ${quote(unit.normalized_summary)}`,
     `metrics: [`,
     metricsBlock,
     `]`,
   ];
-  // Seniority + scope are emitted only when non-empty — the
-  // prompt's rule 3 only needs them for role-level / scope
-  // claims, and most Units won't have both. Keeping the format
-  // tight reduces token cost on the common case.
-  if (unit.seniority_signals && unit.seniority_signals.length > 0) {
-    lines.push(
-      `seniority_signals: [${unit.seniority_signals.map(quote).join(", ")}]`,
-    );
-  }
-  if (unit.scope_signals && unit.scope_signals.length > 0) {
-    lines.push(
-      `scope_signals: [${unit.scope_signals.map(quote).join(", ")}]`,
-    );
+  for (const line of [
+    listLine("seniority_signals", unit.seniority_signals),
+    listLine("scope_signals", unit.scope_signals),
+    listLine("skills", unit.skills),
+    listLine("tools", unit.tools),
+    listLine("domains", unit.domains),
+    dateRangeLine(unit.date_range),
+  ]) {
+    if (line !== null) lines.push(line);
   }
   return lines.join("\n");
+}
+
+/** The Unit block both prompts embed: `formatUnit` per Unit, separated by one blank line. */
+export function formatUnitBlock(units: readonly UnitPromptFields[]): string {
+  return units.map(formatUnit).join("\n\n");
 }
 
 function formatMetric(m: UnitPromptMetric): string {

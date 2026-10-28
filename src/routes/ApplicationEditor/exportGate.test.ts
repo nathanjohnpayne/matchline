@@ -319,9 +319,60 @@ describe("exportGateState: cited-evidence re-check", () => {
   it("stays enabled when only fields the validator ignores change, timestamp included", () => {
     const state = gate(
       passedAsset(),
-      byId(unit("u1"), unit("u2", { updated_at: "2026-05-01T00:00:00.000Z", skills: ["go"] }), unit("u3")),
+      byId(
+        unit("u1"),
+        unit("u2", { updated_at: "2026-05-01T00:00:00.000Z", business_outcomes: ["x"] }),
+        unit("u3"),
+      ),
     );
     expect(state.enabled).toBe(true);
+  });
+
+  it("blocks when a cited Unit's tags or dates change, which the validator now reads (#485)", () => {
+    for (const edit of [{ skills: ["go"] }, { date_range: { start: "2020-01-01", end: "2022-06-30" } }]) {
+      const state = gate(passedAsset(), byId(unit("u1"), unit("u2", edit), unit("u3")));
+      expect(state.enabled, JSON.stringify(edit)).toBe(false);
+      expect(state.disabledReason, JSON.stringify(edit)).toContain("changed since the last validation run");
+      expect(state.enabled === false && state.canRevalidate, JSON.stringify(edit)).toBe(true);
+    }
+  });
+
+  it("says validation has been updated for a verdict recorded under an older evidence format (#485)", () => {
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: `ev2:${"0".repeat(64)}`,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("Validation has been updated");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  it("ranks a missing Unit above an outdated verdict, and an outdated verdict above an edit", () => {
+    const a = passedAsset();
+    const outdatedU2 = attest(a, {
+      validated_unit_versions: {
+        u1: unitEvidenceVersion(unit("u1")),
+        u2: `ev2:${"0".repeat(64)}`,
+        u3: unitEvidenceVersion(unit("u3")),
+      },
+    });
+    const missing = exportGateState(a, byId(unit("u2"), unit("u3")), outdatedU2);
+    expect(missing.disabledReason).toContain("1 Unit that no longer exists");
+
+    const edited = exportGateState(
+      a,
+      byId(unit("u1"), unit("u2"), unit("u3", { raw_text: "Led two teams." })),
+      outdatedU2,
+    );
+    expect(edited.disabledReason).toContain("Validation has been updated");
   });
 
   it("blocks an edit made DURING validation, which a timestamp comparison misses", () => {
