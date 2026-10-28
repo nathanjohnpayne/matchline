@@ -477,7 +477,7 @@ Model strategy:
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
 
-The eval harness does not yet sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing). The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
+The corpus sweep (`npm run eval`) does not sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing); `npm run eval:subtasks -- --suite generation` does. The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
 
 ## Streaming progress
 
