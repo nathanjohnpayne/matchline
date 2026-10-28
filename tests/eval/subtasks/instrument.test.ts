@@ -1,12 +1,28 @@
+import { existsSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as cost from "../../../functions/src/llm/cost.ts";
 import { clearEffortOverrides, clearModelOverrides, setEffortOverrides, setModelOverrides } from "../../../functions/src/llm/config.ts";
+import { ResumeGenerationResponseV1Schema } from "../../../functions/src/prompts/generation/resume.v1.schema.ts";
+import { ClaimExtractionResponseV1Schema } from "../../../functions/src/prompts/validation/claimExtraction.v1.schema.ts";
+import { TraceabilityResponseV1Schema } from "../../../functions/src/prompts/validation/traceability.v1.schema.ts";
 import { extractClaims } from "../../../functions/src/validation/claimExtraction.ts";
 import { checkTraceability } from "../../../functions/src/validation/traceability.ts";
+import { defaultPromptVersion } from "../sweepScope.ts";
 
 import { loadValidationCases } from "./fixtures.ts";
-import { classifierKeyFor, crossCheckSettings, missingClassifiers, servedModelStatus, startInvocation, type CallRecord } from "./instrument.ts";
+import {
+  classifierKeyFor,
+  classifierSchemaPath,
+  classifyMessage,
+  crossCheckSettings,
+  loadClassifier,
+  missingClassifiers,
+  servedModelStatus,
+  startInvocation,
+  type CallRecord,
+} from "./instrument.ts";
 import { replayKey, ReplayStore, type MiniFs } from "./replay.ts";
 import { defaultValidationAnswer, makeCtx, scriptedClient, textMessage, toolMessage } from "./testSupport.ts";
 
@@ -163,11 +179,35 @@ describe("instrumentClient", () => {
 });
 
 describe("outcome classifiers", () => {
-  it("key on the version the module imports (the PROMPT_CONFIG default), and every suite key has one", () => {
-    expect(classifierKeyFor("traceability")).toBe("validation/traceability@v1");
-    expect(classifierKeyFor("generation")).toBe("generation/resume@v1");
+  it("key on the version the module imports (the PROMPT_CONFIG default), and every suite key has one", async () => {
+    expect(classifierKeyFor("traceability")).toBe(`validation/traceability@${defaultPromptVersion("validation/traceability")}`);
+    expect(classifierKeyFor("generation")).toBe(`generation/resume@${defaultPromptVersion("generation/resume")}`);
     expect(classifierKeyFor("extraction")).toBeNull();
-    expect(missingClassifiers(["validation/claimExtraction", "validation/traceability", "validation/specificity", "generation/resume"])).toEqual([]);
+    expect(await missingClassifiers(["validation/claimExtraction", "validation/traceability", "validation/specificity", "generation/resume"])).toEqual([]);
+  });
+
+  it("load the single *ResponseV<N>Schema export from the version's schema file", async () => {
+    expect(await loadClassifier("validation/traceability@v1")).toBe(TraceabilityResponseV1Schema);
+    expect(await loadClassifier("validation/claimExtraction@v1")).toBe(ClaimExtractionResponseV1Schema);
+    expect(await loadClassifier("generation/resume@v1")).toBe(ResumeGenerationResponseV1Schema);
+    // Cached: the same promise for the same key.
+    expect(loadClassifier("generation/resume@v1")).toBe(loadClassifier("generation/resume@v1"));
+  });
+
+  it("return null, and report the key missing, when no schema file exists for the version", async () => {
+    expect(await loadClassifier("validation/traceability@v99")).toBeNull();
+    expect(await loadClassifier("not a key")).toBeNull();
+    expect(classifierSchemaPath("validation/traceability@v2")).toMatch(/functions\/src\/prompts\/validation\/traceability\.v2\.schema\.ts$/);
+    // A fresh version file needs no hand-edited entry: whatever version the default names is looked up by path.
+    const key = classifierKeyFor("specificity")!;
+    expect(existsSync(classifierSchemaPath(key)!)).toBe(true);
+  });
+
+  it("classifies a schema-invalid answer as schema_error and an unloadable schema as unclassified", () => {
+    const msg = (input: unknown) => ({ stop_reason: "tool_use", content: [{ type: "tool_use", input }] }) as unknown as Parameters<typeof classifyMessage>[0];
+    expect(classifyMessage(msg({ supports: true, supporting_unit_id: "u1", rationale: "The first candidate supports it." }), TraceabilityResponseV1Schema)).toBe("tool_use");
+    expect(classifyMessage(msg({ nope: 1 }), TraceabilityResponseV1Schema)).toBe("schema_error");
+    expect(classifyMessage(msg({ supports: true }), null)).toBe("unclassified");
   });
 });
 

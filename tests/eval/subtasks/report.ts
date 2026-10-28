@@ -27,7 +27,7 @@ import type {
   Validity,
   WallTime,
 } from "./metrics.ts";
-import type { ResolvedVariant } from "./overrides.ts";
+import type { ResolvedJudge, ResolvedStageSettings, ResolvedVariant } from "./overrides.ts";
 import type { Projection } from "./plan.ts";
 import type { ReplayMode } from "./replay.ts";
 
@@ -96,6 +96,13 @@ export interface RunRecord {
     readonly primary: readonly { readonly id: string; readonly path: string; readonly derivedFrom: string | null }[];
   };
   readonly schemas: Readonly<Record<string, string>>;
+  /**
+   * Generation suite: the pinned downstream validator whose pass rate the
+   * run reports (settings and prompt fingerprints, resolved at defaults
+   * outside any variant). Null for the validation suite, where the
+   * validator is the thing under test and lives in `variants[].resolved`.
+   */
+  readonly judge: ResolvedJudge | null;
   readonly variants: readonly VariantRecord[];
   readonly guards: {
     readonly maxUsd: number | null;
@@ -118,8 +125,59 @@ export function labelStatus(files: readonly { review_status: string }[]): RunRec
   return "mixed";
 }
 
-/** Whether two runs can be compared row for row; the reason when not. */
-export function comparable(a: RunRecord, b: RunRecord): { ok: true } | { ok: false; reason: string } {
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .filter((k) => o[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** The first key whose value differs between two records, or null when equal. */
+function firstDifference<T>(a: Readonly<Record<string, T>>, b: Readonly<Record<string, T>>): string | null {
+  for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+    if (stableJson(a[k]) !== stableJson(b[k])) return k;
+  }
+  return null;
+}
+
+function settingsDifference(
+  what: string,
+  a: { readonly stages: Readonly<Record<string, ResolvedStageSettings>>; readonly promptVersions: ResolvedVariant["promptVersions"] },
+  b: { readonly stages: Readonly<Record<string, ResolvedStageSettings>>; readonly promptVersions: ResolvedVariant["promptVersions"] },
+): string | null {
+  const stage = firstDifference(a.stages, b.stages);
+  if (stage !== null) return `${what}: different settings for stage ${stage} (model, effort, max_tokens or tool choice)`;
+  const prompt = firstDifference(a.promptVersions, b.promptVersions);
+  if (prompt !== null) {
+    return (
+      `${what}: different prompt for ${prompt} (${a.promptVersions[prompt]?.fingerprint ?? "absent"} vs ${b.promptVersions[prompt]?.fingerprint ?? "absent"}); ` +
+      "a prompt wording change is a new experiment input"
+    );
+  }
+  return null;
+}
+
+/**
+ * Whether two runs can be compared row for row; the reason when not.
+ * Comparable runs share the suite, fixtures and labels, token source,
+ * replay mode, sample count, every enforced tool schema, the settings
+ * and prompt fingerprints of each variant label they both ran
+ * (baseline always), and, for the generation suite, the judge. A
+ * different git sha alone does not refuse the comparison (comparing
+ * across commits is the point), but it is returned as a caveat: module
+ * code that shapes a request (e.g. how Units are rendered into the
+ * prompt) is not covered by a prompt fingerprint.
+ */
+export function comparable(
+  a: RunRecord,
+  b: RunRecord,
+): { ok: true; caveats: readonly string[] } | { ok: false; reason: string } {
   if (a.suite !== b.suite) return { ok: false, reason: `different suites (${a.suite} vs ${b.suite})` };
   if (a.labels.fixtureSetHash !== b.labels.fixtureSetHash) {
     return { ok: false, reason: "different fixtureSetHash: labels or fixtures changed (a relabel invalidates comparison)" };
@@ -128,7 +186,32 @@ export function comparable(a: RunRecord, b: RunRecord): { ok: true } | { ok: fal
   if ((a.cacheMode === "replay") !== (b.cacheMode === "replay")) {
     return { ok: false, reason: "one run replayed local outputs and the other ran live" };
   }
-  return { ok: true };
+  if (a.samples !== b.samples) return { ok: false, reason: `different samples per case (${a.samples} vs ${b.samples})` };
+  const schema = firstDifference(a.schemas, b.schemas);
+  if (schema !== null) return { ok: false, reason: `different enforced tool schema for ${schema}` };
+  const baseA = a.variants.find((v) => v.label === "baseline");
+  const baseB = b.variants.find((v) => v.label === "baseline");
+  if (baseA === undefined || baseB === undefined) return { ok: false, reason: "a run has no baseline variant" };
+  for (const va of a.variants) {
+    const vb = b.variants.find((v) => v.label === va.label);
+    if (vb === undefined) continue;
+    const diff = settingsDifference(`variant ${va.label}`, va.resolved, vb.resolved);
+    if (diff !== null) return { ok: false, reason: diff };
+  }
+  if (a.suite === "generation") {
+    if (a.judge === null || b.judge === null) return { ok: false, reason: "a generation run did not record its judge (the pinned validator)" };
+    const diff = settingsDifference("judge", a.judge, b.judge);
+    if (diff !== null) return { ok: false, reason: `${diff}; the downstream pass rates come from different validators` };
+  }
+  const caveats: string[] = [];
+  if (a.git.sha === null || b.git.sha === null || a.git.sha !== b.git.sha || a.git.dirty === true || b.git.dirty === true) {
+    caveats.push(
+      `different or unknown git state (${a.git.sha?.slice(0, 7) ?? "unknown"}${a.git.dirty === true ? " dirty" : ""} vs ` +
+        `${b.git.sha?.slice(0, 7) ?? "unknown"}${b.git.dirty === true ? " dirty" : ""}): prompts, schemas and settings match, ` +
+        "but module code that builds a request is not fingerprinted",
+    );
+  }
+  return { ok: true, caveats };
 }
 
 // -- Formatting --------------------------------------------------------------------
@@ -197,6 +280,16 @@ export function formatHeader(r: RunRecord): string[] {
   lines.push("");
   lines.push("schemas");
   for (const [k, v] of Object.entries(r.schemas)) lines.push(`  ${k}  sha256 ${short(v)}`);
+  if (r.judge !== null) {
+    lines.push("");
+    lines.push("judge (baseline validator, pinned to production defaults; comparable only with runs that share it)");
+    const rows: string[][] = [["stage", "model", "effort", "max_tokens", "tool_choice", "prompt"]];
+    for (const [stage, s] of Object.entries(r.judge.stages)) {
+      const key = Object.keys(r.judge.promptVersions).find((k) => promptStage(k) === stage);
+      rows.push([stage, s.model, s.effort ?? "-", String(s.maxTokens), s.toolChoice, key === undefined ? "-" : `${key} ${r.judge.promptVersions[key]!.fingerprint}`]);
+    }
+    lines.push(...table(rows));
+  }
   return lines;
 }
 
@@ -300,7 +393,13 @@ export function formatMetrics(r: RunRecord): string[] {
         `  claim extraction: assertion coverage ${pct(m.coverage.assertionCoverage)} (one claim per assertion)   ` +
           `fused claims ${m.coverage.fusedClaims}   relationship coverage ${pct(m.coverage.relationshipCoverage)}`,
       );
-      if (m.coverage.hardFailedCases.length > 0) lines.push(`    hard-failed extraction (counted uncovered): ${m.coverage.hardFailedCases.join(", ")}`);
+      if (m.coverage.hardFailedCases.length > 0) {
+        lines.push(`    hard-failed extraction (not counted; see schema validity): ${m.coverage.hardFailedCases.join(", ")}`);
+        lines.push(
+          `    end to end, hard fails scored as zero: assertion coverage ${pct(m.coverage.assertionCoverageHardFailsAsZero)}   ` +
+            `relationship coverage ${pct(m.coverage.relationshipCoverageHardFailsAsZero)}`,
+        );
+      }
       if (m.coverage.stoppedCases.length > 0) lines.push(`    budget-stopped extraction (not counted): ${m.coverage.stoppedCases.join(", ")}`);
       lines.push(`  traceability: fabrication false accept ${rate(m.traceability.fabricationFalseAccept, "assertions")}`);
       lines.push(`    supported false flag ${rate(m.traceability.supportedFalseFlag, "assertions")}`);

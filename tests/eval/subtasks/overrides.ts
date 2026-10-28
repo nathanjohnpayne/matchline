@@ -64,6 +64,17 @@ export interface ResolvedVariant {
   readonly promptVersions: Readonly<Record<string, { readonly version: string; readonly fingerprint: string }>>;
 }
 
+/**
+ * The pinned downstream validator a generation run reports a pass rate
+ * from: its per-stage settings and prompt fingerprints at production
+ * defaults. Recorded once per run, outside any variant override, so two
+ * generation runs graded by different judges are never compared.
+ */
+export interface ResolvedJudge {
+  readonly stages: Readonly<Record<string, ResolvedStageSettings>>;
+  readonly promptVersions: Readonly<Record<string, { readonly version: string; readonly fingerprint: string }>>;
+}
+
 export function assertNoOverrides(): void {
   const leaked = {
     models: getModelOverrides(),
@@ -187,4 +198,19 @@ export async function withVariantOverrides<T>(
   } finally {
     restore(defaults);
   }
+}
+
+/**
+ * Resolve `judgeScope` (the validation suite's stages and prompts) with
+ * no override installed: the judge a generation run grades with. Throws
+ * if any override is installed, so a leaked override can never be
+ * recorded as the judge.
+ */
+export function resolveJudge(judgeScope: SweepScope): ResolvedJudge {
+  assertNoOverrides();
+  const stages: Record<string, ResolvedStageSettings> = {};
+  for (const s of judgeScope.stages) stages[s] = resolveStage(s);
+  const promptVersions: Record<string, { version: string; fingerprint: string }> = {};
+  for (const k of judgeScope.promptKeys) promptVersions[k] = fingerprint(k);
+  return Object.freeze({ stages, promptVersions });
 }

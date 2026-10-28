@@ -42,6 +42,7 @@ function record(p: Partial<RunRecord> = {}): RunRecord {
       primary: [{ id: "vc-01-x", path: "validation-cases/vc-01-x.json", derivedFrom: null }],
     },
     schemas: { "validation/traceability@v1": "5e3d".padEnd(64, "0") },
+    judge: null,
     variants: [variant(), variant({ label: "bad", validity: "invalid: served-model" })],
     guards: { maxUsd: 5, projected: { expectedUsd: 1, worstCaseUsd: 2, requests: 10 }, capChecks: [], offlineReplay: false, spentUsd: 0.5, budgetReached: false },
     plan: null, invocations: [], calls: [call], caveat: CAVEAT, ...p,
@@ -122,12 +123,67 @@ describe("rate", () => {
 });
 
 describe("comparable", () => {
+  const judge = { stages: resolved.stages, promptVersions: resolved.promptVersions };
+  const gen = (p: Partial<RunRecord> = {}) => record({ suite: "generation", judge, ...p });
+
   it("is false when the fixture set, token source or replay mode differ, true otherwise", () => {
     const a = record();
-    expect(comparable(a, record())).toEqual({ ok: true });
+    expect(comparable(a, record())).toEqual({ ok: true, caveats: [] });
     expect(comparable(a, record({ labels: { ...a.labels, fixtureSetHash: "sha256:other" } })).ok).toBe(false);
     expect(comparable(a, record({ tokenSource: "claude-cli" })).ok).toBe(false);
     expect(comparable(a, record({ cacheMode: "replay" })).ok).toBe(false);
-    expect(comparable(a, record({ cacheMode: "bypass" }))).toEqual({ ok: true });
+    expect(comparable(a, record({ cacheMode: "bypass" }))).toEqual({ ok: true, caveats: [] });
+  });
+
+  it("is false when the sample count or an enforced schema differs", () => {
+    const a = record();
+    expect(comparable(a, record({ samples: 3 }))).toEqual({ ok: false, reason: "different samples per case (1 vs 3)" });
+    const schemas = { "validation/traceability@v1": "9999".padEnd(64, "0") };
+    expect(comparable(a, record({ schemas }))).toEqual({ ok: false, reason: "different enforced tool schema for validation/traceability@v1" });
+    // A schema present in one run only (e.g. the default moved to a new version) also refuses.
+    expect(comparable(a, record({ schemas: { ...a.schemas, "validation/traceability@v2": "5e3d".padEnd(64, "0") } })).ok).toBe(false);
+  });
+
+  it("is false when the baseline prompt fingerprint changed (a prompt edited in place)", () => {
+    const edited = {
+      ...resolved,
+      promptVersions: { ...resolved.promptVersions, "validation/traceability": { version: "v1", fingerprint: "v1:aaaaaaaaaaaaaaaa" } },
+    };
+    const c = comparable(record(), record({ variants: [variant({ resolved: edited })] }));
+    expect(c.ok).toBe(false);
+    if (!c.ok) expect(c.reason).toMatch(/^variant baseline: different prompt for validation\/traceability \(v1:0123456789abcdef vs v1:aaaaaaaaaaaaaaaa\)/);
+  });
+
+  it("is false when the baseline stage settings changed, or a run has no baseline", () => {
+    const sonnet55 = { ...resolved, stages: { ...resolved.stages, traceability: { ...resolved.stages.traceability, model: "claude-sonnet-5-5" } } };
+    const c = comparable(record(), record({ variants: [variant({ resolved: sonnet55 })] }));
+    expect(c).toEqual({ ok: false, reason: "variant baseline: different settings for stage traceability (model, effort, max_tokens or tool choice)" });
+    expect(comparable(record(), record({ variants: [variant({ label: "other" })] }))).toEqual({ ok: false, reason: "a run has no baseline variant" });
+  });
+
+  it("is false when the generation suite's judge differs or is missing", () => {
+    expect(comparable(gen(), gen())).toEqual({ ok: true, caveats: [] });
+    const judged = { ...judge, promptVersions: { ...judge.promptVersions, "validation/traceability": { version: "v2", fingerprint: "v2:bbbbbbbbbbbbbbbb" } } };
+    const c = comparable(gen(), gen({ judge: judged }));
+    expect(c.ok).toBe(false);
+    if (!c.ok) {
+      expect(c.reason).toMatch(/^judge: different prompt for validation\/traceability/);
+      expect(c.reason).toContain("different validators");
+    }
+    const effort = { ...judge, stages: { ...judge.stages, traceability: { ...judge.stages.traceability, effort: "low" as const } } };
+    expect(comparable(gen(), gen({ judge: effort })).ok).toBe(false);
+    expect(comparable(gen(), gen({ judge: null }))).toEqual({ ok: false, reason: "a generation run did not record its judge (the pinned validator)" });
+  });
+
+  it("allows a different git sha but returns it as a caveat", () => {
+    const c = comparable(record(), record({ git: { sha: "abcdef01234", dirty: false } }));
+    expect(c.ok).toBe(true);
+    if (c.ok) expect(c.caveats[0]).toMatch(/^different or unknown git state \(05272fc vs abcdef0\)/);
+  });
+
+  it("prints the judge in the generation header", () => {
+    const out = formatSubtaskReport(gen());
+    expect(out).toContain("judge (baseline validator, pinned to production defaults");
+    expect(out).toMatch(/traceability\s+claude-sonnet-4-6\s+-\s+1024\s+forced\s+validation\/traceability v1:0123456789abcdef/);
   });
 });

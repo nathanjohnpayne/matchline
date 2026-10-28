@@ -99,6 +99,27 @@ describe("eval:subtasks CLI", () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
+  it("records the generation suite's judge at defaults, untouched by a variant's generation override", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "subtasks-"));
+    try {
+      const path = join(dir, "report.json");
+      const { d } = deps({}, { writeFile: (p, data) => writeFileSync(p, data) });
+      const argv = ["--suite", "generation", "--dry-run", "--report-json", path, "--variant", "gen-sonnet:model.generation=claude-sonnet-4-6"];
+      expect(await main(argv, d)).toBe(0);
+      const rec = JSON.parse(readFileSync(path, "utf8"));
+      expect(Object.keys(rec.judge.stages)).toEqual(["claim_extraction", "traceability", "specificity"]);
+      for (const s of Object.values(rec.judge.stages) as { model: string }[]) expect(s.model).toBe(modelFor("traceability").model);
+      expect(Object.keys(rec.judge.promptVersions)).toEqual(["validation/claimExtraction", "validation/traceability", "validation/specificity"]);
+      expect(rec.judge.promptVersions["validation/traceability"].fingerprint).toMatch(/^v\d+:[0-9a-f]{16}$/);
+      // Validation runs have no separate judge: the validator is under test in variants[].resolved.
+      const vpath = join(dir, "v.json");
+      expect(await main(["--suite", "validation", "--dry-run", "--report-json", vpath], d)).toBe(0);
+      expect(JSON.parse(readFileSync(vpath, "utf8")).judge).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("exits 2 with no key and no --dry-run or --replay", async () => {
     const { d, err, factory } = deps();
     expect(await main(["--suite", "validation"], d)).toBe(2);

@@ -81,12 +81,41 @@ describe("normalize and coverage", () => {
     expect(relationshipCovered(r, ["The precoder filter cut mismatch 38%"])).toBe(true);
   });
 
-  it("counts a hard-failed extraction as all uncovered and lists it", () => {
+  it("leaves a hard-failed extraction out of the headline coverage and lists it", () => {
     const c = goldCase([A("alpha", true, true), A("beta", true, true)]);
     const m = coverageMetrics([c], [result({ claims: err })]);
-    expect(m.assertionCoverage).toEqual({ num: 0, den: 2, value: 0 });
+    expect(m.assertionCoverage).toEqual({ num: 0, den: 0, value: null });
     expect(m.hardFailedCases).toEqual(["vc-01-x"]);
     expect(m.relationshipCoverage).toBeNull();
+    expect(m.perCase).toEqual([]);
+    // The end-to-end figure scores the failure as zero, on its own field.
+    expect(m.assertionCoverageHardFailsAsZero).toEqual({ num: 0, den: 2, value: 0 });
+  });
+
+  it("keeps coverage of perfect extractions at 100% when other cases fail the schema", () => {
+    // 14 cases, 3 of which hard-fail: the headline must not read as 78%.
+    const cases = Array.from({ length: 14 }, (_, i) => ({
+      ...goldCase([A(`alpha${i}`, true, true), A(`beta${i}`, true, true)]),
+      id: `vc-${i}`,
+      gold: {
+        assertions: [A(`alpha${i}`, true, true), A(`beta${i}`, true, true)],
+        relationships: [{ co_terms: [[`alpha${i}`], [`beta${i}`]] }],
+        expected_asset_status: "passed",
+      },
+    })) as unknown as ValidationCase[];
+    const failing = new Set(["vc-0", "vc-1", "vc-2"]);
+    const results = cases.map((c, i) =>
+      failing.has(c.id)
+        ? result({ caseId: c.id, claims: err })
+        : result({ caseId: c.id, claims: ok([{ id: "x", bullet_id: "b", text: `alpha${i} with beta${i}` }, { id: "y", bullet_id: "b", text: `beta${i}` }]) }),
+    );
+    const m = coverageMetrics(cases, results);
+    expect(m.assertionCoverage).toEqual({ num: 22, den: 22, value: 1 });
+    expect(m.relationshipCoverage).toEqual({ num: 11, den: 11, value: 1 });
+    expect(m.hardFailedCases).toEqual(["vc-0", "vc-1", "vc-2"]);
+    expect(m.perCase.map((p) => p.caseId)).not.toContain("vc-0");
+    expect(m.assertionCoverageHardFailsAsZero).toEqual({ num: 22, den: 28, value: 22 / 28 });
+    expect(m.relationshipCoverageHardFailsAsZero).toEqual({ num: 11, den: 14, value: 11 / 14 });
   });
 
   it("leaves a budget-stopped extraction out of the denominator", () => {

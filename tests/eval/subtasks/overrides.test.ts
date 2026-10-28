@@ -16,7 +16,7 @@ import { extractClaims } from "../../../functions/src/validation/claimExtraction
 import { checkSpecificity } from "../../../functions/src/validation/specificity.ts";
 import { checkTraceability } from "../../../functions/src/validation/traceability.ts";
 
-import { SWEEP_SCOPES } from "../sweepScope.ts";
+import { defaultPromptVersion, SWEEP_SCOPES } from "../sweepScope.ts";
 
 import { loadGenerationSnapshots, loadValidationCases, toGenerationInputs } from "./fixtures.ts";
 import {
@@ -114,7 +114,8 @@ describe("withVariantOverrides", () => {
       effort: "high",
       outputBudgetFactor: 2,
     });
-    expect(resolved.promptVersions["validation/traceability"]!.fingerprint).toMatch(/^v1:[0-9a-f]{16}$/);
+    const wired = defaultPromptVersion("validation/traceability");
+    expect(resolved.promptVersions["validation/traceability"]!.fingerprint).toMatch(new RegExp(`^${wired}:[0-9a-f]{16}$`));
   });
 });
 

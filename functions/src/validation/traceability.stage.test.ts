@@ -151,15 +151,24 @@ describe("traceability: separately configurable model stage (#489)", () => {
     await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
     const prompt = loadPromptText("validation", "traceability");
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]![0]).toStrictEqual({
+    const body = create.mock.calls[0]![0] as { messages: { role: string; content: string }[] };
+    // Every field the stage split could touch is pinned exactly. The user message's
+    // body belongs to the prompt and its Unit renderer, not to the stage config, so it is
+    // pinned at both ends (few-shot, claim; candidate Units) and may carry other input
+    // lines between them (e.g. a reference date) without this test changing.
+    expect({ ...body, messages: undefined }).toStrictEqual({
       model: "claude-sonnet-4-6",
       max_tokens: 1024,
       system: prompt.system,
       tools: expectedTools(),
       tool_choice: { type: "tool", name: "record_traceability" },
-      messages: [{ role: "user", content: `${prompt.userFewShot}\n\nClaim: ${quote(CLAIM.text)}\n\nCandidate Experience Units:\n\n${formatUnit(makeUnit())}` }],
+      messages: undefined,
       stream: false,
     });
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]!.role).toBe("user");
+    expect(body.messages[0]!.content.startsWith(`${prompt.userFewShot}\n\nClaim: ${quote(CLAIM.text)}\n\n`)).toBe(true);
+    expect(body.messages[0]!.content.endsWith(`\n\nCandidate Experience Units:\n\n${formatUnit(makeUnit())}`)).toBe(true);
     expect(create.mock.calls[0]![1]).toStrictEqual({ signal: undefined });
   });
 

@@ -66,7 +66,7 @@ import {
   type LoadedSnapshot,
   type LoadedSuiteFixtures,
 } from "./fixtures.ts";
-import { CLASSIFIERS, missingClassifiers, type RunCtx, type SubtaskSuite } from "./instrument.ts";
+import { loadClassifier, missingClassifiers, type RunCtx, type SubtaskSuite } from "./instrument.ts";
 import {
   assetMetrics,
   costMetrics,
@@ -80,7 +80,7 @@ import {
   variantValidity,
   wallTime,
 } from "./metrics.ts";
-import { snapshotDefaults, withVariantOverrides, type ResolvedVariant } from "./overrides.ts";
+import { resolveJudge, snapshotDefaults, withVariantOverrides, type ResolvedJudge, type ResolvedVariant } from "./overrides.ts";
 import { planGeneration, planValidation, project, type PlannedRequest } from "./plan.ts";
 import { ReplayStore, type ReplayMode } from "./replay.ts";
 import {
@@ -224,12 +224,12 @@ const BASELINE: SweepVariant = Object.freeze({ label: "baseline", models: {}, pr
  * `promptKey@version`, at the version the module imports (the
  * `PROMPT_CONFIG` default). The generation suite also runs validation.
  */
-function schemaHashes(suite: SubtaskSuite): Record<string, string> {
+async function schemaHashes(suite: SubtaskSuite): Promise<Record<string, string>> {
   const keys = suite === "validation" ? SWEEP_SCOPES.validation.promptKeys : [...SWEEP_SCOPES.generation.promptKeys, ...SWEEP_SCOPES.validation.promptKeys];
   const out: Record<string, string> = {};
   for (const k of keys) {
     const key = `${k}@${defaultPromptVersion(k)}`;
-    const schema = CLASSIFIERS[key];
+    const schema = (await loadClassifier(key)) ?? undefined;
     out[key] = schema === undefined ? "missing" : sha256Hex(canonicalJson(zodToToolSchema(schema as Parameters<typeof zodToToolSchema>[0])));
   }
   return out;
@@ -307,10 +307,10 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     assertModelsPriced(args.variants);
     assertPromptSchemasCompatible(args.variants, args.basePrompts, undefined, scope);
     assertVariantsCallable(args.variants, scope);
-    const unclassifiable = missingClassifiers(args.suite === "validation" ? scope.promptKeys : [...scope.promptKeys, ...SWEEP_SCOPES.validation.promptKeys]);
+    const unclassifiable = await missingClassifiers(args.suite === "validation" ? scope.promptKeys : [...scope.promptKeys, ...SWEEP_SCOPES.validation.promptKeys]);
     if (unclassifiable.length > 0) {
       throw new Error(
-        `no outcome classifier for ${unclassifiable.join(", ")} (the version the module imports); add it to CLASSIFIERS in instrument.ts`,
+        `no outcome classifier for ${unclassifiable.join(", ")} (the version the module imports): no functions/src/prompts/<stage>/<name>.<version>.schema.ts exporting exactly one *ResponseV<N>Schema`,
       );
     }
     const opts = { ...(deps.fixturesRoot !== undefined && { root: deps.fixturesRoot }), ...(args.caseIds !== undefined && { ids: args.caseIds }) };
@@ -326,6 +326,9 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   // 2. Resolve every variant under its overrides (proves restore; refuses unsupported effort) and plan it.
   const variants = [BASELINE, ...args.variants];
   const defaults: Readonly<Record<Stage, ModelConfig>> = snapshotDefaults();
+  // The generation suite reports the pinned validator's pass rate: record that judge
+  // (settings and prompt fingerprints at defaults) outside any variant override.
+  const judge: ResolvedJudge | null = args.suite === "generation" ? resolveJudge(SWEEP_SCOPES.validation) : null;
   const resolvedByLabel = new Map<string, ResolvedVariant>();
   const planRows: PlannedRequest[] = [];
   try {
@@ -366,6 +369,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   const runAbort = new AbortController();
   const ledger = new BudgetLedger({ maxUsd: metered ? args.maxUsd : null, abort: runAbort });
 
+  const schemas = await schemaHashes(args.suite);
   const record = (variantRecords: VariantRecord[], dryRun: boolean, calls: RunCtx["calls"], invocations: RunCtx["invocations"]): RunRecord => ({
     schema_version: 1,
     runId,
@@ -379,7 +383,8 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     cacheMode: args.cacheMode,
     samples: args.samples,
     labels: { status: labelStatus(primaryFiles), fixtureSetHash: fixtures.fixtureSetHash, files, primary },
-    schemas: schemaHashes(args.suite),
+    schemas,
+    judge,
     variants: variantRecords,
     guards: {
       maxUsd: args.maxUsd,

@@ -136,11 +136,24 @@ export function relationshipCovered(r: Pick<GoldRelationship, "co_terms">, claim
 // -- Claim extraction ------------------------------------------------------------
 
 export interface CoverageMetrics {
-  /** One-to-one: each claim credited to at most one assertion. */
+  /**
+   * One-to-one: each claim credited to at most one assertion. Over
+   * successful extractions only: a hard-failed extraction is a schema
+   * (or transport) failure, counted under schema validity and listed in
+   * `hardFailedCases`, never as poor decomposition.
+   */
   readonly assertionCoverage: Ratio;
   readonly relationshipCoverage: Ratio | null;
+  /**
+   * End-to-end figures (secondary): the same ratios with each hard-failed
+   * extraction scored as covering nothing. Equal to the headline figures
+   * when no extraction hard-failed.
+   */
+  readonly assertionCoverageHardFailsAsZero: Ratio;
+  readonly relationshipCoverageHardFailsAsZero: Ratio | null;
   /** Claims that cover the terms of two or more assertions (summed over cases and samples). */
   readonly fusedClaims: number;
+  /** Extractions that hard-failed: left out of the headline denominators. */
   readonly hardFailedCases: readonly string[];
   /** Extractions the budget stopped: left out of the denominators. */
   readonly stoppedCases: readonly string[];
@@ -156,6 +169,8 @@ export function coverageMetrics(
   let den = 0;
   let rNum = 0;
   let rDen = 0;
+  let failedDen = 0;
+  let failedRDen = 0;
   let fusedTotal = 0;
   const hardFailed: string[] = [];
   const stopped: string[] = [];
@@ -167,8 +182,13 @@ export function coverageMetrics(
       stopped.push(r.caseId);
       continue;
     }
+    if (r.claims?.ok === false) {
+      hardFailed.push(r.caseId);
+      failedDen += c.gold.assertions.length;
+      failedRDen += c.gold.relationships.length;
+      continue;
+    }
     const claims = r.claims?.ok === true ? r.claims.value.map((cl) => cl.text) : [];
-    if (r.claims?.ok === false) hardFailed.push(r.caseId);
     const { covered, fused } = matchCoverage(c.gold.assertions, claims);
     const relCovered = c.gold.relationships.filter((rel) => relationshipCovered(rel, claims)).length;
     num += covered;
@@ -181,6 +201,8 @@ export function coverageMetrics(
   return {
     assertionCoverage: ratio(num, den),
     relationshipCoverage: rDen > 0 ? ratio(rNum, rDen) : null,
+    assertionCoverageHardFailsAsZero: ratio(num, den + failedDen),
+    relationshipCoverageHardFailsAsZero: rDen + failedRDen > 0 ? ratio(rNum, rDen + failedRDen) : null,
     fusedClaims: fusedTotal,
     hardFailedCases: hardFailed,
     stoppedCases: stopped,

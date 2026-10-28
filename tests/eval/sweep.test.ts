@@ -29,7 +29,7 @@ import {
 } from "../../functions/src/prompts/loader.ts";
 
 import type { RunForFixtureResult } from "./runForFixture.ts";
-import { SWEEP_SCOPES } from "./sweepScope.ts";
+import { defaultPromptVersion, SWEEP_SCOPES } from "./sweepScope.ts";
 import {
   assertModelsPriced,
   assertPromptSchemasCompatible,
@@ -1108,10 +1108,13 @@ describe("suite scopes for the subtask suites (#488)", () => {
   it("checks prompt schemas against the scope's wired versions", () => {
     const root = mkdtempSync(join(tmpdir(), "sweep-scope-schemas-"));
     try {
+      // Derived from the wired default, so the test still bites after the default moves.
+      const wired = defaultPromptVersion("validation/traceability");
+      const other = `v${Number(wired.slice(1)) + 1}`;
       mkdirSync(join(root, "validation"), { recursive: true });
-      writeFileSync(join(root, "validation", "traceability.v1.schema.ts"), "export const A = 1;\n");
-      writeFileSync(join(root, "validation", "traceability.v2.schema.ts"), "export const A = 2;\n");
-      const variants = [{ label: "a", promptVersions: { "validation/traceability": "v2" } }];
+      writeFileSync(join(root, "validation", `traceability.${wired}.schema.ts`), "export const A = 1;\n");
+      writeFileSync(join(root, "validation", `traceability.${other}.schema.ts`), "export const A = 2;\n");
+      const variants = [{ label: "a", promptVersions: { "validation/traceability": other } }];
       expect(() => assertPromptSchemasCompatible(variants, {}, root, V)).toThrow(/schema the pipeline does not enforce/);
       // The corpus scope does not wire this key, so it has nothing to compare.
       expect(() => assertPromptSchemasCompatible(variants, {}, root)).not.toThrow();

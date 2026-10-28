@@ -17,14 +17,13 @@
  * proof that a module records the `max_tokens` and effort it sent.
  */
 
+import { existsSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 
 import type { Stage } from "../../../functions/src/llm/config.ts";
 import { anthropicUsageFields, priceUsage, type UsageRecord } from "../../../functions/src/llm/cost.ts";
-import { ResumeGenerationResponseV1Schema } from "../../../functions/src/prompts/generation/resume.v1.schema.ts";
-import { ClaimExtractionResponseV1Schema } from "../../../functions/src/prompts/validation/claimExtraction.v1.schema.ts";
-import { SpecificityResponseV1Schema } from "../../../functions/src/prompts/validation/specificity.v1.schema.ts";
-import { TraceabilityResponseV1Schema } from "../../../functions/src/prompts/validation/traceability.v1.schema.ts";
 import { CallPoolAborted } from "../../../functions/src/validation/callPool.ts";
 
 import { describeError } from "../runForFixture.ts";
@@ -165,25 +164,51 @@ const STAGE_PROMPT: Partial<Record<Stage, string>> = {
   generation: "generation/resume",
 };
 
-interface Classifier {
+export interface Classifier {
   readonly safeParse: (input: unknown) => { success: boolean; data?: unknown };
 }
 
+const PROMPTS_ROOT = new URL("../../../functions/src/prompts/", import.meta.url);
+
+/** Where the schema for `promptKey@vN` lives, by the loader's convention. */
+export function classifierSchemaPath(classifierKey: string): string | null {
+  const m = /^([a-z]+)\/([A-Za-z]+)@(v[1-9][0-9]*)$/.exec(classifierKey);
+  if (m === null) return null;
+  return fileURLToPath(new URL(`${m[1]}/${m[2]}.${m[3]}.schema.ts`, PROMPTS_ROOT));
+}
+
+const classifierCache = new Map<string, Promise<Classifier | null>>();
+
 /**
- * Tool-input schemas by `promptKey@version`. The key's version is the
- * one whose schema the module imports (the `PROMPT_CONFIG` default; see
- * `defaultPromptVersion`), never a prompt override: an override only
- * runs once `assertPromptSchemasCompatible` has shown that it enforces
- * the same schema. A missing entry classifies every attempt as
- * `unclassified`, which makes the variant invalid; `sweepScope.test.ts`
- * fails first when a default moves to a version with no entry here.
+ * The tool-input schema for `promptKey@vN`: the module's single
+ * `*ResponseV<N>Schema` export, imported from
+ * `functions/src/prompts/<stage>/<name>.vN.schema.ts` (the convention
+ * `loadPromptWithSchema` uses). Loaded once and cached; null when the
+ * file is missing or does not export exactly one such schema. Keyed on
+ * the version whose schema the module imports (the `PROMPT_CONFIG`
+ * default; see `defaultPromptVersion`), never a prompt override: an
+ * override only runs once `assertPromptSchemasCompatible` has shown
+ * that it enforces the same schema. Nothing is listed by hand, so a
+ * default that moves to a new version with a schema file needs no edit
+ * here.
  */
-export const CLASSIFIERS: Readonly<Record<string, Classifier>> = {
-  "validation/claimExtraction@v1": ClaimExtractionResponseV1Schema,
-  "validation/traceability@v1": TraceabilityResponseV1Schema,
-  "validation/specificity@v1": SpecificityResponseV1Schema,
-  "generation/resume@v1": ResumeGenerationResponseV1Schema,
-};
+export function loadClassifier(classifierKey: string): Promise<Classifier | null> {
+  const cached = classifierCache.get(classifierKey);
+  if (cached !== undefined) return cached;
+  const loading = (async (): Promise<Classifier | null> => {
+    const path = classifierSchemaPath(classifierKey);
+    if (path === null || !existsSync(path)) return null;
+    const version = classifierKey.slice(classifierKey.lastIndexOf("@v") + 2);
+    const mod = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    const exportName = new RegExp(`ResponseV${version}Schema$`);
+    const found = Object.entries(mod).filter(
+      ([name, v]) => exportName.test(name) && typeof (v as Partial<Classifier> | null)?.safeParse === "function",
+    );
+    return found.length === 1 ? (found[0]![1] as Classifier) : null;
+  })();
+  classifierCache.set(classifierKey, loading);
+  return loading;
+}
 
 /** `promptKey@version` of the schema the stage's module enforces. */
 export function classifierKeyFor(stage: Stage): string | null {
@@ -192,9 +217,15 @@ export function classifierKeyFor(stage: Stage): string | null {
   return `${key}@${defaultPromptVersion(key)}`;
 }
 
-/** Prompt keys whose enforced schema has no classifier (refused before a run). */
-export function missingClassifiers(promptKeys: readonly string[]): string[] {
-  return promptKeys.map((k) => `${k}@${defaultPromptVersion(k)}`).filter((k) => CLASSIFIERS[k] === undefined);
+/**
+ * `promptKey@version` keys whose enforced schema has no loadable
+ * classifier (refused before a run). Also warms the cache, so the run
+ * classifies every attempt from schemas loaded at pre-flight.
+ */
+export async function missingClassifiers(promptKeys: readonly string[]): Promise<string[]> {
+  const keys = promptKeys.map((k) => `${k}@${defaultPromptVersion(k)}`);
+  const loaded = await Promise.all(keys.map((k) => loadClassifier(k)));
+  return keys.filter((_, i) => loaded[i] === null);
 }
 
 function citedIds(data: unknown): string[] {
@@ -205,14 +236,13 @@ function citedIds(data: unknown): string[] {
 
 export function classifyMessage(
   message: Anthropic.Messages.Message,
-  classifierKey: string | null,
+  classifier: Classifier | null,
   eligibleUnitIds?: ReadonlySet<string>,
 ): CallOutcome {
   if (message.stop_reason === "refusal") return "refusal";
   const toolUse = message.content.find((b) => b.type === "tool_use");
   if (toolUse === undefined || toolUse.type !== "tool_use") return "no_tool_use";
-  const classifier = classifierKey === null ? undefined : CLASSIFIERS[classifierKey];
-  if (classifier === undefined) return "unclassified";
+  if (classifier === null) return "unclassified";
   const parsed = classifier.safeParse(toolUse.input);
   if (!parsed.success) return "schema_error";
   if (eligibleUnitIds !== undefined && citedIds(parsed.data).some((id) => !eligibleUnitIds.has(id))) {
@@ -372,6 +402,8 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     }
 
     const ended = ctx.clock();
+    const stageKey = classifierKeyFor(meta.stage);
+    const classifier = stageKey === null ? null : await loadClassifier(stageKey);
     const cost = modeledCost(body.model, message);
     if (replayedFrom === null) {
       ctx.ledger.settle(reservation!, cost ?? 0);
@@ -387,7 +419,7 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
       servedModelStatus: servedModelStatus(ctx.tokenSource, body.model, message.model),
       startedAtMs: started,
       endedAtMs: ended,
-      outcome: classifyMessage(message, classifierKeyFor(meta.stage), meta.eligibleUnitIds),
+      outcome: classifyMessage(message, classifier, meta.eligibleUnitIds),
       usage: usageOf(message),
       replayed: replayedFrom !== null,
       replayedFromRunId: replayedFrom,
