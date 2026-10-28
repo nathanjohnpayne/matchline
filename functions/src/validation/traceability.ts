@@ -52,7 +52,7 @@ import {
   type ValidationAttemptFailure,
 } from "./errors.js";
 import type { Claim } from "./claimExtraction.js";
-import { formatUnitBlock, quote } from "./unitPromptText.js";
+import { citedEntityId, formatUnitBlock, quote } from "./unitPromptText.js";
 
 /** Output-token budget per attempt; also recorded on each usage record. */
 const MAX_OUTPUT_TOKENS = 1024;
@@ -250,9 +250,13 @@ function finalizeResult(
   raw: TraceabilityResponseV2,
   candidateUnits: readonly ExperienceUnit[],
 ): TraceabilityResult {
-  if (raw.supports && raw.supporting_unit_id !== undefined) {
+  // A model may echo the quotes `renderEntityId` puts around an unsafe
+  // id; map that back to the raw id before the membership check.
+  const supportingUnitId =
+    raw.supporting_unit_id === undefined ? undefined : citedEntityId(raw.supporting_unit_id);
+  if (raw.supports && supportingUnitId !== undefined) {
     const candidateIds = new Set(candidateUnits.map((u) => u.id));
-    if (!candidateIds.has(raw.supporting_unit_id)) {
+    if (!candidateIds.has(supportingUnitId)) {
       return {
         supports: false,
         rationale:
@@ -264,7 +268,7 @@ function finalizeResult(
   if (raw.supports) {
     return {
       supports: true,
-      supporting_unit_id: raw.supporting_unit_id,
+      supporting_unit_id: supportingUnitId,
       rationale: raw.rationale,
     };
   }

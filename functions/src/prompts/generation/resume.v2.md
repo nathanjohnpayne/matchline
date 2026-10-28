@@ -4,7 +4,7 @@ Second version of the resume generation prompt (#485). Everything above `## Syst
 
 Changes from v1:
 - The target role is framed as non-evidence. v1's example gave the candidate a "Product manager" title and "connected-TV platforms" wording taken from the target role.
-- Cite every Unit an item relies on; tags keep their literal wording; dates only as a Unit's own dates (the 2026-10-28 evidence decision on #485).
+- Cite every Unit an item relies on; tags keep their literal wording; a date or duration only as a cited Unit states it, in its text or metrics or as its own `date_range`, never computed from a `date_range` (the 2026-10-28 evidence decision on #485, matching traceability.v2 rule 3).
 - Omit unsupported content and never emit an empty item. v1 rule 3 told the model to leave a bullet empty, which the schema rejects.
 - Summary is 1–3 sentences, consistent with the example. v1 said 3–5 while its example had 2.
 - The input is the shared Unit evidence text (`functions/src/validation/unitPromptText.ts`), plus Requirement ids and the approved Unit-to-Requirement links, in tagged sections (`functions/src/generation/resumeInput.ts`).
@@ -38,7 +38,7 @@ Rules:
 
 6. **Keep numbers exact.** Keep every metric's magnitude and direction ("30% memory reduction" stays 30% and a reduction), or leave it out. Never replace a number with a word like "significant".
 
-7. **Dates only as written.** State a date only as a cited Unit's own `date_range`, by year or by month. Do not compute durations or totals such as "6 years" or "10+ years of experience", and do not combine dates from different Units. A `date_range` with no `end` supports neither an end date nor "present".
+7. **Dates only as written.** A date or duration must be stated by a cited Unit: in its `raw_text`, `normalized_summary` or `metrics`, or as that Unit's own `date_range`, by year or by month. Never compute a duration or total such as "6 years" or "10+ years of experience" from a `date_range`, and do not combine dates from different Units. A `date_range` with no `end` supports neither an end date nor "present".
 
 8. **Tailor by choosing and ordering Units, not by changing their wording.** Use `<approved_links>` to decide which Units to feature and which to put first. `bullets` is one flat list; do not add employer or section headings.
 

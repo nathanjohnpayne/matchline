@@ -719,6 +719,33 @@ describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
     expect(realUnitsText(args.messages[0]!.content)).toBe(formatUnitBlock(units));
   });
 
+  it("accepts a quoted unsafe id echoed with its quotes, and returns the raw id (#485 review)", async () => {
+    const odd = makeUnit({ id: "unit a" });
+    const { client, create } = mockClient([
+      mockMessage({ supports: true, supporting_unit_id: '"unit a"', rationale: "Unit states it." }),
+    ]);
+    const result = await checkTraceability(CLAIM, [odd], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+    });
+    const args = create.mock.calls[0]![0] as { messages: { content: string }[] };
+    expect(realUnitsText(args.messages[0]!.content)).toContain('[Unit "unit a"]');
+    expect(result.supports).toBe(true);
+    expect(result.supporting_unit_id).toBe("unit a");
+  });
+
+  it("still downgrades a quoted id that is not a candidate", async () => {
+    const { client } = mockClient([
+      mockMessage({ supports: true, supporting_unit_id: '"unit b"', rationale: "Unit states it." }),
+    ]);
+    const result = await checkTraceability(CLAIM, [makeUnit({ id: "unit a" })], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+    });
+    expect(result.supports).toBe(false);
+    expect(result.supporting_unit_id).toBeUndefined();
+  });
+
   it("records the v2 prompt version", async () => {
     const { record } = await capture([TAGGED]);
     expect(record).toHaveBeenCalledWith(

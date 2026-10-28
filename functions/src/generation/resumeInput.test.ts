@@ -8,6 +8,7 @@ import type {
 import { unitEvidenceVersion } from "../validation/unitEvidenceVersion.ts";
 import { formatUnitBlock } from "../validation/unitPromptText.ts";
 
+import { RESUME_EXAMPLE_INPUT, resumeExampleInputBlock } from "./__fixtures__/resumeExample.ts";
 import {
   generationSnapshotOf,
   renderResumeInput,
@@ -18,9 +19,11 @@ import {
 
 /**
  * The generation prompt's real input (#485): pure rendering, pinned
- * byte for byte. The golden below is the `<input>` block of
- * `../prompts/generation/resume.v2.md`'s example, which
- * `../prompts/promptExamples.test.ts` pins to the same function.
+ * byte for byte. The golden is the `<input>` block of
+ * `../prompts/generation/resume.v2.md`'s example, read from the prompt
+ * file, and the fixture is the one in `./__fixtures__/resumeExample.ts`
+ * that `../prompts/promptExamples.test.ts` also uses, so there is one
+ * copy of each (#485 review).
  */
 
 function unit(id: string, fields: Partial<ExperienceUnit> = {}): ExperienceUnit {
@@ -83,84 +86,9 @@ function match(unitId: string, requirementId: string, id = `m-${unitId}-${requir
   };
 }
 
-const EXAMPLE_FIXTURE: ResumeInput = {
-  units: [
-    unit("ex-unit-1", {
-      raw_text:
-        "Led the 64-bit migration of the Disney+ playback stack on PS4, PS5 and Xbox; cut memory footprint 30% and shipped to 5M daily active users.",
-      normalized_summary:
-        "Led the 64-bit Disney+ playback migration on PlayStation and Xbox, cutting memory footprint 30% at 5M daily active users.",
-      metrics: [
-        { claim: "Cut memory footprint 30%", value: 30, unit: "%", direction: "down", confidence: "high" },
-        { claim: "Shipped to 5M daily active users", value: 5000000, unit: "users", direction: "up", confidence: "high" },
-      ],
-      seniority_signals: ["led"],
-      skills: ["memory optimization", "cross-platform playback"],
-      domains: ["streaming video"],
-      date_range: { start: "2019-03-01", end: "2021-06-30" },
-    }),
-    unit("ex-unit-2", {
-      raw_text: "Owned the device certification pipeline for smart TVs from Samsung and LG.",
-      normalized_summary: "Owned smart-TV device certification for Samsung and LG.",
-      scope_signals: ["Samsung and LG smart TVs"],
-      skills: ["device certification"],
-      domains: ["streaming video"],
-      date_range: { start: "2021-07-01" },
-    }),
-  ],
-  roleTitle: "Senior Product Manager, Video Infrastructure",
-  requirements: [
-    requirement("ex-req-1", "Streaming video domain experience", true),
-    requirement("ex-req-2", "Connected-TV platform experience", true),
-    requirement("ex-req-3", "Has managed a team of 10 or more engineers", false),
-  ],
-  links: [
-    ["ex-unit-1", "ex-req-1"],
-    ["ex-unit-2", "ex-req-1"],
-    ["ex-unit-2", "ex-req-2"],
-  ],
-};
-
-const EXAMPLE_GOLDEN = [
-  "<input>",
-  "<candidate_evidence>",
-  "[Unit ex-unit-1]",
-  'raw_text: "Led the 64-bit migration of the Disney+ playback stack on PS4, PS5 and Xbox; cut memory footprint 30% and shipped to 5M daily active users."',
-  'normalized_summary: "Led the 64-bit Disney+ playback migration on PlayStation and Xbox, cutting memory footprint 30% at 5M daily active users."',
-  "metrics: [",
-  '  { claim: "Cut memory footprint 30%", value: 30, unit: "%", direction: "down" },',
-  '  { claim: "Shipped to 5M daily active users", value: 5000000, unit: "users", direction: "up" }',
-  "]",
-  'seniority_signals: ["led"]',
-  'skills: ["memory optimization", "cross-platform playback"]',
-  'domains: ["streaming video"]',
-  'date_range: { start: "2019-03-01", end: "2021-06-30" }',
-  "",
-  "[Unit ex-unit-2]",
-  'raw_text: "Owned the device certification pipeline for smart TVs from Samsung and LG."',
-  'normalized_summary: "Owned smart-TV device certification for Samsung and LG."',
-  "metrics: [",
-  "  (no metrics)",
-  "]",
-  'scope_signals: ["Samsung and LG smart TVs"]',
-  'skills: ["device certification"]',
-  'domains: ["streaming video"]',
-  'date_range: { start: "2021-07-01" }',
-  "</candidate_evidence>",
-  "<target_role>",
-  'title: "Senior Product Manager, Video Infrastructure"',
-  "requirements:",
-  '[Requirement ex-req-1] [MUST-HAVE] "Streaming video domain experience"',
-  '[Requirement ex-req-2] [MUST-HAVE] "Connected-TV platform experience"',
-  '[Requirement ex-req-3] [nice-to-have] "Has managed a team of 10 or more engineers"',
-  "</target_role>",
-  "<approved_links>",
-  "[Unit ex-unit-1] -> [Requirement ex-req-1]",
-  "[Unit ex-unit-2] -> [Requirement ex-req-1]",
-  "[Unit ex-unit-2] -> [Requirement ex-req-2]",
-  "</approved_links>",
-  "</input>",
-].join("\n");
+/** The resume.v2 example's input (shared fixture) and its golden, read from the prompt file. */
+const EXAMPLE_FIXTURE: ResumeInput = RESUME_EXAMPLE_INPUT;
+const EXAMPLE_GOLDEN = resumeExampleInputBlock();
 
 /** Text strictly between the `<tag>` line and the `</tag>` line. */
 function section(text: string, tag: string): string {

@@ -76,6 +76,7 @@ import {
   type GenerationSnapshot,
   type ResumeInput,
 } from "./resumeInput.js";
+import { citedEntityId } from "../validation/unitPromptText.js";
 
 export interface RunGenerationContext {
   readonly ownerUid: string;
@@ -139,7 +140,11 @@ const TOOL_NAME = "record_resume";
  * attempt, keyed by what went wrong (#485). The previous list was keyed
  * by attempt index, so attempt 1 always blamed "schema validation",
  * even after a fabricated id or a transport failure. A transport
- * failure says nothing about the response, so it adds nothing.
+ * failure says nothing about the response, so the reminder comes from
+ * the latest failure that produced a response (`lastResponseFailure`):
+ * after schema_error then transport_error, attempt 3 still gets the
+ * schema reminder, because the last response the model actually sent
+ * was schema-invalid.
  */
 const RETRY_REMINDER: Readonly<Record<GenerationAttemptFailure["kind"], string>> = {
   transport_error: "",
@@ -150,6 +155,21 @@ const RETRY_REMINDER: Readonly<Record<GenerationAttemptFailure["kind"], string>>
   value_error:
     "\n\nYour previous response cited an id that is not a `[Unit …]` id in `<candidate_evidence>`. Cite only those ids, exactly as written. Never cite a `[Requirement …]` id or an id from the example.",
 };
+
+/**
+ * The latest failure whose attempt got a response from the model, or
+ * `undefined` when every failure so far was a transport error (or there
+ * is none). The retry reminder is chosen from it.
+ */
+export function lastResponseFailure(
+  failures: readonly GenerationAttemptFailure[],
+): GenerationAttemptFailure | undefined {
+  for (let i = failures.length - 1; i >= 0; i--) {
+    const f = failures[i]!;
+    if (f.kind !== "transport_error") return f;
+  }
+  return undefined;
+}
 
 export async function runGenerationPipeline(
   ctx: RunGenerationContext,
@@ -347,7 +367,7 @@ export async function runGenerationPipeline(
     // each LLM call's latency reported separately to the cost
     // tracker for accurate provider-side benchmarking.
     const attemptStart = Date.now();
-    const last = failures[failures.length - 1];
+    const last = lastResponseFailure(failures);
     const systemWithReminder =
       prompt.system + (last === undefined ? "" : RETRY_REMINDER[last.kind]);
 
@@ -469,7 +489,11 @@ export async function runGenerationPipeline(
     // can only check shape; this catches the LLM emitting a
     // confident-looking-but-fabricated id. Mirror of #107's
     // finalizeResult guard.
-    const fabricatedId = findFabricatedId(parsed.data, validUnitIds);
+    // A model may echo the quotes `renderEntityId` puts around an
+    // unsafe id; map those back to the raw ids before the check, so
+    // the stored `source_unit_ids` are the raw ids.
+    const cited = withCitedUnitIds(parsed.data);
+    const fabricatedId = findFabricatedId(cited, validUnitIds);
     if (fabricatedId !== null) {
       failures.push({
         attempt,
@@ -485,7 +509,7 @@ export async function runGenerationPipeline(
     // sees the true cost of a successful generation, including
     // any preceding failed attempts that still burned tokens.
     return {
-      content: stampIds(parsed.data, generateId),
+      content: stampIds(cited, generateId),
       // Captured from the SAME `inputs` the prompt was built
       // from, so the persist transaction can prove the set has
       // not moved underneath it.
@@ -623,6 +647,25 @@ export function findStaleGroundingId(
     }
   }
   return null;
+}
+
+/**
+ * `data` with every `source_unit_ids` entry passed through
+ * `citedEntityId`, which undoes only the quoting `renderEntityId`
+ * applies to an unsafe id. Safe ids (every UUID) are unchanged.
+ */
+function withCitedUnitIds(data: ResumeGenerationResponseV2): ResumeGenerationResponseV2 {
+  const fix = <T extends { readonly source_unit_ids: readonly string[] }>(item: T): T => ({
+    ...item,
+    source_unit_ids: item.source_unit_ids.map(citedEntityId),
+  });
+  return {
+    ...data,
+    summary: fix(data.summary),
+    bullets: data.bullets.map(fix),
+    skills: data.skills.map(fix),
+    ...(data.education === undefined ? {} : { education: data.education.map(fix) }),
+  };
 }
 
 /**

@@ -5,6 +5,7 @@ import type { ExperienceUnit, Metric } from "../types/capability.ts";
 import {
   METRIC_FIELD_ROLES,
   UNIT_FIELD_ROLES,
+  citedEntityId,
   formatUnit,
   formatUnitBlock,
   renderEntityId,
@@ -250,6 +251,32 @@ describe("renderEntityId", () => {
 
   it.each(["a b", "x\ny", "", "a".repeat(200)])("JSON-quotes %j", (id) => {
     expect(renderEntityId(id)).toBe(JSON.stringify(id));
+  });
+});
+
+describe("citedEntityId (#485 review)", () => {
+  it.each(["a b", "x\ny", "", 'say "hi"', "a".repeat(200)])(
+    "maps the quoted rendering of %j back to the raw id",
+    (id) => {
+      expect(citedEntityId(renderEntityId(id))).toBe(id);
+    },
+  );
+
+  it.each(["u-1", "3f0fafc4-d7db-4849-88ab-3f1dac64760a"])("leaves safe id %j unchanged", (id) => {
+    expect(citedEntityId(id)).toBe(id);
+  });
+
+  it.each([
+    // A quoted safe id is not a rendering renderEntityId produces.
+    '"u-1"',
+    // Not valid JSON, or not a string.
+    '"a b',
+    '"',
+    '"\\q"x"',
+    "a b",
+    "",
+  ])("leaves %j unchanged", (cited) => {
+    expect(citedEntityId(cited)).toBe(cited);
   });
 });
 

@@ -4,8 +4,21 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { renderResumeInput, type ResumeInput } from "../generation/resumeInput.ts";
-import type { ExperienceUnit, JobRequirementUnit } from "../types/capability.ts";
+import {
+  CERT_RAW,
+  CERT_SUMMARY,
+  PLAYBACK_METRICS,
+  PLAYBACK_RAW,
+  PLAYBACK_SUMMARY,
+  RESUME_EXAMPLE_INPUT,
+  RESUME_EXAMPLE_UNITS,
+  exampleUnit,
+  resumeExampleInputBlock,
+  resumeExampleText,
+  resumeV2Sections,
+} from "../generation/__fixtures__/resumeExample.ts";
+import { renderResumeInput } from "../generation/resumeInput.ts";
+import type { ExperienceUnit } from "../types/capability.ts";
 import { formatUnit } from "../validation/unitPromptText.ts";
 
 import { PROMPT_CONFIG } from "./config.ts";
@@ -36,44 +49,8 @@ function fences(text: string, lang: string): string[] {
 /** Development history must never reach the model. */
 const DEV_HISTORY = /#\d{2,}|\bPR\b|Phase \d|Codex|CodeRabbit|cursor|prior version|validator will|pipeline \(/;
 
-function unit(id: string, fields: Partial<ExperienceUnit>): ExperienceUnit {
-  return {
-    id,
-    owner_uid: "example",
-    source_type: "resume",
-    source_ref: "example",
-    raw_text: "",
-    normalized_summary: "",
-    unit_type: "project",
-    skills: [],
-    tools: [],
-    domains: [],
-    seniority_signals: [],
-    scope_signals: [],
-    business_outcomes: [],
-    metrics: [],
-    evidence_type: "verified",
-    confidence_score: 1,
-    user_approved: true,
-    created_at: "2026-01-01T00:00:00.000Z",
-    updated_at: "2026-01-01T00:00:00.000Z",
-    ...fields,
-  };
-}
-
-const PLAYBACK_RAW =
-  "Led the 64-bit migration of the Disney+ playback stack on PS4, PS5 and Xbox; cut memory footprint 30% and shipped to 5M daily active users.";
-const PLAYBACK_SUMMARY =
-  "Led the 64-bit Disney+ playback migration on PlayStation and Xbox, cutting memory footprint 30% at 5M daily active users.";
-const PLAYBACK_METRICS: ExperienceUnit["metrics"] = [
-  { claim: "Cut memory footprint 30%", value: 30, unit: "%", direction: "down", confidence: "high" },
-  { claim: "Shipped to 5M daily active users", value: 5000000, unit: "users", direction: "up", confidence: "high" },
-];
-const CERT_RAW = "Owned the device certification pipeline for smart TVs from Samsung and LG.";
-const CERT_SUMMARY = "Owned smart-TV device certification for Samsung and LG.";
-
 const TRACEABILITY_UNITS: Record<string, ExperienceUnit> = {
-  "unit-a": unit("unit-a", {
+  "unit-a": exampleUnit("unit-a", {
     raw_text: PLAYBACK_RAW,
     normalized_summary: PLAYBACK_SUMMARY,
     metrics: PLAYBACK_METRICS,
@@ -82,13 +59,13 @@ const TRACEABILITY_UNITS: Record<string, ExperienceUnit> = {
     domains: ["streaming video"],
     date_range: { start: "2019-03-01", end: "2021-06-30" },
   }),
-  "unit-b": unit("unit-b", {
+  "unit-b": exampleUnit("unit-b", {
     raw_text: "Built nightly data pipelines that load partner sales files into the reporting warehouse.",
     normalized_summary: "Built nightly pipelines loading partner sales files into the reporting warehouse.",
     skills: ["Python", "data pipelines"],
     tools: ["Airflow"],
   }),
-  "unit-c": unit("unit-c", {
+  "unit-c": exampleUnit("unit-c", {
     raw_text: CERT_RAW,
     normalized_summary: CERT_SUMMARY,
     domains: ["streaming video"],
@@ -129,77 +106,21 @@ describe("traceability.v2 few-shot", () => {
   });
 });
 
-function requirement(id: string, text: string, mustHave: boolean): JobRequirementUnit {
-  return {
-    id,
-    owner_uid: "example",
-    role_id: "example",
-    raw_text: text,
-    normalized_requirement: text,
-    category: "skill",
-    keywords: [],
-    tools: [],
-    domains: [],
-    priority: "high",
-    must_have: mustHave,
-    extracted_from: "qualifications",
-  };
-}
-
-const RESUME_UNITS: readonly ExperienceUnit[] = [
-  unit("ex-unit-1", {
-    raw_text: PLAYBACK_RAW,
-    normalized_summary: PLAYBACK_SUMMARY,
-    metrics: PLAYBACK_METRICS,
-    seniority_signals: ["led"],
-    skills: ["memory optimization", "cross-platform playback"],
-    domains: ["streaming video"],
-    date_range: { start: "2019-03-01", end: "2021-06-30" },
-  }),
-  unit("ex-unit-2", {
-    raw_text: CERT_RAW,
-    normalized_summary: CERT_SUMMARY,
-    scope_signals: ["Samsung and LG smart TVs"],
-    skills: ["device certification"],
-    domains: ["streaming video"],
-    date_range: { start: "2021-07-01" },
-  }),
-];
-
-const EXAMPLE_FIXTURE: ResumeInput = {
-  units: RESUME_UNITS,
-  roleTitle: "Senior Product Manager, Video Infrastructure",
-  requirements: [
-    requirement("ex-req-1", "Streaming video domain experience", true),
-    requirement("ex-req-2", "Connected-TV platform experience", true),
-    requirement("ex-req-3", "Has managed a team of 10 or more engineers", false),
-  ],
-  links: [
-    ["ex-unit-1", "ex-req-1"],
-    ["ex-unit-2", "ex-req-1"],
-    ["ex-unit-2", "ex-req-2"],
-  ],
-};
-
 interface Item {
   readonly text: string;
   readonly source_unit_ids: readonly string[];
 }
 
 describe("resume.v2 few-shot", () => {
-  const { system, userFewShot } = sections("generation", "resume.v2.md");
-  const example = userFewShot.slice(userFewShot.indexOf("<example>"), userFewShot.indexOf("</example>"));
+  const { system, userFewShot } = resumeV2Sections();
+  const example = resumeExampleText();
   const answerText = fences(example.slice(example.indexOf("Correct `record_resume` call:")), "json")[0]!;
   const answer = ResumeGenerationResponseV2Schema.parse(JSON.parse(answerText));
   const items: readonly Item[] = [answer.summary, ...answer.bullets, ...answer.skills, ...(answer.education ?? [])];
-  const unitsById = new Map(RESUME_UNITS.map((u) => [u.id, u]));
+  const unitsById = new Map(RESUME_EXAMPLE_UNITS.map((u) => [u.id, u]));
 
   it("shows the input exactly as renderResumeInput renders it", () => {
-    const lines = example.split("\n");
-    const start = lines.indexOf("<input>");
-    const end = lines.indexOf("</input>");
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(lines.slice(start, end + 1).join("\n")).toBe(renderResumeInput(EXAMPLE_FIXTURE));
+    expect(resumeExampleInputBlock()).toBe(renderResumeInput(RESUME_EXAMPLE_INPUT));
   });
 
   it("cites only the example's Unit ids", () => {

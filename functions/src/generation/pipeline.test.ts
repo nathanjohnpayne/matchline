@@ -18,6 +18,7 @@ import {
   GenerationError,
   GenerationNoApprovedUnitsError,
   findStaleGroundingId,
+  lastResponseFailure,
   liveApprovedMatchesOf,
   requirementSetToken,
   runGenerationPipeline,
@@ -31,6 +32,7 @@ import {
   sortById,
   type ResumeInput,
 } from "./resumeInput.ts";
+import type { GenerationAttemptFailure } from "./errors.ts";
 import { runGenerateResume } from "./runGenerateResume.ts";
 
 /**
@@ -1388,6 +1390,92 @@ describe("retry reminders follow the failure kind (#485)", () => {
   it("after a schema failure, names the schema", async () => {
     const s = await secondSystem(mockMessage({ summary: { text: "", source_unit_ids: [] } }));
     expect(s.endsWith("never send an item with empty text or empty `source_unit_ids`.")).toBe(true);
+  });
+
+  it("after a schema failure then a transport error, attempt 3 still names the schema (#485 review)", async () => {
+    const { client, create } = mockClient([
+      mockMessage({ summary: { text: "", source_unit_ids: [] } }),
+      new Error("ECONNRESET"),
+      mockMessage(VALID_RESPONSE),
+    ]);
+    await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => makeInputs(["u1"]),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+    expect(create).toHaveBeenCalledTimes(3);
+    const s = callOf(create, 2).system;
+    expect(s.startsWith(system())).toBe(true);
+    expect(s.endsWith("never send an item with empty text or empty `source_unit_ids`.")).toBe(true);
+  });
+});
+
+describe("quoted Unit ids (#485 review)", () => {
+  it("accepts an unsafe id cited with the quotes it was rendered with, and stores the raw id", async () => {
+    const inputs = makeInputs(["u1"]);
+    const odd = { ...inputs.units[0]!, id: "u 1" };
+    const { client, create } = mockClient([
+      mockMessage({
+        summary: { text: "Did it.", source_unit_ids: ['"u 1"'] },
+        bullets: [{ text: "Did it.", source_unit_ids: ['"u 1"'] }],
+        skills: [],
+      }),
+    ]);
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => ({
+        ...inputs,
+        units: [odd],
+        approvedMatches: inputs.approvedMatches.map((m) => ({ ...m, experience_unit_id: "u 1" })),
+      }),
+      generateId: () => "id-x",
+    });
+    expect(callOf(create, 0).messages[0]!.content).toContain('[Unit "u 1"]');
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.content.summary.source_unit_ids).toEqual(["u 1"]);
+    expect(result.content.bullets[0]!.source_unit_ids).toEqual(["u 1"]);
+  });
+
+  it("still rejects a quoted id that is not a loaded Unit", async () => {
+    const { client, create } = mockClient([
+      mockMessage({ ...VALID_RESPONSE, summary: { text: "x", source_unit_ids: ['"u 9"'] } }),
+      mockMessage(VALID_RESPONSE),
+    ]);
+    await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => makeInputs(["u1"]),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("lastResponseFailure (#485 review)", () => {
+  const f = (kind: GenerationAttemptFailure["kind"], attempt: number): GenerationAttemptFailure => ({
+    attempt,
+    kind,
+    message: kind,
+  });
+
+  it("is undefined with no failures, or only transport errors", () => {
+    expect(lastResponseFailure([])).toBeUndefined();
+    expect(lastResponseFailure([f("transport_error", 0), f("transport_error", 1)])).toBeUndefined();
+  });
+
+  it("skips trailing transport errors", () => {
+    expect(lastResponseFailure([f("schema_error", 0), f("transport_error", 1)])?.kind).toBe("schema_error");
+  });
+
+  it("takes the latest response failure", () => {
+    expect(lastResponseFailure([f("schema_error", 0), f("value_error", 1)])?.kind).toBe("value_error");
+    expect(lastResponseFailure([f("no_tool_use", 0), f("transport_error", 1), f("value_error", 2)])?.kind).toBe(
+      "value_error",
+    );
   });
 });
 

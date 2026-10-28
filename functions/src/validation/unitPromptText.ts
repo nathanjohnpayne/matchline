@@ -152,6 +152,28 @@ export function renderEntityId(id: string): string {
 }
 
 /**
+ * The id a model meant when it cites one. `renderEntityId` prints an
+ * unsafe id JSON-quoted (`[Unit "a b"]`), and both prompts say to cite
+ * an id exactly as written, so a model may echo the quotes. Both
+ * consumers compare cited ids with the raw ids, so without this a
+ * correct citation of a quoted id would fail closed (#485 review).
+ *
+ * Undoes exactly that quoting and nothing else: a cited value that is
+ * `renderEntityId`'s quoted rendering of some id maps back to that id;
+ * any other value, including every safe id, is returned unchanged.
+ */
+export function citedEntityId(cited: string): string {
+  if (cited.length < 2 || !cited.startsWith('"') || !cited.endsWith('"')) return cited;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(cited);
+  } catch {
+    return cited;
+  }
+  return typeof decoded === "string" && renderEntityId(decoded) === cited ? decoded : cited;
+}
+
+/**
  * Any value as one line of JSON. `undefined`, functions and symbols
  * (which `JSON.stringify` drops) and anything it cannot encode render
  * as `null`, so neither the word `undefined` nor a raw newline ever
