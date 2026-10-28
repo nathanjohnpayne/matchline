@@ -94,12 +94,14 @@ export const UNIT_FIELD_ROLES = {
   date_range: "rendered",
   // User-editable (Unit Review inline edit and manual add), not just an
   // extraction output. Excluded because the 2026-10-28 #485 evidence
-  // decision admits only the tags and date_range as structured
-  // evidence. Whether user-written outcomes should count (literal
-  // wording only, like tags) is a separate decision for a follow-up
-  // issue; adding it then needs a new evidence-version prefix.
+  // decision admits as structured evidence only the tags (skills,
+  // tools, domains), the seniority and scope signals, each read in its
+  // literal wording, and date_range, read as the Unit's own dates.
+  // Whether user-written outcomes should count (literal wording only,
+  // like tags) is a separate decision for a follow-up issue; adding it
+  // then needs a new evidence-version prefix.
   business_outcomes:
-    "excluded: user-editable outcome tags, but the #485 evidence decision admits only skills, tools, domains and date_range as structured evidence; counting them is a separate decision",
+    "excluded: user-editable outcome tags, but the #485 evidence decision admits as structured evidence only skills, tools, domains, seniority_signals and scope_signals (literal wording) and date_range (own dates); counting them is a separate decision",
   unit_type: "excluded: classification metadata about the record, not a fact about the candidate",
   evidence_type: "excluded: classification metadata",
   confidence_score: "excluded: extraction-model confidence; approval already gates use",
@@ -144,7 +146,21 @@ export const METRIC_FIELD_ROLES = {
  * tested, and unambiguous to readers.
  */
 export function quote(value: string): string {
-  return JSON.stringify(value);
+  return escapeLineBreaks(JSON.stringify(value));
+}
+
+/**
+ * The characters `JSON.stringify` leaves raw that a reader may still
+ * treat as a line break: U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
+ * SEPARATOR and U+0085 NEXT LINE. Left raw, a value containing one
+ * would start a new physical line inside the evidence text, so a value
+ * could begin a line of its own (#485 review).
+ */
+const RAW_LINE_BREAKS = /[\u2028\u2029\u0085]/g;
+
+/** Rewrite each of `RAW_LINE_BREAKS` in JSON text as its `\uXXXX` escape; the JSON still parses to the same value. */
+function escapeLineBreaks(json: string): string {
+  return json.replace(RAW_LINE_BREAKS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
 /**
@@ -155,7 +171,7 @@ export function quote(value: string): string {
 export function renderEntityId(id: string): string {
   return typeof id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(id)
     ? id
-    : (JSON.stringify(id) ?? "null");
+    : escapeLineBreaks(JSON.stringify(id) ?? "null");
 }
 
 /**
@@ -183,15 +199,40 @@ export function citedEntityId(cited: string): string {
 /**
  * Any value as one line of JSON. `undefined`, functions and symbols
  * (which `JSON.stringify` drops) and anything it cannot encode render
- * as `null`, so neither the word `undefined` nor a raw newline ever
- * reaches the text.
+ * as `null`, so neither the word `undefined` nor a raw line break ever
+ * reaches the text (`escapeLineBreaks` covers the ones JSON leaves
+ * raw). Any object that is not plain data also renders as `null`
+ * (`plainDataOnly`).
  */
 function jsonValue(value: unknown): string {
   try {
-    return JSON.stringify(value) ?? "null";
+    return escapeLineBreaks(JSON.stringify(value, plainDataOnly) ?? "null");
   } catch {
     return "null";
   }
+}
+
+/**
+ * `JSON.stringify` replacer: an object whose prototype is not
+ * `Object.prototype`, `Array.prototype` or `null` becomes `null`.
+ *
+ * The app and the functions read Units through different Firestore
+ * SDKs, and the web and admin SDKs serialize a `Timestamp` (and other
+ * SDK classes) differently, through different `toJSON` methods or none.
+ * Rendered as JSON, such a value would give the two sides different
+ * text for the same stored Unit, so different evidence versions, and
+ * export would stay blocked. Neither side's class shape is evidence, so
+ * both render it as `null`.
+ *
+ * It reads the holder's raw member (`this[key]`), not `value`, because
+ * `JSON.stringify` has already applied `toJSON` to `value` by the time
+ * the replacer sees it.
+ */
+function plainDataOnly(this: unknown, key: string, value: unknown): unknown {
+  const raw = (this as Record<string, unknown>)[key];
+  if (typeof raw !== "object" || raw === null) return value;
+  const proto: unknown = Object.getPrototypeOf(raw);
+  return proto === Object.prototype || proto === Array.prototype || proto === null ? value : null;
 }
 
 /** A list field's line, or `null` when the field is absent, empty or malformed. */

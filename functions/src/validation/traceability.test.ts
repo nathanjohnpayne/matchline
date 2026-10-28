@@ -11,6 +11,7 @@ import {
   EMPTY_UNITS_RATIONALE,
   checkTraceability,
   renderTraceabilityInput,
+  traceabilityRetryReminder,
 } from "./traceability.ts";
 import { _clearCacheForTests, loadPromptText } from "../prompts/loader.ts";
 import { formatUnitBlock } from "./unitPromptText.ts";
@@ -664,6 +665,73 @@ describe("checkTraceability", () => {
   });
 });
 
+describe("retry reminders follow the last response failure, not the attempt number (#485 review)", () => {
+  const VALID = { supports: false, rationale: "No support found." };
+  const MALFORMED = { supports: true, rationale: "Some Unit supports this." };
+
+  async function systems(responses: (Anthropic.Messages.Message | Error)[]): Promise<string[]> {
+    vi.useFakeTimers();
+    try {
+      const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+      const { client, create } = mockClient(responses);
+      const promise = checkTraceability(CLAIM, [makeUnit()], CTX, { client, record }).catch((e: unknown) => e);
+      await vi.runAllTimersAsync();
+      await promise;
+      return create.mock.calls.map((c) => (c[0] as { system: string }).system);
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("sends no schema reminder on the retry after a transport error", async () => {
+    _clearCacheForTests();
+    const base = loadPromptText("validation", "traceability").system;
+    const sent = await systems([new Error("ECONNRESET"), mockMessage(VALID)]);
+    expect(sent).toEqual([base, base]);
+    expect(sent[1]).not.toContain("schema validation");
+  });
+
+  it("reminds about the schema after a schema error", async () => {
+    const base = loadPromptText("validation", "traceability").system;
+    const sent = await systems([mockMessage(MALFORMED), mockMessage(VALID)]);
+    expect(sent[0]).toBe(base);
+    expect(sent[1]!.startsWith(base)).toBe(true);
+    expect(sent[1]).toContain("failed schema validation");
+  });
+
+  it("keeps the schema reminder after schema error then transport error", async () => {
+    const sent = await systems([mockMessage(MALFORMED), new Error("ECONNRESET"), mockMessage(VALID)]);
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toContain("failed schema validation");
+    expect(sent[2]).toBe(sent[1]);
+  });
+
+  it("reminds about the tool, not the schema, after a text-only response", async () => {
+    const sent = await systems([mockTextOnlyMessage("no tool"), mockMessage(VALID)]);
+    expect(sent[1]).toContain("did not call the `record_traceability` tool");
+    expect(sent[1]).not.toContain("schema validation");
+  });
+
+  describe("traceabilityRetryReminder", () => {
+    const f = (kind: "transport_error" | "schema_error" | "no_tool_use", attempt = 0) => ({
+      attempt,
+      kind,
+      message: kind,
+    });
+
+    it("is empty with no failures and with only transport errors", () => {
+      expect(traceabilityRetryReminder([])).toBe("");
+      expect(traceabilityRetryReminder([f("transport_error"), f("transport_error", 1)])).toBe("");
+    });
+
+    it("comes from the latest failure that had a response", () => {
+      expect(traceabilityRetryReminder([f("no_tool_use"), f("schema_error", 1)])).toContain("schema validation");
+      expect(traceabilityRetryReminder([f("schema_error"), f("no_tool_use", 1)])).toContain("did not call");
+      expect(traceabilityRetryReminder([f("schema_error"), f("transport_error", 1)])).toContain("schema validation");
+    });
+  });
+});
+
 describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
   const TAGGED = makeUnit({
     id: "unit-tagged",
@@ -791,8 +859,8 @@ describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
     const { args } = await capture([TAGGED]);
     const system = loadPromptText("validation", "traceability").system;
     expect(args.system).toBe(system);
-    expect(system).toContain("Tags support only their own wording");
     expect(system).toContain("Dates support only themselves");
     expect(system).toContain("Titles and level need a statement");
+    expect(system).toContain("Tags and signals support only their own wording");
   });
 });

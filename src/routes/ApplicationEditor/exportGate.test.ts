@@ -7,14 +7,17 @@ import type {
   ValidationStatus,
 } from "../../types/crm.ts";
 
-import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import {
+  UNIT_EVIDENCE_VERSION_PREFIX,
+  unitEvidenceVersion,
+} from "../../../functions/src/validation/unitEvidenceVersion.ts";
 
 import {
   assetContentVersion,
   type ValidationAttestation,
 } from "../../../functions/src/validation/attestation.ts";
 
-import { citedUnitIds, exportGateState } from "./exportGate.ts";
+import { citedUnitIds, exportGateState, isOlderEvidenceVersion } from "./exportGate.ts";
 
 function flag(
   partial: Partial<ValidationFlag> & { id: string },
@@ -353,6 +356,73 @@ describe("exportGateState: cited-evidence re-check", () => {
     expect(state.enabled).toBe(false);
     expect(state.disabledReason).toContain("Validation has been updated");
     expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  it.each([
+    ["ev1", `ev1:${"0".repeat(16)}`],
+    ["ev2", `ev2:${"0".repeat(64)}`],
+    ["pre-prefix updated_at", "2026-04-01T00:00:00.000Z"],
+  ])("says validation has been updated for a %s version (#485 review)", (_, recorded) => {
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: recorded,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("Validation has been updated");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  it("treats a prefix newer than this bundle knows as an edit, not as outdated (#485 review)", () => {
+    // Functions deployed ahead of the app bundle record a newer prefix.
+    // This bundle cannot verify it, but it must not say the verdict is
+    // older than the current validator.
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: `ev4:${"0".repeat(64)}`,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).not.toContain("Validation has been updated");
+    expect(state.disabledReason).toContain("1 Unit this resume cites has changed");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  describe("isOlderEvidenceVersion", () => {
+    it.each([`ev1:${"a".repeat(16)}`, `ev2:${"a".repeat(64)}`, "2026-04-01T00:00:00.000Z", "ev2:"])(
+      "is true for the older form %j",
+      (v) => {
+        expect(isOlderEvidenceVersion(v)).toBe(true);
+      },
+    );
+
+    it.each([
+      unitEvidenceVersion(unit("u1")),
+      `${UNIT_EVIDENCE_VERSION_PREFIX}${"a".repeat(64)}`,
+      `ev4:${"a".repeat(64)}`,
+      `ev10:${"a".repeat(64)}`,
+      "EV2:x",
+      " ev2:x",
+      "x-ev2:",
+      "2026-04-01",
+      "",
+    ])("is false for %j", (v) => {
+      expect(isOlderEvidenceVersion(v)).toBe(false);
+    });
   });
 
   it("ranks a missing Unit above an outdated verdict, and an outdated verdict above an edit", () => {

@@ -94,11 +94,37 @@ export interface TraceabilityDeps {
 const MAX_ATTEMPTS = 3;
 const TOOL_NAME = "record_traceability";
 
-const RETRY_REMINDERS: readonly string[] = [
-  "",
-  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields. Remember: supporting_unit_id MUST be present when supports=true and absent when supports=false.",
-  "\n\nYour previous two attempts failed. Be strict about field types and required fields. If unsure whether a Unit supports the claim, return supports=false — false-negatives are recoverable; false-positives let fabrications ship.",
-];
+/**
+ * Model-visible reminder appended to the system prompt after a failed
+ * attempt, keyed by what went wrong, as generation does
+ * (`RETRY_REMINDER` in `../generation/pipeline.ts`, #485). The previous
+ * list was keyed by attempt index, so attempt 1 blamed "schema
+ * validation" even after a transport error, when the model had sent
+ * nothing. A transport failure says nothing about the response, so the
+ * reminder comes from the latest failure that produced one
+ * (`lastResponseFailure`): after schema_error then transport_error,
+ * attempt 3 still gets the schema reminder.
+ */
+const RETRY_REMINDER: Readonly<Record<ValidationAttemptFailure["kind"], string>> = {
+  transport_error: "",
+  no_tool_use:
+    "\n\nYour previous response did not call the `record_traceability` tool. Respond only by calling it.",
+  schema_error:
+    "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields. Remember: supporting_unit_id MUST be present when supports=true and absent when supports=false. If unsure whether a Unit supports the claim, return supports=false.",
+};
+
+/**
+ * The reminder for the next attempt: from the latest failure whose
+ * attempt got a response from the model, or none when every failure so
+ * far was a transport error (or there is none).
+ */
+export function traceabilityRetryReminder(failures: readonly ValidationAttemptFailure[]): string {
+  for (let i = failures.length - 1; i >= 0; i--) {
+    const f = failures[i]!;
+    if (f.kind !== "transport_error") return RETRY_REMINDER[f.kind];
+  }
+  return "";
+}
 
 /**
  * The synthetic rationale emitted when `candidateUnits` is empty.
@@ -148,7 +174,7 @@ export async function checkTraceability(
     // e.g. after a backoff that `sleep` cut short (Codex on #621).
     ctx.signal?.throwIfAborted();
     const start = Date.now();
-    const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
+    const systemWithReminder = prompt.system + traceabilityRetryReminder(failures);
 
     let response: Anthropic.Messages.Message;
     try {

@@ -6,6 +6,7 @@ Changes from v1:
 - Units now also show `skills`, `tools`, `domains` and `date_range`, through the formatter generation uses (`functions/src/validation/unitPromptText.ts`).
 - Rules for the 2026-10-28 evidence decision: tags support only their literal wording, and `date_range` supports only the Unit's own dates, never a duration.
 - An explicit job-title rule.
+- `seniority_signals` and `scope_signals` fall under the literal-wording rule with the tags, and a title or level is supported only when its own wording appears in a Unit's `raw_text` or `normalized_summary` or as a signal value. Both signal fields are model-extracted and user-editable tags, so reading them by meaning would let "led" become "team lead" (the 2026-10-28 owner decision on #485). The `unit-e` example pins that case.
 - Few-shot Unit blocks match the real formatter. v1 showed `metrics: []`, which the formatter never prints.
 - The input carries the run date (`Today:`), outside the Unit text, and rule 3 treats a `date_range` end later than it as no end. Extraction has defaulted some approved Units' end dates into the future, and v2 is the first version that shows `date_range` to the validator, so without the date it would accept a claim built from an end that has not happened.
 - Issue and PR references removed from model-visible text.
@@ -24,11 +25,11 @@ Rules:
 
 1. **Meaning, not exact wording, for the Unit's text.** A Unit's `raw_text`, `normalized_summary` or `metrics` supports a claim that says the same thing in other words. Numbers (percentages, counts, money) must match within normal rounding, in the same direction.
 
-2. **Tags support only their own wording.** A `skills`, `tools` or `domains` tag supports a claim that names that tag, ignoring capitalization and framing such as "The user has experience with". It does not support broader or stronger wording: a tag "Python" does not support "Python architecture" or "expert in Python". Broader wording needs the Unit's text or metrics.
+2. **Tags and signals support only their own wording.** A `skills`, `tools`, `domains`, `seniority_signals` or `scope_signals` value supports a claim that names that value, ignoring capitalization and framing such as "The user has experience with". It does not support broader or stronger wording, or a title, achievement or proficiency it does not name: a tag "Python" does not support "Python architecture" or "expert in Python", and a signal "led" does not support "team lead". Broader wording needs the Unit's text or metrics.
 
 3. **Dates support only themselves.** A `date_range` supports a claim only when the claim's dates are that Unit's own start and end, by year or by month. It never supports a duration or total ("6 years", "10+ years of experience"), a figure combined across Units, or a claim that the work is current. Such a claim is supported only when a Unit's text or metrics state it. A `date_range` with no `end` supports neither an end date nor "present". A `start` or `end` later than `Today` supports no claim: treat that date as absent, so a future `end` leaves the range with no end.
 
-4. **Titles and level need a statement.** A claim that gives the candidate a job title or level (product manager, engineer, lead, principal, director) needs a Unit whose text or `seniority_signals` states it.
+4. **Titles and level need a statement.** A claim that gives the candidate a job title or level (product manager, engineer, lead, principal, director) is supported only when that title or level appears in its own wording in a Unit's `raw_text` or `normalized_summary`, or as a `seniority_signals` or `scope_signals` value. A verb is not a title: "led" or "owned" in a Unit's text or signals does not make the candidate a "lead" or an "owner".
 
 5. **No invention.** Answer `supports: false` when the claim states a number, company, product, title, skill or date that no single Unit states as rules 1 to 4 require, or anything no Unit contains. Do not reach for a charitable reading; only the user can resolve it.
 
@@ -131,6 +132,36 @@ Correct `record_traceability` call:
 {
   "supports": false,
   "rationale": "Unit unit-b's skills tag \"Python\" supports Python only; nothing in the Unit states architecture work, so the broadened claim is unsupported."
+}
+```
+</example>
+
+<example>
+Input:
+
+```text
+Claim: "The user was a team lead."
+
+Today: "2026-01-15"
+
+Candidate Experience Units:
+
+[Unit unit-e]
+raw_text: "Ran the weekly release review for the mobile apps and set the rollout schedule."
+normalized_summary: "Ran the weekly mobile release review and set the rollout schedule."
+metrics: [
+  (no metrics)
+]
+seniority_signals: ["led"]
+scope_signals: ["4 mobile teams"]
+```
+
+Correct `record_traceability` call:
+
+```json
+{
+  "supports": false,
+  "rationale": "Unit unit-e's seniority_signals value \"led\" supports only the word \"led\"; neither it nor the Unit's text states the title \"team lead\", so the claim is unsupported."
 }
 ```
 </example>

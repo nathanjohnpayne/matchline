@@ -66,6 +66,12 @@ const TRACEABILITY_UNITS: Record<string, ExperienceUnit> = {
     skills: ["Python", "data pipelines"],
     tools: ["Airflow"],
   }),
+  "unit-e": exampleUnit("unit-e", {
+    raw_text: "Ran the weekly release review for the mobile apps and set the rollout schedule.",
+    normalized_summary: "Ran the weekly mobile release review and set the rollout schedule.",
+    seniority_signals: ["led"],
+    scope_signals: ["4 mobile teams"],
+  }),
   "unit-c": exampleUnit("unit-c", {
     raw_text: CERT_RAW,
     normalized_summary: CERT_SUMMARY,
@@ -88,9 +94,9 @@ describe("traceability.v2 few-shot", () => {
   const inputs = fences(userFewShot, "text");
   const answers = fences(userFewShot, "json");
 
-  it("has five examples, each with one input and one answer", () => {
-    expect(inputs).toHaveLength(5);
-    expect(answers).toHaveLength(5);
+  it("has six examples, each with one input and one answer", () => {
+    expect(inputs).toHaveLength(6);
+    expect(answers).toHaveLength(6);
   });
 
   it("shows each example input exactly as renderTraceabilityInput renders it, run date included", () => {
@@ -115,6 +121,23 @@ describe("traceability.v2 few-shot", () => {
     expect(system).toContain("A `start` or `end` later than `Today` supports no claim");
   });
 
+  it("rejects a title that a seniority signal does not name in its own wording", () => {
+    const i = inputs.findIndex((input) => input.includes("[Unit unit-e]"));
+    const unit = TRACEABILITY_UNITS["unit-e"]!;
+    expect(unit.seniority_signals).toEqual(["led"]);
+    expect(inputs[i]).toContain('Claim: "The user was a team lead."');
+    expect(`${unit.raw_text} ${unit.normalized_summary}`.toLowerCase()).not.toContain("lead");
+    expect(TraceabilityResponseV2Schema.parse(JSON.parse(answers[i]!)).supports).toBe(false);
+  });
+
+  it("puts both signal fields under the literal-wording rule, and titles under their own wording", () => {
+    expect(system).toContain(
+      "A `skills`, `tools`, `domains`, `seniority_signals` or `scope_signals` value supports a claim that names that value",
+    );
+    expect(system).toContain("a signal \"led\" does not support \"team lead\"");
+    expect(system).toContain("appears in its own wording in a Unit's `raw_text` or `normalized_summary`");
+  });
+
   it("shows each example Unit exactly as formatUnit renders it", () => {
     const marker = "Candidate Experience Units:\n\n";
     const ids: string[] = [];
@@ -125,12 +148,12 @@ describe("traceability.v2 few-shot", () => {
       ids.push(id!);
       expect(unitText).toBe(formatUnit(TRACEABILITY_UNITS[id!]!));
     }
-    expect(ids).toEqual(["unit-a", "unit-b", "unit-b", "unit-c", "unit-d"]);
+    expect(ids).toEqual(["unit-a", "unit-b", "unit-b", "unit-e", "unit-c", "unit-d"]);
   });
 
   it("gives answers that pass the v2 schema, with the intended verdicts", () => {
     const verdicts = answers.map((a) => TraceabilityResponseV2Schema.parse(JSON.parse(a)).supports);
-    expect(verdicts).toEqual([true, true, false, false, false]);
+    expect(verdicts).toEqual([true, true, false, false, false, false]);
   });
 
   it("keeps development history out of model-visible text", () => {
@@ -166,6 +189,16 @@ describe("resume.v2 few-shot", () => {
 
   it("tells the model a future start or end supports no claim", () => {
     expect(system).toContain("A `start` or `end` later than `today` supports no claim");
+  });
+
+  it("reads both signal fields in their literal wording, never as a title by meaning", () => {
+    expect(system).toContain(
+      "Use a `skills`, `tools`, `domains`, `seniority_signals` or `scope_signals` value exactly as written",
+    );
+    expect(system).toContain("does not make the candidate a \"team lead\"");
+    expect(system).toContain("appears in its own wording in a cited Unit's `raw_text` or `normalized_summary`");
+    // Rule 1 no longer offers the signals as a source of titles by meaning.
+    expect(system).not.toMatch(/in its `raw_text`, `normalized_summary`, `metrics`, `seniority_signals`/);
   });
 
   it("cites only the example's Unit ids", () => {

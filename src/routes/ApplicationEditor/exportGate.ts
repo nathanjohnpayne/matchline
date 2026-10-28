@@ -1,9 +1,6 @@
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
-import {
-  UNIT_EVIDENCE_VERSION_PREFIX,
-  unitEvidenceVersion,
-} from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
 import {
   assetContentVersion,
   type ValidationAttestation,
@@ -62,11 +59,13 @@ import {
  *     that kept `updated_at`, and is immune to client/server clock
  *     skew.
  *
- * A recorded version with an older prefix than
- * `UNIT_EVIDENCE_VERSION_PREFIX` was computed under an earlier
- * evidence format (ev2 before #485), so the verdict no longer applies
- * even though the Unit itself may be untouched. The gate says that
- * validation has been updated rather than claiming the Unit changed.
+ * A recorded version in a known older form (`isOlderEvidenceVersion`)
+ * was computed under an earlier evidence format (ev2 before #485), so
+ * the verdict no longer applies even though the Unit itself may be
+ * untouched. The gate says that validation has been updated rather
+ * than claiming the Unit changed. Any other form that is not the
+ * current version, including a prefix newer than this bundle knows,
+ * reads as an edit.
  *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
@@ -94,6 +93,25 @@ export type ExportGateState =
        */
       readonly canRevalidate?: boolean;
     };
+
+/**
+ * The recorded-version forms older than `UNIT_EVIDENCE_VERSION_PREFIX`:
+ * `ev1:` and `ev2:`, and the pre-prefix form, which recorded the Unit's
+ * `updated_at` (an ISO timestamp). Listed rather than "anything not
+ * `ev3:`", so a newer prefix written by functions deployed ahead of
+ * this app bundle is not mistaken for an older one (#485 review).
+ */
+const OLDER_EVIDENCE_VERSION = /^(?:ev1:|ev2:|\d{4}-\d{2}-\d{2}T)/;
+
+/**
+ * True when `recorded` is an evidence version in a known older form:
+ * the verdict was reached on text the validator no longer reads.
+ * False for the current prefix and for any form this bundle does not
+ * know, such as a newer prefix.
+ */
+export function isOlderEvidenceVersion(recorded: string): boolean {
+  return OLDER_EVIDENCE_VERSION.test(recorded);
+}
 
 /** Count of unresolved (i.e. non-traced) flags. */
 function unresolvedFlagCount(flags: readonly ValidationFlag[]): number {
@@ -142,14 +160,16 @@ function citedEvidenceProblem(
       unapproved += 1;
     } else {
       const recorded = versions[id];
-      if (typeof recorded === "string" && !recorded.startsWith(UNIT_EVIDENCE_VERSION_PREFIX)) {
+      if (typeof recorded === "string" && isOlderEvidenceVersion(recorded)) {
         // Recorded under an earlier evidence format (#485): the Unit
         // may be untouched, but the verdict was not reached on the text
         // the validator reads now.
         outdated += 1;
       } else if (recorded !== unitEvidenceVersion(unit)) {
         // A cited Unit the validator did not load (absent key) was not
-        // evidence for this verdict either.
+        // evidence for this verdict either. A prefix newer than
+        // UNIT_EVIDENCE_VERSION_PREFIX lands here too: this bundle
+        // cannot check it, so it is not claimed to be outdated.
         edited += 1;
       }
     }
