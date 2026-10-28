@@ -144,6 +144,23 @@ describe("runAnalyze", () => {
     expect(existsSync(out)).toBe(false);
   });
 
+  it("refuses the same flow identity pooled twice", () => {
+    const a = join(base, "run-a");
+    const b = join(base, "run-b");
+    writeRecords(a, "sonnet", "inv-a", 22, 2);
+    writeRecords(b, "haiku", "inv-b", 11, 2);
+    // The same directory twice, and a directory plus its own flows.jsonl.
+    expect(() => loadFlows([a, a])).toThrow(/same flow more than once.*inv-a sonnet nathan-2026__google-compute-spm-2026 #0/);
+    expect(() => loadFlows([a, join(a, "flows.jsonl"), b])).toThrow(/same flow more than once/);
+    expect(() =>
+      runAnalyze(parseAnalyzeArgs(["--records", a, b, a, "--task", "extraction", "--incumbent", "sonnet", "--out", join(base, "o3")])),
+    ).toThrow(/same flow more than once/);
+    // Distinct invocations of the same arm pool as before.
+    const c = join(base, "run-c");
+    writeRecords(c, "sonnet", "inv-c", 22, 2);
+    expect(loadFlows([a, b, c])).toHaveLength(6);
+  });
+
   it("accepts a flows.jsonl path and names a directory that holds none", () => {
     const a = join(base, "run-a");
     writeRecords(a, "sonnet", "inv-a", 22, 1);

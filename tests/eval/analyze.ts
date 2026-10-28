@@ -95,12 +95,45 @@ export function flowsPath(record: string): string {
   return existsSync(abs) && statSync(abs).isFile() ? abs : join(abs, FLOWS_FILE);
 }
 
+/**
+ * A flow's identity: one invocation's one sample of one (variant, cell).
+ * Two records with the same identity are the same observation, so pooling
+ * them would count it twice.
+ */
+export function flowIdentity(f: Pick<FlowRecord, "invocationId" | "variant" | "cell" | "sampleIndex">): string {
+  return `${f.invocationId} ${f.variant} ${f.cell} #${f.sampleIndex}`;
+}
+
+/**
+ * Load every flow named by `--records`. Refuses a flow identity that appears
+ * more than once across the inputs (the same directory passed twice, a
+ * directory plus its own `flows.jsonl`, or a copied record file): the replay
+ * filter cannot catch it, since a live flow keeps its live flags, and one
+ * observation counted twice satisfies the two-sample guard and narrows every
+ * interval.
+ */
 export function loadFlows(records: readonly string[]): FlowRecord[] {
-  return records.flatMap((r) => {
+  const flows = records.flatMap((r) => {
     const path = flowsPath(r);
     if (!existsSync(path)) throw new Error(`${r}: no ${FLOWS_FILE} found (looked for ${path})`);
     return parseFlowsJsonl(readFileSync(path, "utf8"), path);
   });
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  for (const f of flows) {
+    const id = flowIdentity(f);
+    if (seen.has(id)) duplicates.push(id);
+    else seen.add(id);
+  }
+  if (duplicates.length > 0) {
+    const shown = [...new Set(duplicates)].slice(0, 5).join("; ");
+    const more = duplicates.length > 5 ? ` and ${duplicates.length - 5} more` : "";
+    throw new Error(
+      `--records holds the same flow more than once (invocationId variant cell #sampleIndex): ${shown}${more}. ` +
+        "Each invocation's records may be passed once; a repeated flow would be counted as a new observation.",
+    );
+  }
+  return flows;
 }
 
 /**
