@@ -446,7 +446,10 @@ export function formatMetrics(r: RunRecord): string[] {
     } else {
       const g = v.metrics.generation;
       lines.push(`  ${GENERATION_SCOPE_NOTE}`);
-      lines.push(`  schema-valid ${pct(g.schemaValidRate)}   first attempt ${pct(g.firstAttemptRate)}   invented-id retry ${pct(g.inventedIdRetryRate)}`);
+      lines.push(
+        `  schema-valid ${pct(g.schemaValidRate)}   first attempt ${pct(g.firstAttemptRate)}   invented-id retry ${pct(g.inventedIdRetryRate)}` +
+          (g.budgetStopped > 0 ? `   budget-stopped flows (not counted) ${g.budgetStopped}` : ""),
+      );
       lines.push(`  requirement coverage ${pct(g.requirementCoverage)}   expected-trace recall ${pct(g.expectedTraceRecall)}`);
       lines.push(`  unmatched must-haves (not scored): ${g.unmatchedMustHaves.join(", ") || "none"}`);
       lines.push(

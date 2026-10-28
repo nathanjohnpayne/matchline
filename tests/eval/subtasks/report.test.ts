@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CallRecord } from "./instrument.ts";
-import { clusteredRate, costMetrics, wallTime } from "./metrics.ts";
+import { clusteredRate, costMetrics, type Validity, wallTime } from "./metrics.ts";
 import { CAVEAT, comparable, formatSubtaskReport, labelStatus, rate, type RunRecord, type VariantRecord } from "./report.ts";
 
 const resolved = {
@@ -159,6 +159,29 @@ describe("comparable", () => {
     expect(comparable(record({ variants: [variant({ validity: "invalid: settings-mismatch" })] }), record()).ok).toBe(false);
     // An invalid variant only one run has is not shared: no refusal.
     expect(comparable(a, record({ variants: [variant(), variant({ label: "other", validity: "invalid: served-model" })] }))).toEqual({ ok: true, caveats: [] });
+  });
+
+  it("refuses every non-valid status of a shared variant, on either side", () => {
+    const notValid: readonly Exclude<Validity, "valid">[] = [
+      "invalid: served-model",
+      "invalid: settings-mismatch",
+      "invalid: unclassified",
+      "failed-preflight",
+      "incomplete: budget_reached",
+      "incomplete: all_failed",
+    ];
+    const ok = (runId: string) => record({ runId, variants: [variant(), variant({ label: "spec-haiku" })] });
+    const bad = (runId: string, validity: Validity) => record({ runId, variants: [variant(), variant({ label: "spec-haiku", validity })] });
+    for (const validity of notValid) {
+      const reason = (runId: string) => `variant spec-haiku is ${validity} in run ${runId}`;
+      // Settings and prompt fingerprints are identical on both sides: only validity can refuse.
+      expect(comparable(bad("eval-a", validity), ok("eval-b"))).toEqual({ ok: false, reason: reason("eval-a") });
+      expect(comparable(ok("eval-a"), bad("eval-b", validity))).toEqual({ ok: false, reason: reason("eval-b") });
+      // The baseline is shared by definition, so a non-valid baseline refuses too.
+      expect(comparable(record({ variants: [variant({ validity })] }), record()).ok).toBe(false);
+      expect(comparable(record(), record({ variants: [variant({ validity })] })).ok).toBe(false);
+    }
+    expect(comparable(ok("eval-a"), ok("eval-b"))).toEqual({ ok: true, caveats: [] });
   });
 
   it("refuses runs whose prompts showed different fixed run dates", () => {

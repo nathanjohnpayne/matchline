@@ -453,7 +453,10 @@ export function assetMetrics(cases: readonly ValidationCase[], results: readonly
 // -- Generation -------------------------------------------------------------------
 
 export interface GenerationMetrics {
+  /** Flows that ran to the end of generation: the denominator of every rate below. */
   readonly runs: number;
+  /** Flows the budget stopped (never started, or a generation request refused): in no denominator. */
+  readonly budgetStopped: number;
   readonly schemaValidRate: Ratio;
   readonly firstAttemptRate: Ratio;
   readonly inventedIdRetryRate: Ratio;
@@ -537,6 +540,7 @@ export function generationMetrics(
   }
   return {
     runs: runs.length,
+    budgetStopped: flows.length - runs.length,
     schemaValidRate: ratio(generated.length, runs.length),
     firstAttemptRate: ratio(generated.filter((f) => f.attempts === 1).length, runs.length),
     inventedIdRetryRate: ratio(invented, runs.length),

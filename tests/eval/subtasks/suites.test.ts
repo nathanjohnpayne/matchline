@@ -15,7 +15,7 @@ import { clearPromptVersionOverrides } from "../../../functions/src/prompts/load
 import { SWEEP_SCOPES } from "../sweepScope.ts";
 
 import { FIXED_RUN_DATE, loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
-import { schemaValidity } from "./metrics.ts";
+import { generationMetrics, schemaValidity } from "./metrics.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
 import { runGenerationSuite, runValidationSuite } from "./suites.ts";
 import { defaultValidationAnswer, makeCtx, scriptedClient, textMessage, toolMessage, type RequestBody } from "./testSupport.ts";
@@ -247,6 +247,27 @@ describe("runGenerationSuite", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("marks a flow the budget interrupts as stopped, not as a generation failure", async () => {
+    const raw = scriptedClient((b) => (b.tools[0]!.name === "record_resume" ? resumeAnswer(["u_threadline_mvp"]) : defaultValidationAnswer(b)));
+    // Below the first generation request's reservation: the ledger refuses it.
+    const ctx = makeCtx({ rawClient: raw.client, suite: "generation", maxUsd: 0.000001 });
+    const flows = await runGenerationSuite(sparse, "baseline", 0, ctx, snapshotDefaults());
+    expect(raw.create).not.toHaveBeenCalled();
+    expect(ctx.runAbort.signal.aborted).toBe(true);
+    expect(flows).toHaveLength(1);
+    expect(flows[0]).toMatchObject({ skipped: "budget_reached", generated: false, completed: false, attempts: 0 });
+    const snaps = new Map(sparse.map((s) => [s.snapshot.id, { snapshot: s.snapshot, traces: s.expectedTraces }]));
+    const m = generationMetrics(flows, snaps, ctx.calls);
+    expect(m.runs).toBe(0);
+    expect(m.budgetStopped).toBe(1);
+    for (const r of [m.schemaValidRate, m.firstAttemptRate, m.inventedIdRetryRate, m.requirementCoverage, m.downstreamPassRate]) {
+      expect(r).toEqual({ num: 0, den: 0, value: null });
+    }
+    const gen = schemaValidity(ctx.invocations.filter((i) => i.stage === "generation"), ctx.calls.filter((c) => c.stage === "generation"));
+    expect(gen.invocations).toBe(0);
+    expect(gen.firstAttemptPass.den).toBe(0);
   });
 
   it("takes flow spans from the injected clock", async () => {

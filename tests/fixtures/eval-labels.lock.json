@@ -7,6 +7,10 @@
         {
           "label_version": 1,
           "sha256": "c59ba000259aad45fe009235ebe147e13ec7a1d0b013780db49c37acb928e1b5"
+        },
+        {
+          "label_version": 2,
+          "sha256": "6570a6423d2a15b05ff12a0722cac420be56fafc0f374f0bf2bd08b493fdea89"
         }
       ]
     },
@@ -97,6 +101,10 @@
         {
           "label_version": 1,
           "sha256": "74d4a971f5716c5dcc0e60a1b62f3fd741f947486c96c79a38ed6054e99d74a7"
+        },
+        {
+          "label_version": 2,
+          "sha256": "3e91da3633efc1fa0a162cd1319e2b1400eb024a6fa388811c215f6ef9955b66"
         }
       ]
     },
@@ -115,6 +123,10 @@
         {
           "label_version": 1,
           "sha256": "f32ee9fcd639dda8ec364e7694f0f7b086a2e2b7ef35d476583b3321fccbe182"
+        },
+        {
+          "label_version": 2,
+          "sha256": "2400d3b5e786be99e212faaff22912346a2bf964dd6f8cd9899b0e8b59e4f0a4"
         }
       ]
     },

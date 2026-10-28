@@ -19,6 +19,7 @@ import {
   VALIDATION_CATEGORIES,
   whitespaceNormalize,
 } from "./fixtures.ts";
+import { matchCoverage, relationshipCovered } from "./metrics.ts";
 
 const cases = loadValidationCases();
 const snaps = loadGenerationSnapshots();
@@ -146,6 +147,17 @@ describe("draft fixtures", () => {
     expect(() => {
       (c.gold.assertions as unknown[]).push({});
     }).toThrow(TypeError);
+  });
+});
+
+describe("gold wording scores full coverage", () => {
+  // An extractor that returns every gold assertion text verbatim decomposed the item exactly as
+  // labeled: it must score full assertion and relationship coverage. A term group whose accepted
+  // alternatives miss the gold wording (#647 review: vc-11's causal claim) would penalize it.
+  it.each(cases.items.map((lc) => [lc.case.id, lc] as const))("%s", (_id, lc) => {
+    const gold = lc.case.gold.assertions.map((a) => a.text);
+    expect(matchCoverage(lc.case.gold.assertions, gold).covered).toBe(lc.case.gold.assertions.length);
+    for (const r of lc.case.gold.relationships) expect(relationshipCovered(r, gold), r.id).toBe(true);
   });
 });
 

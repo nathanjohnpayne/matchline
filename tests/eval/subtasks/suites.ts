@@ -80,6 +80,12 @@ export interface FlowSpans {
 export interface FlowResult {
   readonly snapshotId: string;
   readonly repeat: number;
+  /**
+   * The budget stopped this flow: it was never started, or the ledger
+   * refused one of its generation requests mid-flow. Either way generation
+   * did not get its full set of attempts, so the flow is a stopped run, not
+   * a model failure, and metrics leave it out of every quality denominator.
+   */
   readonly skipped?: "budget_reached";
   /** Generation returned schema-valid content with only eligible ids. */
   readonly generated: boolean;
@@ -377,6 +383,10 @@ export async function runGenerationSuite(
       error = describeError(err);
     }
     const genEnd = ctx.clock();
+    // Only the budget ledger aborts the run, and it was not aborted when this
+    // flow started: a failed generation now means the ledger refused one of its
+    // requests, so the flow stopped rather than failed.
+    const budgetStopped = content === null && ctx.runAbort.signal.aborted;
 
     let downstream: FlowResult["downstream"] = null;
     let validationMs: number | null = null;
@@ -394,6 +404,7 @@ export async function runGenerationSuite(
     results.push({
       snapshotId: s.id,
       repeat,
+      ...(budgetStopped ? { skipped: "budget_reached" as const } : {}),
       generated: content !== null,
       completed: content !== null && downstream !== null && downstream.ok,
       attempts: genRec.attempts,

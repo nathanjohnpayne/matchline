@@ -5,7 +5,7 @@
   "review_status": "draft-pending-owner-review",
   "labeled_by": "claude-draft",
   "labeled_at": "2026-10-28",
-  "label_version": 1,
+  "label_version": 2,
   "source": {
     "resume_fixture_id": "sofia-fullstack-founder-2026",
     "derived_from": null
@@ -111,7 +111,10 @@
         "id": "a3",
         "text": "The latency cut is what unblocked the $1.4M ACV deal.",
         "required_terms": [
-          "280ms",
+          [
+            "280ms",
+            "latency cut"
+          ],
           "unblocked",
           "$1.4M ACV"
         ],
@@ -129,7 +132,8 @@
         ],
         "co_terms": [
           [
-            "280ms"
+            "280ms",
+            "latency cut"
           ],
           [
             "$1.4M"
