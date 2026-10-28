@@ -254,14 +254,50 @@ describe("analyzeRecords", () => {
     expect(arm).toMatchObject({ replayedTaskFlows: 4, repeatedReplays: 2 });
     const r1 = arm.cells.find((c) => c.cell === "r1__j1")!;
     expect(r1.metrics.extraction_accuracy).toMatchObject({ n: 1, mean: 0.6 });
-    // Match accuracy is a whole-flow value and stays.
+    // Only extraction was replayed: requirement parsing ran live, so match accuracy is a new sample and stays.
     expect(r1.metrics.match_accuracy).toMatchObject({ n: 2 });
+    expect(arm.repeatedMatchReplays).toBe(0);
     const r2 = arm.cells.find((c) => c.cell === "r2__j1")!;
     expect(r2.metrics.extraction_accuracy).toMatchObject({ n: 2, mean: 0.5 });
     expect(r2.scored).toBe(2);
     expect(r.warnings.join("\n")).toMatch(
       /inc: 4 flow\(s\) replayed the extraction output from the stage cache; 2 repeat an earlier sample's output/,
     );
+  });
+
+  it("leaves out the match accuracy of full replays that repeat a counted flow's matching inputs", () => {
+    seq = 0;
+    const full = { stepCacheHits: { extraction: true, requirement_parsing: true } };
+    const flows = [
+      // One live flow and three full replays of it: one match sample.
+      flow("inc", "r1", [GOOD], { invocationId: "inv-1", matchAccuracy: 0.5 }),
+      flow("inc", "r1", [GOOD], { invocationId: "inv-2", matchAccuracy: 0.5, ...full }),
+      flow("inc", "r1", [GOOD], { invocationId: "inv-3", matchAccuracy: 0.5, ...full }),
+      flow("inc", "r1", [GOOD], { invocationId: "inv-4", matchAccuracy: 0.5, ...full }),
+      // r2: two full replays of the same pair with no live flow: the first counts.
+      flow("inc", "r2", [GOOD], { invocationId: "inv-1", matchAccuracy: 0.9, ...full }),
+      flow("inc", "r2", [GOOD], { invocationId: "inv-2", matchAccuracy: 0.9, ...full }),
+      // r2: a full replay with different Requirements is a new matching input and counts.
+      flow("inc", "r2", [GOOD], {
+        invocationId: "inv-3",
+        matchAccuracy: 0.1,
+        requirements: [{ normalized_requirement: "go experience", must_have: false }],
+        ...full,
+      }),
+    ];
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+    const arm = r.arms[0]!;
+    // Extraction repeats: three in r1, two in r2 (same Units). Match repeats: three in r1, one in r2.
+    expect(arm).toMatchObject({ repeatedReplays: 5, repeatedMatchReplays: 4 });
+    const r1 = arm.cells.find((c) => c.cell === "r1__j1")!;
+    expect(r1.metrics.match_accuracy).toMatchObject({ n: 1, mean: 0.5 });
+    expect(r1.metrics.extraction_accuracy).toMatchObject({ n: 1 });
+    const r2 = arm.cells.find((c) => c.cell === "r2__j1")!;
+    expect(r2.metrics.match_accuracy).toMatchObject({ n: 2, mean: 0.5 });
+    expect(r.warnings.join("\n")).toMatch(
+      /inc: 4 flow\(s\) replayed both extraction and requirement parsing with the same outputs as a counted flow/,
+    );
+    expect(formatAnalysisMarkdown(r)).toMatch(/repeated match replays dropped/);
   });
 
   it("counts a token-source difference under one label as a separate configuration", () => {

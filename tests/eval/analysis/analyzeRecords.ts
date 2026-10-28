@@ -110,6 +110,8 @@ export interface ArmSummary {
   readonly replayedTaskFlows: number;
   /** Replayed flows left out of the task metrics because their output repeats another flow's in the same cell. */
   readonly repeatedReplays: number;
+  /** Flows that replayed both extraction and requirement parsing with a counted flow's outputs; their match accuracy is left out. */
+  readonly repeatedMatchReplays: number;
   readonly errorKinds: Readonly<Record<string, number>>;
   /** Live (non-replayed) usage records. */
   readonly records: number;
@@ -196,11 +198,27 @@ function replayedTaskStep(flow: FlowRecord, task: Task): boolean {
   return hits[TASK_STEP[task]] === true;
 }
 
+/**
+ * A flow that replayed both scored stages (extraction and requirement
+ * parsing) from the stage cache. Matching then runs on inputs a counted
+ * flow may already have had, so its match accuracy can be a copy.
+ */
+function replayedBothSides(flow: FlowRecord): boolean {
+  const hits = (flow.stepCacheHits as Readonly<Record<string, boolean>> | undefined) ?? {};
+  return hits[TASK_STEP.extraction] === true && hits[TASK_STEP.jd] === true;
+}
+
+/** The matching inputs a flow scored: its saved Units and Requirements. */
+function matchInputKey(flow: FlowRecord): string {
+  return JSON.stringify([flow.units, flow.requirements]);
+}
+
 interface ScoredFlows {
   readonly perFlow: { flow: FlowRecord; values: MetricValues }[];
   readonly taskOutputFlows: number;
   readonly replayedTaskFlows: number;
   readonly repeatedReplays: number;
+  readonly repeatedMatchReplays: number;
 }
 
 /**
@@ -208,7 +226,11 @@ interface ScoredFlows {
  * the task stage's output; match accuracy is null on a failed flow and
  * drops out by itself. A replayed flow whose saved output equals a live
  * flow's, or an earlier replay's, in the same cell keeps only match
- * accuracy: its task value repeats a sample already counted.
+ * accuracy: its task value repeats a sample already counted. Match
+ * accuracy is dropped the same way, but only for a flow that replayed
+ * both extraction and requirement parsing and whose (Units, Requirements)
+ * pair equals a counted flow's in the same cell: matching then ran on
+ * identical inputs. A live parse of either side gives a new match sample.
  */
 function scoreArm(flows: readonly FlowRecord[], task: Task, labels: AnalysisLabels): ScoredFlows {
   const liveOutputs = new Map<string, Set<string>>();
@@ -219,11 +241,20 @@ function scoreArm(flows: readonly FlowRecord[], task: Task, labels: AnalysisLabe
     set.add(JSON.stringify(out));
     liveOutputs.set(f.cell, set);
   }
+  const liveMatchInputs = new Map<string, Set<string>>();
+  for (const f of flows) {
+    if (f.matchAccuracy === null || replayedBothSides(f)) continue;
+    const set = liveMatchInputs.get(f.cell) ?? new Set<string>();
+    set.add(matchInputKey(f));
+    liveMatchInputs.set(f.cell, set);
+  }
   const replaysKept = new Map<string, Set<string>>();
+  const matchReplaysKept = new Map<string, Set<string>>();
   const perFlow: { flow: FlowRecord; values: MetricValues }[] = [];
   let taskOutputFlows = 0;
   let replayedTaskFlows = 0;
   let repeatedReplays = 0;
+  let repeatedMatchReplays = 0;
   for (const flow of flows) {
     const out = taskOutput(flow, task);
     if (out === null) continue;
@@ -241,9 +272,20 @@ function scoreArm(flows: readonly FlowRecord[], task: Task, labels: AnalysisLabe
         kept.add(key);
       }
     }
+    if (values.match_accuracy !== null && values.match_accuracy !== undefined && replayedBothSides(flow)) {
+      const key = matchInputKey(flow);
+      const kept = matchReplaysKept.get(flow.cell) ?? new Set<string>();
+      matchReplaysKept.set(flow.cell, kept);
+      if (liveMatchInputs.get(flow.cell)?.has(key) === true || kept.has(key)) {
+        repeatedMatchReplays += 1;
+        values = { ...values, match_accuracy: null };
+      } else {
+        kept.add(key);
+      }
+    }
     perFlow.push({ flow, values });
   }
-  return { perFlow, taskOutputFlows, replayedTaskFlows, repeatedReplays };
+  return { perFlow, taskOutputFlows, replayedTaskFlows, repeatedReplays, repeatedMatchReplays };
 }
 
 function flowMetrics(flow: FlowRecord, task: Task, labels: AnalysisLabels): MetricValues {
@@ -353,6 +395,7 @@ function summarizeArm(
     taskOutputFlows: scoredArm.taskOutputFlows,
     replayedTaskFlows: scoredArm.replayedTaskFlows,
     repeatedReplays: scoredArm.repeatedReplays,
+    repeatedMatchReplays: scoredArm.repeatedMatchReplays,
     errorKinds,
     records: live.length,
     replayedRecords: replayed,
@@ -406,7 +449,13 @@ export function analyzeRecords(input: readonly FlowRecord[], options: AnalyzeOpt
       warnings.push(
         `${label}: ${scoredArm.replayedTaskFlows} flow(s) replayed the ${TASK_STEP[options.task]} output from the stage cache; ` +
           `${scoredArm.repeatedReplays} repeat an earlier sample's output in the same cell and are left out of the task metrics ` +
-          `(match accuracy kept). Record with --no-cache or --samples > 1 to measure variance.`,
+          `(match accuracy kept unless the flow also replayed the other stage; see below). Record with --no-cache or --samples > 1 to measure variance.`,
+      );
+    }
+    if (scoredArm.repeatedMatchReplays > 0) {
+      warnings.push(
+        `${label}: ${scoredArm.repeatedMatchReplays} flow(s) replayed both extraction and requirement parsing with the same ` +
+          `outputs as a counted flow in the same cell; their match accuracy is a copy and is left out.`,
       );
     }
     return summary;
@@ -493,15 +542,15 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 
   lines.push("", "## Arms", "");
   lines.push(
-    "| arm | flows | failed | in task step | refusals | error kinds | task outputs | replayed task outputs | repeated replays dropped | " +
+    "| arm | flows | failed | in task step | refusals | error kinds | task outputs | replayed task outputs | repeated replays dropped | repeated match replays dropped | " +
       "live records | retry share | truncations | replayed records | invocations | configs | modeled $/flow |",
   );
-  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const a of result.arms) {
     const kinds = Object.entries(a.errorKinds).sort(([x], [y]) => x.localeCompare(y)).map(([k, n]) => `${k} ${n}`).join(", ") || "—";
     lines.push(
       `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.taskStepFailures} | ${a.refusals} | ${kinds} | ` +
-        `${a.taskOutputFlows} | ${a.replayedTaskFlows} | ${a.repeatedReplays} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
+        `${a.taskOutputFlows} | ${a.replayedTaskFlows} | ${a.repeatedReplays} | ${a.repeatedMatchReplays} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
         `${a.truncations} | ${a.replayedRecords} | ${a.invocations.length} | ${a.configs} | ` +
         `${a.modeledCostPerFlowUsd === null ? "—" : `$${a.modeledCostPerFlowUsd.toFixed(4)}`} |`,
     );
