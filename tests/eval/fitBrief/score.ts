@@ -45,7 +45,35 @@ export function normalizeForMatch(text: string): string {
 export interface EvidenceCheck {
   readonly total: number;
   readonly unsupported: readonly string[];
+  /**
+   * Units mode only: the unsupported quotes that DO match a Unit's
+   * `raw_text` (the extraction paraphrased the résumé and the brief quoted
+   * the paraphrase)...
+   */
+  readonly extractionParaphrase?: readonly string[];
+  /** ...and the ones that match neither the sources nor any Unit. */
+  readonly unsupportedQuote?: readonly string[];
 }
+
+/**
+ * Every failure category the printed aggregate may show. A closed set,
+ * so a new failure path cannot invent a column.
+ *
+ * - `evidence-quote`: a quote found in neither the sources nor (units
+ *   mode) any Unit — artifacts call it `unsupported-quote`.
+ * - `extraction-paraphrase`: units mode, a quote found in a Unit's
+ *   `raw_text` but not in the résumé or inventory.
+ * - `unsupported-claim`, `claim-rule`: the judge's two lists.
+ * - `unscored`: the brief could not be generated or judged.
+ */
+export const FAILURE_CATEGORIES = [
+  "evidence-quote",
+  "extraction-paraphrase",
+  "unsupported-claim",
+  "claim-rule",
+  "unscored",
+] as const;
+export type FailureCategory = (typeof FAILURE_CATEGORIES)[number];
 
 /**
  * A quote is supported when it appears, as written, inside a single
@@ -57,14 +85,45 @@ export interface EvidenceCheck {
  * fails here, and any date a brief asserts is left to the judge's
  * claim gate against the canonical sources.
  */
-export function checkEvidence(brief: FitBriefResponseV1, sources: readonly string[]): EvidenceCheck {
+export function checkEvidence(
+  brief: FitBriefResponseV1,
+  sources: readonly string[],
+  /** Units mode: the `raw_text` of each Unit the generator read, to classify failures. */
+  unitTexts?: readonly string[],
+): EvidenceCheck {
   const units = sources.flatMap(evidenceUnits);
   const quotes = brief.strengths.flatMap((s) => s.evidence);
   const supported = (q: string): boolean => {
     const needle = normalizeForMatch(q);
     return units.some((unit) => containsAtWordBoundaries(unit, needle));
   };
-  return { total: quotes.length, unsupported: quotes.filter((q) => !supported(q)) };
+  const unsupported = quotes.filter((q) => !supported(q));
+  return {
+    total: quotes.length,
+    unsupported,
+    ...(unitTexts !== undefined && classifyUnsupportedQuotes(unsupported, unitTexts)),
+  };
+}
+
+/**
+ * Split failed quotes by whether a Unit's `raw_text` holds them (same
+ * normalization and word-boundary rule as the gate). Classification only:
+ * a quote matching a Unit still fails the evidence gate, because Units
+ * never certify a claim.
+ */
+export function classifyUnsupportedQuotes(
+  unsupported: readonly string[],
+  unitTexts: readonly string[],
+): { extractionParaphrase: string[]; unsupportedQuote: string[] } {
+  const normalizedUnits = unitTexts.map(normalizeForMatch).filter((u) => u.length > 0);
+  const extractionParaphrase: string[] = [];
+  const unsupportedQuote: string[] = [];
+  for (const q of unsupported) {
+    const needle = normalizeForMatch(q);
+    if (normalizedUnits.some((u) => containsAtWordBoundaries(u, needle))) extractionParaphrase.push(q);
+    else unsupportedQuote.push(q);
+  }
+  return { extractionParaphrase, unsupportedQuote };
 }
 
 const LIST_ITEM = /^\s*(?:[-*+•]|\d+[.)])\s+/u;
@@ -118,7 +177,7 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
  * Substring match anchored at word boundaries, so a short quote such as
  * "led" is not found inside "controlled" (CodeRabbit on #581).
  */
-function containsAtWordBoundaries(haystack: string, needle: string): boolean {
+export function containsAtWordBoundaries(haystack: string, needle: string): boolean {
   if (needle.length === 0) return false;
   return new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapeRegExp(needle)}(?=$|[^\\p{L}\\p{N}_])`, "u").test(haystack);
 }
@@ -126,6 +185,12 @@ function containsAtWordBoundaries(haystack: string, needle: string): boolean {
 export interface BriefScore {
   readonly evidenceTotal: number;
   readonly evidenceUnsupported: number;
+  /** Failed quotes found in a Unit's raw_text (units mode); 0 otherwise. */
+  readonly evidenceExtractionParaphrase: number;
+  /** Failed quotes found nowhere; every failed quote in résumé mode. */
+  readonly evidenceUnsupportedQuote: number;
+  /** The closed-set categories this brief failed on. */
+  readonly failureCategories: readonly FailureCategory[];
   readonly unsupportedClaims: number;
   readonly claimRuleViolations: number;
   /** (covered + 0.5 × partial) / reference points; null when the reference has none. */
@@ -151,9 +216,19 @@ export function scoreBrief(args: {
   const matched = gen.filter((g) => g.matches_reference).length;
   const unsupportedClaims = judge.unsupported_candidate_claims.length;
   const claimRuleViolations = judge.claim_rule_violations.length;
+  const extractionParaphrase = evidence.extractionParaphrase?.length ?? 0;
+  const unsupportedQuote = evidence.unsupportedQuote?.length ?? evidence.unsupported.length;
+  const failureCategories: FailureCategory[] = [];
+  if (unsupportedQuote > 0) failureCategories.push("evidence-quote");
+  if (extractionParaphrase > 0) failureCategories.push("extraction-paraphrase");
+  if (unsupportedClaims > 0) failureCategories.push("unsupported-claim");
+  if (claimRuleViolations > 0) failureCategories.push("claim-rule");
   return {
     evidenceTotal: evidence.total,
     evidenceUnsupported: evidence.unsupported.length,
+    evidenceExtractionParaphrase: extractionParaphrase,
+    evidenceUnsupportedQuote: unsupportedQuote,
+    failureCategories,
     unsupportedClaims,
     claimRuleViolations,
     recall: refs.length === 0 ? null : (covered + 0.5 * partial) / refs.length,
@@ -164,10 +239,19 @@ export function scoreBrief(args: {
   };
 }
 
+export interface CategoryCount {
+  /** Briefs with at least one failure of the category. */
+  readonly briefs: number;
+  /** Failing items (quotes, claims, violations, unscored briefs). */
+  readonly items: number;
+}
+
 export interface AggregateRow {
   readonly split: string;
   readonly briefs: number;
+  /** Unscored briefs (generation or judging failed). */
   readonly failed: number;
+  readonly categories: Readonly<Record<FailureCategory, CategoryCount>>;
   readonly gatesPassed: number;
   readonly evidenceUnsupported: number;
   readonly unsupportedClaims: number;
@@ -192,10 +276,22 @@ export function aggregate(
     const scored = inSplit.map((r) => r.score).filter((s): s is BriefScore => s !== null);
     const sum = (f: (s: BriefScore) => number) => scored.reduce((a, s) => a + f(s), 0);
     const verdicts = scored.map((s) => s.verdictAgrees).filter((v): v is boolean => v !== null);
+    const failed = inSplit.length - scored.length;
+    const count = (cat: FailureCategory, items: (s: BriefScore) => number): CategoryCount => ({
+      briefs: scored.filter((s) => s.failureCategories.includes(cat)).length,
+      items: sum(items),
+    });
     return {
       split,
       briefs: inSplit.length,
-      failed: inSplit.length - scored.length,
+      failed,
+      categories: {
+        "evidence-quote": count("evidence-quote", (s) => s.evidenceUnsupportedQuote),
+        "extraction-paraphrase": count("extraction-paraphrase", (s) => s.evidenceExtractionParaphrase),
+        "unsupported-claim": count("unsupported-claim", (s) => s.unsupportedClaims),
+        "claim-rule": count("claim-rule", (s) => s.claimRuleViolations),
+        unscored: { briefs: failed, items: failed },
+      },
       gatesPassed: scored.filter((s) => s.gatesPass).length,
       evidenceUnsupported: sum((s) => s.evidenceUnsupported),
       unsupportedClaims: sum((s) => s.unsupportedClaims),
@@ -265,16 +361,18 @@ export function formatAggregate(
             .join(", ")}`
         : ""),
     "",
-    "| split | briefs | failed | gates passed | unsupported evidence | unsupported claims | claim-rule violations | recall* | precision* | verdict agreement |",
-    "|---|---|---|---|---|---|---|---|---|---|",
+    `| split | briefs | gates passed | ${FAILURE_CATEGORIES.join(" | ")} | recall* | precision* | verdict agreement |`,
+    `|---|---|---|${FAILURE_CATEGORIES.map(() => "---").join("|")}|---|---|---|`,
     ...rows.map(
       (r) =>
-        `| ${r.split} | ${r.briefs} | ${r.failed} | ${r.gatesPassed}/${r.briefs - r.failed} | ` +
-        `${r.evidenceUnsupported} | ${r.unsupportedClaims} | ${r.claimRuleViolations} | ` +
+        // An unscored brief passed no gate, so it stays in the denominator.
+        `| ${r.split} | ${r.briefs} | ${r.gatesPassed}/${r.briefs} | ` +
+        `${FAILURE_CATEGORIES.map((c) => `${r.categories[c].briefs} (${r.categories[c].items})`).join(" | ")} | ` +
         `${pct(r.meanRecall)} | ${pct(r.meanPrecision)} | ${pct(r.verdictAgreement)} |`,
     ),
     "",
-    `* model-graded by ${meta.judgeModel}; unsupported claims and claim-rule violations are model-graded too.`,
+    "Failure columns: briefs failing on the category (failing items). gates passed counts every brief, so an unscored brief is a gate failure.",
+    `* model-graded by ${meta.judgeModel}; unsupported-claim and claim-rule are model-graded too.`,
     `Spend (list-price estimate from usage records): $${meta.spentUsd.toFixed(2)}.` +
       (meta.incomplete ? " INCOMPLETE: the run stopped at its --max-usd bound." : "") +
       // Every sample ran, but the last call reached the bound: say so, so a

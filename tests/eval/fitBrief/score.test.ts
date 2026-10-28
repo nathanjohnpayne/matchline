@@ -3,7 +3,16 @@ import { describe, expect, it } from "vitest";
 import type { FitBriefResponseV1 } from "../../../functions/src/prompts/generation/fitBrief.v1.schema.ts";
 
 import type { JudgeResult } from "./judge.ts";
-import { aggregate, checkEvidence, evidenceUnits, formatAggregate, normalizeForMatch, scoreBrief } from "./score.ts";
+import {
+  aggregate,
+  checkEvidence,
+  classifyUnsupportedQuotes,
+  evidenceUnits,
+  FAILURE_CATEGORIES,
+  formatAggregate,
+  normalizeForMatch,
+  scoreBrief,
+} from "./score.ts";
 
 const brief = (evidence: string[], verdict: FitBriefResponseV1["verdict"] = "apply"): FitBriefResponseV1 => ({
   bottom_line: "b",
@@ -173,5 +182,78 @@ describe("aggregate / formatAggregate", () => {
     expect(out).toMatch(/model-graded by claude-opus-5-5/);
     expect(out).toContain("$1.23");
     expect(out).toMatch(/INCOMPLETE/);
+  });
+});
+
+describe("evidence failure classes", () => {
+  const RESUME = "- Owned the checkout API used by four storefront teams.";
+  const UNITS = ["Owned the checkout API used by twelve teams."];
+
+  it("classifies a failed quote by whether a Unit's raw_text holds it", () => {
+    expect(classifyUnsupportedQuotes(["owned the checkout API used by twelve teams", "Ran payroll."], UNITS)).toEqual({
+      extractionParaphrase: ["owned the checkout API used by twelve teams"],
+      unsupportedQuote: ["Ran payroll."],
+    });
+    // Same word-boundary rule as the gate.
+    expect(classifyUnsupportedQuotes(["wned"], UNITS).unsupportedQuote).toEqual(["wned"]);
+  });
+
+  it("classifies only in units mode, and a Unit match still fails the gate", () => {
+    const b = brief(["Owned the checkout API used by twelve teams.", "Ran payroll.", "Owned the checkout API used by four storefront teams."]);
+    const resumeMode = checkEvidence(b, [RESUME]);
+    expect(resumeMode.extractionParaphrase).toBeUndefined();
+    const unitsMode = checkEvidence(b, [RESUME], UNITS);
+    expect(unitsMode.unsupported).toHaveLength(2);
+    expect(unitsMode.extractionParaphrase).toEqual(["Owned the checkout API used by twelve teams."]);
+    expect(unitsMode.unsupportedQuote).toEqual(["Ran payroll."]);
+
+    const s = scoreBrief({ evidence: unitsMode, judge: judge(), generatedVerdict: "apply" });
+    expect(s).toMatchObject({ evidenceUnsupported: 2, evidenceExtractionParaphrase: 1, evidenceUnsupportedQuote: 1, gatesPass: false });
+    expect(s.failureCategories).toEqual(["evidence-quote", "extraction-paraphrase"]);
+    expect(scoreBrief({ evidence: resumeMode, judge: judge(), generatedVerdict: "apply" })).toMatchObject({
+      evidenceExtractionParaphrase: 0,
+      evidenceUnsupportedQuote: 2,
+      failureCategories: ["evidence-quote"],
+    });
+  });
+
+  it("names judge failures with the closed-set categories", () => {
+    const s = scoreBrief({
+      evidence: { total: 1, unsupported: [] },
+      judge: judge({ unsupported_candidate_claims: [{ quote: "q", reason: "r" }], claim_rule_violations: [{ rule: "r", quote: "q" }] }),
+      generatedVerdict: "apply",
+    });
+    expect(s.failureCategories).toEqual(["unsupported-claim", "claim-rule"]);
+    expect(s.failureCategories.every((c) => (FAILURE_CATEGORIES as readonly string[]).includes(c))).toBe(true);
+  });
+
+  it("aggregates per category and counts an unscored brief as a gate failure", () => {
+    const paraphrase = scoreBrief({
+      evidence: checkEvidence(brief(["Owned the checkout API used by twelve teams."]), [RESUME], UNITS),
+      judge: judge(),
+      generatedVerdict: "apply",
+    });
+    const clean = scoreBrief({ evidence: { total: 1, unsupported: [] }, judge: judge(), generatedVerdict: "apply" });
+    const [row] = aggregate([
+      { split: "dev", score: clean },
+      { split: "dev", score: paraphrase },
+      { split: "dev", score: null },
+    ]);
+    expect(row).toMatchObject({ briefs: 3, failed: 1, gatesPassed: 1 });
+    expect(row!.categories).toEqual({
+      "evidence-quote": { briefs: 0, items: 0 },
+      "extraction-paraphrase": { briefs: 1, items: 1 },
+      "unsupported-claim": { briefs: 0, items: 0 },
+      "claim-rule": { briefs: 0, items: 0 },
+      unscored: { briefs: 1, items: 1 },
+    });
+    const out = formatAggregate([row!], { model: "m", judgeModel: "j", evidenceMode: "units", spentUsd: 0, incomplete: false });
+    // gatesPassed / every brief, unscored included.
+    expect(out).toContain("| dev | 3 | 1/3 | 0 (0) | 1 (1) | 0 (0) | 0 (0) | 1 (1) |");
+    const header = out.split("\n").find((l) => l.startsWith("| split"))!;
+    const columns = header.split("|").map((c) => c.trim()).filter(Boolean);
+    expect(columns).toEqual(["split", "briefs", "gates passed", ...FAILURE_CATEGORIES, "recall*", "precision*", "verdict agreement"]);
+    // Aggregates only: no quote text.
+    expect(out).not.toContain("twelve teams");
   });
 });

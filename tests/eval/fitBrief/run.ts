@@ -416,6 +416,8 @@ export async function runFitBriefEval(
   // extraction error cannot launder an unsupported claim through the gates.
   const sources = [corpus.resumeText, ...(corpus.inventoryText ? [corpus.inventoryText] : [])];
   let generatorEvidence = corpus.resumeText;
+  // Units mode: each Unit's raw_text, used only to classify failed quotes.
+  let unitTexts: readonly string[] | undefined;
   if (options.evidence === "units") {
     let units: readonly UnitEvidence[];
     if (options.frozenUnits) {
@@ -433,6 +435,7 @@ export async function runFitBriefEval(
       }
     }
     generatorEvidence = renderUnitEvidence(units);
+    unitTexts = units.map((u) => u.raw_text);
     unitsSha256 = sha256Hex(generatorEvidence);
     // Persist the exact Units so the run can be audited and its extraction
     // reused by later comparison runs via --units-from (Codex P2, #581).
@@ -499,6 +502,7 @@ export async function runFitBriefEval(
         const evidence = checkEvidence(
           generated.brief,
           sources,
+          unitTexts,
         );
         const score = scoreBrief({ evidence, judge: judgement, generatedVerdict: generated.brief.verdict });
         rows.push({ split: pair.split, score });
@@ -526,6 +530,7 @@ export async function runFitBriefEval(
               config: config(),
               // Keep a paid-for brief when only the judge failed.
               ...(generated !== undefined && { brief: generated.brief }),
+              ...(!stoppedByBound && { failureCategories: ["unscored"] }),
               error: err instanceof Error ? err.message : String(err),
               // Keep per-attempt detail (FitBriefError.failures) so a bad
               // key or exhausted retries can be diagnosed privately.
