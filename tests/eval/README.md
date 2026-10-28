@@ -181,6 +181,52 @@ level up: an ignored `--tokn-source claude-cli` would leave the default
 metered API selected and spend real money on a run you meant to bill to
 a subscription.
 
+### Per-flow records (`--record`)
+
+The sweep table prints one aggregate row per variant, and `runForFixture` returns only summed cost and end-to-end latency, so a decision rule that needs per-sample values, retries, truncations, refusals, per-step latency or cost, or the extracted Units cannot be computed from a run's output. `--record <dir>` keeps all of it, on the ordinary path and on the `--variant` sweep path alike:
+
+```bash
+npm run eval -- --full --samples 6 --no-cache --record ~/.matchline/eval-records/2026-10-28-extraction \
+  --variant 'sonnet:model.extraction=claude-sonnet-4-6' \
+  --variant 'haiku55:model.extraction=claude-haiku-5-5'
+```
+
+- The directory must resolve outside this repository (symlinks resolved, the same check the fit-brief harness uses), and must not already hold a record: one directory is one invocation. Both are checked before any spend. The fixtures are public, so the records are safe to keep; the refusal keeps run output out of commits.
+- `invocation.json`: invocation id, HEAD sha and whether the tree was dirty, argv, token source, cache mode, samples, mode, `--prompt` overrides, the arms (each variant's requested models, efforts and prompt versions, and after the run the configuration each actually resolved to; a plain run is one arm labelled `default` with its stage configuration), and started/finished timestamps.
+- `flows.jsonl`: one JSON line per flow with the invocation id; the variant label (`default` outside a sweep); per LLM stage the requested model, the effort requested and the effort sent, the prompt version and prompt fingerprint; the cell (`resumeId`, `jdId`); `sampleIndex` within (variant, cell); `startedAt`/`finishedAt`; `ok`, and on failure the error kind, name, message and failing step; `extractionAccuracy` and `matchAccuracy` (null on a failed flow, where the result reports 0); extracted-Unit, parsed-Requirement and parsed must-have counts (from the saved objects, so known even when a later stage failed); every usage record of the flow with all its fields, including the served model when the provider reports one, its step (`extraction`, `unit_embedding`, `requirement_parsing`, `requirement_embedding`) and whether it was replayed from the stage cache; the failing stage's `failures` array; the extracted Units and parsed Requirements as the stages returned them; `costUsd` and `modeledCostUsd`.
+- Files appear with the first recorded flow, so a run refused before spending (projection guard, nothing runnable) leaves nothing behind. The location is printed to stderr; stdout keeps the report.
+
+Use `--no-cache` (or `--samples` above 1, which bypasses the cache) when the records are meant to measure variance: a cache hit replays the stored output and its original usage, and the record marks those calls `replayed: true`.
+
+#### Derived per-call fields
+
+The pipeline does not expose a stop reason per call (extraction and JD parsing record usage before inspecting `stop_reason`, and `UsageRecord` has no field for it), and this harness does not change `functions/src`. Each recorded call therefore carries flags derived from what is recorded:
+
+- `truncated`: `maxTokens` is set and `outputTokens >= maxTokens`, or the stage's thrown `failures` list a `max_tokens_exceeded` at that attempt.
+- `retry`: `attempt > 0`. A transport error records no usage but advances `attempt`, so the call after it counts as a retry.
+- `refusal`: the failing stage's `failures` list a `refusal` at that attempt. A stage throws `failures` only when it gives up, so a recovered failure (for example a truncated attempt followed by a good one) is visible through `truncated`/`retry`, not through `failures`.
+- There is no reasoning-token field: Anthropic counts thinking inside `outputTokens`.
+
+### Comparing arms (`eval:analyze`)
+
+```bash
+npm run eval:analyze -- --records ~/.matchline/eval-records/run-a ~/.matchline/eval-records/run-b \
+  --task extraction --incumbent sonnet [--candidates haiku55,opus55] [--out <dir>] [--seed N]
+```
+
+Reads `flows.jsonl` from each records directory (a `.jsonl` path works too), pools flows by variant label across invocations, scores the saved Units or Requirements against the public labels under `tests/fixtures/`, prints Markdown, and writes the full result as `analysis-<task>.json` to `--out` (default: the first records directory; refused inside the repository). It makes no model call. `--candidates` defaults to every other label in the records. Output is deterministic for a given seed (default 20261028).
+
+Per arm: flows, failed flows, refusals (failed flows whose error kind is `refusal`) and other error kinds; retry share (live records with `attempt > 0` / live records); truncations; per-cell mean, SD and min–max of every metric over successful flows; an aggregate that is the mean of cell means, so every cell weighs the same; per-step latency p50 (nearest rank) and max from per-call `latencyMs`; modeled cost per flow by step at list price (`priceUsage`), with a count of records no rate could price. Replayed (cache-hit) records are left out of the retry, truncation and latency figures, because they repeat a call measured in an earlier run; they stay in the modeled cost, which prices what the flow would cost uncached.
+
+Metrics:
+
+- `--task extraction`: extraction accuracy (`unitSetAccuracy` against `tests/fixtures/expected-units`, recomputed from the saved Units); Unit precision (share of extracted Units that are some expected Unit's greedy best match at score ≥ 0.5); extracted-Unit count; mean summary length in whitespace-delimited words; grounding share (share of Units whose `raw_text`, normalized as the fit-brief evidence gate normalizes, appears at word boundaries within one line of the résumé fixture); match accuracy as reported.
+- `--task jd`: requirement-set accuracy (for each `expected_requirements` entry in label order, the best unused parsed requirement by `tokenOverlapCoefficient(tokenize(text), tokenize(normalized_requirement))`, averaged; the `unitSetAccuracy` shape); must-have agreement on pairs mapped at ≥ 0.3; requirement precision (share of parsed requirements mapped at ≥ 0.3); parsed-requirement and must-have counts; match accuracy as reported.
+
+Versus the incumbent, per metric: the difference of means (mean over the cells both arms hold of candidate minus incumbent cell means); a 95% percentile CI from a stratified bootstrap (10,000 resamples, each arm resampled with replacement within each cell, seeded); a two-sided Welch t p-value on the flow-level values; per-cell differences and the number of cells where the candidate is ahead.
+
+Power check, for the incumbent: s is the pooled within-cell SD (`sqrt(Σ(n_c−1)s_c² / Σ(n_c−1))`). The half-width at n = 6 samples per cell is `1.96·s/√(2n)`; the report also shows the C-cell form `1.96·s·√(2/(C·n))`, the half-width of an equal-cell-weight difference over C cells, which equals the first at C = 4 (today's labeled corpus). For share metrics it gives the n per cell needed for a ±2.5-point half-width from both forms.
+
 ### Fit-brief eval — private corpus (#495 Phase 3)
 
 `npm run eval:fit-brief` generates a fit brief for each job description in a **private** corpus and scores it against the brief the owner wrote and approved for that role. The corpus is the owner's real job search, and this repository is public, so the harness enforces three rules:
@@ -206,6 +252,8 @@ Each brief is scored on:
 - **Claim gate (model-graded).** The judge (default `claude-opus-5-5`, effort `high`) lists statements about the candidate that the sources don't support, and claim-rule violations. A brief passes the gates only with none of these and no unsupported evidence.
 - **Coverage (model-graded).** Recall: the reference's strengths and exposures that the brief covers, with half credit for partial coverage. Precision: the brief's points that match the reference.
 - **Verdict agreement** with the reference.
+
+The printed aggregate names every failure with one of a closed set of categories, each shown as briefs failing (failing items): `evidence-quote` (a quote found in neither the résumé nor the inventory, nor in units mode any Unit), `extraction-paraphrase` (units mode only: a quote that matches a Unit's `raw_text` under the gate's normalization but not the résumé or inventory, so the brief quoted the extraction's paraphrase), `unsupported-claim` and `claim-rule` (the judge's two lists), and `unscored` (generation or judging failed). Both evidence classes fail the gate; the split only says where the quote came from. Each brief's artifact carries the classified quotes (`evidence.extractionParaphrase`, `evidence.unsupportedQuote`), their counts and `failureCategories`, and an unscored brief's artifact records `failureCategories: ["unscored"]`. `gates passed` divides by every brief, so an unscored brief counts as a gate failure.
 
 `--evidence units` feeds the generator Experience Units extracted from the résumé by the current extraction pin, instead of the résumé itself. Each Unit contributes its verbatim text and its date range; other structured fields are left out. The inventory reaches the generator in both modes, so the comparison changes only how the résumé is represented. Both gates still ground on the canonical résumé and inventory, never on the extracted Units, so an extraction error cannot certify a claim. The mode tests whether Units are sufficient evidence for a brief. Extraction is stochastic, so each units-mode run saves the Units it used as `units.json` in its output directory. Pass that file to later runs with `--units-from <path>` to compare generators on identical evidence; the report and artifacts record the extraction pin that made the Units, whether they were extracted or reused, and a hash of the evidence the generator read.
 
@@ -241,6 +289,12 @@ once the corpus is large enough for stable percentiles.
 tests/eval/
 ├── run.ts             CLI entry point
 ├── runForFixture.ts   per-fixture orchestration (#136)
+├── flowTrace.ts       pure: per-flow trace collector (--record)
+├── flowRecord.ts      pure: flow/invocation record shapes, derived flags, JSONL parser
+├── recorder.ts        --record: writes invocation.json + flows.jsonl
+├── analyze.ts         eval:analyze CLI
+├── analysis/          pure: metrics, statistics, arm comparison for eval:analyze
+├── fitBrief/          private-corpus fit-brief eval (#495)
 ├── loadFixtures.ts    typed fixture-file readers (#136)
 ├── mapping.ts         runtime UUID → labeler mnemonic (#136)
 ├── cache.ts           content-addressed stage cache (#389)

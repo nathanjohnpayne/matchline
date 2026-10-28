@@ -595,3 +595,64 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--model", "m", "--max-usd", "1", "--samples", "0"], now)).toThrow(/--samples/);
   });
 });
+
+describe("evidence failure classes in the run (units mode)", () => {
+  const PARAPHRASE = "Owned the checkout API used by twelve teams.";
+  const quoting = (evidence: string[]): FitBriefResponseV1 => ({ ...BRIEF, strengths: [{ jd_clause: "c", evidence, argument: "a" }] });
+
+  it("carries extraction-paraphrase and unsupported-quote counts into each artifact and the aggregate", async () => {
+    const d = deps({
+      extractUnits: vi.fn(async () => [{ raw_text: PARAPHRASE }]),
+      generate: vi.fn(async (_input, record) => {
+        await record(usage("fit_brief"));
+        return { brief: quoting([PARAPHRASE, "Ran payroll for a bank."]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+      }),
+    });
+    const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units" }, d);
+    const artifacts = [...d.files].filter(([k]) => k !== "/private/out/units.json").map(([, v]) => JSON.parse(v));
+    expect(artifacts).toHaveLength(2);
+    for (const a of artifacts) {
+      expect(a.evidence).toMatchObject({ extractionParaphrase: [PARAPHRASE], unsupportedQuote: ["Ran payroll for a bank."] });
+      expect(a.score).toMatchObject({
+        evidenceExtractionParaphrase: 1,
+        evidenceUnsupportedQuote: 1,
+        failureCategories: ["evidence-quote", "extraction-paraphrase"],
+        gatesPass: false,
+      });
+    }
+    expect(out.report).toContain("| dev | 2 | 0/2 | 2 (2) | 2 (2) | 0 (0) | 0 (0) | 0 (0) |");
+    // stdout stays aggregates-only.
+    expect(out.report).not.toContain("twelve teams");
+    expect(out.report).not.toContain("payroll");
+  });
+
+  it("in résumé mode every failed quote is an evidence-quote failure", async () => {
+    const d = deps({
+      generate: vi.fn(async (_input, record) => {
+        await record(usage("fit_brief"));
+        return { brief: quoting([PARAPHRASE]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+      }),
+    });
+    const out = await runFitBriefEval(CORPUS, OPTIONS, d);
+    const artifact = JSON.parse([...d.files.values()][0]!);
+    expect(artifact.evidence.extractionParaphrase).toBeUndefined();
+    expect(artifact.score.failureCategories).toEqual(["evidence-quote"]);
+    expect(out.report).toContain("| dev | 2 | 0/2 | 2 (2) | 0 (0) | 0 (0) | 0 (0) | 0 (0) |");
+  });
+
+  it("counts an unscored brief against the printed pass rate and marks its artifact", async () => {
+    let n = 0;
+    const d = deps({
+      generate: vi.fn(async (_input, record) => {
+        n += 1;
+        if (n === 2) throw new Error("boom");
+        await record(usage("fit_brief"));
+        return { brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+      }),
+    });
+    const out = await runFitBriefEval(CORPUS, OPTIONS, d);
+    expect(out.report).toContain("| dev | 2 | 1/2 | 0 (0) | 0 (0) | 0 (0) | 0 (0) | 1 (1) |");
+    const failedArtifact = [...d.files.values()].map((v) => JSON.parse(v)).find((a) => a.error !== undefined);
+    expect(failedArtifact.failureCategories).toEqual(["unscored"]);
+  });
+});

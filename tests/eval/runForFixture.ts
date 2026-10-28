@@ -46,6 +46,15 @@ import type {
 } from "../../functions/src/types/capability.ts";
 
 import { StageCache, sumUsageCost, type CacheKeyInput } from "./cache.ts";
+// --record hook (per-flow recorder): see flowTrace.ts.
+import {
+  traceCacheOutcome,
+  traceCall,
+  traceFailure,
+  traceStepFor,
+  traceValue,
+  type FlowTrace,
+} from "./flowTrace.ts";
 import {
   loadExpectedMatches,
   loadExpectedUnits,
@@ -113,6 +122,14 @@ export interface RunForFixtureDeps {
    * only re-pay for identical vectors — see the call sites.
    */
   readonly cacheDiscriminators?: Readonly<Record<string, string | number>>;
+  /**
+   * --record hook (per-flow recorder). A fresh collector from
+   * `newFlowTrace()` that this run fills with every usage record
+   * (tagged by step, replayed or live), the extracted Units, the
+   * parsed Requirements, and the failure detail. The result object is
+   * unchanged; omit it and nothing is collected.
+   */
+  readonly trace?: FlowTrace;
 }
 
 export interface RunForFixtureInput {
@@ -215,6 +232,7 @@ export async function runForFixture(
     modeledUsage,
     hits: 0,
     misses: 0,
+    trace: deps.trace, // --record hook
   };
 
   try {
@@ -227,6 +245,7 @@ export async function runForFixture(
       tally,
     );
   } catch (err) {
+    traceFailure(deps.trace, err); // --record hook
     return {
       resumeFixtureId: input.resumeFixtureId,
       jdFixtureId: input.jdFixtureId,
@@ -333,6 +352,8 @@ interface StageTally {
   readonly modeledUsage: UsageRecord[];
   hits: number;
   misses: number;
+  /** --record hook: per-flow collector, when the caller asked for one. */
+  readonly trace?: FlowTrace;
 }
 
 /**
@@ -355,13 +376,17 @@ async function runStage<T>(
   liveRecord: (usage: UsageRecord) => Promise<number>,
   compute: (record: (usage: UsageRecord) => Promise<number>) => Promise<T>,
 ): Promise<T> {
+  const step = traceStepFor(tally.trace, keyInput.stage); // --record hook
   if (cache === undefined) {
     // No cache: the live recorder both prices into `costAccum` and
     // needs to land in `modeledUsage`. Wrap it.
-    return compute(async (usage) => {
+    const value = await compute(async (usage) => {
       tally.modeledUsage.push(usage);
+      traceCall(tally.trace, step, usage, false); // --record hook
       return liveRecord(usage);
     });
+    traceValue(tally.trace, keyInput.stage, value); // --record hook
+    return value;
   }
 
   // Codex P2 round 1: modeled usage used to be copied out of
@@ -385,6 +410,7 @@ async function runStage<T>(
       (cacheRecord) =>
         compute(async (usage) => {
           tally.modeledUsage.push(usage);
+          traceCall(tally.trace, step, usage, false); // --record hook
           await cacheRecord(usage);
           return liveRecord(usage);
         }),
@@ -393,9 +419,12 @@ async function runStage<T>(
     if (outcome.hit) {
       tally.hits += 1;
       tally.modeledUsage.push(...outcome.usage);
+      for (const usage of outcome.usage) traceCall(tally.trace, step, usage, true); // --record hook
     } else {
       tally.misses += 1;
     }
+    traceCacheOutcome(tally.trace, step, outcome.hit); // --record hook
+    traceValue(tally.trace, keyInput.stage, outcome.value); // --record hook
     return outcome.value;
   } catch (err) {
     // Count the attempt so a failed stage still shows as a miss

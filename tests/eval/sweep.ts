@@ -295,7 +295,10 @@ export interface RunVariantDeps {
    * Run the whole labeled corpus once under the currently-active
    * overrides. Injected so the sweep is testable without LLM calls.
    */
-  readonly runCorpus: () => Promise<readonly RunForFixtureResult[]>;
+  readonly runCorpus: (
+    /** --record hook: the variant whose overrides are installed, so a recorder can label its flows. */
+    variant: SweepVariant,
+  ) => Promise<readonly RunForFixtureResult[]>;
 }
 
 /**
@@ -427,7 +430,7 @@ export async function runVariant(
   };
   setPromptVersionOverrides(effectivePromptVersions);
   try {
-    const results = await deps.runCorpus();
+    const results = await deps.runCorpus(variant); // --record hook: pass the variant
     // Report the configuration that actually ran. Returning the raw
     // variant here used to hide command-wide --prompt flags behind
     // "(defaults)", making a valid sweep look like it used a

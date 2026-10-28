@@ -20,6 +20,10 @@
  * with no API keys set at all.
  *   --no-cache                 — bypass the cache entirely
  *   --refresh-cache            — ignore stored entries but rewrite them
+ *
+ * Per-flow records (--record hook; see recorder.ts and the README):
+ *   --record <dir>             — write invocation.json + flows.jsonl to a
+ *                                directory outside the repository
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -52,7 +56,9 @@ import {
   runSweep,
 } from "./sweep.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
-import { runForFixture, type RunForFixtureResult } from "./runForFixture.js";
+import { type RunForFixtureResult } from "./runForFixture.js";
+// --record hook (per-flow recorder): see recorder.ts.
+import { describeVariants, FlowRecorder, parseRecordDir, recordingRunner } from "./recorder.js";
 
 type Mode = "smoke" | "full";
 
@@ -118,6 +124,7 @@ const FLAGS_WITH_VALUES: readonly string[] = [
   "--prompt",
   "--variant",
   "--token-source",
+  "--record", // --record hook (per-flow recorder)
 ];
 
 /** Flags that stand alone; an `=value` on these is a mistake. */
@@ -522,6 +529,23 @@ async function main(): Promise<number> {
   assertVariantsCallable(variants);
   const cacheMode = resolveCacheMode(argv, samples);
   const cache = new StageCache({ mode: cacheMode });
+  // --record hook (per-flow recorder): validated here, before any spend;
+  // an in-repo or already-used directory is refused. Files appear with
+  // the first recorded flow.
+  const recordDir = parseRecordDir(argv);
+  const recorder =
+    recordDir === undefined
+      ? undefined
+      : FlowRecorder.prepare(recordDir, {
+          argv,
+          tokenSource,
+          cacheMode,
+          samples,
+          mode,
+          promptOverrides,
+          variants: describeVariants(variants, tokenSource, promptOverrides),
+        });
+  const runFlow = recordingRunner(recorder, tokenSource);
   // Omitted from the report when caching is off, so a `--no-cache`
   // run's output stays byte-identical to the pre-#389 shape.
   // Projection-guard baseline. Hoisted above the sweep branch so the
@@ -677,12 +701,13 @@ async function main(): Promise<number> {
         console.log(formatReport(buildReport(mode, fixtureResults, sweepChecks, cacheRollup(), tokenSource)));
         return 1;
       }
-      const runCorpus = async (): Promise<readonly RunForFixtureResult[]> => {
+      const runCorpus = async (variant: { readonly label: string }): Promise<readonly RunForFixtureResult[]> => {
+        recorder?.setVariant(variant.label); // --record hook
         const out: RunForFixtureResult[] = [];
         for (const pair of pairs) {
           for (let i = 0; i < samples; i++) {
             out.push(
-              await runForFixture(
+              await runFlow(
                 {
                   resumeFixtureId: pair.resume.replace(/\.txt$/, ""),
                   jdFixtureId: pair.jd.replace(/\.txt$/, ""),
@@ -711,6 +736,7 @@ async function main(): Promise<number> {
         { basePromptVersions: promptOverrides },
       );
       console.log(report);
+      finishRecording(recorder, results); // --record hook
       // An all-failure sweep produced no usable measurements; CI and
       // shell callers must not read that as success.
       if (!results.some((r) => r.flows > 0 && r.failures < r.flows)) {
@@ -735,7 +761,7 @@ async function main(): Promise<number> {
       const samplesForThisPair: RunForFixtureResult[] = [];
       for (let i = 0; i < samples; i++) {
         samplesForThisPair.push(
-          await runForFixture(
+          await runFlow(
             { resumeFixtureId, jdFixtureId },
             {
               anthropicClient,
@@ -763,6 +789,7 @@ async function main(): Promise<number> {
       successfulFlows += samplesForThisPair.filter((r) => r.ok).length;
       fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
     }
+    finishRecording(recorder); // --record hook
   } else if (variants.length > 0) {
     // Codex P2: a requested sweep that cannot run used to print the
     // ordinary no-key fixture listing and exit 0, so CI and shell
@@ -882,6 +909,19 @@ async function main(): Promise<number> {
   }
 
   return 0;
+}
+
+/**
+ * --record hook (per-flow recorder): stamp the invocation as finished
+ * and say where the records went. stderr, so stdout keeps the report.
+ */
+function finishRecording(
+  recorder: FlowRecorder | undefined,
+  results?: Parameters<FlowRecorder["finish"]>[0],
+): void {
+  if (recorder === undefined) return;
+  recorder.finish(results);
+  console.error(`Recorded ${recorder.flowCount} flow(s) to ${recorder.dir}`);
 }
 
 /**
