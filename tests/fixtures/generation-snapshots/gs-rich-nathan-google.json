@@ -1,0 +1,661 @@
+{
+  "schema_version": 1,
+  "id": "gs-rich-nathan-google",
+  "evidence_density": "rich",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "nathan-2026",
+    "jd_fixture_id": "google-compute-spm-2026",
+    "expected_matches": "expected-matches/nathan-2026__google-compute-spm-2026.json",
+    "expected_traces": "expected-asset-traces/nathan-2026__google-compute-spm-2026__resume.json"
+  },
+  "role": {
+    "id": "role_google_compute_spm",
+    "title": "Senior Product Manager, Google Compute",
+    "company_id": "co_google"
+  },
+  "units": [
+    {
+      "id": "u_kepler",
+      "raw_text": "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV's Android stack with a native Linux-based OS. Ported all three NCP apps, hit the September 2025 announcement, shipped on-time in October with zero negative impact to engagement metrics. Fire TV is Disney's fourth-largest living room platform (~18M monthly active devices).",
+      "normalized_summary": "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack with native Linux-based OS",
+      "unit_type": "project",
+      "skills": [
+        "platform launch",
+        "partner integration",
+        "device certification",
+        "cross-team leadership",
+        "release engineering"
+      ],
+      "tools": [
+        "NCP",
+        "Fire TV",
+        "Kepler",
+        "Linux"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "connected devices"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_disney_plus_launch",
+      "raw_text": "Brought Disney+ from concept to launch on multiple connected devices, working across Engineering, Design, and Product.",
+      "normalized_summary": "Brought Disney+ from concept to launch on multiple connected devices — fastest-growing streaming service of all time",
+      "unit_type": "project",
+      "skills": [
+        "0-to-1 product launch",
+        "cross-functional leadership",
+        "front-end engineering team management"
+      ],
+      "tools": [
+        "Disney+"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "consumer launch"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_ncp_v3",
+      "raw_text": "Led NCPv3 — JavaScript/React support on NCP devices enabling the mature BBD application to run on PlayStation, Xbox, Vega OS, STBs, and smart TVs without a separate Rust implementation. Drafted the CER; weathered a proposed Galileo pivot that was later reversed.",
+      "normalized_summary": "Led NCPv3 — JavaScript/React support on NCP devices enabling BBD app on PlayStation, Xbox, Vega OS, STBs, smart TVs without separate Rust implementation",
+      "unit_type": "project",
+      "skills": [
+        "technical strategy",
+        "platform architecture",
+        "engineering team leadership"
+      ],
+      "tools": [
+        "JavaScript",
+        "React",
+        "NCP",
+        "PlayStation",
+        "Xbox"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "connected devices"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_partner_data",
+      "raw_text": "Rebuilt partner device data infrastructure. Designed a two-tier ADK4 partner questionnaire (qualification plus certification), moved device certification data into Partner Portal with Snowflake backend and Looker dashboards, and replaced a workflow of 40+ inconsistent spreadsheets with structured, queryable records. Forcing function was a German HEVC patent enforcement action that exposed critical gaps in pulling partner device data on demand; the same infrastructure now supports AV1/HEVC legal compliance work across Germany and Brazil.",
+      "normalized_summary": "Rebuilt partner device data infrastructure with two-tier ADK4 questionnaire, Snowflake backend, Looker dashboards — replacing 40+ inconsistent spreadsheets",
+      "unit_type": "project",
+      "skills": [
+        "data infrastructure",
+        "schema design",
+        "operational tooling",
+        "compliance"
+      ],
+      "tools": [
+        "Snowflake",
+        "Looker",
+        "Partner Portal"
+      ],
+      "domains": [
+        "device certification",
+        "partner operations",
+        "legal compliance"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_adk_releases",
+      "raw_text": "Shipped multiple ADK versions adding live video playback, ad playback, and advanced video and audio format support — most recently ADK 4.0 GA (March 2026) with a DMP hot-swappable player, text-to-speech, encrypted audio, and a Sentry to DataDog migration. Owned scope tradeoffs, partner communication, and certification gate decisions across releases.",
+      "normalized_summary": "Shipped multiple ADK versions including ADK 4.0 GA with hot-swappable player, text-to-speech, encrypted audio, and Sentry to DataDog migration",
+      "unit_type": "project",
+      "skills": [
+        "release management",
+        "scope tradeoffs",
+        "partner communication",
+        "certification gate decisions"
+      ],
+      "tools": [
+        "ADK",
+        "Sentry",
+        "DataDog",
+        "DMP"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "platform observability"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_mergepath",
+      "raw_text": "A deterministic repository standard that keeps humans and AI coding agents aligned through canonical documentation, binding CI constraints, multi-identity code review, and automated external review via the OpenAI Codex GitHub App. Mergepath is the enforcement layer underneath every other project on this site — the reason \"built with AI agents\" comes with a governance trail instead of just a vibe. Currently deployed across seven repositories.",
+      "normalized_summary": "Built Mergepath — agent governance infrastructure with multi-identity code review and automated external review via OpenAI Codex GitHub App, deployed across 7 repositories",
+      "unit_type": "project",
+      "skills": [
+        "AI agent governance",
+        "CI infrastructure",
+        "multi-repo standards",
+        "0-to-1 product"
+      ],
+      "tools": [
+        "GitHub Actions",
+        "OpenAI Codex",
+        "1Password",
+        "bash",
+        "Python"
+      ],
+      "domains": [
+        "developer tools",
+        "AI-augmented engineering"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_swipe_watch",
+      "raw_text": "A swipe-based discovery experiment for Disney+ and Hulu, built to test whether a faster, more active taste-signal loop would improve the recommendation experience. Demoed to Disney's EVP of Product as an interaction-design hypothesis test.",
+      "normalized_summary": "Built Swipe Watch — swipe-based discovery experiment for Disney+ and Hulu, demoed to Disney's EVP of Product",
+      "unit_type": "project",
+      "skills": [
+        "interaction design",
+        "rapid prototyping",
+        "executive demo"
+      ],
+      "tools": [
+        "JavaScript",
+        "Firebase Hosting"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "content discovery"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_override",
+      "raw_text": "A production financial platform for Broadway productions: capitalization, investor returns, waterfall modeling, and recoup scenarios. Handles theatrical financing mechanics including recoup-first vs. share-from-dollar-one structures, running royalty offsets, and GP fees.",
+      "normalized_summary": "Built Override — production financial platform for Broadway productions: capitalization, investor returns, waterfall modeling, recoup scenarios",
+      "unit_type": "project",
+      "skills": [
+        "financial modeling",
+        "0-to-1 product",
+        "domain-specific software"
+      ],
+      "tools": [
+        "Next.js",
+        "TypeScript",
+        "Firebase"
+      ],
+      "domains": [
+        "theatrical finance",
+        "investor tooling"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_dsot",
+      "raw_text": "A single web application for understanding partner device hardware, DRM, codec support, and operational readiness across Disney+, Hulu, and ESPN. Consolidates what was previously 40+ inconsistent questionnaire versions into structured, queryable records with role-based access and domain-restricted auth.",
+      "normalized_summary": "Built Device Source of Truth — single web app for partner device hardware, DRM, codec support, operational readiness across Disney+, Hulu, ESPN",
+      "unit_type": "project",
+      "skills": [
+        "data consolidation",
+        "role-based access design",
+        "0-to-1 product"
+      ],
+      "tools": [
+        "React",
+        "TypeScript",
+        "Vite",
+        "Firebase"
+      ],
+      "domains": [
+        "device certification",
+        "partner operations"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_bamtech_ott",
+      "raw_text": "Managed development of OTT apps for Roku, Chromecast, PlayStation, and Xbox across MLBAM's platforms and partners (MLB.com, HBO, Fox Sports, Eurosport, MLS, NHL). Full lifecycle responsibility: iteration management, development resource coordination, feature scheduling, QA, and deployment.",
+      "normalized_summary": "Managed development of OTT apps for Roku, Chromecast, PlayStation, Xbox across MLBAM platforms (MLB.com, HBO, Fox Sports, Eurosport, MLS, NHL)",
+      "unit_type": "ownership",
+      "skills": [
+        "technical project management",
+        "lifecycle management",
+        "QA",
+        "deployment coordination"
+      ],
+      "tools": [
+        "Roku",
+        "Chromecast",
+        "PlayStation",
+        "Xbox"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "OTT applications"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_playstation_proto",
+      "raw_text": "Led PlayStation prototyping that produced the first-to-launch living room experience.",
+      "normalized_summary": "Led PlayStation prototyping for Disney+ that produced the first-to-launch living room experience",
+      "unit_type": "project",
+      "skills": [
+        "prototyping",
+        "platform launch",
+        "product validation"
+      ],
+      "tools": [
+        "PlayStation",
+        "Disney+"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "console platforms"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_platform_health",
+      "raw_text": "Ran NCP plus ADK platform health reporting across Conviva, Sentry, and Datadog. Weekly exec-format narration, Q2/Q3 KPI tracking (FPS, Glimpse attribution, DataDog migration, AI PR cycle time), and automation to port Sentry dashboards to Datadog ahead of the July 2026 cutover.",
+      "normalized_summary": "Ran NCP and ADK platform health reporting across Conviva, Sentry, Datadog with weekly exec narration and Sentry-to-DataDog cutover automation",
+      "unit_type": "ownership",
+      "skills": [
+        "platform observability",
+        "executive reporting",
+        "KPI tracking",
+        "cross-tool migration"
+      ],
+      "tools": [
+        "Conviva",
+        "Sentry",
+        "DataDog"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "platform observability"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_ai_pr_review",
+      "raw_text": "Introduced AI-powered PR review to the NCPF App Foundations squad. Reduced median PR cycle time from 7.4 days to 4 — beating the 30% Q2 OKR target. Policy is now AI review plus 2 human reviewers, moving toward AI plus 1 human.",
+      "normalized_summary": "Introduced AI-powered PR review reducing median PR cycle time from 7.4 to 4 days, beating the 30% Q2 OKR target",
+      "unit_type": "achievement",
+      "skills": [
+        "engineering productivity",
+        "AI tooling adoption",
+        "OKR ownership",
+        "process change"
+      ],
+      "tools": [
+        "GitHub",
+        "AI code review"
+      ],
+      "domains": [
+        "developer tools",
+        "AI-augmented engineering"
+      ],
+      "metrics": [
+        {
+          "claim": "reduced median PR cycle time from 7.4 days to 4",
+          "value": 4,
+          "unit": "days median PR cycle time",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "u_san",
+      "raw_text": "Designed and implemented SAN supporting 180TB of shared storage at 99.9% SLA for 100+ concurrent users.",
+      "normalized_summary": "Designed and implemented SAN supporting 180TB shared storage at 99.9% SLA for 100+ concurrent users",
+      "unit_type": "technical_decision",
+      "skills": [
+        "storage systems",
+        "SLA-driven infrastructure",
+        "capacity planning"
+      ],
+      "tools": [
+        "SAN",
+        "shared storage"
+      ],
+      "domains": [
+        "enterprise storage",
+        "broadcast operations"
+      ],
+      "metrics": []
+    }
+  ],
+  "requirements": [
+    {
+      "id": "r_8yr_pm",
+      "raw_text": "8 years of experience in product management or related technical role",
+      "normalized_requirement": "8 years of experience in product management or related technical role",
+      "category": "experience_level",
+      "keywords": [
+        "product management",
+        "8 years"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_3yr_zero_to_one",
+      "raw_text": "3 years of experience taking technical products from conception to launch (e.g., ideation to execution, end-to-end, 0 to 1, etc.)",
+      "normalized_requirement": "3 years of experience taking technical products from conception to launch (e.g., ideation to execution, end-to-end, 0 to 1)",
+      "category": "experience_level",
+      "keywords": [
+        "0 to 1",
+        "conception to launch"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_3yr_cloud",
+      "raw_text": "3 years of experience working with cloud, compute, SaaS, or enterprise technologies",
+      "normalized_requirement": "3 years of experience working with cloud, compute, SaaS, or enterprise technologies",
+      "category": "domain",
+      "keywords": [
+        "cloud",
+        "saas",
+        "enterprise"
+      ],
+      "tools": [],
+      "domains": [
+        "cloud"
+      ],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_gtm_strategy",
+      "raw_text": "Experience driving product goal, go-to-market strategy, and design discussions",
+      "normalized_requirement": "Driving product goal, go-to-market strategy, and design discussions",
+      "category": "skill",
+      "keywords": [
+        "go-to-market",
+        "product goal"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_technical_design_direction",
+      "raw_text": "Experience managing day-to-day technical and design direction",
+      "normalized_requirement": "Managing day-to-day technical and design direction",
+      "category": "skill",
+      "keywords": [
+        "technical direction",
+        "design direction"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_compute_arch",
+      "raw_text": "Experience in compute architecture, data center infrastructure, CPU (x86/Arm) and I/O technologies, and operational aspects of cloud servers",
+      "normalized_requirement": "Compute architecture, data center infrastructure, CPU (x86/Arm) and I/O technologies, operational aspects of cloud servers",
+      "category": "domain",
+      "keywords": [
+        "compute architecture",
+        "cpu",
+        "data center"
+      ],
+      "tools": [],
+      "domains": [
+        "cloud infrastructure"
+      ],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_category_defining",
+      "raw_text": "Experience bringing innovative, category-defining tech products to market and driving product goal and GTM strategy",
+      "normalized_requirement": "Bringing innovative, category-defining tech products to market",
+      "category": "skill",
+      "keywords": [
+        "category-defining",
+        "gtm"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_storage_systems",
+      "raw_text": "Understanding of locally attached storage systems (LSDD), performance needs, and workload requirements for enterprise applications like relational database management systems (e.g., SAP HANA, etc.)",
+      "normalized_requirement": "Locally attached storage systems (LSDD), enterprise applications like SAP HANA",
+      "category": "domain",
+      "keywords": [
+        "storage",
+        "sap hana"
+      ],
+      "tools": [
+        "SAP HANA"
+      ],
+      "domains": [
+        "enterprise storage"
+      ],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_cross_functional_influence",
+      "raw_text": "Ability to communicate effectively and influence decisions cross-functionally and at all levels of an organization",
+      "normalized_requirement": "Communicate effectively and influence decisions cross-functionally and at all levels",
+      "category": "soft_skill",
+      "keywords": [
+        "influence",
+        "cross-functional"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_multi_year_roadmap",
+      "raw_text": "Define and drive the multi-year product roadmap for CPU and memory technologies, ensuring Google Compute Engine meets the performance and efficiency needs of modern workloads",
+      "normalized_requirement": "Define and drive multi-year roadmap for CPU and memory technologies for Google Compute Engine",
+      "category": "scope",
+      "keywords": [
+        "roadmap",
+        "multi-year"
+      ],
+      "tools": [],
+      "domains": [
+        "compute"
+      ],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "responsibilities"
+    },
+    {
+      "id": "r_vm_lifecycle",
+      "raw_text": "Lead the product lifecycle for compute-based virtual machines, from deep-range silicon feature planning through to broad market scaling and adoption",
+      "normalized_requirement": "Lead product lifecycle for compute-based virtual machines, deep-range silicon feature planning through to broad market scaling",
+      "category": "domain",
+      "keywords": [
+        "virtual machines",
+        "product lifecycle"
+      ],
+      "tools": [],
+      "domains": [
+        "compute"
+      ],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "responsibilities"
+    },
+    {
+      "id": "r_business_dev_strategy",
+      "raw_text": "Conduct business development strategy and go-to-market activities, building sales programs to secure business and market share for new infrastructure products",
+      "normalized_requirement": "Conduct business development strategy and GTM activities, build sales programs to secure business and market share",
+      "category": "skill",
+      "keywords": [
+        "business development",
+        "sales programs"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "responsibilities"
+    },
+    {
+      "id": "r_executive_engagement",
+      "raw_text": "Serve as a technical and business expert in customer-facing engagements, influencing executive stakeholders at major partner and customer organizations",
+      "normalized_requirement": "Customer-facing engagements, influence executive stakeholders at major partner and customer organizations",
+      "category": "skill",
+      "keywords": [
+        "executive stakeholders",
+        "customer-facing"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "responsibilities"
+    },
+    {
+      "id": "r_cross_functional_collab",
+      "raw_text": "Collaborate with engineering, UX, marketing, and sales teams across all layers of the cloud stack to prioritize initiatives and maximize return on investment",
+      "normalized_requirement": "Collaborate with engineering, UX, marketing, and sales teams across all layers of the cloud stack",
+      "category": "soft_skill",
+      "keywords": [
+        "collaboration",
+        "cross-functional"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "responsibilities"
+    }
+  ],
+  "approved_matches": [
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_executive_engagement"
+    },
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_cross_functional_collab"
+    },
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_gtm_strategy"
+    },
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_technical_design_direction"
+    },
+    {
+      "experience_unit_id": "u_disney_plus_launch",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_disney_plus_launch",
+      "job_requirement_unit_id": "r_category_defining"
+    },
+    {
+      "experience_unit_id": "u_disney_plus_launch",
+      "job_requirement_unit_id": "r_cross_functional_collab"
+    },
+    {
+      "experience_unit_id": "u_ncp_v3",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_ncp_v3",
+      "job_requirement_unit_id": "r_technical_design_direction"
+    },
+    {
+      "experience_unit_id": "u_partner_data",
+      "job_requirement_unit_id": "r_executive_engagement"
+    },
+    {
+      "experience_unit_id": "u_partner_data",
+      "job_requirement_unit_id": "r_cross_functional_influence"
+    },
+    {
+      "experience_unit_id": "u_adk_releases",
+      "job_requirement_unit_id": "r_technical_design_direction"
+    },
+    {
+      "experience_unit_id": "u_adk_releases",
+      "job_requirement_unit_id": "r_multi_year_roadmap"
+    },
+    {
+      "experience_unit_id": "u_mergepath",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_mergepath",
+      "job_requirement_unit_id": "r_category_defining"
+    },
+    {
+      "experience_unit_id": "u_swipe_watch",
+      "job_requirement_unit_id": "r_executive_engagement"
+    },
+    {
+      "experience_unit_id": "u_override",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_dsot",
+      "job_requirement_unit_id": "r_3yr_zero_to_one"
+    },
+    {
+      "experience_unit_id": "u_dsot",
+      "job_requirement_unit_id": "r_3yr_cloud"
+    },
+    {
+      "experience_unit_id": "u_partner_data",
+      "job_requirement_unit_id": "r_3yr_cloud"
+    },
+    {
+      "experience_unit_id": "u_kepler",
+      "job_requirement_unit_id": "r_8yr_pm"
+    },
+    {
+      "experience_unit_id": "u_disney_plus_launch",
+      "job_requirement_unit_id": "r_8yr_pm"
+    },
+    {
+      "experience_unit_id": "u_bamtech_ott",
+      "job_requirement_unit_id": "r_8yr_pm"
+    }
+  ],
+  "item_upper_bound": 26,
+  "notes": "Draft stand-in for owner-approved evidence: all 24 owner-labeled top matches approved. u_playstation_proto, u_platform_health, u_ai_pr_review and u_san appear only in the owner's expected traces, so they are present but ineligible (no approved match)."
+}

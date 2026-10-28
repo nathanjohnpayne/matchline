@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "id": "vc-03-swapped-employer-project",
+  "category": "swapped_employer_project",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_factory_scheduler",
+      "raw_text": "Designed the Threadline factory-comms scheduler — a Postgres-backed job system with idempotent retries, dead-letter queues per factory, and a SLA-violation alert path that pages the factory's dedicated CS owner. Replaces what would otherwise be Sidekiq plus a separate alerting stack; a single engineer maintains it.",
+      "normalized_summary": "Designed Threadline factory-comms scheduler — Postgres-backed job system with idempotent retries, per-factory dead-letter queues, and SLA-violation alert path replacing Sidekiq plus separate alerting stack",
+      "unit_type": "technical_decision",
+      "skills": [
+        "distributed systems",
+        "job scheduling design",
+        "postgres engineering",
+        "operational tooling"
+      ],
+      "tools": [
+        "Postgres"
+      ],
+      "domains": [
+        "backend engineering",
+        "b2b saas"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_async_jobs_postgres",
+      "raw_text": "Built the Pliant async job system on top of Postgres LISTEN/NOTIFY plus a row-level locking pattern. Replaced the existing Sidekiq deployment for the workflow execution path; reduced per-job p99 latency by 60% and removed Redis as a tier-1 dependency.",
+      "normalized_summary": "Built Pliant async job system on Postgres LISTEN/NOTIFY plus row-level locking, replacing Sidekiq for workflow execution; reduced per-job p99 latency by 60% and removed Redis as tier-1 dependency",
+      "unit_type": "technical_decision",
+      "skills": [
+        "distributed systems",
+        "postgres engineering",
+        "performance engineering",
+        "infrastructure simplification"
+      ],
+      "tools": [
+        "Postgres",
+        "Sidekiq",
+        "Redis"
+      ],
+      "domains": [
+        "backend engineering",
+        "b2b saas"
+      ],
+      "metrics": [
+        {
+          "claim": "reduced per-job p99 latency by 60%",
+          "value": 60,
+          "unit": "% p99 latency",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "At Threadline, built a Postgres job system on LISTEN/NOTIFY that cut per-job p99 latency by 60% and removed Redis as a tier-1 dependency.",
+    "source_unit_ids": [
+      "u_factory_scheduler"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Built a Postgres-backed job system at Threadline.",
+        "required_terms": [
+          "Threadline",
+          "Postgres"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_factory_scheduler"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "The Threadline job system was built on Postgres LISTEN/NOTIFY.",
+        "required_terms": [
+          "LISTEN/NOTIFY"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "The Threadline job system cut per-job p99 latency by 60%.",
+        "required_terms": [
+          "p99",
+          "60%"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      },
+      {
+        "id": "a4",
+        "text": "The Threadline job system removed Redis as a tier-1 dependency.",
+        "required_terms": [
+          "Redis"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The LISTEN/NOTIFY, p99 -60% and Redis facts belong to the Pliant job system (u_async_jobs_postgres, included uncited); the cited Threadline scheduler supports only a Postgres-backed job system."
+}

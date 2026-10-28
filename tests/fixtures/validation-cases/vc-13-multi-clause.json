@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "id": "vc-13-multi-clause",
+  "category": "multi_clause",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "dimitri-wireless-ran-engineer-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_mu_mimo_scheduler",
+      "raw_text": "Owned the MU-MIMO scheduler co-design across L1 and L2. Closed the gap between the L2 proportional-fair scheduler and the L1 PMI feedback rate by introducing a one-slot precoder-prediction filter; reduced rank mismatch events by 38% on the FR1 8-layer test set.",
+      "normalized_summary": "Owned MU-MIMO scheduler co-design across L1 and L2, introduced one-slot precoder-prediction filter that reduced rank mismatch events by 38% on FR1 8-layer test set",
+      "unit_type": "technical_decision",
+      "skills": [
+        "scheduler design",
+        "cross-layer optimization",
+        "mu-mimo",
+        "signal processing"
+      ],
+      "tools": [
+        "FR1 8-layer"
+      ],
+      "domains": [
+        "telecom infrastructure",
+        "5g ran"
+      ],
+      "metrics": [
+        {
+          "claim": "reduced rank mismatch events by 38% on the FR1 8-layer test set",
+          "value": 38,
+          "unit": "% rank mismatch events",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Owned MU-MIMO scheduler co-design across L1 and L2, introducing a one-slot precoder-prediction filter that reduced rank mismatch events by 38% on the FR1 8-layer test set.",
+    "source_unit_ids": [
+      "u_mu_mimo_scheduler"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Owned MU-MIMO scheduler co-design across L1 and L2.",
+        "required_terms": [
+          "MU-MIMO",
+          "L1",
+          "L2"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_mu_mimo_scheduler"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Introduced a one-slot precoder-prediction filter.",
+        "required_terms": [
+          "one-slot",
+          "precoder-prediction filter"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_mu_mimo_scheduler"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "Reduced rank mismatch events by 38% on the FR1 8-layer test set.",
+        "required_terms": [
+          "rank mismatch",
+          "38%",
+          "FR1 8-layer"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_mu_mimo_scheduler"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [
+      {
+        "id": "rel1",
+        "assertion_ids": [
+          "a2",
+          "a3"
+        ],
+        "co_terms": [
+          [
+            "precoder-prediction"
+          ],
+          [
+            "38%"
+          ]
+        ]
+      },
+      {
+        "id": "rel2",
+        "assertion_ids": [
+          "a1",
+          "a2"
+        ],
+        "co_terms": [
+          [
+            "MU-MIMO"
+          ],
+          [
+            "precoder-prediction"
+          ]
+        ]
+      }
+    ],
+    "expected_asset_status": "passed"
+  },
+  "notes": "Draft. One sentence carrying three clauses and two relationships; extraction must keep the filter tied to the 38% result."
+}

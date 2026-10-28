@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "id": "vc-11-cross-unit-fusion",
+  "category": "cross_unit_fusion",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_pliant_monolith_split",
+      "raw_text": "Owned the migration of Pliant's monolithic Rails app to a TypeScript-Node services architecture for the workflow execution path. Designed the service split, ran the dual-write window for six weeks, and cut median workflow execution latency from 1.2s to 280ms; old code path retired three months later.",
+      "normalized_summary": "Owned migration of Pliant Rails monolith to TypeScript-Node services for workflow execution path, six-week dual-write window; cut median workflow execution latency from 1.2s to 280ms",
+      "unit_type": "technical_decision",
+      "skills": [
+        "service decomposition",
+        "migration engineering",
+        "performance engineering",
+        "backend architecture"
+      ],
+      "tools": [
+        "TypeScript",
+        "Node.js",
+        "Rails"
+      ],
+      "domains": [
+        "b2b saas",
+        "backend engineering"
+      ],
+      "metrics": [
+        {
+          "claim": "cut median workflow execution latency from 1.2s to 280ms",
+          "value": 280,
+          "unit": "ms median latency",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "u_data_export",
+      "raw_text": "Led the multi-tenant data-export feature end-to-end — schema design, Postgres COPY-based pipeline, S3 hand-off, signed download URLs, and the customer-facing UI. Feature shipped on the deadline tied to a Fortune 500 procurement requirement and unblocked a $1.4M ACV deal.",
+      "normalized_summary": "Led Pliant multi-tenant data export end-to-end — schema design, Postgres COPY pipeline, S3 hand-off, signed URLs, customer UI; shipped on procurement deadline and unblocked $1.4M ACV deal",
+      "unit_type": "project",
+      "skills": [
+        "feature engineering",
+        "postgres optimization",
+        "s3 integration",
+        "full-stack engineering"
+      ],
+      "tools": [
+        "Postgres",
+        "S3"
+      ],
+      "domains": [
+        "b2b saas",
+        "enterprise sales"
+      ],
+      "metrics": [
+        {
+          "claim": "unblocked a $1.4M ACV deal",
+          "value": 1400000,
+          "unit": "USD ACV",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Cut Pliant's median workflow execution latency to 280ms, which unblocked a $1.4M ACV deal.",
+    "source_unit_ids": [
+      "u_pliant_monolith_split",
+      "u_data_export"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Cut Pliant's median workflow execution latency to 280ms.",
+        "required_terms": [
+          "280ms",
+          "workflow execution latency"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_pliant_monolith_split"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Unblocked a $1.4M ACV deal.",
+        "required_terms": [
+          "$1.4M ACV"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_data_export"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "The latency cut is what unblocked the $1.4M ACV deal.",
+        "required_terms": [
+          "280ms",
+          "unblocked",
+          "$1.4M ACV"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      }
+    ],
+    "relationships": [
+      {
+        "id": "rel1",
+        "assertion_ids": [
+          "a1",
+          "a2"
+        ],
+        "co_terms": [
+          [
+            "280ms"
+          ],
+          [
+            "$1.4M"
+          ]
+        ]
+      }
+    ],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. Each fact is supported by its own Unit; the deal was unblocked by the data-export feature, not the latency work, so the causal fusion is unsupported."
+}

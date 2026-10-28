@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "id": "vc-02-equivalent-numeric-notation",
+  "category": "equivalent_numeric_notation",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_threadline_mvp",
+      "raw_text": "Built Threadline's MVP solo over fourteen months — Next.js front end, Node.js + Postgres back end, Stripe Billing, and a Twilio-backed factory-comms layer. Closed the first ten paying customers from cold outbound and a single Hacker News Show post; first $10K MRR within seven months of launch.",
+      "normalized_summary": "Built Threadline MVP solo over fourteen months — Next.js, Node.js, Postgres, Stripe Billing, Twilio factory-comms; closed first ten customers from cold outbound and Hacker News, hit $10K MRR in seven months",
+      "unit_type": "project",
+      "skills": [
+        "full-stack engineering",
+        "0-to-1 product",
+        "customer development",
+        "founding engineer"
+      ],
+      "tools": [
+        "Next.js",
+        "Node.js",
+        "Postgres",
+        "Stripe Billing",
+        "Twilio"
+      ],
+      "domains": [
+        "b2b saas",
+        "apparel manufacturing"
+      ],
+      "metrics": [
+        {
+          "claim": "first $10K MRR within seven months of launch",
+          "value": 10000,
+          "unit": "USD MRR",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Built the Threadline MVP solo in 14 months on Next.js, Node.js and Postgres, reaching $10,000 MRR within 7 months of launch.",
+    "source_unit_ids": [
+      "u_threadline_mvp"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Built the Threadline MVP solo in 14 months.",
+        "required_terms": [
+          "Threadline",
+          "MVP",
+          [
+            "14 months",
+            "fourteen months"
+          ]
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_threadline_mvp"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Built the Threadline MVP on Next.js, Node.js and Postgres.",
+        "required_terms": [
+          "Next.js",
+          "Node.js",
+          "Postgres"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_threadline_mvp"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "Threadline reached $10,000 MRR within 7 months of launch.",
+        "required_terms": [
+          [
+            "$10,000",
+            "$10K",
+            "10k"
+          ],
+          "MRR",
+          [
+            "7 months",
+            "seven months"
+          ]
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_threadline_mvp"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [
+      {
+        "id": "rel1",
+        "assertion_ids": [
+          "a1",
+          "a3"
+        ],
+        "co_terms": [
+          [
+            "$10,000",
+            "$10K"
+          ],
+          [
+            "7 months",
+            "seven months"
+          ]
+        ]
+      }
+    ],
+    "expected_asset_status": "passed"
+  },
+  "notes": "Draft. $10,000 and 7 months are notation-equivalent to the source's $10K and seven months; a validator that flags them is a supported-claim false flag."
+}

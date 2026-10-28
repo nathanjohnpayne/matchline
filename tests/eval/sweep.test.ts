@@ -29,6 +29,7 @@ import {
 } from "../../functions/src/prompts/loader.ts";
 
 import type { RunForFixtureResult } from "./runForFixture.ts";
+import { SWEEP_SCOPES } from "./sweepScope.ts";
 import {
   assertModelsPriced,
   assertPromptSchemasCompatible,
@@ -1040,5 +1041,82 @@ describe("effort variants (#495)", () => {
     expect(effortFor("extraction")).toBeUndefined();
     // The report records what was sent, defaults included.
     expect(result.efforts.extraction).toBe("low");
+  });
+});
+
+// -- Suite scopes (#488) ----------------------------------------------------------
+
+describe("suite scopes for the subtask suites (#488)", () => {
+  const V = SWEEP_SCOPES.validation;
+  const G = SWEEP_SCOPES.generation;
+
+  it("parses the validation subtasks in the validation scope", () => {
+    expect(parseVariantFlag("a:model.claim_extraction=claude-haiku-4-5-20251001", "api", V).models).toEqual({
+      claim_extraction: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+    });
+    expect(() => parseVariantFlag("b:model.traceability=claude-haiku-4-5-20251001", "api", V)).not.toThrow();
+    expect(() => parseVariantFlag("c:model.specificity=claude-haiku-4-5-20251001", "api", V)).not.toThrow();
+    expect(parseVariantFlag("d:model.traceability=claude-sonnet-5-5,effort.traceability=medium", "api", V).efforts).toEqual({
+      traceability: "medium",
+    });
+  });
+
+  it("refuses corpus stages and prompt keys in the validation scope", () => {
+    expect(() => parseVariantFlag("a:model.extraction=claude-haiku-4-5-20251001", "api", V)).toThrow(
+      /not exercised by suite validation/,
+    );
+    expect(() => parseVariantFlag("a:prompt.validation/specificity=v1", "api", V)).not.toThrow();
+    expect(() => parseVariantFlag("a:prompt.extraction/resume=v1", "api", V)).toThrow(/not exercised by suite validation/);
+  });
+
+  it("still refuses a validation subtask in the corpus scope", () => {
+    expect(() => parseVariantFlag("a:model.specificity=claude-haiku-4-5-20251001", "api")).toThrow(/not exercised/);
+  });
+
+  it("refuses an effort on generation in the generation scope", () => {
+    expect(() => parseVariantFlag("a:effort.generation=low", "api", G)).toThrow(/does not apply model profiles/);
+    expect(() => parseVariantFlag("a:model.generation=claude-sonnet-4-6", "api", G)).not.toThrow();
+  });
+
+  it("refuses the reserved rationale stage in every scope", () => {
+    for (const scope of [SWEEP_SCOPES.corpus, V, G]) {
+      expect(() => parseVariantFlag("a:model.rationale=claude-sonnet-4-6", "api", scope)).toThrow(/not exercised/);
+      expect(() => parseVariantFlag("a:effort.rationale=low", "api", scope)).toThrow(/not exercised/);
+    }
+  });
+
+  it("threads the scope through parseVariants", () => {
+    expect(parseVariants(["--variant", "a:model.specificity=claude-haiku-4-5-20251001"], "api", V)).toHaveLength(1);
+    expect(() => parseVariants(["--variant", "a:model.specificity=claude-haiku-4-5-20251001"], "api")).toThrow(/not exercised/);
+  });
+
+  it("checks effort support on the scope's stages", () => {
+    const variant = (efforts: Record<string, string>, models: Record<string, string> = {}) => ({
+      label: "v",
+      efforts: efforts as never,
+      models: Object.fromEntries(Object.entries(models).map(([s, m]) => [s, { provider: "anthropic" as const, model: m }])),
+    });
+    expect(() => assertVariantsCallable([variant({ specificity: "low" })], V)).toThrow(/does not accept effort low/);
+    expect(() =>
+      assertVariantsCallable([variant({ specificity: "low" }, { specificity: "claude-haiku-4-5-20251001" })], V),
+    ).toThrow(/does not accept effort low/);
+    expect(() =>
+      assertVariantsCallable([variant({ specificity: "low" }, { specificity: "claude-sonnet-5-5" })], V),
+    ).not.toThrow();
+  });
+
+  it("checks prompt schemas against the scope's wired versions", () => {
+    const root = mkdtempSync(join(tmpdir(), "sweep-scope-schemas-"));
+    try {
+      mkdirSync(join(root, "validation"), { recursive: true });
+      writeFileSync(join(root, "validation", "traceability.v1.schema.ts"), "export const A = 1;\n");
+      writeFileSync(join(root, "validation", "traceability.v2.schema.ts"), "export const A = 2;\n");
+      const variants = [{ label: "a", promptVersions: { "validation/traceability": "v2" } }];
+      expect(() => assertPromptSchemasCompatible(variants, {}, root, V)).toThrow(/schema the pipeline does not enforce/);
+      // The corpus scope does not wire this key, so it has nothing to compare.
+      expect(() => assertPromptSchemasCompatible(variants, {}, root)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

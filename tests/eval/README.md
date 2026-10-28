@@ -268,6 +268,56 @@ The printed aggregate names every failure with one of a closed set of categories
 
 The claim gate is model-graded rather than reusing the claim-extraction and traceability validators. Those validators assume every claim is about the candidate, as in a résumé bullet. A fit brief also states facts about the role and gives advice, and traceability would flag those as fabrications.
 
+### Generation and validation-subtask suites (#488, #489)
+
+`npm run eval:subtasks` evaluates the three validation subtasks (claim extraction, traceability, specificity) and the JD-to-validated-résumé path from frozen approved matches. It is a separate entry point from `npm run eval`: the corpus report, its cache and its CI no-keys path are unchanged, and onboarding extraction stays in `npm run eval`.
+
+```bash
+# Plan and projection only: no keys, no client, no request
+npm run eval:subtasks -- --suite validation --dry-run
+npm run eval:subtasks -- --suite generation --dry-run
+
+# A cheaper specificity model against the baseline (a paid run: project first, post on #495)
+npm run eval:subtasks -- --suite validation --max-usd 10 \
+  --variant 'spec-haiku:model.specificity=claude-haiku-4-5-20251001'
+
+# A supported effort on a registered 5.5 model
+npm run eval:subtasks -- --suite validation --max-usd 10 \
+  --variant 't55:model.traceability=claude-sonnet-5-5,effort.traceability=medium'
+```
+
+Flags: `--suite validation|generation` (required), `--case <id>` (repeatable), `--samples N`, `--prompt <stage>/<name>=vN`, `--variant` (same grammar as the corpus sweep), `--token-source api|claude-cli`, `--dry-run`, `--max-usd <n>`, `--replay` or `--no-cache`, `--report-json <path>`. Unknown flags exit 2. An implicit `baseline` variant with no overrides always runs first; the label is reserved.
+
+**Scopes.** Each suite accepts overrides only for what it runs; anything else is refused before a request, like the corpus sweep's "not exercised" rule.
+
+| Suite | `model.` / `effort.` stages | Prompt keys |
+| --- | --- | --- |
+| corpus (`npm run eval`) | `extraction`, `requirement_parsing` | `extraction/resume`, `parsing/jd` |
+| validation | `claim_extraction`, `traceability`, `specificity` | `validation/claimExtraction`, `validation/traceability`, `validation/specificity` |
+| generation | `generation` | `generation/resume` |
+
+`rationale` is in no scope: rationales are a deterministic template and the config entry is never read. The old single `validation` stage is an unknown stage since #489. Generation variants are limited to models whose profile is forced tool choice, no effort and budget factor 1 (today `claude-haiku-4-5-20251001` and `claude-sonnet-4-6`): `functions/src/generation/pipeline.ts` does not apply model profiles yet, so an effort or a 5.5 model there would run without the requested setting or fail on forced tool choice.
+
+**What is graded, and by what.** The validator under test is graded only against labels, never against another model. Traceability and specificity are called on the GOLD assertion text, with the item's cited Units as the only candidates (the same rule as `validateBullet`); claim extraction is scored by lexical coverage of the gold assertions; a whole-asset pass runs `validateAsset` with in-memory loaders and is graded only on its status. In the generation suite, downstream validation runs with the validator pinned to production defaults (`assertValidationAtDefaults`), and its verdict is reported as the baseline validator's, not as ground truth.
+
+**Fixtures.** `tests/fixtures/validation-cases/` (14 cases covering the #488 categories plus multi-clause and the owner's adversarial fabrication) and `tests/fixtures/generation-snapshots/` (one rich, one sparse), built only from public fixtures. All are drafts (`"review_status": "draft-pending-owner-review"`, `"labeled_by": "claude-draft"`) until the owner reviews them; every report over drafts carries a DRAFT banner and is not a comparison of record. See the README in each directory for the schema and the loader's refusals.
+
+**Labels are immutable for a comparison.** `tests/fixtures/eval-labels.lock.json` holds each labeled file's sha256 per `label_version` (cases, snapshots and `expected-asset-traces/`). To relabel: edit the file and bump `label_version`, append `{ label_version, sha256 }` to its lock history, and land it as a separately reviewed PR. `labelsLock.test.ts` fails on any unlocked change, and the run refuses to start. Every report prints a `fixtureSetHash`; runs whose hashes differ are not comparable (`comparable()` in `tests/eval/subtasks/report.ts`).
+
+**Metrics** (pure, in `tests/eval/subtasks/metrics.ts`; every rate shows its numerator and denominator):
+
+- Claim extraction: assertion coverage and relationship coverage, kept apart from schema validity (first-attempt pass, pass after retry, hard fail, outcome histogram per stage).
+- Traceability: fabrication false accept, supported-claim false flag, wrong supporting Unit. A fabrication whose check hard-failed is listed as unverified, never counted as caught.
+- Specificity: false flag and miss. Whole asset: false accept and false block; an errored run is neither.
+- Generation: schema-valid and first-attempt rates, invented-id retry rate, requirement coverage through approved pairs, expected-trace recall (rich snapshot), unmatched must-haves (listed, not scored), and the baseline validator's pass rate.
+- Retry and error rate per stage; cost per completed flow (all modeled cost, failed flows included, over completed flows); per-stage span and end-to-end span with p50/p95 (spans, never sums of concurrent calls), plus per-call latency.
+
+**Run metadata.** Each run has a `runId`; every attempt has an `attemptId` and records the requested and served model, `max_tokens`, tool choice and effort as sent, the request key, usage, modeled cost and token fidelity (`metered` for api, `estimated` for the CLI). An api call with a missing or mismatched served model makes the variant `invalid: served-model`; a usage record whose `max_tokens` or effort differs from the wire makes it `invalid: settings-mismatch`. Invalid variants are printed but marked not comparable. `--report-json` writes the whole `RunRecord` privately.
+
+**Local replay is not the provider cache.** Requests are keyed by the full request body (model, `max_tokens`, tool choice, effort, system prompt with suffix and retry reminder, tool schema, rendered messages) plus token source, CLI adapter version and sample index, so every setting, prompt and rendering change is in the key. The default mode, `fresh`, stores outputs but never reads them, so independent live runs never reuse an output; `--replay` reuses stored outputs to rescore offline; `--no-cache` neither reads nor writes. The report shows local replay and provider prompt-cache tokens as separate rows. The corpus `StageCache` is untouched.
+
+**Spend.** `--dry-run` prints the request plan with an expected and a retry-inclusive worst case (3 attempts at the full output cap, input with a 1.25 margin, ×1.35 for the 5.5 tokenizer). A live api run requires `--max-usd`, refuses when the worst case exceeds it or a monthly cap, and the budget ledger then checks each request's worst case before sending it; reaching the bound aborts the run without retries and marks the remaining cases `skipped: budget_reached`. Post the projection on #495 before any paid run. Fourteen cases and two snapshots cannot support production p95 or reliability claims; every report says so.
+
 ### What the cost figures are
 
 Every dollar figure the harness prints is a **list-price estimate**: provider-reported token counts priced through `functions/src/llm/rates.ts` by `priceUsage` in `functions/src/llm/cost.ts`, the same function production telemetry uses. It is not an invoice. Credits, discounts and billing adjustments never show up here, so check the provider console for what was actually billed.
@@ -307,10 +357,12 @@ tests/eval/
 ├── cache.ts           content-addressed stage cache (#389)
 ├── tokenSource.ts     api / claude-cli adapters (#389)
 ├── sweep.ts           pure: model×prompt matrix + Pareto table (#389)
+├── sweepScope.ts      which stages / prompt keys each suite may override (#488)
+├── subtasks/          generation and validation-subtask suites (#488, #489)
 ├── scoring.ts         pure: jaccard, unit-set accuracy, top-K overlap
 ├── projection.ts      pure: monthly-spend cap check
 ├── report.ts          pure: stdout formatter
-├── .cache/            stage-cache entries (gitignored)
+├── .cache/            stage-cache and subtask replay entries (gitignored)
 └── *.test.ts          vitest unit tests
 ```
 
@@ -326,7 +378,10 @@ tests/fixtures/
 ├── jds/                 raw JD text, one file per fixture
 ├── expected-units/      hand-labeled ExperienceUnit[] per resume
 ├── expected-matches/    hand-labeled top-K match IDs per (resume, jd)
-└── expected-asset-traces/   per-generated-output claim → Unit map
+├── expected-asset-traces/   per-generated-output claim → Unit map
+├── validation-cases/    draft labeled cases for the validation suite (#488)
+├── generation-snapshots/    draft frozen generation inputs (#488)
+└── eval-labels.lock.json    label lock for the three labeled directories above
 ```
 
 Phase 0 ships the directory skeleton only; the 10×10 corpus is

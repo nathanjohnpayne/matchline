@@ -1,0 +1,105 @@
+import { describe, expect, it } from "vitest";
+
+import type { CallRecord } from "./instrument.ts";
+import { costMetrics, wallTime } from "./metrics.ts";
+import { CAVEAT, comparable, formatSubtaskReport, labelStatus, type RunRecord, type VariantRecord } from "./report.ts";
+
+const resolved = {
+  label: "baseline",
+  stages: {
+    traceability: { provider: "anthropic", model: "claude-sonnet-4-6", maxTokens: 1024, toolChoice: "forced" as const, outputBudgetFactor: 1 },
+    specificity: { provider: "anthropic", model: "claude-sonnet-5-5", maxTokens: 1024, toolChoice: "auto" as const, effort: "high" as const, outputBudgetFactor: 2 },
+  },
+  promptVersions: {
+    "validation/traceability": { version: "v1", fingerprint: "v1:0123456789abcdef" },
+    "validation/specificity": { version: "v1", fingerprint: "v1:fedcba9876543210" },
+  },
+};
+
+const call: CallRecord = {
+  runId: "eval-1", attemptId: "a", suite: "validation", pass: "isolated", variant: "baseline", caseId: "c", repeat: 0, stage: "traceability",
+  invocationId: "i", attemptIndex: 0, requestedModel: "claude-sonnet-4-6", servedModel: "claude-sonnet-4-6", servedModelStatus: "ok",
+  maxTokens: 1024, toolChoice: "forced", effort: null, requestKey: "k", startedAtMs: 0, endedAtMs: 100, outcome: "tool_use",
+  usage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 30, cacheCreationInputTokens: 4 }, replayed: true,
+  replayedFromRunId: "eval-0", tokenFidelity: "metered", modeledUsd: 0.002,
+};
+
+function variant(p: Partial<VariantRecord> = {}): VariantRecord {
+  return {
+    label: "baseline", validity: "valid", resolved, servedModels: { traceability: ["claude-sonnet-4-6"] }, concurrency: 6, budgetMs: null,
+    metrics: null, wallTime: wallTime([call], ["traceability"], null), usage: costMetrics([call], 1), notes: [], ...p,
+  };
+}
+
+function record(p: Partial<RunRecord> = {}): RunRecord {
+  return {
+    schema_version: 1, runId: "eval-20261028T190112Z-3fa9c1", suite: "validation", startedAt: "s", finishedAt: "f", dryRun: false,
+    git: { sha: "05272fc0000", dirty: false }, tokenSource: "api", tokenFidelity: "metered", cacheMode: "fresh", samples: 1,
+    labels: {
+      status: "draft",
+      fixtureSetHash: "sha256:9c41aaaa",
+      files: [{ path: "validation-cases/vc-01-x.json", sha256: "1f0a".padEnd(64, "0"), label_version: 1, review_status: "draft-pending-owner-review", labeled_by: "claude-draft" }],
+      primary: [{ id: "vc-01-x", path: "validation-cases/vc-01-x.json", derivedFrom: null }],
+    },
+    schemas: { "validation/traceability@v1": "5e3d".padEnd(64, "0") },
+    variants: [variant(), variant({ label: "bad", validity: "invalid: served-model" })],
+    guards: { maxUsd: 5, projected: { expectedUsd: 1, worstCaseUsd: 2, requests: 10 }, capChecks: [], spentUsd: 0.5, budgetReached: false },
+    plan: null, invocations: [], calls: [call], caveat: CAVEAT, ...p,
+  };
+}
+
+describe("formatSubtaskReport", () => {
+  const text = formatSubtaskReport(record());
+
+  it("carries the run metadata header", () => {
+    expect(text).toContain("eval-20261028T190112Z-3fa9c1");
+    expect(text).toContain("token source: api (metered)");
+    expect(text).toContain("cache: fresh (never reads earlier runs)");
+    expect(text).toContain("DRAFT LABELS");
+    expect(text).toContain("validation-cases/vc-01-x.json");
+    expect(text).toContain("sha256:9c41aaaa");
+    expect(text).toContain("v1:0123456789abcdef");
+    expect(text).toContain("5e3d");
+    expect(text).toContain("Onboarding extraction is not part of this suite");
+  });
+
+  it("shows the settings as sent on the wire", () => {
+    expect(text).toMatch(/specificity\s+claude-sonnet-5-5\s+-\s+high\s+1024\s+auto/);
+    expect(text).toMatch(/traceability\s+claude-sonnet-4-6\s+claude-sonnet-4-6\s+-\s+1024\s+forced/);
+  });
+
+  it("marks invalid variants not comparable", () => {
+    expect(text).toContain("variant bad   validity: invalid: served-model — not comparable");
+  });
+
+  it("separates provider cache tokens from local replay, and labels wall time a span", () => {
+    expect(text).toContain("provider cache tokens: read 30, write 4");
+    expect(text).toContain("local replay: 1 calls");
+    expect(text).toContain("span, not sum");
+    expect(text).toContain(`caveat: ${CAVEAT}`);
+  });
+
+  it("drops the DRAFT banner only when every file is owner-reviewed", () => {
+    const owner = record({
+      labels: { ...record().labels, status: "owner-reviewed", files: record().labels.files.map((f) => ({ ...f, review_status: "owner-reviewed" })) },
+    });
+    expect(formatSubtaskReport(owner)).not.toContain("DRAFT LABELS");
+    expect(labelStatus([{ review_status: "owner-reviewed" }, { review_status: "draft-pending-owner-review" }])).toBe("mixed");
+  });
+
+  it("round-trips the record through JSON", () => {
+    const r = record();
+    expect(JSON.parse(JSON.stringify(r))).toEqual(r);
+  });
+});
+
+describe("comparable", () => {
+  it("is false when the fixture set, token source or replay mode differ, true otherwise", () => {
+    const a = record();
+    expect(comparable(a, record())).toEqual({ ok: true });
+    expect(comparable(a, record({ labels: { ...a.labels, fixtureSetHash: "sha256:other" } })).ok).toBe(false);
+    expect(comparable(a, record({ tokenSource: "claude-cli" })).ok).toBe(false);
+    expect(comparable(a, record({ cacheMode: "replay" })).ok).toBe(false);
+    expect(comparable(a, record({ cacheMode: "bypass" }))).toEqual({ ok: true });
+  });
+});
