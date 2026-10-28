@@ -153,14 +153,16 @@ const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\
 
 /**
  * Parse an ISO date or date-time. `Date.parse` alone accepts other
- * formats and rolls an impossible date such as 2026-02-30 forward, so
- * the calendar date is checked against what it parsed to.
+ * formats and some runtimes roll an impossible date such as 2026-02-30
+ * forward, so the captured calendar date is checked on its own, with or
+ * without a time.
  */
 export function parseIsoDate(name: string, value: string): number {
   const m = ISO_DATE.exec(value);
   const ms = m ? Date.parse(m[4] ? value : `${value}T00:00:00Z`) : Number.NaN;
   if (!m || Number.isNaN(ms)) throw new Error(`--${name} must be an ISO date: ${value}`);
-  if (!m[4] && new Date(ms).toISOString().slice(0, 10) !== value) {
+  const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (date.toISOString().slice(0, 10) !== `${m[1]}-${m[2]}-${m[3]}`) {
     throw new Error(`--${name} is not a calendar date: ${value}`);
   }
   return ms;

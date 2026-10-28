@@ -86,6 +86,7 @@ describe("latency report (#616)", () => {
     expect(parseIsoDate("since", "2026-10-01")).toBe(Date.UTC(2026, 9, 1));
     expect(parseIsoDate("since", "2026-10-01T12:00:00Z")).toBe(Date.UTC(2026, 9, 1, 12));
     expect(() => parseIsoDate("since", "2026-02-30")).toThrow(/calendar date/);
+    expect(() => parseIsoDate("since", "2026-02-30T12:00:00Z")).toThrow(/calendar date/);
     expect(() => parseIsoDate("since", "10/01/2026")).toThrow(/ISO date/);
     expect(() => parseIsoDate("since", "2026-13-01")).toThrow();
   });
