@@ -151,16 +151,8 @@ Acceptance criteria:
 
 ### End-to-end acceptance
 
-- **Full flow (Target, not met).** From a populated Capability Graph,
-  a user can paste a JD and produce a validated, exportable resume in
-  under 20 s at p95. Not yet measured end to end (#616): the 236 s
-  p95 from #177 timed résumé extraction through matching in the eval
-  harness, not this flow. JD parsing alone takes about 30 s in
-  production, so the target is not met. Export is not built (#33).
-- **Cost (Target).** Per-application LLM spend (parse + match +
-  generate + validate) is under $1, with a p95 target of $0.75. Per-call cost
-  is attributed by task since #483; no per-application p95 has been
-  reported against this target yet.
+- **Full flow (Target, not met).** From a populated Capability Graph, a user can paste a JD and produce a validated, exportable resume in under 20 s at p95. One timed run on matchline-dev took about 88 s of server time to a saved validation verdict, about 4.4× the target (n = 1, #619; see Execution targets). The 236 s p95 from #177 timed résumé extraction through matching in the eval harness, not this flow. Export is not built (#33).
+- **Cost (Target).** Per-application LLM spend (parse + match + generate + validate) is under $1, with a p95 target of $0.75. Per-call cost is attributed by task since #483. One timed run of the full flow cost $0.87 (#619), under the $1 ceiling; a single run does not establish a p95.
 - **Zero fabrication.** Every claim in every exported or sent output
   traces to an approved Experience Unit. This is an invariant, not a
   metric. Today it is enforced at the export gate, which requires a
@@ -443,6 +435,8 @@ validation runs when the user saves a bullet's text or chooses
 without running it). **Target:** validation completes before generated output
 is first shown.
 
+`validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The pool's deadline falls 45 s before the callable's 300 s budget. When it passes, no new call starts and the callable fails with `deadline-exceeded`. The first failed call aborts the pool the same way, and nothing persists unless every item validated.
+
 **Target:**
 
 - A claim-rule check runs every generated artifact against the user's
@@ -549,14 +543,9 @@ Guarding *unsaved editor content* is a related but separate contract, tracked in
 
 ## Execution targets
 
-These are **Target** values. Measured in production (`npm run
-latency:report`, the 12 recorded calls from 2026-08-31 to 2026-09-03):
-resume extraction 125 s (n = 1), JD parsing p50 31.6 s and p95 31.9 s
-(n = 5, Haiku 4.5, about 4,000 output tokens per call), embeddings
-under 2.5 s. Resume generation and validation have no production
-calls, so the full flow is unmeasured (#616). The 236 s p95 in #177
-is an eval-harness figure that includes resume extraction and stops
-at matching; it is not the full flow.
+These are **Target** values. Measured in production (`npm run latency:report`, the 12 recorded calls from 2026-08-31 to 2026-09-03): resume extraction 125 s (n = 1), JD parsing p50 31.6 s and p95 31.9 s (n = 5, Haiku 4.5, about 4,000 output tokens per call), embeddings under 2.5 s.
+
+The full flow is measured from one timed run on matchline-dev (n = 1, 2026-10-27 Pacific, #619): about 88 s of server time from paste JD to a saved validation verdict, so the 20 s p95 **Target** is not met (about 4.4× over). Parse JD took 23.8 s, matching 5.1 s (including a 2.0 s `409` the app retried), resume generation 9.8 s and validation 48.8 s (108 Sonnet 4.6 calls: 281.9 s of model time, finishing within a 47.9 s span). Each step was timed in the browser around its callable; the clicks between steps are not counted. The run cost $0.87, inside the $0.50–$1.00 per-new-role cost **Target**. An earlier run the same day (#616) never reached a verdict: validation's calls ran one at a time and the callable's 300 s timeout killed it after 92 calls, which #621 fixed. The 236 s p95 in #177 is an eval-harness figure that includes resume extraction and stops at matching; it is not the full flow.
 
 Latency (p50 / p95):
 
@@ -582,8 +571,7 @@ Reliability:
 
 - Structured-output failures retry with stricter prompts up to twice,
   then surface as "needs manual review" for extraction, parsing and
-  generation. **Target:** the same for validation; the Application
-  Editor shows a generic "Validation couldn't run" today.
+  generation. **Target:** the same for validation. Today the Application Editor says validation "ran out of time" when a run hits its deadline (#621) and shows a generic "Validation couldn't run" for any other failure.
 - Validation failures never auto-regenerate. They always surface for
   explicit user approval.
 - No silent fallbacks. If the system cannot produce a confident result,
