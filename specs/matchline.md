@@ -136,6 +136,7 @@ Acceptance criteria:
   under the same grounding and validation. Outreach drafting is
   **Deferred**. `AssetRef.kind` already reserves `cover_letter` and
   `outreach`; no writer produces them yet.
+- Generation reads each eligible Unit through the same evidence text the validator reads: `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range` (`functions/src/validation/unitPromptText.ts`). It also reads the target role (title and Requirements, with ids) and the approved Unit-to-Requirement links, in separately tagged sections. The target role and the links say what is relevant; they never supply facts about the candidate, including titles and tenure. Content the Units do not support is omitted, never filled; an empty bullet or skill list is a valid result. Eligibility is unchanged: an approved Unit in the Application's `approved_unit_ids` with at least one approved match to a Requirement the Role still has.
 - The validation layer (see `## Validation layer`) attaches a
   claim-to-Unit map and flags any claim that does not trace to an
   approved Unit. It runs when the user saves a bullet's text or
@@ -144,7 +145,7 @@ Acceptance criteria:
 - The export gate (today in the Application Editor; **Target:** the
   Package, PRD decision 5) blocks export while any validation flag is
   unresolved.
-- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
+- A passing validation result covers the evidence as the validator read it. When the validator's evidence format changes (the evidence version's prefix moves, as it did to `ev3` for #485), every earlier verdict stops covering export and the editor says that validation has been updated; re-running it is a user-triggered model call, and stored verdicts are never recomputed. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
 - **Target:** export to PDF, DOCX, and plain text (#33), from the
   Package. Today the Export control enforces the gate above, but its
   action is a stub.
@@ -278,10 +279,7 @@ document uses it.
   to something the job description no longer asks for. Such matches are
   refused at generation rather than deleted — the approval is the
   user's decision to keep, and a rematch may well reinstate the pair.
-  The check is applied again inside the persist transaction, because
-  the inputs are read minutes before the artifact is written and a
-  re-parse can land in between; a generation whose grounding stops
-  holding mid-flight is discarded rather than saved.
+  The check is applied again inside the persist transaction, because the inputs are read minutes before the artifact is written. The transaction re-verifies the Requirement set (ids, text and must-have), that every cited Unit still has a live approved match, the Role's title, that every Unit shown to the model is unchanged in its evidence text, still approved, owned and listed in `approved_unit_ids`, and that every Unit-to-Requirement link shown to the model is still live and approved. A generation whose inputs changed mid-flight is discarded rather than saved; additions (a newly approved match or Unit) do not discard it, because they cannot make what the model read untrue.
 - `Application.approved_unit_ids` is a snapshot of the Units used to
   generate a specific artifact. Changing a Unit later must not mutate
   a historical Application's grounding set.
@@ -437,6 +435,8 @@ is first shown.
 
 `validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The deadline covers validation's reads and model calls and falls 45 s before the callable's 300 s budget. When it passes, no new call starts, and the callable fails with `deadline-exceeded`, unless an earlier call already failed, in which case it reports that failure. Persisting the verdict runs after the pool closes, outside the deadline; the 45 s margin leaves room for it. The first failed call aborts the pool the same way, and the run then persists nothing. Empty or whitespace-only items are skipped without a call.
 
+Traceability reads each candidate Unit through the formatter generation uses (`functions/src/validation/unitPromptText.ts`), so the two can never see different evidence. It renders `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range`. It deliberately leaves out `business_outcomes` (an unreviewed paraphrase), metric confidence, classification and provenance metadata, approval flags, embeddings and timestamps. Approved tags count as evidence only in their literal wording: a claim that broadens a tag ("Python architecture" from "Python") is unsupported unless the Unit's text supports it. A `date_range` supports only the Unit's own dates: durations, tenure, figures combined across Units and "current" from a range with no end are unsupported unless a Unit's text or metrics state them. A Unit's evidence version (`functions/src/validation/unitEvidenceVersion.ts`) is the prefix `ev3:` plus the SHA-256 of that text. The #485 change to the text moved the prefix from `ev2`, so every verdict recorded before it needs one re-run before export.
+
 **Target:**
 
 - A claim-rule check runs every generated artifact against the user's
@@ -460,7 +460,9 @@ Real-time:
 
 4. Matching (vector + rules, deterministic rationales; no LLM call)
 5. Generation (controlled-generation prompt using approved Units as
-   ground truth)
+   ground truth, rendered through the same Unit formatter as
+   validation; the target role and approved links are relevance, not
+   evidence)
 6. Validation (LLM claim extraction, traceability and specificity; the
    deny-list is a hint to the specificity model, not a verdict)
 
@@ -478,6 +480,8 @@ Model strategy:
   informed by #495.
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
+
+The eval harness does not yet sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing). The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
 
 ## Streaming progress
 
