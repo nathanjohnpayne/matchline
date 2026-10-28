@@ -67,6 +67,12 @@ export interface TraceabilityResult {
 }
 
 export interface TraceabilityContext {
+  /**
+   * Cancels the in-flight request and skips further retries: the
+   * orchestrator aborts it at its deadline or after another call fails
+   * (#619).
+   */
+  readonly signal?: AbortSignal;
   readonly ownerUid: string;
   /** Application whose asset is being validated; recorded on usage telemetry. */
   readonly applicationId?: string;
@@ -127,6 +133,9 @@ export async function checkTraceability(
   const failures: ValidationAttemptFailure[] = [];
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Don't start an attempt the orchestrator has already cancelled,
+    // e.g. after a backoff that `sleep` cut short (Codex on #621).
+    ctx.signal?.throwIfAborted();
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = buildUserContent(prompt.userFewShot, claim, candidateUnits);
@@ -148,8 +157,11 @@ export async function checkTraceability(
         tool_choice: { type: "tool", name: TOOL_NAME },
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, { signal: ctx.signal });
     } catch (err) {
+      // An abort is the orchestrator's decision, not a transport
+      // fault: no retry, no backoff.
+      if (ctx.signal?.aborted) throw err;
       failures.push({
         attempt,
         kind: "transport_error",
@@ -161,7 +173,7 @@ export async function checkTraceability(
       // backoff a single 429 quickly cascades into a window-spanning
       // burst. See functions/src/llm/retry.ts.
       if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(transportBackoffMs(attempt, err));
+        await sleep(transportBackoffMs(attempt, err), ctx.signal);
       }
       continue;
     }

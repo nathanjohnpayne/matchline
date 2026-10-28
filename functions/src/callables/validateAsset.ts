@@ -17,6 +17,7 @@
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 import { anthropicKey } from "../llm/anthropic.js";
+import { ValidationDeadlineExceeded } from "../validation/callPool.js";
 import {
   ClaimExtractionError,
   SpecificityCheckError,
@@ -62,7 +63,13 @@ export const validateAssetCallable = onCall(
     };
 
     try {
-      const result = await runValidateAsset(ctx);
+      // The orchestrator stops starting calls shortly before this
+      // budget runs out and throws ValidationDeadlineExceeded, so the
+      // client gets an error it can show rather than the dropped
+      // connection a platform kill produces (#619).
+      const result = await runValidateAsset(ctx, {
+        budgetMs: CALLABLE_TIMEOUT_SECONDS.validateAsset * 1000,
+      });
       // Strip `content_snapshot` — it's an internal
       // TOCTOU-detection field, not part of the public response.
       const { content_snapshot: _snapshot, ...publicResult } = result;
@@ -99,6 +106,13 @@ export const validateAssetCallable = onCall(
         throw new HttpsError(
           "aborted",
           "Asset content changed during validation; re-run validateAsset.",
+        );
+      }
+      if (err instanceof ValidationDeadlineExceeded) {
+        throw new HttpsError(
+          "deadline-exceeded",
+          "Validation ran out of time before it checked every claim, so there's no verdict yet. Try again.",
+          { stage: "validation", callsStarted: err.callsStarted },
         );
       }
       // Per-stage retry-budget-exhausted errors. Each module

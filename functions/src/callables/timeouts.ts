@@ -77,7 +77,10 @@ export const CALLABLE_TIMEOUT_SECONDS = {
    * Runs several Sonnet passes per invocation — claim extraction,
    * then traceability and specificity over the extracted claims —
    * each with its own 3-attempt budget. The most call-fan-out of any
-   * stage even though each individual response is small.
+   * stage even though each individual response is small. Run one at a
+   * time, ~100 calls outlived this budget (#619); the orchestrator now
+   * runs them through a bounded pool and stops starting calls shortly
+   * before the budget ends (`validation/callPool.ts`).
    */
   validateAsset: 300,
 

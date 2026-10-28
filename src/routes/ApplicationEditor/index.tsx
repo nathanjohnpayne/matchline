@@ -767,7 +767,14 @@ function ApplicationEditorInner({
         // server may have persisted a verdict even though the response
         // was lost or timed out. If the refetch shows a new verdict, the
         // effect on the asset's validation state clears this error.
-        setRevalidateError("Validation couldn't run. Try again in a moment.");
+        // `deadline-exceeded` comes from the server's own deadline
+        // (#619) or the client's callable timeout; either way the run
+        // ended without a verdict.
+        setRevalidateError(
+          (err as { code?: unknown } | null)?.code === "functions/deadline-exceeded"
+            ? "Validation ran out of time before it checked every claim, so there's no verdict yet. Try again."
+            : "Validation couldn't run. Try again in a moment.",
+        );
       }
       try {
         await refetchApplication();
