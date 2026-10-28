@@ -52,7 +52,13 @@ import {
   type ValidationAttemptFailure,
 } from "./errors.js";
 import type { Claim } from "./claimExtraction.js";
-import { citedEntityId, formatUnitBlock, quote } from "./unitPromptText.js";
+import {
+  citedEntityId,
+  formatUnitBlock,
+  promptDate,
+  quote,
+  type UnitPromptFields,
+} from "./unitPromptText.js";
 
 /** Output-token budget per attempt; also recorded on each usage record. */
 const MAX_OUTPUT_TOKENS = 1024;
@@ -81,6 +87,8 @@ export interface TraceabilityContext {
 export interface TraceabilityDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
+  /** Clock for the run date the prompt shows (`promptDate`); injectable for tests. */
+  readonly clock?: () => Date;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -131,6 +139,9 @@ export async function checkTraceability(
   const toolSchema = zodToToolSchema(TraceabilityResponseV2Schema);
 
   const failures: ValidationAttemptFailure[] = [];
+  // Rendered once: the run date and the Units do not change between attempts.
+  const today = promptDate((deps.clock ?? (() => new Date()))());
+  const userContent = `${prompt.userFewShot}\n\n${renderTraceabilityInput(claim.text, today, candidateUnits)}`;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Don't start an attempt the orchestrator has already cancelled,
@@ -138,7 +149,6 @@ export async function checkTraceability(
     ctx.signal?.throwIfAborted();
     const start = Date.now();
     const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
-    const userContent = buildUserContent(prompt.userFewShot, claim, candidateUnits);
 
     let response: Anthropic.Messages.Message;
     try {
@@ -278,14 +288,20 @@ function finalizeResult(
   };
 }
 
-function buildUserContent(
-  userFewShot: string,
-  claim: Claim,
-  candidateUnits: readonly ExperienceUnit[],
+/**
+ * The real input that follows the prompt's few-shot examples: the claim,
+ * the run date, then the Units. The Unit block is the same text
+ * generation reads and the evidence version hashes
+ * (`./unitPromptText.ts`, #485). The run date sits outside it, so it
+ * never changes an evidence version; the prompt uses it only to treat a
+ * `date_range` end later than today as no end (traceability.v2 rule 3).
+ * Exported so the few-shot examples can be pinned to it.
+ */
+export function renderTraceabilityInput(
+  claimText: string,
+  today: string,
+  candidateUnits: readonly UnitPromptFields[],
 ): string {
-  // The same Unit text generation reads and the evidence version
-  // hashes (`./unitPromptText.ts`, #485).
-  const unitsBlock = formatUnitBlock(candidateUnits);
-  return `${userFewShot}\n\nClaim: ${quote(claim.text)}\n\nCandidate Experience Units:\n\n${unitsBlock}`;
+  return `Claim: ${quote(claimText)}\n\nToday: ${quote(today)}\n\nCandidate Experience Units:\n\n${formatUnitBlock(candidateUnits)}`;
 }
 

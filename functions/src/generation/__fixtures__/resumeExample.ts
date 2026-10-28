@@ -96,6 +96,7 @@ export const RESUME_EXAMPLE_UNITS: readonly ExperienceUnit[] = [
 
 /** The input the resume.v2 example shows, before rendering. */
 export const RESUME_EXAMPLE_INPUT: ResumeInput = {
+  today: "2026-01-15",
   units: RESUME_EXAMPLE_UNITS,
   roleTitle: "Senior Product Manager, Video Infrastructure",
   requirements: [

@@ -78,6 +78,7 @@ function match(unitId: string, requirementId: string): UnitMatch {
 const U1 = unit("u1");
 const U2 = unit("u2");
 const SNAPSHOT: GenerationSnapshot = generationSnapshotOf({
+  today: "2026-10-28",
   units: [U1, U2],
   roleTitle: "Staff PM",
   requirements: [requirement("r1"), requirement("r2")],

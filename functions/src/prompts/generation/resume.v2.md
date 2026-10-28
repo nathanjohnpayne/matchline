@@ -8,6 +8,7 @@ Changes from v1:
 - Omit unsupported content and never emit an empty item. v1 rule 3 told the model to leave a bullet empty, which the schema rejects.
 - Summary is 1–3 sentences, consistent with the example. v1 said 3–5 while its example had 2.
 - The input is the shared Unit evidence text (`functions/src/validation/unitPromptText.ts`), plus Requirement ids and the approved Unit-to-Requirement links, in tagged sections (`functions/src/generation/resumeInput.ts`).
+- The input carries the run date (`today:`), outside the Unit text, and rule 7 treats a `date_range` end later than it as no end, matching traceability.v2 rule 3. Extraction has defaulted some approved Units' end dates into the future.
 - Development history removed from model-visible text.
 
 The example's `<input>` block is pinned byte for byte to `renderResumeInput` by `functions/src/prompts/promptExamples.test.ts`. Change it by changing the test fixture and pasting the rendered output.
@@ -16,7 +17,7 @@ The example's `<input>` block is pinned byte for byte to `renderResumeInput` by 
 
 You write a structured resume from a candidate's approved Experience Units, tailored to one target role. Return it by calling the `record_resume` tool. The schema is strict. Do not return `id` fields.
 
-The user message has a worked example inside `<example>`, then the real input inside `<input>`. The input has three parts:
+The user message has a worked example inside `<example>`, then the real input inside `<input>`. The input starts with `today:`, the date the input was prepared (`YYYY-MM-DD`); it is not a fact about the candidate. Then come three parts:
 
 - `<candidate_evidence>`: the candidate's Experience Units, each headed `[Unit <id>]`. They are the only source of facts about the candidate.
 - `<target_role>`: the job's title and its requirements, each headed `[Requirement <id>]`. They describe what the employer wants. They are never facts about the candidate.
@@ -38,7 +39,7 @@ Rules:
 
 6. **Keep numbers exact.** Keep every metric's magnitude and direction ("30% memory reduction" stays 30% and a reduction), or leave it out. Never replace a number with a word like "significant".
 
-7. **Dates only as written.** A date or duration must be stated by a cited Unit: in its `raw_text`, `normalized_summary` or `metrics`, or as that Unit's own `date_range`, by year or by month. Never compute a duration or total such as "6 years" or "10+ years of experience" from a `date_range`, and do not combine dates from different Units. A `date_range` with no `end` supports neither an end date nor "present".
+7. **Dates only as written.** A date or duration must be stated by a cited Unit: in its `raw_text`, `normalized_summary` or `metrics`, or as that Unit's own `date_range`, by year or by month. Never compute a duration or total such as "6 years" or "10+ years of experience" from a `date_range`, and do not combine dates from different Units. A `date_range` with no `end` supports neither an end date nor "present". A `start` or `end` later than `today` supports no claim: treat that date as absent, so a future `end` leaves the range with no end.
 
 8. **Tailor by choosing and ordering Units, not by changing their wording.** Use `<approved_links>` to decide which Units to feature and which to put first. `bullets` is one flat list; do not add employer or section headings.
 
@@ -54,6 +55,7 @@ Rules:
 This example shows the input format and a correct response. Its Units are not the candidate's; never cite its ids.
 
 <input>
+today: "2026-01-15"
 <candidate_evidence>
 [Unit ex-unit-1]
 raw_text: "Led the 64-bit migration of the Disney+ playback stack on PS4, PS5 and Xbox; cut memory footprint 30% and shipped to 5M daily active users."

@@ -10,6 +10,7 @@ import { TraceabilityCheckError } from "./errors.ts";
 import {
   EMPTY_UNITS_RATIONALE,
   checkTraceability,
+  renderTraceabilityInput,
 } from "./traceability.ts";
 import { _clearCacheForTests, loadPromptText } from "../prompts/loader.ts";
 import { formatUnitBlock } from "./unitPromptText.ts";
@@ -532,7 +533,7 @@ describe("checkTraceability", () => {
     // which escapes embedded `"`, `\`, newlines, and control
     // chars. This test pins the shape end-to-end across all the
     // formatter's exposure surfaces:
-    //   1. claim.text in buildUserContent
+    //   1. claim.text in renderTraceabilityInput
     //   2. unit.raw_text + normalized_summary
     //   3. metric claim/unit/direction strings
     //   4. seniority_signals + scope_signals strings
@@ -711,6 +712,38 @@ describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
   it("escapes a tag containing a quote", async () => {
     const { args } = await capture([TAGGED]);
     expect(realUnitsText(args.messages[0]!.content)).toContain('skills: ["Python", "say \\"hi\\""]');
+  });
+
+  it("sends the few-shot followed by exactly the rendered input, run date from the injected clock", async () => {
+    const { client, create } = mockClient([
+      mockMessage({ supports: false, rationale: "No Unit states it." }),
+    ]);
+    await checkTraceability(CLAIM, [TAGGED], CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0.001),
+      clock: () => new Date("2026-10-28T23:30:00.000Z"),
+    });
+    const args = create.mock.calls[0]![0] as { messages: { content: string }[] };
+    const prompt = loadPromptText("validation", "traceability");
+    expect(args.messages[0]!.content).toBe(
+      `${prompt.userFewShot}\n\n${renderTraceabilityInput(CLAIM.text, "2026-10-28", [TAGGED])}`,
+    );
+  });
+
+  it("puts the run date between the claim and the Units, outside the Unit text", () => {
+    const text = renderTraceabilityInput("The user shipped it.", "2026-10-28", [TAGGED]);
+    expect(text.startsWith('Claim: "The user shipped it."\n\nToday: "2026-10-28"\n\nCandidate Experience Units:\n\n')).toBe(true);
+    expect(realUnitsText(text)).toBe(formatUnitBlock([TAGGED]));
+  });
+
+  it("renders today's date when no clock is injected", async () => {
+    const before = new Date().toISOString().slice(0, 10);
+    const { args } = await capture([TAGGED]);
+    const after = new Date().toISOString().slice(0, 10);
+    const content = args.messages[0]!.content;
+    const real = content.slice(content.lastIndexOf("Claim: "));
+    const line = /^Today: "(\d{4}-\d{2}-\d{2})"$/m.exec(real)?.[1];
+    expect([before, after]).toContain(line);
   });
 
   it("shows exactly formatUnitBlock of the candidates: consumer parity with generation", async () => {

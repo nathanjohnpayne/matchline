@@ -1223,12 +1223,17 @@ describe("requirementSetToken: content, not just ids (#449 round 2)", () => {
 
 // -- #485: the rendered input, retry reminders and snapshot ------------------
 
+/** The fixed clock the rendered-input tests inject, and the run date it renders. */
+const NOW = new Date("2026-10-28T23:30:00.000Z");
+const TODAY = "2026-10-28";
+
 /** What the pipeline should render for `inputs`, computed independently of it. */
 function expectedInput(inputs: GenerationInputs): ResumeInput {
   const live = liveApprovedMatchesOf(inputs.approvedMatches, inputs.requirements);
   const eligible = new Set(live.map((m) => m.experience_unit_id));
   const units = sortById(inputs.units.filter((u) => eligible.has(u.id)));
   return {
+    today: TODAY,
     units,
     roleTitle: inputs.role.title,
     requirements: sortById(inputs.requirements),
@@ -1282,6 +1287,7 @@ describe("generation renders the shared evidence input (#485)", () => {
       record: vi.fn<typeof RecordUsage>(async () => 0),
       loadInputs: async () => inputs,
       generateId: () => "id-x",
+      clock: () => NOW,
     });
     return { result, call: callOf(create, 0) };
   }
@@ -1293,6 +1299,28 @@ describe("generation renders the shared evidence input (#485)", () => {
     expect(call.messages[0]!.content).toBe(
       `${prompt.userFewShot}\n\n${renderResumeInput(expectedInput(inputs))}`,
     );
+  });
+
+  it("renders the run date from the injected clock, in UTC, before the evidence", async () => {
+    const { call } = await run(richInputs());
+    const content = call.messages[0]!.content;
+    const input = content.slice(content.lastIndexOf("<input>"));
+    expect(input.split("\n").slice(0, 3)).toEqual(["<input>", `today: "${TODAY}"`, "<candidate_evidence>"]);
+  });
+
+  it("renders today's date when no clock is injected", async () => {
+    const before = new Date().toISOString().slice(0, 10);
+    const { client, create } = mockClient([mockMessage(VALID_RESPONSE)]);
+    await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => richInputs(),
+      generateId: () => "id-x",
+    });
+    const after = new Date().toISOString().slice(0, 10);
+    const content = callOf(create, 0).messages[0]!.content;
+    const line = /^today: "(\d{4}-\d{2}-\d{2})"$/m.exec(content.slice(content.lastIndexOf("<input>")))?.[1];
+    expect([before, after]).toContain(line);
   });
 
   it("puts the real input last, after the example", async () => {

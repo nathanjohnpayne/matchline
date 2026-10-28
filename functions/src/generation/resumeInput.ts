@@ -2,8 +2,11 @@
  * The real input of the resume generation prompt (#485), as a pure
  * function of what the pipeline loaded. No Firestore, no model.
  *
- * Three tagged sections, so the boundary between evidence and
- * relevance is in the structure and not only in the instructions:
+ * A `today:` line (the run date, `promptDate`) and then three tagged
+ * sections, so the boundary between evidence and relevance is in the
+ * structure and not only in the instructions. The date is outside the
+ * Unit text, so it never changes an evidence version; the prompt uses it
+ * only to treat a `date_range` end later than today as no end:
  *
  *   - `<candidate_evidence>`: each eligible Unit through the shared
  *     formatter (`../validation/unitPromptText.ts`), the same text the
@@ -25,7 +28,10 @@
  *
  * `generationSnapshotOf` records what was rendered beyond the
  * Requirement set, so the persist transaction can refuse a resume whose
- * input changed while the model was writing it (`./snapshot.ts`).
+ * input changed while the model was writing it (`./snapshot.ts`). It
+ * leaves out the run date on purpose: a date that moves on before the
+ * persist only turns future ends into past ones, so the resume was
+ * written under rules at least as strict as the persist-time date gives.
  */
 
 import type {
@@ -40,6 +46,8 @@ import { formatUnitBlock, quote, renderEntityId } from "../validation/unitPrompt
 export type GenerationLink = readonly [unitId: string, requirementId: string];
 
 export interface ResumeInput {
+  /** The run date, `YYYY-MM-DD` (`promptDate`). */
+  readonly today: string;
   /** Eligible Units, sorted by id. */
   readonly units: readonly ExperienceUnit[];
   readonly roleTitle: string;
@@ -100,6 +108,7 @@ function formatLink([unitId, requirementId]: GenerationLink): string {
 export function renderResumeInput(input: ResumeInput): string {
   return [
     "<input>",
+    `today: ${quote(input.today)}`,
     "<candidate_evidence>",
     formatUnitBlock(input.units),
     "</candidate_evidence>",

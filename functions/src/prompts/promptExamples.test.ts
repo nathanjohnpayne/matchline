@@ -19,6 +19,7 @@ import {
 } from "../generation/__fixtures__/resumeExample.ts";
 import { renderResumeInput } from "../generation/resumeInput.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
+import { renderTraceabilityInput } from "../validation/traceability.ts";
 import { formatUnit } from "../validation/unitPromptText.ts";
 
 import { PROMPT_CONFIG } from "./config.ts";
@@ -71,16 +72,47 @@ const TRACEABILITY_UNITS: Record<string, ExperienceUnit> = {
     domains: ["streaming video"],
     date_range: { start: "2015-01-01", end: "2021-06-30" },
   }),
+  "unit-d": exampleUnit("unit-d", {
+    raw_text: CERT_RAW,
+    normalized_summary: CERT_SUMMARY,
+    skills: ["device certification"],
+    date_range: { start: "2021-07-01", end: "2027-06-30" },
+  }),
 };
+
+/** The run date every traceability example shows. */
+const TRACEABILITY_EXAMPLE_TODAY = "2026-01-15";
 
 describe("traceability.v2 few-shot", () => {
   const { system, userFewShot } = sections("validation", "traceability.v2.md");
   const inputs = fences(userFewShot, "text");
   const answers = fences(userFewShot, "json");
 
-  it("has four examples, each with one input and one answer", () => {
-    expect(inputs).toHaveLength(4);
-    expect(answers).toHaveLength(4);
+  it("has five examples, each with one input and one answer", () => {
+    expect(inputs).toHaveLength(5);
+    expect(answers).toHaveLength(5);
+  });
+
+  it("shows each example input exactly as renderTraceabilityInput renders it, run date included", () => {
+    for (const input of inputs) {
+      const claim = JSON.parse(/^Claim: (.*)$/m.exec(input)![1]!) as string;
+      const id = /^\[Unit ([^\]]+)\]/m.exec(input)![1]!;
+      expect(input).toBe(
+        renderTraceabilityInput(claim, TRACEABILITY_EXAMPLE_TODAY, [TRACEABILITY_UNITS[id]!]),
+      );
+    }
+  });
+
+  it("rejects a claim built from a date_range end later than today", () => {
+    const i = inputs.findIndex((input) => input.includes("[Unit unit-d]"));
+    const end = TRACEABILITY_UNITS["unit-d"]!.date_range!.end!;
+    expect(end > TRACEABILITY_EXAMPLE_TODAY).toBe(true);
+    expect(inputs[i]).toContain("June 2027");
+    expect(TraceabilityResponseV2Schema.parse(JSON.parse(answers[i]!)).supports).toBe(false);
+  });
+
+  it("tells the model a future start or end supports no claim", () => {
+    expect(system).toContain("A `start` or `end` later than `Today` supports no claim");
   });
 
   it("shows each example Unit exactly as formatUnit renders it", () => {
@@ -93,12 +125,12 @@ describe("traceability.v2 few-shot", () => {
       ids.push(id!);
       expect(unitText).toBe(formatUnit(TRACEABILITY_UNITS[id!]!));
     }
-    expect(ids).toEqual(["unit-a", "unit-b", "unit-b", "unit-c"]);
+    expect(ids).toEqual(["unit-a", "unit-b", "unit-b", "unit-c", "unit-d"]);
   });
 
   it("gives answers that pass the v2 schema, with the intended verdicts", () => {
     const verdicts = answers.map((a) => TraceabilityResponseV2Schema.parse(JSON.parse(a)).supports);
-    expect(verdicts).toEqual([true, true, false, false]);
+    expect(verdicts).toEqual([true, true, false, false, false]);
   });
 
   it("keeps development history out of model-visible text", () => {
@@ -121,6 +153,19 @@ describe("resume.v2 few-shot", () => {
 
   it("shows the input exactly as renderResumeInput renders it", () => {
     expect(resumeExampleInputBlock()).toBe(renderResumeInput(RESUME_EXAMPLE_INPUT));
+  });
+
+  it("shows a run date after every date its Units show", () => {
+    expect(resumeExampleInputBlock().split("\n")[1]).toBe(`today: "${RESUME_EXAMPLE_INPUT.today}"`);
+    for (const u of RESUME_EXAMPLE_UNITS) {
+      for (const d of [u.date_range?.start, u.date_range?.end]) {
+        if (d !== undefined) expect(d < RESUME_EXAMPLE_INPUT.today, `${u.id} ${d}`).toBe(true);
+      }
+    }
+  });
+
+  it("tells the model a future start or end supports no claim", () => {
+    expect(system).toContain("A `start` or `end` later than `today` supports no claim");
   });
 
   it("cites only the example's Unit ids", () => {

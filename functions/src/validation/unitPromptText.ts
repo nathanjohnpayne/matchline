@@ -84,6 +84,13 @@ export const UNIT_FIELD_ROLES = {
   skills: "rendered",
   tools: "rendered",
   domains: "rendered",
+  // Rendered as stored, with no reading added. A start-only range is
+  // NOT rendered as "ongoing": the stored shape cannot tell a user's
+  // "ongoing" (Unit Review's end-date field left blank) from an end
+  // extraction never found, so neither model may read it as current
+  // work (see `dateRangeLine`). An end later than the run date is
+  // likewise shown as stored; the prompts, which see the run date
+  // (`promptDate`), treat it as no end.
   date_range: "rendered",
   // User-editable (Unit Review inline edit and manual add), not just an
   // extraction output. Excluded because the 2026-10-28 #485 evidence
@@ -193,7 +200,23 @@ function listLine(name: string, field: unknown): string | null {
   return `${name}: [${field.map(jsonValue).join(", ")}]`;
 }
 
-/** The `date_range` line, or `null` when there is no string date to show. */
+/**
+ * The `date_range` line, or `null` when there is no string date to show.
+ *
+ * Lossy on purpose, and fail-safe: a range with a `start` and no `end`
+ * renders as `date_range: { start: "…" }`, with nothing saying whether
+ * the work is ongoing. The app writes that shape in two cases it cannot
+ * tell apart afterwards: the user cleared the end date in Unit Review,
+ * meaning "ongoing", and extraction found a start but no end. The
+ * second is not evidence that the work is current, so the text does
+ * not claim it, and both prompts say a range with no `end` supports
+ * neither an end date nor "present" (traceability.v2 rule 3, resume.v2
+ * rule 7). A user's "ongoing" therefore cannot yet support "present";
+ * making it evidence needs an explicit stored marker that only the
+ * editor sets, a new rendered member, and a new evidence-version
+ * prefix. Until then the editor labels the blank end as "no end date",
+ * not "ongoing".
+ */
 function dateRangeLine(dr: unknown): string | null {
   if (typeof dr !== "object" || dr === null) return null;
   const { start, end } = dr as { start?: unknown; end?: unknown };
@@ -244,6 +267,23 @@ export function formatUnit(unit: UnitPromptFields): string {
     if (line !== null) lines.push(line);
   }
   return lines.join("\n");
+}
+
+/**
+ * The run date both prompts show beside the Unit block, as
+ * `YYYY-MM-DD` in UTC, so a model can tell a past `date_range` end
+ * from one in the future. Extraction has defaulted some ends into the
+ * future, and an end later than this date supports no claim
+ * (traceability.v2 rule 3, resume.v2 rule 7).
+ *
+ * Deliberately not part of `formatUnit`'s text: the date changes every
+ * day and the Unit does not, so putting it in the Unit text would make
+ * every evidence version change daily. Passing time only turns future
+ * ends into past ones, so a verdict reached under an earlier date is
+ * never less conservative than one reached today.
+ */
+export function promptDate(now: Date): string {
+  return now.toISOString().slice(0, 10);
 }
 
 /** The Unit block both prompts embed: `formatUnit` per Unit, separated by one blank line. */

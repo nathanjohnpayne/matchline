@@ -76,7 +76,7 @@ import {
   type GenerationSnapshot,
   type ResumeInput,
 } from "./resumeInput.js";
-import { citedEntityId } from "../validation/unitPromptText.js";
+import { citedEntityId, promptDate } from "../validation/unitPromptText.js";
 
 export interface RunGenerationContext {
   readonly ownerUid: string;
@@ -129,6 +129,12 @@ export interface GenerationDeps {
   readonly generateId?: () => string;
   /** Sleep for transport backoff; injectable for tests. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * Clock for the run date the prompt shows (`promptDate`); injectable
+   * for tests. Not `now`: `RunGenerateResumeDeps.now` is the asset's
+   * ISO timestamp source.
+   */
+  readonly clock?: () => Date;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -329,6 +335,9 @@ export async function runGenerationPipeline(
   // does not change between attempts. Eligibility is unchanged — this
   // only decides what the model sees of the Units already admitted.
   const resumeInput: ResumeInput = {
+    // The run date, so the model can tell a past `date_range` end from
+    // a future one that extraction defaulted (resume.v2 rule 7).
+    today: promptDate((deps.clock ?? (() => new Date()))()),
     units: sortById(eligibleUnits),
     // `Role.company_id` is a UUID, not a display name — the
     // human-readable Company name lives on the Company doc and

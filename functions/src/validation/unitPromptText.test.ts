@@ -10,6 +10,7 @@ import {
   formatUnitBlock,
   renderEntityId,
   type UnitPromptFields,
+  promptDate,
 } from "./unitPromptText.ts";
 
 /**
@@ -277,6 +278,39 @@ describe("citedEntityId (#485 review)", () => {
     "",
   ])("leaves %j unchanged", (cited) => {
     expect(citedEntityId(cited)).toBe(cited);
+  });
+});
+
+describe("a start-only date_range (#485 review)", () => {
+  it("renders the start alone, with nothing that reads as ongoing or present", () => {
+    const text = formatUnit({ id: "u", raw_text: "r", normalized_summary: "s", date_range: { start: "2021-07-01" } });
+    expect(text.split("\n").at(-1)).toBe('date_range: { start: "2021-07-01" }');
+    expect(text).not.toMatch(/ongoing|present|current|null/i);
+  });
+
+  it("renders a future end as stored: the prompts, not the Unit text, judge it against the run date", () => {
+    const text = formatUnit({
+      id: "u",
+      raw_text: "r",
+      normalized_summary: "s",
+      date_range: { start: "2021-07-01", end: "2999-06-30" },
+    });
+    expect(text.split("\n").at(-1)).toBe('date_range: { start: "2021-07-01", end: "2999-06-30" }');
+  });
+});
+
+describe("promptDate", () => {
+  it("is the UTC calendar date, YYYY-MM-DD", () => {
+    expect(promptDate(new Date("2026-10-28T00:00:00.000Z"))).toBe("2026-10-28");
+    expect(promptDate(new Date("2026-10-28T23:59:59.999Z"))).toBe("2026-10-28");
+    expect(promptDate(new Date("2026-10-29T00:00:00.000Z"))).toBe("2026-10-29");
+  });
+
+  it("compares with stored ISO dates as strings, the way the prompts read them", () => {
+    const today = promptDate(new Date("2026-10-28T12:00:00.000Z"));
+    expect("2027-06-30" > today).toBe(true);
+    expect("2026-10-28" > today).toBe(false);
+    expect("2021-06-30" > today).toBe(false);
   });
 });
 
