@@ -28,6 +28,8 @@ export type TraceStep =
   | "unit_embedding"
   | "requirement_parsing"
   | "requirement_embedding"
+  | "matching"
+  | "scoring"
   | (string & {});
 
 export interface TracedCall {
@@ -49,7 +51,12 @@ export interface FlowTrace {
   requirements?: readonly unknown[];
   /** Whether each step was served from the stage cache. */
   readonly stepCacheHits: Record<string, boolean>;
-  /** The step running when the flow threw. */
+  /**
+   * The step running now. Set when a stage starts, cleared when it
+   * returns, and set to `matching` / `scoring` by the orchestrator before
+   * those non-LLM steps, so a throw is never charged to the last stage
+   * that happened to start.
+   */
   currentStep?: TraceStep;
   failedStep?: TraceStep;
   /** Last `failures[].kind` when the error carried one, else the error's name. */
@@ -71,6 +78,16 @@ export function traceStepFor(trace: FlowTrace | undefined, stage: string): Trace
   }
   if (trace !== undefined) trace.currentStep = step;
   return step;
+}
+
+/** A stage returned: nothing is running until the next step starts. */
+export function traceStepDone(trace: FlowTrace | undefined): void {
+  if (trace !== undefined) trace.currentStep = undefined;
+}
+
+/** Name a non-LLM step (matching, scoring) the flow is entering. */
+export function traceEnterStep(trace: FlowTrace | undefined, step: TraceStep): void {
+  if (trace !== undefined) trace.currentStep = step;
 }
 
 export function traceCall(

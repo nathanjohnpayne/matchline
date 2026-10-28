@@ -12,6 +12,12 @@
  * each expected requirement in label order, the best unused parsed
  * requirement by `tokenOverlapCoefficient(tokenize(label text),
  * tokenize(normalized_requirement))`, ties to the lowest index.
+ *
+ * "Mapped" pairs (Unit precision at ≥ 0.5; must-have agreement and
+ * requirement precision at ≥ 0.3) come from a threshold-first
+ * assignment instead (`thresholdFirstAssignment`, mapping.ts's rule), so
+ * an expected item that scores below the threshold cannot take an actual
+ * item a later expected item maps above it.
  */
 
 import { containsAtWordBoundaries, normalizeForMatch } from "../fitBrief/score.ts";
@@ -63,7 +69,7 @@ export function unitAssignment(expected: readonly ScoringUnit[], actual: readonl
     for (let i = 0; i < actual.length; i++) {
       if (used.has(i)) continue;
       const a = actual[i]!;
-      const score = summaryScore(e.normalizedSummary, a.normalizedSummary) * 0.6 + jaccard(e.skills, a.skills) * 0.4;
+      const score = unitPairScore(e, a);
       if (score > bestScore) {
         bestScore = score;
         bestIdx = i;
@@ -78,10 +84,63 @@ export function unitAssignment(expected: readonly ScoringUnit[], actual: readonl
   return { mean: total / expected.length, pairs };
 }
 
-/** Share of extracted Units that are some expected Unit's best match at ≥ 0.5. Null with none extracted. */
-export function unitPrecision(assignment: Assignment, extractedCount: number): number | null {
+/**
+ * One-to-one pairs at or above `threshold`, assigned threshold-first:
+ * every (expected, actual) pair that clears the threshold, taken in
+ * descending score order (ties: lower expected index, then lower actual
+ * index), each side used once. The same rule as mapping.ts
+ * `mapRequirementIds` / `mapUnitIds`, so an expected item that scores
+ * below the threshold can never take an actual item a later expected
+ * item maps at or above it. `mean` is not meaningful here and is 0.
+ */
+export function thresholdFirstAssignment(
+  expectedCount: number,
+  actualCount: number,
+  score: (expectedIndex: number, actualIndex: number) => number,
+  threshold: number,
+): Assignment {
+  const candidates: AssignmentPair[] = [];
+  for (let e = 0; e < expectedCount; e++) {
+    for (let a = 0; a < actualCount; a++) {
+      const s = score(e, a);
+      if (s >= threshold) candidates.push({ expectedIndex: e, actualIndex: a, score: s });
+    }
+  }
+  candidates.sort((x, y) => y.score - x.score || x.expectedIndex - y.expectedIndex || x.actualIndex - y.actualIndex);
+  const usedE = new Set<number>();
+  const usedA = new Set<number>();
+  const pairs: AssignmentPair[] = [];
+  for (const c of candidates) {
+    if (usedE.has(c.expectedIndex) || usedA.has(c.actualIndex)) continue;
+    usedE.add(c.expectedIndex);
+    usedA.add(c.actualIndex);
+    pairs.push(c);
+  }
+  pairs.sort((x, y) => x.expectedIndex - y.expectedIndex);
+  return { mean: 0, pairs };
+}
+
+function unitPairScore(e: ScoringUnit, a: ActualUnit): number {
+  return summaryScore(e.normalizedSummary, a.normalizedSummary) * 0.6 + jaccard(e.skills, a.skills) * 0.4;
+}
+
+/** Units mapped threshold-first at ≥ 0.5, with the `unitSetAccuracy` pair score. */
+export function unitMapping(expected: readonly ScoringUnit[], actual: readonly ActualUnit[]): Assignment {
+  return thresholdFirstAssignment(
+    expected.length,
+    actual.length,
+    (e, a) => unitPairScore(expected[e]!, actual[a]!),
+    UNIT_PRECISION_THRESHOLD,
+  );
+}
+
+/**
+ * Share of extracted Units mapped to an expected Unit at ≥ 0.5 by the
+ * threshold-first assignment (`unitMapping`). Null with none extracted.
+ */
+export function unitPrecision(mapping: Assignment, extractedCount: number): number | null {
   if (extractedCount === 0) return null;
-  return assignment.pairs.filter((p) => p.score >= UNIT_PRECISION_THRESHOLD).length / extractedCount;
+  return mapping.pairs.filter((p) => p.score >= UNIT_PRECISION_THRESHOLD).length / extractedCount;
 }
 
 /** Whitespace-delimited word count of a summary. */
@@ -141,21 +200,40 @@ function mappedPairs(assignment: Assignment): AssignmentPair[] {
   return assignment.pairs.filter((p) => p.score >= REQUIREMENT_MAP_THRESHOLD);
 }
 
-/** Share of mapped (≥ 0.3) pairs whose must-have flags agree. Null with no mapped pair. */
+/**
+ * Requirements mapped threshold-first at ≥ 0.3, scored by the same
+ * overlap coefficient as `requirementAssignment`. Requirement-set
+ * accuracy keeps the expected-order assignment (the `unitSetAccuracy`
+ * shape); the mapped pairs behind must-have agreement and precision
+ * come from here.
+ */
+export function requirementMapping(
+  expected: readonly { readonly text: string }[],
+  actual: readonly { readonly normalizedRequirement: string }[],
+): Assignment {
+  return thresholdFirstAssignment(
+    expected.length,
+    actual.length,
+    (e, a) => summaryScore(expected[e]!.text, actual[a]!.normalizedRequirement),
+    REQUIREMENT_MAP_THRESHOLD,
+  );
+}
+
+/** Share of mapped (≥ 0.3, `requirementMapping`) pairs whose must-have flags agree. Null with no mapped pair. */
 export function mustHaveAgreement(
   expected: readonly { readonly must_have: boolean }[],
   actual: readonly { readonly mustHave: boolean }[],
-  assignment: Assignment,
+  mapping: Assignment,
 ): number | null {
-  const mapped = mappedPairs(assignment);
+  const mapped = mappedPairs(mapping);
   if (mapped.length === 0) return null;
   return mapped.filter((p) => expected[p.expectedIndex]!.must_have === actual[p.actualIndex]!.mustHave).length / mapped.length;
 }
 
-/** Share of parsed requirements mapped at ≥ 0.3. Null with none parsed. */
-export function requirementPrecision(assignment: Assignment, parsedCount: number): number | null {
+/** Share of parsed requirements mapped at ≥ 0.3 (`requirementMapping`). Null with none parsed. */
+export function requirementPrecision(mapping: Assignment, parsedCount: number): number | null {
   if (parsedCount === 0) return null;
-  return mappedPairs(assignment).length / parsedCount;
+  return mappedPairs(mapping).length / parsedCount;
 }
 
 // -- Flow-level metric sets ---------------------------------------------------
@@ -206,11 +284,11 @@ export function extractionMetrics(flow: FlowRecord, labels: ExtractionLabels): M
   const units = flow.units ?? [];
   const expected = labels.expectedUnits.map((e) => ({ normalizedSummary: e.normalized_summary, skills: e.skills }));
   const actual = units.map((u) => ({ normalizedSummary: str(u.normalized_summary), skills: strs(u.skills) }));
-  const assignment = unitAssignment(expected, actual);
+  const mapping = unitMapping(expected, actual);
   const tokenLengths = units.map((u) => summaryTokenLength(str(u.normalized_summary)));
   return {
     extraction_accuracy: unitSetAccuracy(expected, actual),
-    unit_precision: unitPrecision(assignment, units.length),
+    unit_precision: unitPrecision(mapping, units.length),
     extracted_unit_count: units.length,
     summary_tokens: tokenLengths.length === 0 ? null : tokenLengths.reduce((a, b) => a + b, 0) / tokenLengths.length,
     grounding_share: groundingShare(units.map((u) => str(u.raw_text)), labels.resumeText),
@@ -225,10 +303,11 @@ export function jdMetrics(flow: FlowRecord, labels: JdLabels): MetricValues {
     mustHave: r.must_have === true,
   }));
   const assignment = requirementAssignment(labels.expectedRequirements, actual);
+  const mapping = requirementMapping(labels.expectedRequirements, actual);
   return {
     requirement_set_accuracy: assignment.mean,
-    must_have_agreement: mustHaveAgreement(labels.expectedRequirements, actual, assignment),
-    requirement_precision: requirementPrecision(assignment, reqs.length),
+    must_have_agreement: mustHaveAgreement(labels.expectedRequirements, actual, mapping),
+    requirement_precision: requirementPrecision(mapping, reqs.length),
     parsed_requirement_count: reqs.length,
     parsed_must_have_count: actual.filter((r) => r.mustHave).length,
     match_accuracy: flow.matchAccuracy,

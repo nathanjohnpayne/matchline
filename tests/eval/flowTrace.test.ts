@@ -15,7 +15,7 @@ import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
 import { buildFlowRecord } from "./flowRecord.ts";
-import { newFlowTrace, traceFailure, traceStepFor, traceValue } from "./flowTrace.ts";
+import { newFlowTrace, traceEnterStep, traceFailure, traceStepDone, traceStepFor, traceValue } from "./flowTrace.ts";
 import { runForFixture } from "./runForFixture.ts";
 
 interface Step {
@@ -239,6 +239,35 @@ describe("runForFixture with a trace (--record hook)", () => {
     });
     expect(rec.calls.filter((c) => c.refusal).map((c) => c.step)).toEqual(["requirement_parsing"]);
     expect(rec.failures).toEqual([expect.objectContaining({ kind: "refusal", attempt: 0 })]);
+  });
+
+  it("charges a throw in matching to matching, not to the last embedding call", async () => {
+    const trace = newFlowTrace();
+    const result = await runForFixture(INPUT, {
+      anthropicClient: mockAnthropic([{ input: EXTRACTION }, { input: PARSING }]),
+      openaiClient: mockOpenAi(),
+      persistBatch: async () => {
+        throw new Error("persist failed");
+      },
+      trace,
+    });
+    expect(result.ok).toBe(false);
+    expect(trace.failedStep).toBe("matching");
+    const rec = buildFlowRecord(CTX, result, trace);
+    expect(rec.error).toMatchObject({ step: "matching", message: expect.stringContaining("persist failed") });
+    // Every LLM stage finished, so no call carries the failure.
+    expect(rec.calls.some((c) => c.refusal || c.truncated)).toBe(false);
+  });
+
+  it("clears the current step when a stage returns", () => {
+    const trace = newFlowTrace();
+    traceStepFor(trace, "extraction");
+    traceStepDone(trace);
+    traceFailure(trace, new Error("between stages"));
+    expect(trace.failedStep).toBeUndefined();
+    traceEnterStep(trace, "scoring");
+    traceFailure(trace, new Error("in scoring"));
+    expect(trace.failedStep).toBe("scoring");
   });
 
   describe("with the stage cache", () => {

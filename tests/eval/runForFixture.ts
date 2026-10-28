@@ -50,7 +50,9 @@ import { StageCache, sumUsageCost, type CacheKeyInput } from "./cache.ts";
 import {
   traceCacheOutcome,
   traceCall,
+  traceEnterStep,
   traceFailure,
+  traceStepDone,
   traceStepFor,
   traceValue,
   type FlowTrace,
@@ -386,6 +388,7 @@ async function runStage<T>(
       return liveRecord(usage);
     });
     traceValue(tally.trace, keyInput.stage, value); // --record hook
+    traceStepDone(tally.trace); // --record hook
     return value;
   }
 
@@ -425,6 +428,7 @@ async function runStage<T>(
     }
     traceCacheOutcome(tally.trace, step, outcome.hit); // --record hook
     traceValue(tally.trace, keyInput.stage, outcome.value); // --record hook
+    traceStepDone(tally.trace); // --record hook
     return outcome.value;
   } catch (err) {
     // Count the attempt so a failed stage still shows as a miss
@@ -590,6 +594,7 @@ async function runForFixtureInner(
   }));
 
   // 6. Run matching with in-memory deps (no Firestore).
+  traceEnterStep(tally.trace, "matching"); // --record hook
   const matches = await runMatchingPipeline(
     { ownerUid: EVAL_OWNER_UID, roleId: EVAL_ROLE_ID },
     {
@@ -599,6 +604,7 @@ async function runForFixtureInner(
     },
   );
 
+  traceEnterStep(tally.trace, "scoring"); // --record hook
   // 7. Score extraction. unitSetAccuracy uses
   //    `normalizedSummary` + `skills`; convert our shapes.
   const extractionAccuracy = unitSetAccuracy(

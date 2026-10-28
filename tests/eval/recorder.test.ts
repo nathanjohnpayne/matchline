@@ -200,6 +200,79 @@ describe("recordingRunner", () => {
   });
 });
 
+describe("recordingRunner per-variant token source and write failures", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "matchline-root-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const deps = { anthropicClient: {} as never, openaiClient: {} as never };
+
+  it("records the variant's own token source and the effort that source sends", async () => {
+    setEffortOverrides({ extraction: "low" });
+    const dir = join(base, "rec");
+    const recorder = FlowRecorder.prepare(dir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+    const run = recordingRunner(recorder, "api", fakeRun);
+    recorder.setVariant("cli-arm", "claude-cli");
+    await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+    recorder.setVariant("api-arm");
+    await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+    const flows = parseFlowsJsonl(readFileSync(join(dir, "flows.jsonl"), "utf8"), "flows.jsonl");
+    expect(flows[0]).toMatchObject({ variant: "cli-arm", tokenSource: "claude-cli" });
+    expect(flows[0]!.stages.extraction).toMatchObject({ effortRequested: "low", effortSent: null });
+    expect(flows[1]).toMatchObject({ variant: "api-arm", tokenSource: "api" });
+    expect(flows[1]!.stages.extraction).toMatchObject({ effortRequested: "low", effortSent: "low" });
+  });
+
+  it("prints a write failure, turns recording off and keeps returning results", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dir = join(base, "rec");
+    const recorder = FlowRecorder.prepare(dir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+    const traced: boolean[] = [];
+    const spy: FlowRunner = async (input, d) => {
+      traced.push(d.trace !== undefined);
+      return fakeRun(input, d);
+    };
+    const run = recordingRunner(recorder, "api", spy);
+    await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+    // Break the record file: appending to a directory fails.
+    rmSync(join(dir, "flows.jsonl"));
+    mkdirSync(join(dir, "flows.jsonl"));
+    const second = await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+    expect(second.ok).toBe(true);
+    expect(recorder.disabled).toBe(true);
+    expect(errors).toHaveBeenCalledWith(expect.stringMatching(/recording is off for the rest of this run/));
+    const third = await run({ resumeFixtureId: "r2", jdFixtureId: "j1" }, deps);
+    expect(third.ok).toBe(true);
+    expect(traced).toEqual([true, true, false]);
+    expect(recorder.flowCount).toBe(1);
+    recorder.finish();
+    const inv = JSON.parse(readFileSync(join(dir, "invocation.json"), "utf8"));
+    expect(inv.flowCount).toBe(1);
+    expect(inv.finishedAt).not.toBeNull();
+    expect(inv.recordingError).toMatch(/EISDIR|illegal operation|directory/i);
+  });
+
+  it("does not abort the run when the record directory cannot be created", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dir = join(base, "not-a-dir");
+    writeFileSync(dir, "a file where the directory should be");
+    const recorder = FlowRecorder.prepare(dir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+    const run = recordingRunner(recorder, "api", fakeRun);
+    const out = await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+    expect(out.ok).toBe(true);
+    expect(recorder.disabled).toBe(true);
+    expect(errors).toHaveBeenCalledTimes(1);
+    // Nothing was opened, so finish leaves the path alone.
+    recorder.finish();
+    expect(readFileSync(dir, "utf8")).toBe("a file where the directory should be");
+  });
+});
+
 describe("captureStageConfig / describeVariants", () => {
   it("records the requested effort, and sends none for a CLI token source", () => {
     setEffortOverrides({ extraction: "low" });

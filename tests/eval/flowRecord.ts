@@ -78,6 +78,12 @@ export interface FlowRecord {
   readonly invocationId: string;
   /** Sweep variant label, or "default" outside a sweep. */
   readonly variant: string;
+  /**
+   * Token source the flow ran under: the variant's own when it set one,
+   * else the command's. Optional only so records written before it
+   * existed still parse.
+   */
+  readonly tokenSource?: string;
   readonly stages: StageConfigs;
   readonly embeddingModel: string;
   readonly resumeId: string;
@@ -148,11 +154,17 @@ export interface InvocationRecord {
   readonly startedAt: string;
   readonly finishedAt: string | null;
   readonly flowCount: number;
+  /**
+   * Set when a write to the record directory failed mid-run: recording
+   * stopped there and the run went on unrecorded.
+   */
+  readonly recordingError?: string;
 }
 
 export interface FlowContext {
   readonly invocationId: string;
   readonly variant: string;
+  readonly tokenSource?: string;
   readonly stages: StageConfigs;
   readonly embeddingModel: string;
   readonly resumeId: string;
@@ -223,6 +235,7 @@ export function buildFlowRecord(
     schemaVersion: FLOW_RECORD_SCHEMA_VERSION,
     invocationId: ctx.invocationId,
     variant: ctx.variant,
+    ...(ctx.tokenSource !== undefined && { tokenSource: ctx.tokenSource }),
     stages: ctx.stages,
     embeddingModel: ctx.embeddingModel,
     resumeId: ctx.resumeId,

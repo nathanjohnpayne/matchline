@@ -103,12 +103,16 @@ export function loadFlows(records: readonly string[]): FlowRecord[] {
   });
 }
 
-/** Load the public labels every successful flow of the analyzed arms needs. */
+/**
+ * Load the public labels every scored flow of the analyzed arms needs:
+ * each flow whose task stage returned (Units for extraction, Requirements
+ * for jd), whether or not a later stage failed.
+ */
 export function loadLabels(flows: readonly FlowRecord[], task: Task, paths?: FixturePaths): AnalysisLabels {
-  const ok = flows.filter((f) => f.ok);
+  const scored = flows.filter((f) => (task === "extraction" ? f.units !== null : f.requirements !== null));
   if (task === "extraction") {
     const units = new Map<string, ExtractionLabels>();
-    for (const id of [...new Set(ok.map((f) => f.resumeId))].sort()) {
+    for (const id of [...new Set(scored.map((f) => f.resumeId))].sort()) {
       units.set(id, {
         expectedUnits: loadExpectedUnits(id, paths).expected_units,
         resumeText: loadResumeText(id, paths),
@@ -117,7 +121,7 @@ export function loadLabels(flows: readonly FlowRecord[], task: Task, paths?: Fix
     return { units };
   }
   const requirements = new Map<string, JdLabels>();
-  for (const f of ok) {
+  for (const f of scored) {
     if (requirements.has(f.cell)) continue;
     requirements.set(f.cell, { expectedRequirements: loadExpectedMatches(f.resumeId, f.jdId, paths).expected_requirements });
   }

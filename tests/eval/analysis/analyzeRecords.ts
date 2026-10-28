@@ -4,9 +4,14 @@
  * result object and Markdown go out. Deterministic for a given seed.
  *
  * An arm is a variant label; flows from several invocations with the
- * same label pool into one arm. Metrics come from successful flows only.
- * Every aggregate weights cells equally, so an unbalanced cell mix
- * cannot move a mean.
+ * same label pool into one arm. Task metrics come from every flow whose
+ * task stage returned (`units !== null` for extraction, `requirements
+ * !== null` for jd), so a later-stage outage does not remove a valid
+ * sample; match accuracy comes from successful flows only. A flow that
+ * replayed its task stage from the stage cache with the same output as
+ * another flow of the arm and cell is not an independent sample, so its
+ * task metrics are left out. Every aggregate weights cells equally, so an
+ * unbalanced cell mix cannot move a mean.
  */
 
 import { priceUsage, type UsageRecord } from "../../../functions/src/llm/cost.ts";
@@ -69,6 +74,8 @@ export interface CellSummary {
   readonly cell: string;
   readonly flows: number;
   readonly successful: number;
+  /** Flows whose task-stage metrics count (task output present, not a repeated replay). */
+  readonly scored: number;
   readonly metrics: Readonly<Record<string, CellStat>>;
 }
 
@@ -95,6 +102,14 @@ export interface ArmSummary {
   readonly failedFlows: number;
   /** Failed flows whose error kind is `refusal`. */
   readonly refusals: number;
+  /** Failed flows that failed in the task's own stage (extraction / requirement_parsing). */
+  readonly taskStepFailures: number;
+  /** Flows whose task stage returned an output, whether or not a later stage failed. */
+  readonly taskOutputFlows: number;
+  /** Flows that replayed the task stage from the stage cache. */
+  readonly replayedTaskFlows: number;
+  /** Replayed flows left out of the task metrics because their output repeats another flow's in the same cell. */
+  readonly repeatedReplays: number;
   readonly errorKinds: Readonly<Record<string, number>>;
   /** Live (non-replayed) usage records. */
   readonly records: number;
@@ -165,6 +180,72 @@ function compareFlows(a: FlowRecord, b: FlowRecord): number {
   );
 }
 
+/** The step whose output a task scores. */
+export const TASK_STEP: Readonly<Record<Task, string>> = { extraction: "extraction", jd: "requirement_parsing" };
+
+/** Metrics computed from the task stage's output (everything but the reported match accuracy). */
+const isTaskMetric = (metric: string): boolean => metric !== "match_accuracy";
+
+function taskOutput(flow: FlowRecord, task: Task): readonly unknown[] | null {
+  return task === "extraction" ? flow.units : flow.requirements;
+}
+
+function replayedTaskStep(flow: FlowRecord, task: Task): boolean {
+  // Records parsed from disk may predate `stepCacheHits`.
+  const hits = (flow.stepCacheHits as Readonly<Record<string, boolean>> | undefined) ?? {};
+  return hits[TASK_STEP[task]] === true;
+}
+
+interface ScoredFlows {
+  readonly perFlow: { flow: FlowRecord; values: MetricValues }[];
+  readonly taskOutputFlows: number;
+  readonly replayedTaskFlows: number;
+  readonly repeatedReplays: number;
+}
+
+/**
+ * The per-flow metric values an arm contributes. Task metrics need only
+ * the task stage's output; match accuracy is null on a failed flow and
+ * drops out by itself. A replayed flow whose saved output equals a live
+ * flow's, or an earlier replay's, in the same cell keeps only match
+ * accuracy: its task value repeats a sample already counted.
+ */
+function scoreArm(flows: readonly FlowRecord[], task: Task, labels: AnalysisLabels): ScoredFlows {
+  const liveOutputs = new Map<string, Set<string>>();
+  for (const f of flows) {
+    const out = taskOutput(f, task);
+    if (out === null || replayedTaskStep(f, task)) continue;
+    const set = liveOutputs.get(f.cell) ?? new Set<string>();
+    set.add(JSON.stringify(out));
+    liveOutputs.set(f.cell, set);
+  }
+  const replaysKept = new Map<string, Set<string>>();
+  const perFlow: { flow: FlowRecord; values: MetricValues }[] = [];
+  let taskOutputFlows = 0;
+  let replayedTaskFlows = 0;
+  let repeatedReplays = 0;
+  for (const flow of flows) {
+    const out = taskOutput(flow, task);
+    if (out === null) continue;
+    taskOutputFlows += 1;
+    let values = flowMetrics(flow, task, labels);
+    if (replayedTaskStep(flow, task)) {
+      replayedTaskFlows += 1;
+      const key = JSON.stringify(out);
+      const kept = replaysKept.get(flow.cell) ?? new Set<string>();
+      replaysKept.set(flow.cell, kept);
+      if (liveOutputs.get(flow.cell)?.has(key) === true || kept.has(key)) {
+        repeatedReplays += 1;
+        values = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, isTaskMetric(k) ? null : v]));
+      } else {
+        kept.add(key);
+      }
+    }
+    perFlow.push({ flow, values });
+  }
+  return { perFlow, taskOutputFlows, replayedTaskFlows, repeatedReplays };
+}
+
 function flowMetrics(flow: FlowRecord, task: Task, labels: AnalysisLabels): MetricValues {
   if (task === "extraction") {
     const l = labels.units?.get(flow.resumeId);
@@ -204,9 +285,11 @@ function cellValues(perFlow: readonly { flow: FlowRecord; values: MetricValues }
 function summarizeArm(
   label: string,
   flows: readonly FlowRecord[],
-  perFlow: readonly { flow: FlowRecord; values: MetricValues }[],
+  scoredArm: ScoredFlows,
   metrics: readonly MetricDef[],
+  task: Task,
 ): ArmSummary {
+  const { perFlow } = scoredArm;
   const failed = flows.filter((f) => !f.ok);
   const errorKinds: Record<string, number> = {};
   for (const f of failed) {
@@ -225,7 +308,16 @@ function summarizeArm(
       const mm = minMax(values);
       stats[m.id] = { n: values.length, mean: mean(values), sd: sampleSd(values), min: mm?.min ?? null, max: mm?.max ?? null };
     }
-    return { cell, flows: inCell.length, successful: inCell.filter((f) => f.ok).length, metrics: stats };
+    const scoredInCell = perFlow.filter(
+      (p) => p.flow.cell === cell && Object.entries(p.values).some(([k, v]) => isTaskMetric(k) && v !== null),
+    ).length;
+    return {
+      cell,
+      flows: inCell.length,
+      successful: inCell.filter((f) => f.ok).length,
+      scored: scoredInCell,
+      metrics: stats,
+    };
   });
 
   const aggregate: Record<string, number | null> = {};
@@ -253,10 +345,14 @@ function summarizeArm(
   return {
     label,
     invocations: [...new Set(flows.map((f) => f.invocationId))].sort(),
-    configs: new Set(flows.map((f) => JSON.stringify(f.stages))).size,
+    configs: new Set(flows.map((f) => JSON.stringify([f.tokenSource ?? null, f.stages]))).size,
     flows: flows.length,
     failedFlows: failed.length,
     refusals: failed.filter((f) => f.error?.kind === "refusal").length,
+    taskStepFailures: failed.filter((f) => f.error?.step === TASK_STEP[task]).length,
+    taskOutputFlows: scoredArm.taskOutputFlows,
+    replayedTaskFlows: scoredArm.replayedTaskFlows,
+    repeatedReplays: scoredArm.repeatedReplays,
     errorKinds,
     records: live.length,
     replayedRecords: replayed,
@@ -295,13 +391,24 @@ export function analyzeRecords(input: readonly FlowRecord[], options: AnalyzeOpt
   const perFlowByArm = new Map<string, { flow: FlowRecord; values: MetricValues }[]>();
   const arms: ArmSummary[] = armLabels.map((label) => {
     const armFlows = flows.filter((f) => f.variant === label);
-    const perFlow = armFlows.filter((f) => f.ok).map((flow) => ({ flow, values: flowMetrics(flow, options.task, options.labels) }));
-    perFlowByArm.set(label, perFlow);
-    const summary = summarizeArm(label, armFlows, perFlow, metrics);
+    const scoredArm = scoreArm(armFlows, options.task, options.labels);
+    perFlowByArm.set(label, scoredArm.perFlow);
+    const summary = summarizeArm(label, armFlows, scoredArm, metrics, options.task);
     if (summary.configs > 1) {
-      warnings.push(`${label}: ${summary.configs} different stage configurations share this label; the arm pools them.`);
+      warnings.push(
+        `${label}: ${summary.configs} different stage configurations (or token sources) share this label; the arm pools them.`,
+      );
     }
-    if (perFlow.length === 0) warnings.push(`${label}: no successful flows, so no metric values.`);
+    if (scoredArm.perFlow.length === 0) {
+      warnings.push(`${label}: no flow returned a ${TASK_STEP[options.task]} output, so no metric values.`);
+    }
+    if (scoredArm.replayedTaskFlows > 0) {
+      warnings.push(
+        `${label}: ${scoredArm.replayedTaskFlows} flow(s) replayed the ${TASK_STEP[options.task]} output from the stage cache; ` +
+          `${scoredArm.repeatedReplays} repeat an earlier sample's output in the same cell and are left out of the task metrics ` +
+          `(match accuracy kept). Record with --no-cache or --samples > 1 to measure variance.`,
+      );
+    }
     return summary;
   });
 
@@ -385,18 +492,28 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
   }
 
   lines.push("", "## Arms", "");
-  lines.push("| arm | flows | failed | refusals | error kinds | live records | retry share | truncations | replayed records | invocations | configs | modeled $/flow |");
-  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+  lines.push(
+    "| arm | flows | failed | in task step | refusals | error kinds | task outputs | replayed task outputs | repeated replays dropped | " +
+      "live records | retry share | truncations | replayed records | invocations | configs | modeled $/flow |",
+  );
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const a of result.arms) {
     const kinds = Object.entries(a.errorKinds).sort(([x], [y]) => x.localeCompare(y)).map(([k, n]) => `${k} ${n}`).join(", ") || "—";
     lines.push(
-      `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.refusals} | ${kinds} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
+      `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.taskStepFailures} | ${a.refusals} | ${kinds} | ` +
+        `${a.taskOutputFlows} | ${a.replayedTaskFlows} | ${a.repeatedReplays} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
         `${a.truncations} | ${a.replayedRecords} | ${a.invocations.length} | ${a.configs} | ` +
         `${a.modeledCostPerFlowUsd === null ? "—" : `$${a.modeledCostPerFlowUsd.toFixed(4)}`} |`,
     );
   }
 
-  lines.push("", "## Metrics", "", "Aggregate = mean of cell means. Cells show mean ± SD [min–max] (n successful flows).");
+  lines.push(
+    "",
+    "## Metrics",
+    "",
+    "Aggregate = mean of cell means. Cells show mean ± SD [min–max] (n flows). Task metrics count every flow whose " +
+      "task stage returned, less repeated cache replays; match accuracy counts successful flows.",
+  );
   const allCells = [...new Set(result.arms.flatMap((a) => a.cells.map((c) => c.cell)))].sort();
   for (const m of result.metrics) {
     lines.push("", `### ${m.label}`, "");

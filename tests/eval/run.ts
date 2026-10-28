@@ -701,8 +701,11 @@ async function main(): Promise<number> {
         console.log(formatReport(buildReport(mode, fixtureResults, sweepChecks, cacheRollup(), tokenSource)));
         return 1;
       }
-      const runCorpus = async (variant: { readonly label: string }): Promise<readonly RunForFixtureResult[]> => {
-        recorder?.setVariant(variant.label); // --record hook
+      const runCorpus = async (variant: {
+        readonly label: string;
+        readonly tokenSource?: string;
+      }): Promise<readonly RunForFixtureResult[]> => {
+        recorder?.setVariant(variant.label, variant.tokenSource); // --record hook
         const out: RunForFixtureResult[] = [];
         for (const pair of pairs) {
           for (let i = 0; i < samples; i++) {
@@ -730,13 +733,20 @@ async function main(): Promise<number> {
       };
       // Command-wide `--prompt` flags survive into every variant;
       // variant-level prompt overrides layer on top.
-      const { results, report } = await runSweep(
-        variants,
-        { runCorpus },
-        { basePromptVersions: promptOverrides },
-      );
+      // --record hook: finish in a finally so an aborted sweep still
+      // stamps finishedAt and the true flow count.
+      let sweepOutcome: Awaited<ReturnType<typeof runSweep>> | undefined;
+      try {
+        sweepOutcome = await runSweep(
+          variants,
+          { runCorpus },
+          { basePromptVersions: promptOverrides },
+        );
+      } finally {
+        finishRecording(recorder, sweepOutcome?.results); // --record hook
+      }
+      const { results, report } = sweepOutcome;
       console.log(report);
-      finishRecording(recorder, results); // --record hook
       // An all-failure sweep produced no usable measurements; CI and
       // shell callers must not read that as success.
       if (!results.some((r) => r.flows > 0 && r.failures < r.flows)) {
@@ -749,47 +759,52 @@ async function main(): Promise<number> {
       return 0;
     }
 
-    for (const pair of pairs) {
-      // Strip `.txt` from the fixture filename to get the
-      // fixture id (resumes/jds are always `<id>.txt`).
-      const resumeFixtureId = pair.resume.replace(/\.txt$/, "");
-      const jdFixtureId = pair.jd.replace(/\.txt$/, "");
-      // Multi-sample averaging: when `--samples N` (N > 1) is
-      // passed, run extraction + matching N times per pair and
-      // aggregate. Default 1 keeps the single-run cost +
-      // behavior. See parseSamples docstring for rationale.
-      const samplesForThisPair: RunForFixtureResult[] = [];
-      for (let i = 0; i < samples; i++) {
-        samplesForThisPair.push(
-          await runFlow(
-            { resumeFixtureId, jdFixtureId },
-            {
-              anthropicClient,
-              // Codex P2: only `api` is metered — CLI sources are
-              // subscription-billed, so their Anthropic usage must
-              // not count as real spend in `costUsd`.
-              anthropicIsMetered: tokenSource === "api",
-              openaiClient,
-              cache,
-              // Keep API- and CLI-produced entries in separate
-              // keyspaces — comparing them is the point.
-              cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
-            },
-          ),
-        );
+    // --record hook: finish in a finally so an aborted run still stamps
+    // finishedAt and the true flow count.
+    try {
+      for (const pair of pairs) {
+        // Strip `.txt` from the fixture filename to get the
+        // fixture id (resumes/jds are always `<id>.txt`).
+        const resumeFixtureId = pair.resume.replace(/\.txt$/, "");
+        const jdFixtureId = pair.jd.replace(/\.txt$/, "");
+        // Multi-sample averaging: when `--samples N` (N > 1) is
+        // passed, run extraction + matching N times per pair and
+        // aggregate. Default 1 keeps the single-run cost +
+        // behavior. See parseSamples docstring for rationale.
+        const samplesForThisPair: RunForFixtureResult[] = [];
+        for (let i = 0; i < samples; i++) {
+          samplesForThisPair.push(
+            await runFlow(
+              { resumeFixtureId, jdFixtureId },
+              {
+                anthropicClient,
+                // Codex P2: only `api` is metered — CLI sources are
+                // subscription-billed, so their Anthropic usage must
+                // not count as real spend in `costUsd`.
+                anthropicIsMetered: tokenSource === "api",
+                openaiClient,
+                cache,
+                // Keep API- and CLI-produced entries in separate
+                // keyspaces — comparing them is the point.
+                cacheDiscriminators: cacheDiscriminatorsFor(tokenSource),
+              },
+            ),
+          );
+        }
+        // Codex P2: the sweep branch already refuses to report success
+        // when nothing measured, but the ordinary branch returned 0
+        // unconditionally. `runForFixture` turns every adapter exception
+        // into an `ok: false` row, so a `--token-source claude-cli` run
+        // against a missing, logged-out, or preflight-rejected Claude
+        // printed a table of failures and still exited 0 — CI and shell
+        // callers read that as a passing eval.
+        attemptedFlows += samplesForThisPair.length;
+        successfulFlows += samplesForThisPair.filter((r) => r.ok).length;
+        fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
       }
-      // Codex P2: the sweep branch already refuses to report success
-      // when nothing measured, but the ordinary branch returned 0
-      // unconditionally. `runForFixture` turns every adapter exception
-      // into an `ok: false` row, so a `--token-source claude-cli` run
-      // against a missing, logged-out, or preflight-rejected Claude
-      // printed a table of failures and still exited 0 — CI and shell
-      // callers read that as a passing eval.
-      attemptedFlows += samplesForThisPair.length;
-      successfulFlows += samplesForThisPair.filter((r) => r.ok).length;
-      fixtureResults.push(aggregateSampledFixture(samplesForThisPair));
+    } finally {
+      finishRecording(recorder); // --record hook
     }
-    finishRecording(recorder); // --record hook
   } else if (variants.length > 0) {
     // Codex P2: a requested sweep that cannot run used to print the
     // ordinary no-key fixture listing and exit 0, so CI and shell
@@ -920,7 +935,16 @@ function finishRecording(
   results?: Parameters<FlowRecorder["finish"]>[0],
 ): void {
   if (recorder === undefined) return;
-  recorder.finish(results);
+  // Runs in a finally: a write failure here must not replace the run's
+  // own outcome (its report, or the error that aborted it).
+  try {
+    recorder.finish(results);
+  } catch (err) {
+    console.error(
+      `--record: could not stamp ${recorder.dir}/invocation.json as finished ` +
+        `(${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
   console.error(`Recorded ${recorder.flowCount} flow(s) to ${recorder.dir}`);
 }
 

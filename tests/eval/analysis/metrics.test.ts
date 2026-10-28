@@ -9,9 +9,11 @@ import {
   jdMetrics,
   mustHaveAgreement,
   requirementAssignment,
+  requirementMapping,
   requirementPrecision,
   summaryTokenLength,
   unitAssignment,
+  unitMapping,
   unitPrecision,
 } from "./metrics.ts";
 import { mulberry32 } from "./stats.ts";
@@ -55,15 +57,55 @@ describe("unitAssignment", () => {
       { normalizedSummary: "billing", skills: ["z"] }, // 0.6 × 1 + 0.4 × 0 = 0.6
       { normalizedSummary: "unrelated thing entirely", skills: [] },
     ];
-    const asg = unitAssignment(e, a);
+    const asg = unitMapping(e, a);
     expect(unitPrecision(asg, a.length)).toBeCloseTo(2 / 3, 12);
-    const weak = unitAssignment([{ normalizedSummary: "billing", skills: ["b"] }], [{ normalizedSummary: "billing other words here", skills: [] }]);
+    const weak = unitMapping([{ normalizedSummary: "billing", skills: ["b"] }], [{ normalizedSummary: "billing other words here", skills: [] }]);
     // 0.6 × 1 (overlap coefficient) + 0.4 × 0 = 0.6 ≥ 0.5.
     expect(unitPrecision(weak, 1)).toBe(1);
-    const below = unitAssignment([{ normalizedSummary: "billing revenue growth", skills: ["b"] }], [{ normalizedSummary: "billing other words", skills: [] }]);
+    const below = unitMapping([{ normalizedSummary: "billing revenue growth", skills: ["b"] }], [{ normalizedSummary: "billing other words", skills: [] }]);
     // overlap 1/3 → 0.2 < 0.5.
     expect(unitPrecision(below, 1)).toBe(0);
     expect(unitPrecision(asg, 0)).toBeNull();
+  });
+});
+
+describe("threshold-first mapping", () => {
+  it("lets a later expected Unit at >= 0.5 keep an extracted Unit an earlier one scores below it", () => {
+    const e = [
+      { normalizedSummary: "alpha beta gamma delta", skills: [] }, // vs a: 0.6 × 1/3 = 0.2
+      { normalizedSummary: "kepler launch", skills: ["x"] }, // vs a: 0.6 × 1 + 0.4 × 1 = 1
+    ];
+    const a = [{ normalizedSummary: "alpha kepler launch", skills: ["x"] }];
+    // The expected-order assignment gives `a` to e[0] at 0.2, so nothing clears 0.5.
+    expect(unitAssignment(e, a).pairs).toEqual([{ expectedIndex: 0, actualIndex: 0, score: expect.closeTo(0.2, 12) }]);
+    expect(unitPrecision(unitAssignment(e, a), 1)).toBe(0);
+    expect(unitMapping(e, a).pairs).toEqual([{ expectedIndex: 1, actualIndex: 0, score: 1 }]);
+    expect(unitPrecision(unitMapping(e, a), 1)).toBe(1);
+  });
+
+  it("maps e2 to a1 at 0.5 when e1 scores a1 at 0.25 (requirements)", () => {
+    const expected = [
+      { text: "docker alpha beta gamma", must_have: true }, // vs a1: 1/4
+      { text: "kubernetes cloud", must_have: false }, // vs a1: 1/2
+    ];
+    const actual = [{ normalizedRequirement: "kubernetes experience docker operations", mustHave: false }];
+    const ordered = requirementAssignment(expected, actual);
+    expect(ordered.pairs.map((p) => [p.expectedIndex, p.actualIndex, p.score])).toEqual([[0, 0, 0.25]]);
+    expect(requirementPrecision(ordered, 1)).toBe(0);
+    expect(mustHaveAgreement(expected, actual, ordered)).toBeNull();
+    const mapped = requirementMapping(expected, actual);
+    expect(mapped.pairs.map((p) => [p.expectedIndex, p.actualIndex, p.score])).toEqual([[1, 0, 0.5]]);
+    expect(requirementPrecision(mapped, 1)).toBe(1);
+    expect(mustHaveAgreement(expected, actual, mapped)).toBe(1);
+  });
+
+  it("breaks score ties by expected index, then actual index", () => {
+    const expected = [{ text: "kubernetes" }, { text: "kubernetes" }];
+    const actual = [{ normalizedRequirement: "kubernetes" }, { normalizedRequirement: "kubernetes" }];
+    expect(requirementMapping(expected, actual).pairs.map((p) => [p.expectedIndex, p.actualIndex])).toEqual([
+      [0, 0],
+      [1, 1],
+    ]);
   });
 });
 
@@ -108,7 +150,7 @@ describe("requirement metrics", () => {
   });
 
   it("agreement and precision use pairs mapped at >= 0.3", () => {
-    const asg = requirementAssignment(expected, actual);
+    const asg = requirementMapping(expected, actual);
     // Pair (0,1) agrees (true/true); pair (1,0) disagrees (false/true).
     expect(mustHaveAgreement(expected, actual, asg)).toBe(0.5);
     expect(requirementPrecision(asg, actual.length)).toBeCloseTo(2 / 3, 12);

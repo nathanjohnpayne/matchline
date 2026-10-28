@@ -205,6 +205,76 @@ describe("analyzeRecords", () => {
     expect(r.warnings.join("\n")).toMatch(/common cells only; r3__j1/);
   });
 
+  it("scores the task stage's output even when a later stage failed, and match accuracy only on success", () => {
+    seq = 0;
+    const flows = [
+      flow("inc", "r1", [GOOD], { matchAccuracy: 0.5 }),
+      flow("inc", "r1", [GOOD], { matchAccuracy: 0.7 }),
+      // Extraction returned; the embedding call after it failed.
+      flow("inc", "r1", [MID], {
+        ok: false,
+        matchAccuracy: null,
+        error: { kind: "APIError", name: "APIError", message: "embedding outage", step: "unit_embedding" },
+      }),
+      // Extraction itself failed: nothing to score.
+      flow("inc", "r1", null, {
+        ok: false,
+        matchAccuracy: null,
+        requirements: null,
+        error: { kind: "schema_error", name: "ExtractionError", message: "bad", step: "extraction" },
+      }),
+    ];
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+    const arm = r.arms[0]!;
+    expect(arm).toMatchObject({ flows: 4, failedFlows: 2, taskStepFailures: 1, taskOutputFlows: 3 });
+    const cell = arm.cells[0]!;
+    expect(cell).toMatchObject({ flows: 4, successful: 2, scored: 3 });
+    expect(cell.metrics.extraction_accuracy).toMatchObject({ n: 3, mean: (1 + 1 + 0.6) / 3 });
+    expect(cell.metrics.match_accuracy).toMatchObject({ n: 2, mean: 0.6 });
+    // The JD task gates on Requirements instead: the extraction failure has none.
+    const jd = analyzeRecords(flows, { task: "jd", incumbent: "inc", labels: LABELS, resamples: 200 });
+    expect(jd.arms[0]).toMatchObject({ taskOutputFlows: 3, taskStepFailures: 0 });
+  });
+
+  it("leaves out replays that repeat a counted sample's output, and warns", () => {
+    seq = 0;
+    const replay = { stepCacheHits: { extraction: true } };
+    const flows = [
+      // r1: two invocations replayed the same cached Units; one counts.
+      flow("inc", "r1", [MID], { invocationId: "inv-1", ...replay }),
+      flow("inc", "r1", [MID], { invocationId: "inv-2", ...replay }),
+      // r2: a live flow and a replay of the same output; the live one counts.
+      flow("inc", "r2", [GOOD], { invocationId: "inv-2", ...replay }),
+      flow("inc", "r2", [GOOD], { invocationId: "inv-1" }),
+      // r2: a replay with an output no counted flow has keeps its value.
+      flow("inc", "r2", [BAD], { invocationId: "inv-3", ...replay }),
+    ];
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+    const arm = r.arms[0]!;
+    expect(arm).toMatchObject({ replayedTaskFlows: 4, repeatedReplays: 2 });
+    const r1 = arm.cells.find((c) => c.cell === "r1__j1")!;
+    expect(r1.metrics.extraction_accuracy).toMatchObject({ n: 1, mean: 0.6 });
+    // Match accuracy is a whole-flow value and stays.
+    expect(r1.metrics.match_accuracy).toMatchObject({ n: 2 });
+    const r2 = arm.cells.find((c) => c.cell === "r2__j1")!;
+    expect(r2.metrics.extraction_accuracy).toMatchObject({ n: 2, mean: 0.5 });
+    expect(r2.scored).toBe(2);
+    expect(r.warnings.join("\n")).toMatch(
+      /inc: 4 flow\(s\) replayed the extraction output from the stage cache; 2 repeat an earlier sample's output/,
+    );
+  });
+
+  it("counts a token-source difference under one label as a separate configuration", () => {
+    seq = 0;
+    const flows = [
+      flow("inc", "r1", [GOOD], { tokenSource: "api" }),
+      flow("inc", "r1", [GOOD], { tokenSource: "claude-cli" }),
+    ];
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+    expect(r.arms[0]!.configs).toBe(2);
+    expect(r.warnings.join("\n")).toMatch(/inc: 2 different stage configurations \(or token sources\)/);
+  });
+
   it("scores the JD task from saved Requirements", () => {
     const r = analyzeRecords(corpus(), { task: "jd", incumbent: "inc", labels: LABELS, resamples: 200 });
     expect(r.arms[0]!.aggregate).toMatchObject({ requirement_set_accuracy: 1, must_have_agreement: 1, parsed_must_have_count: 1 });
@@ -215,7 +285,8 @@ describe("analyzeRecords", () => {
     for (const heading of ["## Arms", "## Metrics", "## Versus incumbent", "## Latency per step", "## Modeled cost per flow", "## Power check"]) {
       expect(md).toContain(heading);
     }
-    expect(md).toMatch(/\| inc \| 5 \| 1 \| 1 \| refusal 1 \|/);
+    // flows, failed, failed in the task step, refusals, error kinds.
+    expect(md).toMatch(/\| inc \| 5 \| 1 \| 1 \| 1 \| refusal 1 \|/);
     expect(md).toMatch(/\| cand \| extraction accuracy \| \+30\.0 \|/);
     expect(md).not.toContain("SECRET-UNIT-TEXT");
   });

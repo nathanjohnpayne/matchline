@@ -189,6 +189,8 @@ export class FlowRecorder {
   private invocation: InvocationRecord;
   private opened = false;
   private variantLabel = DEFAULT_VARIANT_LABEL;
+  private variantTokenSourceValue: string | undefined;
+  private disabledReason: string | undefined;
   private readonly samplesSeen = new Map<string, number>();
   private readonly clock: RecorderClock;
 
@@ -257,9 +259,40 @@ export class FlowRecorder {
     return this.clock.now();
   }
 
-  /** Label the flows that follow (a sweep calls this per variant). */
-  setVariant(label: string): void {
+  /** The token source the current variant set, if any. */
+  get variantTokenSource(): string | undefined {
+    return this.variantTokenSourceValue;
+  }
+
+  /** True once a write failed; later flows run unrecorded. */
+  get disabled(): boolean {
+    return this.disabledReason !== undefined;
+  }
+
+  /**
+   * Label the flows that follow (a sweep calls this per variant), with
+   * the variant's own token source when it sets one, so each flow
+   * records the effort that source actually sends.
+   */
+  setVariant(label: string, tokenSource?: string): void {
     this.variantLabel = label;
+    this.variantTokenSourceValue = tokenSource;
+  }
+
+  /**
+   * Stop recording after a write failure. The run has already paid for
+   * the flow, so the failure goes to stderr and the run continues
+   * without records rather than aborting.
+   */
+  disable(err: unknown): void {
+    if (this.disabledReason !== undefined) return;
+    const message = err instanceof Error ? err.message : String(err);
+    this.disabledReason = message;
+    this.invocation = { ...this.invocation, recordingError: message };
+    console.error(
+      `--record: writing to ${this.dir} failed (${message}); recording is off for the rest of this run, ` +
+        `which continues. ${this.invocation.flowCount} flow(s) were recorded before the failure.`,
+    );
   }
 
   /** 0-based index of the next sample of (variant, cell). */
@@ -271,6 +304,7 @@ export class FlowRecorder {
   }
 
   append(flow: FlowRecord): void {
+    if (this.disabled) return;
     this.open();
     appendFileSync(join(this.dir, FLOWS_FILE), `${JSON.stringify(flow)}\n`, "utf8");
     this.invocation = { ...this.invocation, flowCount: this.invocation.flowCount + 1 };
@@ -278,7 +312,9 @@ export class FlowRecorder {
 
   /**
    * Stamp `finishedAt`, and for a sweep the configuration each variant
-   * actually resolved to. A no-op when no flow was recorded.
+   * actually resolved to. A no-op when no flow was recorded. After a
+   * write failure it still tries once, so invocation.json says how many
+   * flows made it and why recording stopped.
    */
   finish(results?: readonly VariantResult[]): void {
     if (!this.opened) return;
@@ -331,29 +367,47 @@ export function recordingRunner(
 ): FlowRunner {
   if (recorder === undefined) return run;
   return async (input, deps) => {
+    if (recorder.disabled) return run(input, deps);
     const trace = newFlowTrace();
-    const stages = captureStageConfig(tokenSource);
     const variant = recorder.variant;
-    const startedAt = recorder.now().toISOString();
+    // A sweep variant may run under its own token source; the effort
+    // sent depends on it (CLI sources drop output_config).
+    const flowTokenSource = recorder.variantTokenSource ?? tokenSource;
+    let stages: StageConfigs;
+    let startedAt: string;
+    try {
+      stages = captureStageConfig(flowTokenSource);
+      startedAt = recorder.now().toISOString();
+    } catch (err) {
+      recorder.disable(err);
+      return run(input, deps);
+    }
     const result = await run(input, { ...deps, trace });
-    const finishedAt = recorder.now().toISOString();
-    recorder.append(
-      buildFlowRecord(
-        {
-          invocationId: recorder.invocationId,
-          variant,
-          stages,
-          embeddingModel: EMBEDDING_MODEL,
-          resumeId: input.resumeFixtureId,
-          jdId: input.jdFixtureId,
-          sampleIndex: recorder.nextSampleIndex(variant, input.resumeFixtureId, input.jdFixtureId),
-          startedAt,
-          finishedAt,
-        },
-        result,
-        trace,
-      ),
-    );
+    // The flow is paid for by now: a failure to record it must not
+    // abort the run or lose its result.
+    try {
+      const finishedAt = recorder.now().toISOString();
+      recorder.append(
+        buildFlowRecord(
+          {
+            invocationId: recorder.invocationId,
+            variant,
+            tokenSource: flowTokenSource,
+            stages,
+            embeddingModel: EMBEDDING_MODEL,
+            resumeId: input.resumeFixtureId,
+            jdId: input.jdFixtureId,
+            sampleIndex: recorder.nextSampleIndex(variant, input.resumeFixtureId, input.jdFixtureId),
+            startedAt,
+            finishedAt,
+          },
+          result,
+          trace,
+        ),
+      );
+    } catch (err) {
+      recorder.disable(err);
+    }
     return result;
   };
 }
