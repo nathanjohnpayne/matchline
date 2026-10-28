@@ -96,8 +96,24 @@ describe("cell-weighted difference and stratified bootstrap", () => {
     expect(x!.hi).toBeGreaterThanOrEqual(diff);
   });
 
+  it("pins the interval when every common cell has at least two values in both arms", () => {
+    // Values from before the singleton guard: n >= 2 in every common cell, so unchanged.
+    expect(stratifiedBootstrapCi(inc, cand, { seed: 1, resamples: 2000 })).toEqual({
+      lo: 0.033333333333333465,
+      hi: 0.20010416666666614,
+    });
+  });
+
+  it("is null when a common cell has fewer than two values in either arm, as the stratified Welch test is", () => {
+    // A singleton is redrawn unchanged every resample: this used to give [0.1, 0.1].
+    expect(stratifiedBootstrapCi(cells({ a: [0.6] }), cells({ a: [0.7] }))).toBeNull();
+    expect(stratifiedWelchTTest(cells({ a: [0.6] }), cells({ a: [0.7] }))).toBeNull();
+    expect(stratifiedBootstrapCi(cells({ a: [0.6, 0.7], b: [0.1, 0.2] }), cells({ a: [0.7, 0.8], b: [0.3] }))).toBeNull();
+    expect(stratifiedBootstrapCi(cells({ a: [0.6], b: [0.1, 0.2] }), cells({ a: [0.7, 0.8], b: [0.3, 0.2] }))).toBeNull();
+  });
+
   it("collapses to the shift when every cell is constant", () => {
-    const ci = stratifiedBootstrapCi(cells({ a: [0.4, 0.4], b: [0.1, 0.1] }), cells({ a: [0.5, 0.5, 0.5], b: [0.2] }), { resamples: 500 })!;
+    const ci = stratifiedBootstrapCi(cells({ a: [0.4, 0.4], b: [0.1, 0.1] }), cells({ a: [0.5, 0.5, 0.5], b: [0.2, 0.2] }), { resamples: 500 })!;
     expect(ci.lo).toBeCloseTo(0.1, 12);
     expect(ci.hi).toBeCloseTo(0.1, 12);
   });

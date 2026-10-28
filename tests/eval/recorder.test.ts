@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { profileFor } from "../../functions/src/llm/modelProfile.ts";
 import { repoRoot } from "./fitBrief/corpus.ts";
 import { parseFlowsJsonl } from "./flowRecord.ts";
 import {
+  assertRecordDirOutsideRepo,
   captureStageConfig,
   describeVariants,
   FlowRecorder,
@@ -67,6 +69,20 @@ afterEach(() => {
   clearModelOverrides();
 });
 
+/** Hermetic git: no global or system config, and no repository inherited from a hook environment. */
+function git(cwd: string, ...args: string[]): string {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
+  return execFileSync("git", ["-C", cwd, ...args], { env, stdio: ["ignore", "pipe", "pipe"] }).toString();
+}
+
+/** A fresh git repository at `dir` (the recorder refuses a root git cannot describe). */
+function gitRepo(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  git(dir, "init", "-q", "-b", "main");
+  return dir;
+}
+
 function clock(): { now: () => Date } {
   let t = Date.parse("2026-10-28T09:00:00.000Z");
   return { now: () => new Date((t += 1000)) };
@@ -101,10 +117,40 @@ describe("FlowRecorder.prepare", () => {
   });
 
   it("refuses a directory inside an injected root, and accepts one outside it", () => {
-    const root = join(base, "repo");
-    mkdirSync(root);
+    const root = gitRepo(join(base, "repo"));
     expect(() => FlowRecorder.prepare(join(root, "out"), INVOCATION, { root })).toThrow(/--record .* inside this repository/);
     expect(() => FlowRecorder.prepare(join(base, "out"), INVOCATION, { root, head: { sha: null, dirty: null } })).not.toThrow();
+  });
+
+  it("refuses a directory inside another worktree or the main checkout of the same repository", () => {
+    const main = gitRepo(join(base, "main"));
+    writeFileSync(join(main, "README"), "x\n");
+    git(main, "add", "README");
+    git(main, "-c", "user.name=Recorder Test", "-c", "user.email=recorder-test@example.invalid", "commit", "-q", "-m", "init");
+    const wt = join(base, "wt");
+    git(main, "worktree", "add", "-q", wt);
+    // Run from the main checkout: a path in the second worktree is refused.
+    expect(() => assertRecordDirOutsideRepo(join(wt, "records", "run-1"), "--record", main)).toThrow(
+      /--record .* resolves inside this repository \(the checkout or worktree at .*wt\)/,
+    );
+    expect(() => FlowRecorder.prepare(join(wt, "out"), INVOCATION, { root: main, head: { sha: null, dirty: null } })).toThrow(
+      /inside this repository/,
+    );
+    // Run from the second worktree: a path in the main checkout is refused.
+    expect(() => assertRecordDirOutsideRepo(join(main, "out"), "--record", wt)).toThrow(/resolves inside this repository/);
+    expect(() => assertRecordDirOutsideRepo(join(main, "out"), "--record", main)).toThrow(/resolves inside this repository/);
+    // A sibling directory of both is outside.
+    expect(() => assertRecordDirOutsideRepo(join(base, "elsewhere", "out"), "--record", main)).not.toThrow();
+    expect(() => assertRecordDirOutsideRepo(join(base, "elsewhere", "out"), "--out", wt)).not.toThrow();
+    expect(existsSync(join(base, "elsewhere"))).toBe(false);
+  });
+
+  it("refuses (fails closed) when git cannot list the repository's checkouts", () => {
+    const notARepo = join(base, "plain");
+    mkdirSync(notARepo);
+    expect(() => assertRecordDirOutsideRepo(join(base, "elsewhere"), "--record", notARepo)).toThrow(
+      /--record .* cannot confirm it is outside this repository, because `git rev-parse .*` failed/,
+    );
   });
 
   it("refuses a directory that already holds a record", () => {
@@ -123,7 +169,7 @@ describe("recordingRunner", () => {
   });
 
   it("writes invocation.json and one line per flow, labelled, sampled and timed", async () => {
-    const root = mkdtempSync(join(tmpdir(), "matchline-root-"));
+    const root = gitRepo(mkdtempSync(join(tmpdir(), "matchline-root-")));
     try {
       const dir = join(base, "rec");
       const recorder = FlowRecorder.prepare(dir, INVOCATION, {
@@ -187,8 +233,28 @@ describe("recordingRunner", () => {
     }
   });
 
+  it("keeps invocation.json's flowCount current after each flow, with finishedAt null until finish", async () => {
+    const root = gitRepo(mkdtempSync(join(tmpdir(), "matchline-root-")));
+    try {
+      const dir = join(base, "killed");
+      const recorder = FlowRecorder.prepare(dir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+      const run = recordingRunner(recorder, "api", fakeRun);
+      const deps = { anthropicClient: {} as never, openaiClient: {} as never };
+      await run({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+      await run({ resumeFixtureId: "r2", jdFixtureId: "j1" }, deps);
+      // No finish(): as if the run were killed here.
+      const inv = JSON.parse(readFileSync(join(dir, "invocation.json"), "utf8"));
+      expect(inv).toMatchObject({ flowCount: 2, finishedAt: null });
+      expect(readFileSync(join(dir, "flows.jsonl"), "utf8").trim().split("\n")).toHaveLength(2);
+      // The temp file is renamed over invocation.json, never left behind.
+      expect(readdirSync(dir).sort()).toEqual(["flows.jsonl", "invocation.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("finish is a no-op when nothing was recorded", () => {
-    const root = mkdtempSync(join(tmpdir(), "matchline-root-"));
+    const root = gitRepo(mkdtempSync(join(tmpdir(), "matchline-root-")));
     try {
       const dir = join(base, "empty");
       const recorder = FlowRecorder.prepare(dir, INVOCATION, { root, head: { sha: null, dirty: null } });
@@ -203,7 +269,7 @@ describe("recordingRunner", () => {
 describe("recordingRunner per-variant token source and write failures", () => {
   let root: string;
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "matchline-root-"));
+    root = gitRepo(mkdtempSync(join(tmpdir(), "matchline-root-")));
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });

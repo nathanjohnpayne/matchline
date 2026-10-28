@@ -382,7 +382,7 @@ async function runStage<T>(
   if (cache === undefined) {
     // No cache: the live recorder both prices into `costAccum` and
     // needs to land in `modeledUsage`. Wrap it.
-    const value = await compute(async (usage) => {
+    const value = await compute(async (usage) => { // --record hook
       tally.modeledUsage.push(usage);
       traceCall(tally.trace, step, usage, false); // --record hook
       return liveRecord(usage);

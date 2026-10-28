@@ -101,6 +101,13 @@ export function cellWeightedDiff(incumbent: CellValues, candidate: CellValues): 
  * each resample redraws every arm's values with replacement WITHIN each
  * cell, so the cell mix never changes. Deterministic for a given seed;
  * values are sorted per cell first so input order cannot move the result.
+ *
+ * Null when there is no common cell, or when any common cell has fewer
+ * than two values in either arm: a single value is redrawn unchanged in
+ * every resample, so that cell would contribute no spread and the
+ * interval would be too narrow (incumbent [0.6] vs candidate [0.7] gave
+ * [0.1, 0.1]). This is the condition under which `stratifiedWelchTTest`
+ * returns null, so the CI and the p-value are blank together.
  */
 export function stratifiedBootstrapCi(
   incumbent: CellValues,
@@ -109,6 +116,7 @@ export function stratifiedBootstrapCi(
 ): { lo: number; hi: number } | null {
   const cells = commonCells(incumbent, candidate);
   if (cells.length === 0) return null;
+  if (cells.some((c) => incumbent.get(c)!.length < 2 || candidate.get(c)!.length < 2)) return null;
   const resamples = options.resamples ?? DEFAULT_RESAMPLES;
   const rng = mulberry32(options.seed ?? DEFAULT_SEED);
   const inc = cells.map((c) => [...incumbent.get(c)!].sort((x, y) => x - y));

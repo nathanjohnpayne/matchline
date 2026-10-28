@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { priceUsage, type UsageRecord } from "../../../functions/src/llm/cost.ts";
 import type { FlowRecord, RecordedCall } from "../flowRecord.ts";
 
-import { analyzeRecords, formatAnalysisMarkdown, type AnalysisLabels } from "./analyzeRecords.ts";
+import { analyzeRecords, formatAnalysisMarkdown, RAN_CELL_NO_VALUES, type AnalysisLabels } from "./analyzeRecords.ts";
+import { cellWeightedDiff, stratifiedBootstrapCi, stratifiedWelchTTest } from "./stats.ts";
 
 const GOOD = { raw_text: "SECRET-UNIT-TEXT Led the Kepler launch", normalized_summary: "led kepler launch", skills: ["a"] };
 const MID = { raw_text: "Led Kepler", normalized_summary: "led kepler", skills: [] }; // 0.6
@@ -146,11 +147,12 @@ describe("analyzeRecords", () => {
     expect(c.diff).toBeCloseTo(((0.6 - 1) + (1 - 0)) / 2, 12);
     expect(c.cellDiffs.map((d) => d.cell)).toEqual(["r1__j1", "r2__j1"]);
     expect(c.cellsAhead).toBe(1);
-    expect(c.ci95!.lo).toBeLessThanOrEqual(c.diff!);
-    expect(c.ci95!.hi).toBeGreaterThanOrEqual(c.diff!);
     // The incumbent holds one successful r2 flow, so r2's variance is
-    // undefined and the stratified Welch test of this difference is too.
+    // undefined: the stratified Welch test of this difference is too, and
+    // the bootstrap CI (which would redraw that one value every time) is
+    // blank with it.
     expect(c.welchP).toBeNull();
+    expect(c.ci95).toBeNull();
   });
 
   it("pins the Welch p-value to the printed difference when the cell mix differs between arms", () => {
@@ -325,5 +327,50 @@ describe("analyzeRecords", () => {
     expect(md).toMatch(/\| inc \| 5 \| 1 \| 1 \| 1 \| refusal 1 \|/);
     expect(md).toMatch(/\| cand \| extraction accuracy \| \+30\.0 \|/);
     expect(md).not.toContain("SECRET-UNIT-TEXT");
+  });
+
+  describe("a cell both arms ran but one arm has no values in (guard ran-cell-no-values)", () => {
+    const refused = { ok: false, matchAccuracy: null, requirements: null, error: { kind: "refusal", name: null, message: "", step: "requirement_parsing" } };
+    function dropCell(candR2: "refused" | "answered"): FlowRecord[] {
+      seq = 0;
+      const at = (variant: string, resume: string, values: number[]): FlowRecord[] =>
+        values.map((v) => flow(variant, resume, [GOOD], { matchAccuracy: v }));
+      return [
+        ...at("inc", "r1", [0.5, 0.7, 0.6]),
+        ...at("inc", "r2", [0.2, 0.4]),
+        ...at("cand", "r1", [0.8, 0.9, 0.85]),
+        // The candidate refused every r2 flow: it ran the cell and produced nothing.
+        ...(candR2 === "refused"
+          ? [flow("cand", "r2", [GOOD], refused as Partial<FlowRecord>), flow("cand", "r2", [GOOD], refused as Partial<FlowRecord>)]
+          : at("cand", "r2", [0.3, 0.5, 0.4])),
+      ];
+    }
+
+    it("withholds the difference, CI and p, warns, and marks the row instead of comparing on the surviving cell", () => {
+      const r = analyzeRecords(dropCell("refused"), { task: "jd", incumbent: "inc", labels: LABELS, resamples: 500 });
+      const c = r.comparisons.find((x) => x.metric === "match_accuracy")!;
+      // Before the guard this printed +25.0 on r1 alone.
+      expect(c).toMatchObject({ diff: null, ci95: null, welchP: null, droppedCells: ["r2__j1"], failedGuards: [RAN_CELL_NO_VALUES] });
+      expect(r.warnings.join("\n")).toMatch(/cand match_accuracy: r2__j1 \(no values for cand\) ran in both arms .*\(guard ran-cell-no-values\)/);
+      // Every jd metric lost r2 for the candidate, so every row is guarded.
+      expect(r.comparisons.every((x) => x.failedGuards.includes(RAN_CELL_NO_VALUES))).toBe(true);
+      const md = formatAnalysisMarkdown(r);
+      expect(md).toContain("| failed guards |");
+      expect(md).toMatch(/\| cand \| match accuracy \(reported\) \| — \| — \| — \| 1\/1 \| r1__j1 \+25\.0 \| ran-cell-no-values: r2__j1 \|/);
+    });
+
+    it("leaves a comparison where both arms have values in every cell unchanged", () => {
+      const r = analyzeRecords(dropCell("answered"), { task: "jd", incumbent: "inc", labels: LABELS, resamples: 500 });
+      const c = r.comparisons.find((x) => x.metric === "match_accuracy")!;
+      const inc = new Map([["r1__j1", [0.5, 0.7, 0.6]], ["r2__j1", [0.2, 0.4]]]);
+      const cand = new Map([["r1__j1", [0.8, 0.9, 0.85]], ["r2__j1", [0.3, 0.5, 0.4]]]);
+      expect(c.diff).toBeCloseTo(cellWeightedDiff(inc, cand)!, 12);
+      expect(c.diff).toBeCloseTo((0.25 + 0.1) / 2, 12);
+      expect(c.ci95).toEqual(stratifiedBootstrapCi(inc, cand, { seed: 20261028, resamples: 500 }));
+      expect(c.welchP).toBeCloseTo(stratifiedWelchTTest(inc, cand)!.p, 12);
+      expect(c).toMatchObject({ commonCells: 2, droppedCells: [], failedGuards: [] });
+      expect(r.comparisons.every((x) => x.failedGuards.length === 0)).toBe(true);
+      expect(r.warnings.join("\n")).not.toMatch(/ran in both arms/);
+    });
   });
 });

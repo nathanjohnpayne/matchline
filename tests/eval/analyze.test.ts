@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -118,6 +119,29 @@ describe("runAnalyze", () => {
     expect(() =>
       runAnalyze(parseAnalyzeArgs(["--records", a, "--task", "extraction", "--incumbent", "sonnet", "--out", join(repoRoot(), "tests", "eval", ".analysis-out")])),
     ).toThrow(/inside this repository/);
+  });
+
+  it("refuses an --out inside another worktree of the same repository", () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
+    const git = (cwd: string, ...args: string[]): void => {
+      execFileSync("git", ["-C", cwd, ...args], { env, stdio: "ignore" });
+    };
+    const main = join(base, "main");
+    mkdirSync(main);
+    git(main, "init", "-q", "-b", "main");
+    writeFileSync(join(main, "README"), "x\n");
+    git(main, "add", "README");
+    git(main, "-c", "user.name=Analyze Test", "-c", "user.email=analyze-test@example.invalid", "commit", "-q", "-m", "init");
+    const wt = join(base, "wt");
+    git(main, "worktree", "add", "-q", wt);
+    const a = join(base, "run-a");
+    writeRecords(a, "sonnet", "inv-a", 22, 2);
+    const out = join(wt, "analysis");
+    expect(() =>
+      runAnalyze(parseAnalyzeArgs(["--records", a, "--task", "extraction", "--incumbent", "sonnet", "--out", out]), { root: main }),
+    ).toThrow(/--out .* resolves inside this repository \(the checkout or worktree at /);
+    expect(existsSync(out)).toBe(false);
   });
 
   it("accepts a flows.jsonl path and names a directory that holds none", () => {

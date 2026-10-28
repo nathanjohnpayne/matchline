@@ -3,22 +3,27 @@
  * `<dir>/flows.jsonl` and the run's configuration to
  * `<dir>/invocation.json`, for `analyze.ts` to compare arms with.
  *
- * The directory must resolve outside this public repository, using the
- * same check as the fit-brief harness (`assertOutsideRepo`). The eval
- * corpus is public, so the records are safe to keep; the refusal keeps
- * run output out of commits all the same.
+ * The directory must resolve outside this public repository: outside
+ * the checkout the code runs from (the fit-brief harness's
+ * `assertOutsideRepo`), and outside the main checkout and every other
+ * worktree of the same repository, which git lists. The eval corpus is
+ * public, so the records are safe to keep; the refusal keeps run output
+ * out of commits all the same.
  *
  * Files are created on the first recorded flow, so a run refused before
- * any spend (a projection-guard block, a sweep with no labeled pairs)
- * leaves nothing behind. An existing `flows.jsonl` or `invocation.json`
+ * any flow runs (a `--variant` sweep blocked by its projection guard,
+ * which is checked before the sweep starts; a sweep with no labeled
+ * pairs) leaves nothing behind. The ordinary (non-sweep) path checks its
+ * projection guard only after the corpus has run, so a run that guard
+ * refuses has already recorded its flows. An existing `flows.jsonl` or `invocation.json`
  * in the directory is refused rather than appended to, so one directory
  * always holds exactly one invocation.
  */
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { effortFor, EMBEDDING_MODEL, modelFor, type Stage } from "../../functions/src/llm/config.ts";
 import { profileFor } from "../../functions/src/llm/modelProfile.ts";
@@ -72,18 +77,87 @@ export function parseRecordDir(argv: readonly string[]): string | undefined {
   return found;
 }
 
-/** Refuse a directory that resolves inside the repository (symlinks resolved). */
+/**
+ * Refuse a directory that resolves inside the repository (symlinks
+ * resolved): inside `root`, inside the main checkout (the parent of the
+ * shared git directory), or inside any worktree `git worktree list`
+ * reports. A worktree of the same repository can commit records just as
+ * well as the checkout the code runs from. When git cannot answer, the
+ * path is refused: an unknown checkout layout is not proof of "outside".
+ */
 export function assertRecordDirOutsideRepo(dir: string, label: string, root: string = repoRoot()): void {
   try {
     assertOutsideRepo(dir, label, root);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("resolves inside this repository")) throw err;
-    throw new Error(
-      `${label} ${dir} resolves inside this repository. This repository is public; ` +
-        `write eval records outside it (for example ~/.matchline/eval-records/<run>).`,
-    );
+    throw new Error(insideRepoMessage(label, dir, null));
   }
+  const target = comparablePath(realpathOrAncestor(dir));
+  for (const checkout of repositoryCheckouts(root, label, dir)) {
+    if (isWithin(relative(comparablePath(realpathOrAncestor(checkout)), target))) {
+      throw new Error(insideRepoMessage(label, dir, checkout));
+    }
+  }
+}
+
+function insideRepoMessage(label: string, dir: string, checkout: string | null): string {
+  return (
+    `${label} ${dir} resolves inside this repository${checkout === null ? "" : ` (the checkout or worktree at ${checkout})`}. ` +
+    `This repository is public; write eval records outside it (for example ~/.matchline/eval-records/<run>).`
+  );
+}
+
+/**
+ * The main checkout and every worktree of the repository at `root`. Throws
+ * (refusing the path) when either git command fails. GIT_DIR and friends
+ * are dropped so an inherited hook environment cannot point git at a
+ * different repository than `root`.
+ */
+function repositoryCheckouts(root: string, label: string, dir: string): string[] {
+  const env = { ...process.env };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
+  const git = (args: readonly string[]): string => {
+    try {
+      return execFileSync("git", ["-C", root, ...args], { env, stdio: ["ignore", "pipe", "pipe"] }).toString();
+    } catch (err) {
+      const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
+      const reason = stderr || (err instanceof Error ? err.message : String(err));
+      throw new Error(
+        `${label} ${dir}: cannot confirm it is outside this repository, because \`git ${args.join(" ")}\` ` +
+          `failed in ${root} (${reason}). Refusing rather than risk writing into a checkout.`,
+      );
+    }
+  };
+  const commonDir = git(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+  const checkouts = [dirname(commonDir)];
+  for (const line of git(["worktree", "list", "--porcelain"]).split("\n")) {
+    if (line.startsWith("worktree ")) checkouts.push(line.slice("worktree ".length));
+  }
+  return checkouts;
+}
+
+/** `rel` stays inside its base (the rule the fit-brief helper uses). */
+function isWithin(rel: string): boolean {
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
+
+/** Case-fold where the default file system is case-insensitive, as the fit-brief helper does. */
+function comparablePath(path: string): string {
+  return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/** Real path of `path`, or of its deepest existing ancestor with the rest appended. */
+function realpathOrAncestor(path: string): string {
+  let current = resolve(path);
+  const tail: string[] = [];
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    tail.unshift(current.slice(parent.length + 1));
+    current = parent;
+  }
+  return join(realpathSync.native(current), ...tail);
 }
 
 /** HEAD and whether the tree is dirty; nulls when git is unavailable. */
@@ -303,11 +377,17 @@ export class FlowRecorder {
     return next;
   }
 
+  /**
+   * Append one flow, then rewrite invocation.json with the new count, so
+   * a run killed mid-way (SIGINT, OOM) leaves a `flowCount` that matches
+   * `flows.jsonl`; `finishedAt` stays null until `finish()`.
+   */
   append(flow: FlowRecord): void {
     if (this.disabled) return;
     this.open();
     appendFileSync(join(this.dir, FLOWS_FILE), `${JSON.stringify(flow)}\n`, "utf8");
     this.invocation = { ...this.invocation, flowCount: this.invocation.flowCount + 1 };
+    this.writeInvocation();
   }
 
   /**
@@ -348,8 +428,11 @@ export class FlowRecorder {
     this.writeInvocation();
   }
 
+  /** Write to a temp file and rename it over, so a kill mid-write cannot truncate invocation.json. */
   private writeInvocation(): void {
-    writeFileSync(join(this.dir, INVOCATION_FILE), `${JSON.stringify(this.invocation, null, 2)}\n`, "utf8");
+    const tmp = join(this.dir, `.${INVOCATION_FILE}.${process.pid}.tmp`);
+    writeFileSync(tmp, `${JSON.stringify(this.invocation, null, 2)}\n`, "utf8");
+    renameSync(tmp, join(this.dir, INVOCATION_FILE));
   }
 }
 

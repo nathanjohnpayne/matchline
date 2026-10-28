@@ -150,7 +150,21 @@ export interface Comparison {
   readonly cellDiffs: readonly CellDiff[];
   /** Common cells where the candidate's cell mean is higher. */
   readonly cellsAhead: number;
+  /**
+   * Cells both arms ran (any flow) where one arm has values for this
+   * metric and the other has none, e.g. every candidate flow refused.
+   */
+  readonly droppedCells: readonly string[];
+  /**
+   * Guards this comparison fails. When non-empty, `diff`, `ci95` and
+   * `welchP` are null: a figure over the surviving cells would favour an
+   * arm that produced nothing in a hard cell.
+   */
+  readonly failedGuards: readonly string[];
 }
+
+/** Guard: a cell both arms ran has values for this metric in one arm only. */
+export const RAN_CELL_NO_VALUES = "ran-cell-no-values";
 
 export interface PowerRow extends Partial<PowerCheck> {
   readonly metric: string;
@@ -470,20 +484,47 @@ export function analyzeRecords(input: readonly FlowRecord[], options: AnalyzeOpt
     if (onlyOne.length > 0) {
       warnings.push(`${candidate}: compared on common cells only; ${[...new Set(onlyOne)].sort().join(", ")} held by one arm.`);
     }
+    // Cells both arms ran (any flow), whatever their metric values.
+    const ranBoth = [...incCells].filter((c) => candCells.has(c)).sort();
     for (const m of metrics) {
       const inc = valuesOf(options.incumbent, m.id);
       const cand = valuesOf(candidate, m.id);
       const cells = commonCells(inc, cand);
+      const withValues = new Set(cells);
+      const has = (v: CellValues, cell: string): boolean => (v.get(cell)?.length ?? 0) > 0;
+      const missing = ranBoth.filter((c) => !withValues.has(c));
+      // One arm has values, the other none: comparing on the rest would
+      // favour the arm that produced nothing there.
+      const droppedCells = missing.filter((c) => has(inc, c) || has(cand, c));
+      // Neither arm has values: the metric is undefined there for both, so
+      // dropping the cell treats them alike; say so without failing a guard.
+      const neither = missing.filter((c) => !has(inc, c) && !has(cand, c));
+      const failedGuards = droppedCells.length > 0 ? [RAN_CELL_NO_VALUES] : [];
+      if (droppedCells.length > 0) {
+        const detail = droppedCells
+          .map((c) => `${c} (no values for ${has(inc, c) ? candidate : options.incumbent})`)
+          .join(", ");
+        warnings.push(
+          `${candidate} ${m.id}: ${detail} ran in both arms but has values in one only; difference, CI and p ` +
+            `are withheld rather than computed on the other cells (guard ${RAN_CELL_NO_VALUES}).`,
+        );
+      }
+      if (neither.length > 0) {
+        warnings.push(`${candidate} ${m.id}: ${neither.join(", ")} ran in both arms but has no values in either; compared without it.`);
+      }
       const cellDiffs = cells.map((cell) => ({ cell, diff: mean(cand.get(cell)!)! - mean(inc.get(cell)!)! }));
+      const guarded = failedGuards.length > 0;
       comparisons.push({
         candidate,
         metric: m.id,
-        diff: cellWeightedDiff(inc, cand),
-        ci95: stratifiedBootstrapCi(inc, cand, { seed, resamples }),
-        welchP: stratifiedWelchTTest(inc, cand)?.p ?? null,
+        diff: guarded ? null : cellWeightedDiff(inc, cand),
+        ci95: guarded ? null : stratifiedBootstrapCi(inc, cand, { seed, resamples }),
+        welchP: guarded ? null : (stratifiedWelchTTest(inc, cand)?.p ?? null),
         commonCells: cells.length,
         cellDiffs,
         cellsAhead: cellDiffs.filter((d) => d.diff > 0).length,
+        droppedCells,
+        failedGuards,
       });
     }
   }
@@ -580,15 +621,16 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 
   if (result.comparisons.length > 0) {
     lines.push("", "## Versus incumbent", "", "Difference = mean over common cells of (candidate − incumbent) cell means.", "");
-    lines.push("| candidate | metric | difference | 95% CI | stratified Welch p | cells ahead | per-cell differences |");
-    lines.push("|---|---|---|---|---|---|---|");
+    lines.push("| candidate | metric | difference | 95% CI | stratified Welch p | cells ahead | per-cell differences | failed guards |");
+    lines.push("|---|---|---|---|---|---|---|---|");
     for (const c of result.comparisons) {
       const def = defs.get(c.metric)!;
       lines.push(
         `| ${c.candidate} | ${def.label} | ${fmtMetric(def, c.diff, true)} | ` +
           `${c.ci95 === null ? "—" : `${fmtMetric(def, c.ci95.lo, true)} to ${fmtMetric(def, c.ci95.hi, true)}`} | ` +
           `${fmtP(c.welchP)} | ${c.cellsAhead}/${c.commonCells} | ` +
-          `${c.cellDiffs.map((d) => `${d.cell} ${fmtMetric(def, d.diff, true)}`).join("; ") || "—"} |`,
+          `${c.cellDiffs.map((d) => `${d.cell} ${fmtMetric(def, d.diff, true)}`).join("; ") || "—"} | ` +
+          `${c.failedGuards.length === 0 ? "—" : `${c.failedGuards.join(", ")}: ${c.droppedCells.join(", ")}`} |`,
       );
     }
   }
