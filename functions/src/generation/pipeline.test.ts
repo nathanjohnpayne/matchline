@@ -702,9 +702,13 @@ describe("runGenerationPipeline", () => {
         persistAsset,
       });
       expect(result.cost_usd).toBeNull();
-      const [{ asset }] = persistAsset.mock.calls[0]! as unknown as [{ asset: object }];
+      const [{ asset, snapshot }] = persistAsset.mock.calls[0]! as unknown as [
+        { asset: object; snapshot: unknown },
+      ];
       expect(asset).not.toHaveProperty("cost_usd");
       expect(asset).toMatchObject({ input_tokens: 800 });
+      // The persist re-checks what the prompt rendered (#485).
+      expect(snapshot).toEqual(generationSnapshotOf(expectedInput(makeInputs(["u1"]))));
     });
   });
 
