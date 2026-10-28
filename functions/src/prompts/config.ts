@@ -27,7 +27,9 @@ export const PROMPT_CONFIG = {
     specificity: "v1",
   },
   generation: {
-    resume: "v1",
+    // #485: shared Unit evidence text, target role framed as non-evidence;
+    // the v1 file stays for the eval harness.
+    resume: "v2",
     // #495 Phase 3: evaluated privately before any product surface uses it.
     fitBrief: "v1",
   },

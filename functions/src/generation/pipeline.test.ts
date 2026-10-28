@@ -10,16 +10,27 @@ import type {
 } from "../types/capability.ts";
 import type { Role } from "../types/crm.ts";
 
+import { loadPromptText } from "../prompts/loader.ts";
+import { formatUnit } from "../validation/unitPromptText.ts";
+
 import {
   GenerationApplicationNotFound,
   GenerationError,
   GenerationNoApprovedUnitsError,
   findStaleGroundingId,
+  liveApprovedMatchesOf,
   requirementSetToken,
   runGenerationPipeline,
   type GenerationInputs,
   type RunGenerationContext,
 } from "./pipeline.ts";
+import {
+  generationSnapshotOf,
+  renderResumeInput,
+  renderedLinksOf,
+  sortById,
+  type ResumeInput,
+} from "./resumeInput.ts";
 import { runGenerateResume } from "./runGenerateResume.ts";
 
 /**
@@ -649,7 +660,7 @@ describe("runGenerationPipeline", () => {
           stage: "generation",
           model: "claude-haiku-4-5-20251001",
           servedModel: "claude-haiku-4-5-20251001",
-          promptVersion: "generation/resume.v1",
+          promptVersion: "generation/resume.v2",
           attempt: index,
           maxTokens: 4096,
           ownerUid: CTX.ownerUid,
@@ -1201,5 +1212,222 @@ describe("requirementSetToken: content, not just ids (#449 round 2)", () => {
       } as never,
     ]);
     expect(a).toBe(b);
+  });
+});
+
+// -- #485: the rendered input, retry reminders and snapshot ------------------
+
+/** What the pipeline should render for `inputs`, computed independently of it. */
+function expectedInput(inputs: GenerationInputs): ResumeInput {
+  const live = liveApprovedMatchesOf(inputs.approvedMatches, inputs.requirements);
+  const eligible = new Set(live.map((m) => m.experience_unit_id));
+  const units = sortById(inputs.units.filter((u) => eligible.has(u.id)));
+  return {
+    units,
+    roleTitle: inputs.role.title,
+    requirements: sortById(inputs.requirements),
+    links: renderedLinksOf(live, new Set(units.map((u) => u.id))),
+  };
+}
+
+function reqWith(id: string, text: string, mustHave = true): JobRequirementUnit {
+  return { ...makeReq(id), normalized_requirement: text, must_have: mustHave };
+}
+
+interface CapturedCall {
+  readonly system: string;
+  readonly messages: readonly { readonly content: string }[];
+}
+
+const callOf = (create: ReturnType<typeof vi.fn>, i: number): CapturedCall =>
+  create.mock.calls[i]![0] as CapturedCall;
+
+describe("generation renders the shared evidence input (#485)", () => {
+  const RICH_UNIT = makeUnit("u1", {
+    metrics: [{ claim: "Cut memory 30%", value: 30, unit: "%", direction: "down", confidence: "high" }],
+    seniority_signals: ["led"],
+    scope_signals: ["3 platforms"],
+    skills: ["memory optimization"],
+    tools: ["Perfetto"],
+    domains: ["streaming video"],
+    date_range: { start: "2019-03-01", end: "2021-06-30" },
+  });
+
+  function richInputs(): GenerationInputs {
+    return {
+      // u3 is approved but has no live match; u4's only match is stranded.
+      units: [makeUnit("u3"), RICH_UNIT, makeUnit("u2"), makeUnit("u4")],
+      role: makeRole(),
+      requirements: [reqWith("req-2", "Connected-TV platforms", false), makeReq("req-1"), reqWith("req-3", "Team of 10")],
+      approvedMatches: [
+        makeMatch("u2", "req-1"),
+        makeMatch("u1", "req-2"),
+        makeMatch("u1", "req-1"),
+        makeMatch("u4", "req-gone"),
+        makeMatch("u2", "req-gone"),
+      ],
+    };
+  }
+
+  async function run(inputs: GenerationInputs) {
+    const { client, create } = mockClient([mockMessage(VALID_RESPONSE)]);
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => inputs,
+      generateId: () => "id-x",
+    });
+    return { result, call: callOf(create, 0) };
+  }
+
+  it("sends the few-shot followed by exactly the rendered input", async () => {
+    const inputs = richInputs();
+    const { call } = await run(inputs);
+    const prompt = loadPromptText("generation", "resume");
+    expect(call.messages[0]!.content).toBe(
+      `${prompt.userFewShot}\n\n${renderResumeInput(expectedInput(inputs))}`,
+    );
+  });
+
+  it("puts the real input last, after the example", async () => {
+    const { call } = await run(richInputs());
+    const content = call.messages[0]!.content;
+    expect(content.endsWith("</input>")).toBe(true);
+    expect(content.lastIndexOf("<input>")).toBeGreaterThan(content.lastIndexOf("</example>"));
+  });
+
+  it("shows a Unit's metrics, signals, tags and dates through the shared formatter", async () => {
+    const { call } = await run(richInputs());
+    expect(call.messages[0]!.content).toContain(formatUnit(RICH_UNIT));
+  });
+
+  it("does not show an approved Unit with no live approved match", async () => {
+    const { call } = await run(richInputs());
+    const content = call.messages[0]!.content;
+    expect(content).not.toContain("[Unit u3]");
+    expect(content).not.toContain("[Unit u4]");
+  });
+
+  it("adds no link line for a stranded match", async () => {
+    const { call } = await run(richInputs());
+    const content = call.messages[0]!.content;
+    expect(content).not.toContain("req-gone");
+    expect(content).toContain("[Unit u1] -> [Requirement req-1]\n[Unit u1] -> [Requirement req-2]\n[Unit u2] -> [Requirement req-1]");
+  });
+
+  it("renders every Requirement with its id, matched or not", async () => {
+    const { call } = await run(richInputs());
+    const content = call.messages[0]!.content;
+    expect(content).toContain('[Requirement req-1] [MUST-HAVE] "5+ years product management experience"');
+    expect(content).toContain('[Requirement req-2] [nice-to-have] "Connected-TV platforms"');
+    expect(content).toContain('[Requirement req-3] [MUST-HAVE] "Team of 10"');
+  });
+
+  it("sends the v2 system prompt unchanged on the first attempt", async () => {
+    const { call } = await run(richInputs());
+    expect(call.system).toBe(loadPromptText("generation", "resume").system);
+  });
+
+  it("returns the snapshot of what it rendered, and the unchanged Requirement token", async () => {
+    const inputs = richInputs();
+    const { result } = await run(inputs);
+    expect(result.snapshot).toEqual(generationSnapshotOf(expectedInput(inputs)));
+    expect(Object.keys(result.snapshot.unitVersions)).toEqual(["u1", "u2"]);
+    expect(result.requirement_set_token).toBe(requirementSetToken(inputs.requirements));
+  });
+
+  it("does not crash on a Unit with a null date_range and missing tools", async () => {
+    const odd = makeUnit("u1", {
+      date_range: null as unknown as undefined,
+      tools: undefined as unknown as string[],
+    });
+    const { result, call } = await run({ ...makeInputs(["u1"]), units: [odd] });
+    expect(result.content.summary.source_unit_ids).toEqual(["u1"]);
+    expect(call.messages[0]!.content).toContain("[Unit u1]");
+  });
+});
+
+describe("retry reminders follow the failure kind (#485)", () => {
+  const system = () => loadPromptText("generation", "resume").system;
+
+  async function secondSystem(first: Anthropic.Messages.Message | Error): Promise<string> {
+    const { client, create } = mockClient([first, mockMessage(VALID_RESPONSE)]);
+    await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => makeInputs(["u1"]),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+    return callOf(create, 1).system;
+  }
+
+  it("after a fabricated id, names Unit ids and not the schema", async () => {
+    const s = await secondSystem(
+      mockMessage({ ...VALID_RESPONSE, summary: { text: "x", source_unit_ids: ["u-fab"] } }),
+    );
+    expect(s.startsWith(system())).toBe(true);
+    expect(s.endsWith("Never cite a `[Requirement …]` id or an id from the example.")).toBe(true);
+    expect(s.slice(system().length)).not.toContain("schema");
+  });
+
+  it("after a transport error, adds nothing", async () => {
+    expect(await secondSystem(new Error("ECONNRESET"))).toBe(system());
+  });
+
+  it("after a text-only reply, asks for the tool", async () => {
+    const s = await secondSystem(mockTextOnlyMessage("no tool"));
+    expect(s.endsWith("did not call the `record_resume` tool. Respond only by calling it.")).toBe(true);
+  });
+
+  it("after a schema failure, names the schema", async () => {
+    const s = await secondSystem(mockMessage({ summary: { text: "", source_unit_ids: [] } }));
+    expect(s.endsWith("never send an item with empty text or empty `source_unit_ids`.")).toBe(true);
+  });
+});
+
+describe("sparse evidence (#485)", () => {
+  function sparseInputs(): GenerationInputs {
+    return {
+      units: [makeUnit("u1", { normalized_summary: "Owned smart-TV device certification for Samsung and LG." })],
+      role: makeRole(),
+      requirements: [makeReq("req-1"), reqWith("req-2", "Connected-TV platforms"), reqWith("req-3", "Team of 10")],
+      approvedMatches: [makeMatch("u1", "req-1")],
+    };
+  }
+  const SPARSE = {
+    summary: { text: "Owned smart-TV device certification for Samsung and LG.", source_unit_ids: ["u1"] },
+    bullets: [],
+    skills: [],
+  };
+
+  it("accepts a summary with empty bullets and skills on the first attempt", async () => {
+    const { client, create } = mockClient([mockMessage(SPARSE)]);
+    const result = await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => sparseInputs(),
+      generateId: () => "id-x",
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.content.bullets).toEqual([]);
+    expect(result.content.skills).toEqual([]);
+  });
+
+  it("still refuses a Requirement id cited as a source", async () => {
+    const { client, create } = mockClient([
+      mockMessage({ ...SPARSE, summary: { ...SPARSE.summary, source_unit_ids: ["req-1"] } }),
+      mockMessage(SPARSE),
+    ]);
+    await runGenerationPipeline(CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      loadInputs: async () => sparseInputs(),
+      generateId: () => "id-x",
+      sleep: async () => {},
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(callOf(create, 1).system).toContain("cited an id that is not a `[Unit …]` id");
   });
 });

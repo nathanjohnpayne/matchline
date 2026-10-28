@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import type { ExperienceUnit } from "../types/capability.ts";
+import { renderResumeInput, type ResumeInput } from "../generation/resumeInput.ts";
+import type { ExperienceUnit, JobRequirementUnit } from "../types/capability.ts";
 import { formatUnit } from "../validation/unitPromptText.ts";
 
 import { PROMPT_CONFIG } from "./config.ts";
+import { ResumeGenerationResponseV2Schema } from "./generation/resume.v2.schema.ts";
 import { parsePromptSections } from "./loader.ts";
 import { TraceabilityResponseV2Schema } from "./validation/traceability.v2.schema.ts";
 
@@ -127,8 +129,131 @@ describe("traceability.v2 few-shot", () => {
   });
 });
 
+function requirement(id: string, text: string, mustHave: boolean): JobRequirementUnit {
+  return {
+    id,
+    owner_uid: "example",
+    role_id: "example",
+    raw_text: text,
+    normalized_requirement: text,
+    category: "skill",
+    keywords: [],
+    tools: [],
+    domains: [],
+    priority: "high",
+    must_have: mustHave,
+    extracted_from: "qualifications",
+  };
+}
+
+const RESUME_UNITS: readonly ExperienceUnit[] = [
+  unit("ex-unit-1", {
+    raw_text: PLAYBACK_RAW,
+    normalized_summary: PLAYBACK_SUMMARY,
+    metrics: PLAYBACK_METRICS,
+    seniority_signals: ["led"],
+    skills: ["memory optimization", "cross-platform playback"],
+    domains: ["streaming video"],
+    date_range: { start: "2019-03-01", end: "2021-06-30" },
+  }),
+  unit("ex-unit-2", {
+    raw_text: CERT_RAW,
+    normalized_summary: CERT_SUMMARY,
+    scope_signals: ["Samsung and LG smart TVs"],
+    skills: ["device certification"],
+    domains: ["streaming video"],
+    date_range: { start: "2021-07-01" },
+  }),
+];
+
+const EXAMPLE_FIXTURE: ResumeInput = {
+  units: RESUME_UNITS,
+  roleTitle: "Senior Product Manager, Video Infrastructure",
+  requirements: [
+    requirement("ex-req-1", "Streaming video domain experience", true),
+    requirement("ex-req-2", "Connected-TV platform experience", true),
+    requirement("ex-req-3", "Has managed a team of 10 or more engineers", false),
+  ],
+  links: [
+    ["ex-unit-1", "ex-req-1"],
+    ["ex-unit-2", "ex-req-1"],
+    ["ex-unit-2", "ex-req-2"],
+  ],
+};
+
+interface Item {
+  readonly text: string;
+  readonly source_unit_ids: readonly string[];
+}
+
+describe("resume.v2 few-shot", () => {
+  const { system, userFewShot } = sections("generation", "resume.v2.md");
+  const example = userFewShot.slice(userFewShot.indexOf("<example>"), userFewShot.indexOf("</example>"));
+  const answerText = fences(example.slice(example.indexOf("Correct `record_resume` call:")), "json")[0]!;
+  const answer = ResumeGenerationResponseV2Schema.parse(JSON.parse(answerText));
+  const items: readonly Item[] = [answer.summary, ...answer.bullets, ...answer.skills, ...(answer.education ?? [])];
+  const unitsById = new Map(RESUME_UNITS.map((u) => [u.id, u]));
+
+  it("shows the input exactly as renderResumeInput renders it", () => {
+    const lines = example.split("\n");
+    const start = lines.indexOf("<input>");
+    const end = lines.indexOf("</input>");
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(lines.slice(start, end + 1).join("\n")).toBe(renderResumeInput(EXAMPLE_FIXTURE));
+  });
+
+  it("cites only the example's Unit ids", () => {
+    for (const item of items) {
+      for (const id of item.source_unit_ids) expect(["ex-unit-1", "ex-unit-2"]).toContain(id);
+    }
+  });
+
+  it("repeats each skill as a tag of every Unit it cites", () => {
+    for (const skill of answer.skills) {
+      for (const id of skill.source_unit_ids) {
+        const u = unitsById.get(id)!;
+        const tags = [...u.skills, ...u.tools, ...u.domains].map((t) => t.toLowerCase());
+        expect(tags, `${skill.text} / ${id}`).toContain(skill.text.toLowerCase());
+      }
+    }
+  });
+
+  it("writes a summary of one to three sentences", () => {
+    const sentences = answer.summary.text.split(/(?<=[.!?])\s+/).filter((p) => p.length > 0);
+    expect(sentences.length).toBeGreaterThanOrEqual(1);
+    expect(sentences.length).toBeLessThanOrEqual(3);
+  });
+
+  it("takes no title, seniority, role wording or tenure from the target role", () => {
+    for (const item of items) {
+      expect(item.text).not.toMatch(/product manager|senior|connected-tv|video infrastructure|\b\d+\+?\s*years?\b/i);
+    }
+  });
+
+  it("states only numbers its cited Units state", () => {
+    for (const item of items) {
+      const evidence = item.source_unit_ids.map((id) => formatUnit(unitsById.get(id)!)).join("\n");
+      for (const n of item.text.match(/\d+(?:\.\d+)?/g) ?? []) {
+        expect(evidence, `${n} in "${item.text}"`).toContain(n);
+      }
+    }
+  });
+
+  it("keeps each bullet to about 200 characters", () => {
+    for (const b of answer.bullets) expect(b.text.length).toBeLessThanOrEqual(200);
+  });
+
+  it("keeps development history out of model-visible text", () => {
+    expect(`${system}\n${userFewShot}`).not.toMatch(DEV_HISTORY);
+  });
+});
+
 describe("active prompt versions (#485)", () => {
   it("serves traceability v2", () => {
     expect(PROMPT_CONFIG.validation.traceability).toBe("v2");
+  });
+
+  it("serves resume generation v2", () => {
+    expect(PROMPT_CONFIG.generation.resume).toBe("v2");
   });
 });
