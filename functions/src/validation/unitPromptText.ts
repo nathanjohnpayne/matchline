@@ -30,7 +30,11 @@
 
 import type { ExperienceUnit, Metric } from "../types/capability.js";
 
-/** A metric as the prompt renders it; values are printed as written. */
+/**
+ * A metric as the prompt renders it. A numeric `value` is printed as
+ * written (so `40`, `NaN` and `Infinity` stay distinct, #506); any
+ * other value, and every other member, is JSON-encoded.
+ */
 export interface UnitPromptMetric {
   readonly claim: string;
   readonly value?: unknown;
@@ -81,8 +85,14 @@ export const UNIT_FIELD_ROLES = {
   tools: "rendered",
   domains: "rendered",
   date_range: "rendered",
+  // User-editable (Unit Review inline edit and manual add), not just an
+  // extraction output. Excluded because the 2026-10-28 #485 evidence
+  // decision admits only the tags and date_range as structured
+  // evidence. Whether user-written outcomes should count (literal
+  // wording only, like tags) is a separate decision for a follow-up
+  // issue; adding it then needs a new evidence-version prefix.
   business_outcomes:
-    "excluded: an extraction paraphrase of raw_text, not separately reviewed; rendering it adds a second, unvalidated source of outcome wording",
+    "excluded: user-editable outcome tags, but the #485 evidence decision admits only skills, tools, domains and date_range as structured evidence; counting them is a separate decision",
   unit_type: "excluded: classification metadata about the record, not a fact about the candidate",
   evidence_type: "excluded: classification metadata",
   confidence_score: "excluded: extraction-model confidence; approval already gates use",
@@ -141,10 +151,24 @@ export function renderEntityId(id: string): string {
     : (JSON.stringify(id) ?? "null");
 }
 
+/**
+ * Any value as one line of JSON. `undefined`, functions and symbols
+ * (which `JSON.stringify` drops) and anything it cannot encode render
+ * as `null`, so neither the word `undefined` nor a raw newline ever
+ * reaches the text.
+ */
+function jsonValue(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "null";
+  } catch {
+    return "null";
+  }
+}
+
 /** A list field's line, or `null` when the field is absent, empty or malformed. */
 function listLine(name: string, field: unknown): string | null {
   if (!Array.isArray(field) || field.length === 0) return null;
-  return `${name}: [${field.map((v) => JSON.stringify(v) ?? "null").join(", ")}]`;
+  return `${name}: [${field.map(jsonValue).join(", ")}]`;
 }
 
 /** The `date_range` line, or `null` when there is no string date to show. */
@@ -160,9 +184,10 @@ function dateRangeLine(dr: unknown): string | null {
 
 /**
  * One Unit's evidence text. Deterministic, never throws on
- * Firestore-shaped data, and every value is either JSON-quoted on a
- * labelled line or an id through `renderEntityId`, so no value can
- * start a line of its own.
+ * Firestore-shaped data (including wrongly typed fields and metric
+ * entries), and every value is either JSON-encoded on a labelled line
+ * (a numeric metric value as written, which has no line break) or an
+ * id through `renderEntityId`, so no value can start a line of its own.
  *
  * The Unit `id` is critical: both models answer with it
  * (`source_unit_ids`, `supporting_unit_id`), and both callers check
@@ -173,14 +198,15 @@ function dateRangeLine(dr: unknown): string | null {
  * common case.
  */
 export function formatUnit(unit: UnitPromptFields): string {
+  // A metric entry that is not an object (`null`, a string) carries no
+  // claim, so it is skipped rather than rendered as an empty record.
+  const metrics = Array.isArray(unit.metrics) ? unit.metrics.filter(isMetricRecord) : [];
   const metricsBlock =
-    Array.isArray(unit.metrics) && unit.metrics.length > 0
-      ? unit.metrics.map((m) => formatMetric(m)).join(",\n")
-      : "  (no metrics)";
+    metrics.length > 0 ? metrics.map((m) => formatMetric(m)).join(",\n") : "  (no metrics)";
   const lines: string[] = [
     `[Unit ${renderEntityId(unit.id)}]`,
-    `raw_text: ${quote(unit.raw_text)}`,
-    `normalized_summary: ${quote(unit.normalized_summary)}`,
+    `raw_text: ${jsonValue(unit.raw_text)}`,
+    `normalized_summary: ${jsonValue(unit.normalized_summary)}`,
     `metrics: [`,
     metricsBlock,
     `]`,
@@ -203,10 +229,24 @@ export function formatUnitBlock(units: readonly UnitPromptFields[]): string {
   return units.map(formatUnit).join("\n\n");
 }
 
+function isMetricRecord(m: unknown): m is UnitPromptMetric {
+  return typeof m === "object" && m !== null && !Array.isArray(m);
+}
+
+/**
+ * One metric line. A numeric value prints as written, so `NaN`,
+ * `Infinity` and `40` keep #506's distinctions (and `null` still prints
+ * `null`); any other value is JSON-encoded, so a string value can
+ * neither break the line nor forge a delimiter, and an object value
+ * shows its contents instead of `[object Object]`. `firestore.rules`
+ * checks the metric keys a client writes, not their types (#485 review).
+ */
 function formatMetric(m: UnitPromptMetric): string {
-  const parts: string[] = [`claim: ${quote(m.claim)}`];
-  if (m.value !== undefined) parts.push(`value: ${m.value}`);
-  if (m.unit !== undefined) parts.push(`unit: ${quote(m.unit)}`);
-  if (m.direction !== undefined) parts.push(`direction: ${quote(m.direction)}`);
+  const parts: string[] = [`claim: ${jsonValue(m.claim)}`];
+  if (m.value !== undefined) {
+    parts.push(`value: ${typeof m.value === "number" ? String(m.value) : jsonValue(m.value)}`);
+  }
+  if (m.unit !== undefined) parts.push(`unit: ${jsonValue(m.unit)}`);
+  if (m.direction !== undefined) parts.push(`direction: ${jsonValue(m.direction)}`);
   return `  { ${parts.join(", ")} }`;
 }
