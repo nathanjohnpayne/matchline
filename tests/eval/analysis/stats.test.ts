@@ -14,6 +14,7 @@ import {
   regularizedIncompleteBeta,
   sampleSd,
   stratifiedBootstrapCi,
+  stratifiedWelchTTest,
   studentTTwoSidedP,
   welchTTest,
 } from "./stats.ts";
@@ -132,6 +133,59 @@ describe("Student t and Welch", () => {
     // A constant that does not divide evenly leaves rounding noise in the variance.
     const x = 1 / 11;
     expect(welchTTest([x, x, x], [2 / 3, 2 / 3, 2 / 3])).toBeNull();
+  });
+});
+
+describe("stratified Welch", () => {
+  it("tests the equal-cell-weight difference with Welch–Satterthwaite df over 2C components", () => {
+    const inc = cells({ a: [1, 3], b: [0, 2] }); // means 2, 1; variances 2, 2
+    const cand = cells({ a: [2, 4], b: [1, 5] }); // means 3, 3; variances 2, 8
+    const r = stratifiedWelchTTest(inc, cand)!;
+    // D = (1 + 2)/2; components (1/4)·v/n = 0.25, 0.25, 0.25, 1 → se² = 1.75.
+    expect(r.diff).toBeCloseTo(cellWeightedDiff(inc, cand)!, 12);
+    expect(r.diff).toBeCloseTo(1.5, 12);
+    expect(r.t).toBeCloseTo(1.5 / Math.sqrt(1.75), 12);
+    expect(r.df).toBeCloseTo(1.75 ** 2 / (3 * 0.25 ** 2 + 1 ** 2), 12);
+    expect(r.p).toBeCloseTo(studentTTwoSidedP(r.t, r.df), 12);
+  });
+
+  // Review round 1 (P2): unequal per-cell n across arms. Incumbent: six
+  // values near 1.0 in A, two near 0.0 in B; candidate: the reverse mix.
+  // The pooled Welch test sees a ~49-point gap of the opposite sign; the
+  // stratified test must follow the printed equal-cell-weight difference.
+  it("follows the printed difference when the arms' cell mix differs", () => {
+    const inc = cells({ a: [0.97, 0.98, 0.99, 1, 1, 1], b: [0, 0.02] });
+    const cand = cells({ a: [0.985, 0.999], b: [0, 0.01, 0.02, 0, 0.01, 0.02] });
+    const diff = cellWeightedDiff(inc, cand)!;
+    expect(diff).toBeCloseTo(0.001, 12);
+    const pooled = (c: Map<string, number[]>): number[] => [...c.values()].flat();
+    const naive = welchTTest(pooled(inc), pooled(cand))!;
+    expect(naive.t).toBeLessThan(0); // the pooled test points the other way…
+    expect(naive.p).toBeLessThan(0.05); // …and calls it significant.
+    const r = stratifiedWelchTTest(inc, cand)!;
+    expect(r.diff).toBeCloseTo(diff, 12);
+    expect(Math.sign(r.t)).toBe(Math.sign(diff));
+    expect(r.p).toBeGreaterThan(0.5);
+  });
+
+  it("reports p = 1 for identical per-cell values whatever the cell mix", () => {
+    const inc = cells({ a: [0.9, 1, 0.9, 1, 0.9, 1], b: [0, 0.2] });
+    const cand = cells({ a: [0.9, 1], b: [0, 0.2, 0, 0.2, 0, 0.2] });
+    const r = stratifiedWelchTTest(inc, cand)!;
+    expect(r.t).toBeCloseTo(0, 12);
+    expect(r.p).toBeCloseTo(1, 12);
+  });
+
+  it("is null without common cells or when a common cell has fewer than two values in an arm", () => {
+    expect(stratifiedWelchTTest(cells({ a: [1, 2] }), cells({ b: [1, 2] }))).toBeNull();
+    expect(stratifiedWelchTTest(cells({ a: [1, 2], b: [1] }), cells({ a: [1, 2], b: [3, 4] }))).toBeNull();
+    // A cell only one arm holds is outside the estimand and does not block the test.
+    expect(stratifiedWelchTTest(cells({ a: [1, 2], b: [1] }), cells({ a: [2, 3] }))).not.toBeNull();
+  });
+
+  it("reports p = 1 for identical constants and null for a constant gap", () => {
+    expect(stratifiedWelchTTest(cells({ a: [3, 3] }), cells({ a: [3, 3, 3] }))!.p).toBe(1);
+    expect(stratifiedWelchTTest(cells({ a: [3, 3] }), cells({ a: [4, 4] }))).toBeNull();
   });
 });
 

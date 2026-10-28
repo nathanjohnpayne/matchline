@@ -148,7 +148,28 @@ describe("analyzeRecords", () => {
     expect(c.cellsAhead).toBe(1);
     expect(c.ci95!.lo).toBeLessThanOrEqual(c.diff!);
     expect(c.ci95!.hi).toBeGreaterThanOrEqual(c.diff!);
-    expect(c.welchP).not.toBeNull();
+    // The incumbent holds one successful r2 flow, so r2's variance is
+    // undefined and the stratified Welch test of this difference is too.
+    expect(c.welchP).toBeNull();
+  });
+
+  it("pins the Welch p-value to the printed difference when the cell mix differs between arms", () => {
+    seq = 0;
+    const at = (variant: string, resume: string, values: number[]): FlowRecord[] =>
+      values.map((v) => flow(variant, resume, [GOOD], { matchAccuracy: v }));
+    const unbalanced = [
+      ...at("inc", "r1", [0.97, 0.98, 0.99, 1, 1, 1]),
+      ...at("inc", "r2", [0, 0.02]),
+      ...at("cand", "r1", [0.985, 0.999]),
+      ...at("cand", "r2", [0, 0.01, 0.02, 0, 0.01, 0.02]),
+    ];
+    const r = analyzeRecords(unbalanced, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 2000 });
+    const c = r.comparisons.find((x) => x.metric === "match_accuracy")!;
+    expect(c.diff).toBeCloseTo(0.001, 12);
+    expect(c.ci95!.lo).toBeLessThan(0);
+    expect(c.ci95!.hi).toBeGreaterThan(0);
+    // The pooled flow-level Welch test gave p < 0.05 for a ~−49-point gap here.
+    expect(c.welchP).toBeGreaterThan(0.5);
   });
 
   it("runs the power check on the incumbent's pooled within-cell SD", () => {

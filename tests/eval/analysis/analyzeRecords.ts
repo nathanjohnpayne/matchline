@@ -35,7 +35,7 @@ import {
   powerCheck,
   sampleSd,
   stratifiedBootstrapCi,
-  welchTTest,
+  stratifiedWelchTTest,
   type CellValues,
   type PowerCheck,
 } from "./stats.ts";
@@ -124,6 +124,10 @@ export interface Comparison {
   /** Equal-cell-weight difference of means (candidate − incumbent) over common cells. */
   readonly diff: number | null;
   readonly ci95: { readonly lo: number; readonly hi: number } | null;
+  /**
+   * Two-sided p of the stratified Welch test of `diff` (same estimand).
+   * Null when a common cell has fewer than two values in either arm.
+   */
   readonly welchP: number | null;
   readonly commonCells: number;
   readonly cellDiffs: readonly CellDiff[];
@@ -315,13 +319,12 @@ export function analyzeRecords(input: readonly FlowRecord[], options: AnalyzeOpt
       const cand = valuesOf(candidate, m.id);
       const cells = commonCells(inc, cand);
       const cellDiffs = cells.map((cell) => ({ cell, diff: mean(cand.get(cell)!)! - mean(inc.get(cell)!)! }));
-      const pooled = (vals: CellValues): number[] => cells.flatMap((c) => [...vals.get(c)!]);
       comparisons.push({
         candidate,
         metric: m.id,
         diff: cellWeightedDiff(inc, cand),
         ci95: stratifiedBootstrapCi(inc, cand, { seed, resamples }),
-        welchP: welchTTest(pooled(inc), pooled(cand))?.p ?? null,
+        welchP: stratifiedWelchTTest(inc, cand)?.p ?? null,
         commonCells: cells.length,
         cellDiffs,
         cellsAhead: cellDiffs.filter((d) => d.diff > 0).length,
@@ -411,7 +414,7 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 
   if (result.comparisons.length > 0) {
     lines.push("", "## Versus incumbent", "", "Difference = mean over common cells of (candidate − incumbent) cell means.", "");
-    lines.push("| candidate | metric | difference | 95% CI | Welch p | cells ahead | per-cell differences |");
+    lines.push("| candidate | metric | difference | 95% CI | stratified Welch p | cells ahead | per-cell differences |");
     lines.push("|---|---|---|---|---|---|---|");
     for (const c of result.comparisons) {
       const def = defs.get(c.metric)!;

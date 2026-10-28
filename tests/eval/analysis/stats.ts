@@ -218,6 +218,54 @@ export function welchTTest(
 }
 
 /**
+ * Stratified Welch test of `cellWeightedDiff`: the same estimand as the
+ * printed difference and the bootstrap CI, so a p-value can never test a
+ * different (pooled, cell-mix-dependent) gap than the one shown.
+ *
+ *   D   = (1/C)·Σ_c (m_cand,c − m_inc,c)       over the C common cells
+ *   se² = (1/C²)·Σ_c (s²_cand,c/n_cand,c + s²_inc,c/n_inc,c)
+ *   df  = se⁴ / Σ_k (v_k/n_k)²/(n_k − 1)        Welch–Satterthwaite over the
+ *                                               2C components, v_k/n_k
+ *                                               scaled by 1/C²
+ *   t   = D/se, p two-sided from Student t(df).
+ *
+ * Null when there is no common cell, or when any common cell has fewer
+ * than two values in either arm (its variance is undefined; dropping the
+ * cell would test a different difference than the one printed). Zero
+ * total variance reports p = 1 when D is zero and null otherwise, as
+ * `welchTTest` does.
+ */
+export function stratifiedWelchTTest(
+  incumbent: CellValues,
+  candidate: CellValues,
+): { t: number; df: number; p: number; diff: number } | null {
+  const cells = commonCells(incumbent, candidate);
+  if (cells.length === 0) return null;
+  const k = 1 / cells.length;
+  let diff = 0;
+  let se2 = 0;
+  let dfDen = 0;
+  for (const c of cells) {
+    for (const values of [incumbent.get(c)!, candidate.get(c)!]) {
+      if (values.length < 2) return null;
+      const component = (k * k * sampleSd(values)! ** 2) / values.length;
+      se2 += component;
+      dfDen += component ** 2 / (values.length - 1);
+    }
+    diff += k * (mean(candidate.get(c)!)! - mean(incumbent.get(c)!)!);
+  }
+  if (se2 <= 1e-20) {
+    if (Math.abs(diff) > 1e-12) return null;
+    let n = 0;
+    for (const c of cells) n += incumbent.get(c)!.length + candidate.get(c)!.length;
+    return { t: 0, df: n - 2 * cells.length, p: 1, diff };
+  }
+  const t = diff / Math.sqrt(se2);
+  const df = se2 ** 2 / dfDen;
+  return { t, df, p: studentTTwoSidedP(t, df), diff };
+}
+
+/**
  * Pooled within-cell SD: sqrt(Σ (n_c − 1) s_c² / Σ (n_c − 1)). Null when
  * no cell has two values.
  */
