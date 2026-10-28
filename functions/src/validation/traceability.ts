@@ -40,9 +40,9 @@ import {
 } from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
-  TraceabilityResponseV1Schema,
-  type TraceabilityResponseV1,
-} from "../prompts/validation/traceability.v1.schema.js";
+  TraceabilityResponseV2Schema,
+  type TraceabilityResponseV2,
+} from "../prompts/validation/traceability.v2.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import type { ExperienceUnit } from "../types/capability.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
@@ -52,7 +52,7 @@ import {
   type ValidationAttemptFailure,
 } from "./errors.js";
 import type { Claim } from "./claimExtraction.js";
-import { formatUnit, quote } from "./unitPromptText.js";
+import { formatUnitBlock, quote } from "./unitPromptText.js";
 
 /** Output-token budget per attempt; also recorded on each usage record. */
 const MAX_OUTPUT_TOKENS = 1024;
@@ -128,7 +128,7 @@ export async function checkTraceability(
     );
   }
 
-  const toolSchema = zodToToolSchema(TraceabilityResponseV1Schema);
+  const toolSchema = zodToToolSchema(TraceabilityResponseV2Schema);
 
   const failures: ValidationAttemptFailure[] = [];
 
@@ -213,7 +213,7 @@ export async function checkTraceability(
       continue;
     }
 
-    const parsed = TraceabilityResponseV1Schema.safeParse(toolUse.input);
+    const parsed = TraceabilityResponseV2Schema.safeParse(toolUse.input);
     if (!parsed.success) {
       failures.push({
         attempt,
@@ -247,7 +247,7 @@ export async function checkTraceability(
  * invisible-to-them dangling reference.
  */
 function finalizeResult(
-  raw: TraceabilityResponseV1,
+  raw: TraceabilityResponseV2,
   candidateUnits: readonly ExperienceUnit[],
 ): TraceabilityResult {
   if (raw.supports && raw.supporting_unit_id !== undefined) {
@@ -279,7 +279,9 @@ function buildUserContent(
   claim: Claim,
   candidateUnits: readonly ExperienceUnit[],
 ): string {
-  const unitsBlock = candidateUnits.map(formatUnit).join("\n\n");
+  // The same Unit text generation reads and the evidence version
+  // hashes (`./unitPromptText.ts`, #485).
+  const unitsBlock = formatUnitBlock(candidateUnits);
   return `${userFewShot}\n\nClaim: ${quote(claim.text)}\n\nCandidate Experience Units:\n\n${unitsBlock}`;
 }
 

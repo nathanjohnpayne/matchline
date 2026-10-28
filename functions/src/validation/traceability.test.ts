@@ -11,6 +11,15 @@ import {
   EMPTY_UNITS_RATIONALE,
   checkTraceability,
 } from "./traceability.ts";
+import { _clearCacheForTests, loadPromptText } from "../prompts/loader.ts";
+import { formatUnitBlock } from "./unitPromptText.ts";
+
+const UNITS_MARKER = "Candidate Experience Units:\n\n";
+
+/** The Unit text of the real input: everything after the last Units marker. */
+function realUnitsText(content: string): string {
+  return content.slice(content.lastIndexOf(UNITS_MARKER) + UNITS_MARKER.length);
+}
 
 /**
  * Tests for the validation pipeline's traceability check
@@ -503,7 +512,9 @@ describe("checkTraceability", () => {
     const callArgs = create.mock.calls[0]![0] as {
       messages: { content: string }[];
     };
-    const content = callArgs.messages[0]!.content;
+    // Only the real input: the v2 few-shot's own example Unit shows
+    // seniority signals (#485).
+    const content = realUnitsText(callArgs.messages[0]!.content);
     expect(content).not.toContain("seniority_signals:");
     expect(content).not.toContain("scope_signals:");
   });
@@ -649,5 +660,79 @@ describe("checkTraceability", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
+  const TAGGED = makeUnit({
+    id: "unit-tagged",
+    seniority_signals: ["led"],
+    scope_signals: ["3 teams"],
+    skills: ["Python", 'say "hi"'],
+    tools: ["Airflow"],
+    domains: ["payments"],
+    date_range: { start: "2019-03-01", end: "2021-06-30" },
+  });
+
+  async function capture(units: ExperienceUnit[]) {
+    const record = vi.fn<typeof RecordUsage>(async () => 0.001);
+    const { client, create } = mockClient([
+      mockMessage({ supports: false, rationale: "No Unit states it." }),
+    ]);
+    await checkTraceability(CLAIM, units, CTX, { client, record });
+    const args = create.mock.calls[0]![0] as {
+      system: string;
+      messages: { content: string }[];
+    };
+    return { args, record };
+  }
+
+  it("renders tags and dates in formatter order", async () => {
+    const { args } = await capture([TAGGED]);
+    const lines = realUnitsText(args.messages[0]!.content).split("\n");
+    const order = ["seniority_signals:", "scope_signals:", "skills:", "tools:", "domains:", "date_range:"].map(
+      (label) => lines.findIndex((l) => l.startsWith(label)),
+    );
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(lines).toContain('tools: ["Airflow"]');
+    expect(lines).toContain('date_range: { start: "2019-03-01", end: "2021-06-30" }');
+  });
+
+  it("omits empty tag lists", async () => {
+    const { args } = await capture([makeUnit({ id: "unit-plain" })]);
+    const units = realUnitsText(args.messages[0]!.content);
+    expect(units).not.toContain("skills:");
+    expect(units).not.toContain("tools:");
+    expect(units).not.toContain("domains:");
+    expect(units).not.toContain("date_range:");
+  });
+
+  it("escapes a tag containing a quote", async () => {
+    const { args } = await capture([TAGGED]);
+    expect(realUnitsText(args.messages[0]!.content)).toContain('skills: ["Python", "say \\"hi\\""]');
+  });
+
+  it("shows exactly formatUnitBlock of the candidates: consumer parity with generation", async () => {
+    const units = [TAGGED, makeUnit({ id: "unit-b", metrics: [] })];
+    const { args } = await capture(units);
+    expect(realUnitsText(args.messages[0]!.content)).toBe(formatUnitBlock(units));
+  });
+
+  it("records the v2 prompt version", async () => {
+    const { record } = await capture([TAGGED]);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ promptVersion: "validation/traceability.v2" }),
+    );
+  });
+
+  it("sends the v2 system prompt with the literal-tag, own-dates and title rules", async () => {
+    _clearCacheForTests();
+    const { args } = await capture([TAGGED]);
+    const system = loadPromptText("validation", "traceability").system;
+    expect(args.system).toBe(system);
+    expect(system).toContain("Tags support only their own wording");
+    expect(system).toContain("Dates support only themselves");
+    expect(system).toContain("Titles and level need a statement");
   });
 });

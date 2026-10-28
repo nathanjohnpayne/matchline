@@ -22,7 +22,8 @@ export const PROMPT_CONFIG = {
   },
   validation: {
     claimExtraction: "v1",
-    traceability: "v1",
+    // #485: tags and dates as literal evidence; the v1 file stays for the eval harness.
+    traceability: "v2",
     specificity: "v1",
   },
   generation: {
