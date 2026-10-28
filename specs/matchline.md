@@ -435,7 +435,7 @@ validation runs when the user saves a bullet's text or chooses
 without running it). **Target:** validation completes before generated output
 is first shown.
 
-`validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The deadline covers validation's reads and model calls and falls 45 s before the callable's 300 s budget. When it passes, no new call starts and the callable fails with `deadline-exceeded`. Persisting the verdict runs after the pool closes, outside the deadline; the 45 s margin leaves room for it. The first failed call aborts the pool the same way, and the run then persists nothing. Empty or whitespace-only items are skipped without a call.
+`validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The deadline covers validation's reads and model calls and falls 45 s before the callable's 300 s budget. When it passes, no new call starts, and the callable fails with `deadline-exceeded`, unless an earlier call already failed, in which case it reports that failure. Persisting the verdict runs after the pool closes, outside the deadline; the 45 s margin leaves room for it. The first failed call aborts the pool the same way, and the run then persists nothing. Empty or whitespace-only items are skipped without a call.
 
 **Target:**
 
