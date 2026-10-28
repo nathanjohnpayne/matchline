@@ -167,7 +167,9 @@ $0.105 against ~$0.066 of real Haiku payload).
 The sweep refuses to start rather than produce a mislabeled table. It
 rejects a model with no `rates.ts` entry (it would report $0.00 and win
 on cost), a misspelled stage, a stage the corpus never runs
-(`generation`, `validation`, `rationale`), an OpenAI model (see #402),
+(`generation`, `claim_extraction`, `traceability`, `specificity`,
+`rationale`; the old single `validation` stage was split by #489, so
+`model.validation` is now an unknown stage), an OpenAI model (see #402),
 a prompt key the corpus never resolves — only `extraction/resume` and
 `parsing/jd` are exercised, so `--variant
 'x:prompt.validation/traceability=v2'` and a command-wide `--prompt`

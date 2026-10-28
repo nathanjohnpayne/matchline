@@ -1,8 +1,18 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import {
+  clearEffortOverrides,
+  clearModelOverrides,
+  setEffortOverrides,
+  setModelOverrides,
+} from "../llm/config.ts";
+import { zodToToolSchema } from "../llm/zodToolSchema.ts";
+import { loadPromptText } from "../prompts/loader.ts";
+import { TraceabilityResponseV1Schema } from "../prompts/validation/traceability.v1.schema.ts";
+import { formatUnit, quote } from "./unitPromptText.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 import type { Claim } from "./claimExtraction.ts";
@@ -862,5 +872,131 @@ describe("checkTraceability reads the shared Unit evidence text (#485)", () => {
     expect(system).toContain("Dates support only themselves");
     expect(system).toContain("Titles and level need a statement");
     expect(system).toContain("Tags and signals support only their own wording");
+  });
+});
+
+// -- Per-stage model configuration (#489) ------------------------------------
+
+describe("traceability: separately configurable model stage (#489)", () => {
+  afterEach(() => {
+    clearModelOverrides();
+    clearEffortOverrides();
+  });
+
+  const HAIKU_45 = { provider: "anthropic" as const, model: "claude-haiku-4-5-20251001" };
+  const SONNET_55 = { provider: "anthropic" as const, model: "claude-sonnet-5-5" };
+  const SUFFIX =
+    "Respond only by calling the `record_traceability` tool, exactly once, with your complete answer. Do not reply in text.";
+
+  function expectedTools(): unknown[] {
+    return [
+      {
+        name: "record_traceability",
+        description: "Record the traceability verdict for one claim against the candidate Experience Units.",
+        input_schema: zodToToolSchema(TraceabilityResponseV1Schema),
+      },
+    ];
+  }
+
+  const SUPPORTED = {
+    supports: true,
+    supporting_unit_id: "unit-a",
+    rationale: "Unit unit-a states the 30% memory reduction.",
+  };
+  const runWith = (client: Anthropic, record: typeof RecordUsage) =>
+    checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+
+  it("baseline request is byte-identical to the pre-#489 shape", async () => {
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([mockMessage(SUPPORTED)]);
+    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+    const prompt = loadPromptText("validation", "traceability");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]![0]).toStrictEqual({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1024,
+      system: prompt.system,
+      tools: expectedTools(),
+      tool_choice: { type: "tool", name: "record_traceability" },
+      messages: [{ role: "user", content: `${prompt.userFewShot}\n\nClaim: ${quote(CLAIM.text)}\n\nCandidate Experience Units:\n\n${formatUnit(makeUnit())}` }],
+      stream: false,
+    });
+    expect(create.mock.calls[0]![1]).toStrictEqual({ signal: undefined });
+  });
+
+  it("passes the caller's signal and nothing else as request options", async () => {
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([mockMessage(SUPPORTED)]);
+    const controller = new AbortController();
+    await checkTraceability(CLAIM, [makeUnit()], { ...CTX, signal: controller.signal }, { client, record });
+    expect(create.mock.calls[0]![1]).toStrictEqual({ signal: controller.signal });
+  });
+
+  it("a Sonnet 5.5 override with medium effort sends auto tool choice, the suffix, effort and a doubled cap", async () => {
+    setModelOverrides({ traceability: SONNET_55 });
+    setEffortOverrides({ traceability: "medium" });
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([mockMessage(SUPPORTED)]);
+    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+    const body = create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(body.model).toBe("claude-sonnet-5-5");
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    expect(body.output_config).toEqual({ effort: "medium" });
+    expect(body.max_tokens).toBe(1024 * 2);
+    expect(String(body.system).endsWith(SUFFIX)).toBe(true);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "validation",
+        subtask: "traceability",
+        model: "claude-sonnet-5-5",
+        maxTokens: 1024 * 2,
+        effort: "medium",
+      }),
+    );
+  });
+
+  it("a Sonnet 5.5 override with no effort sends and records the profile default", async () => {
+    setModelOverrides({ traceability: SONNET_55 });
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([mockMessage(SUPPORTED)]);
+    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+    const body = create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(body.output_config).toEqual({ effort: "high" });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ effort: "high" }));
+  });
+
+  it("refuses an effort on a 4.x pin before any request", async () => {
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    setEffortOverrides({ traceability: "low" });
+    const first = mockClient([mockMessage(SUPPORTED)]);
+    await expect(runWith(first.client, record)).rejects.toThrow(/does not accept an effort setting/);
+    expect(first.create).not.toHaveBeenCalled();
+
+    setModelOverrides({ traceability: HAIKU_45 });
+    const second = mockClient([mockMessage(SUPPORTED)]);
+    await expect(runWith(second.client, record)).rejects.toThrow(/does not accept an effort setting/);
+    expect(second.create).not.toHaveBeenCalled();
+  });
+
+  it("an override on another validation stage leaves this one on its default", async () => {
+    setModelOverrides({ claim_extraction: HAIKU_45 });
+    setEffortOverrides({ claim_extraction: "low" });
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([mockMessage(SUPPORTED)]);
+    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+    const body = create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(body.model).toBe("claude-sonnet-4-6");
+    expect(body).not.toHaveProperty("output_config");
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ subtask: "traceability", model: "claude-sonnet-4-6", maxTokens: 1024 }));
+    expect(record.mock.calls[0]![0]).not.toHaveProperty("effort");
+  });
+
+  it("still short-circuits empty candidate Units with no request, even under an invalid effort override", async () => {
+    setEffortOverrides({ traceability: "low" });
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client, create } = mockClient([]);
+    const result = await checkTraceability(CLAIM, [], CTX, { client, record });
+    expect(result).toEqual({ supports: false, rationale: EMPTY_UNITS_RATIONALE });
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -654,15 +654,36 @@ describe("parseVariantFlag", () => {
   });
 
   it("rejects a stage the eval corpus never exercises", () => {
-    // Codex P2: `generation` / `validation` aren't wired into
-    // runForFixture, so overriding them changes nothing while still
-    // showing up in the table.
+    // Codex P2: `generation` and the validation subtasks aren't wired
+    // into runForFixture, so overriding them changes nothing while
+    // still showing up in the table.
     expect(() => parseVariantFlag("v:model.generation=claude-sonnet-4-6", "api")).toThrow(
       /not exercised by the eval corpus/,
     );
+    // #489: the single `validation` stage was split into three, so the
+    // old key is now an unknown stage rather than a silent no-op.
     expect(() => parseVariantFlag("v:model.validation=claude-sonnet-4-6", "api")).toThrow(
+      /unknown stage "validation"/,
+    );
+    expect(() => parseVariantFlag("v:effort.validation=low", "api")).toThrow(
+      /unknown stage "validation"/,
+    );
+  });
+
+  it("rejects the separately configured validation subtasks in the corpus sweep (#489)", () => {
+    expect(() =>
+      parseVariantFlag("v:model.traceability=claude-haiku-4-5-20251001", "api"),
+    ).toThrow(/not exercised by the eval corpus/);
+    expect(() => parseVariantFlag("v:effort.specificity=low", "api")).toThrow(
       /not exercised by the eval corpus/,
     );
+  });
+
+  it("rejects the reserved rationale stage as not exercised (#489)", () => {
+    expect(() => parseVariantFlag("v:model.rationale=claude-sonnet-4-6", "api")).toThrow(
+      /not exercised/,
+    );
+    expect(() => parseVariantFlag("v:effort.rationale=low", "api")).toThrow(/not exercised/);
   });
 
   it("accepts the two stages the corpus does exercise", () => {

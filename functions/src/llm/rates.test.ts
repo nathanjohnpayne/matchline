@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { modelFor, type Stage } from "./config.js";
+import { modelFor, STAGES } from "./config.js";
 import { EMBEDDING_MODEL } from "./config.js";
 import { RATES, rateFor } from "./rates.js";
 
@@ -12,14 +12,7 @@ describe("rates", () => {
   });
 
   it("covers every stage-configured model", () => {
-    const stages: readonly Stage[] = [
-      "extraction",
-      "requirement_parsing",
-      "rationale",
-      "generation",
-      "validation",
-    ];
-    for (const stage of stages) {
+    for (const stage of STAGES) {
       const { model } = modelFor(stage);
       expect(RATES[model], `stage "${stage}" model "${model}" has no rate entry`).toBeDefined();
     }

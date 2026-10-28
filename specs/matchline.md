@@ -468,13 +468,7 @@ Real-time:
 
 Model strategy:
 
-- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6
-  for extraction and validation; Claude Haiku 4.5 for requirement
-  parsing and generation. Embeddings use OpenAI
-  `text-embedding-3-small`. Match rationales make no LLM call: they
-  come from a deterministic template (`generateRationale()` in
-  `functions/src/matching/rationale.ts`, #100). The config's
-  `rationale` entry (Sonnet 4.6) is set but unused.
+- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6 for extraction and for each validation subtask, configured separately as `claim_extraction`, `traceability` and `specificity` (#489); Claude Haiku 4.5 for requirement parsing and generation. Embeddings use OpenAI `text-embedding-3-small`. Match rationales make no LLM call: they come from a deterministic template (`generateRationale()` in `functions/src/matching/rationale.ts`, #100). The config's `rationale` entry is reserved and never read (see the comment in `config.ts`). Each validation usage record keeps `stage: "validation"` and names its subtask. A default changes only through a measured, approved PR.
 - The Claude 5.5 models are wired for evaluation runs only (#579). A
   production default changes only through its own approved change,
   informed by #495.
