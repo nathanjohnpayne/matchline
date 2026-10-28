@@ -59,6 +59,14 @@ import {
  *     that kept `updated_at`, and is immune to client/server clock
  *     skew.
  *
+ * A recorded version in a known older form (`isOlderEvidenceVersion`)
+ * was computed under an earlier evidence format (ev2 before #485), so
+ * the verdict no longer applies even though the Unit itself may be
+ * untouched. The gate says that validation has been updated rather
+ * than claiming the Unit changed. Any other form that is not the
+ * current version, including a prefix newer than this bundle knows,
+ * reads as an edit.
+ *
  * Re-checking here rather than flipping stored assets to `stale` on
  * every Unit write keeps this a pure function of what the editor has
  * already loaded: no fan-out query across Applications, no extra
@@ -86,6 +94,25 @@ export type ExportGateState =
       readonly canRevalidate?: boolean;
     };
 
+/**
+ * The recorded-version forms older than `UNIT_EVIDENCE_VERSION_PREFIX`:
+ * `ev1:` and `ev2:`, and the pre-prefix form, which recorded the Unit's
+ * `updated_at` (an ISO timestamp). Listed rather than "anything not
+ * `ev3:`", so a newer prefix written by functions deployed ahead of
+ * this app bundle is not mistaken for an older one (#485 review).
+ */
+const OLDER_EVIDENCE_VERSION = /^(?:ev1:|ev2:|\d{4}-\d{2}-\d{2}T)/;
+
+/**
+ * True when `recorded` is an evidence version in a known older form:
+ * the verdict was reached on text the validator no longer reads.
+ * False for the current prefix and for any form this bundle does not
+ * know, such as a newer prefix.
+ */
+export function isOlderEvidenceVersion(recorded: string): boolean {
+  return OLDER_EVIDENCE_VERSION.test(recorded);
+}
+
 /** Count of unresolved (i.e. non-traced) flags. */
 function unresolvedFlagCount(flags: readonly ValidationFlag[]): number {
   return flags.filter(
@@ -112,8 +139,9 @@ export function citedUnitIds(asset: AssetRef): ReadonlySet<string> {
 
 /**
  * Why a `passed` asset's grounding is no longer current, or `null` if
- * it still is. Precedence: missing > not approved > edited, so the
- * reason names the most severe problem.
+ * it still is. Precedence: missing > not approved > outdated (recorded
+ * under an older evidence format) > edited, so the reason names the
+ * most severe problem.
  */
 function citedEvidenceProblem(
   asset: AssetRef,
@@ -122,6 +150,7 @@ function citedEvidenceProblem(
 ): { readonly reason: string; readonly canRevalidate: boolean } | null {
   let missing = 0;
   let unapproved = 0;
+  let outdated = 0;
   let edited = 0;
   for (const id of citedUnitIds(asset)) {
     const unit = unitsById.get(id);
@@ -129,10 +158,20 @@ function citedEvidenceProblem(
       missing += 1;
     } else if (unit.user_approved !== true) {
       unapproved += 1;
-    } else if (versions[id] !== unitEvidenceVersion(unit)) {
-      // A cited Unit the validator did not load (absent key) was not
-      // evidence for this verdict either.
-      edited += 1;
+    } else {
+      const recorded = versions[id];
+      if (typeof recorded === "string" && isOlderEvidenceVersion(recorded)) {
+        // Recorded under an earlier evidence format (#485): the Unit
+        // may be untouched, but the verdict was not reached on the text
+        // the validator reads now.
+        outdated += 1;
+      } else if (recorded !== unitEvidenceVersion(unit)) {
+        // A cited Unit the validator did not load (absent key) was not
+        // evidence for this verdict either. A prefix newer than
+        // UNIT_EVIDENCE_VERSION_PREFIX lands here too: this bundle
+        // cannot check it, so it is not claimed to be outdated.
+        edited += 1;
+      }
     }
   }
   const units = (n: number): string => (n === 1 ? "1 Unit" : `${n} Units`);
@@ -151,6 +190,14 @@ function citedEvidenceProblem(
         `This resume cites ${units(unapproved)} that ${verb(unapproved, "is", "are")} no longer approved. ` +
         "Re-approve them, or edit or remove the bullets that cite them.",
       canRevalidate: false,
+    };
+  }
+  if (outdated > 0) {
+    return {
+      reason:
+        "Validation has been updated since this resume was last checked, so that result no longer applies. " +
+        "Re-run validation before exporting.",
+      canRevalidate: true,
     };
   }
   if (edited > 0) {

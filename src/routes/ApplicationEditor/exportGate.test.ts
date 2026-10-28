@@ -7,14 +7,17 @@ import type {
   ValidationStatus,
 } from "../../types/crm.ts";
 
-import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import {
+  UNIT_EVIDENCE_VERSION_PREFIX,
+  unitEvidenceVersion,
+} from "../../../functions/src/validation/unitEvidenceVersion.ts";
 
 import {
   assetContentVersion,
   type ValidationAttestation,
 } from "../../../functions/src/validation/attestation.ts";
 
-import { citedUnitIds, exportGateState } from "./exportGate.ts";
+import { citedUnitIds, exportGateState, isOlderEvidenceVersion } from "./exportGate.ts";
 
 function flag(
   partial: Partial<ValidationFlag> & { id: string },
@@ -319,9 +322,127 @@ describe("exportGateState: cited-evidence re-check", () => {
   it("stays enabled when only fields the validator ignores change, timestamp included", () => {
     const state = gate(
       passedAsset(),
-      byId(unit("u1"), unit("u2", { updated_at: "2026-05-01T00:00:00.000Z", skills: ["go"] }), unit("u3")),
+      byId(
+        unit("u1"),
+        unit("u2", { updated_at: "2026-05-01T00:00:00.000Z", business_outcomes: ["x"] }),
+        unit("u3"),
+      ),
     );
     expect(state.enabled).toBe(true);
+  });
+
+  it("blocks when a cited Unit's tags or dates change, which the validator now reads (#485)", () => {
+    for (const edit of [{ skills: ["go"] }, { date_range: { start: "2020-01-01", end: "2022-06-30" } }]) {
+      const state = gate(passedAsset(), byId(unit("u1"), unit("u2", edit), unit("u3")));
+      expect(state.enabled, JSON.stringify(edit)).toBe(false);
+      expect(state.disabledReason, JSON.stringify(edit)).toContain("changed since the last validation run");
+      expect(state.enabled === false && state.canRevalidate, JSON.stringify(edit)).toBe(true);
+    }
+  });
+
+  it("says validation has been updated for a verdict recorded under an older evidence format (#485)", () => {
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: `ev2:${"0".repeat(64)}`,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("Validation has been updated");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  it.each([
+    ["ev1", `ev1:${"0".repeat(16)}`],
+    ["ev2", `ev2:${"0".repeat(64)}`],
+    ["pre-prefix updated_at", "2026-04-01T00:00:00.000Z"],
+  ])("says validation has been updated for a %s version (#485 review)", (_, recorded) => {
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: recorded,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("Validation has been updated");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  it("treats a prefix newer than this bundle knows as an edit, not as outdated (#485 review)", () => {
+    // Functions deployed ahead of the app bundle record a newer prefix.
+    // This bundle cannot verify it, but it must not say the verdict is
+    // older than the current validator.
+    const a = passedAsset();
+    const state = exportGateState(
+      a,
+      ALL(),
+      attest(a, {
+        validated_unit_versions: {
+          u1: unitEvidenceVersion(unit("u1")),
+          u2: `ev4:${"0".repeat(64)}`,
+          u3: unitEvidenceVersion(unit("u3")),
+        },
+      }),
+    );
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).not.toContain("Validation has been updated");
+    expect(state.disabledReason).toContain("1 Unit this resume cites has changed");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
+  describe("isOlderEvidenceVersion", () => {
+    it.each([`ev1:${"a".repeat(16)}`, `ev2:${"a".repeat(64)}`, "2026-04-01T00:00:00.000Z", "ev2:"])(
+      "is true for the older form %j",
+      (v) => {
+        expect(isOlderEvidenceVersion(v)).toBe(true);
+      },
+    );
+
+    it.each([
+      unitEvidenceVersion(unit("u1")),
+      `${UNIT_EVIDENCE_VERSION_PREFIX}${"a".repeat(64)}`,
+      `ev4:${"a".repeat(64)}`,
+      `ev10:${"a".repeat(64)}`,
+      "EV2:x",
+      " ev2:x",
+      "x-ev2:",
+      "2026-04-01",
+      "",
+    ])("is false for %j", (v) => {
+      expect(isOlderEvidenceVersion(v)).toBe(false);
+    });
+  });
+
+  it("ranks a missing Unit above an outdated verdict, and an outdated verdict above an edit", () => {
+    const a = passedAsset();
+    const outdatedU2 = attest(a, {
+      validated_unit_versions: {
+        u1: unitEvidenceVersion(unit("u1")),
+        u2: `ev2:${"0".repeat(64)}`,
+        u3: unitEvidenceVersion(unit("u3")),
+      },
+    });
+    const missing = exportGateState(a, byId(unit("u2"), unit("u3")), outdatedU2);
+    expect(missing.disabledReason).toContain("1 Unit that no longer exists");
+
+    const edited = exportGateState(
+      a,
+      byId(unit("u1"), unit("u2"), unit("u3", { raw_text: "Led two teams." })),
+      outdatedU2,
+    );
+    expect(edited.disabledReason).toContain("Validation has been updated");
   });
 
   it("blocks an edit made DURING validation, which a timestamp comparison misses", () => {

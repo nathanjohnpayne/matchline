@@ -136,6 +136,7 @@ Acceptance criteria:
   under the same grounding and validation. Outreach drafting is
   **Deferred**. `AssetRef.kind` already reserves `cover_letter` and
   `outreach`; no writer produces them yet.
+- Generation reads each eligible Unit through the same evidence text the validator reads: `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range` (`functions/src/validation/unitPromptText.ts`). It does not read `business_outcomes`, which users can edit but which the #485 evidence decision does not admit as structured evidence (see § Validation layer). It also reads the target role (title and Requirements, with ids) and the approved Unit-to-Requirement links, in separately tagged sections. The target role and the links say what is relevant; they never supply facts about the candidate, including titles and tenure. Tags and seniority and scope signals are used only in their literal wording, and a title or level only when its own wording appears in a cited Unit's text or signals (the validator applies the same rule). A date or duration is stated only as a cited Unit states it, in its text or metrics or as its own `date_range`; a duration is never computed from a `date_range` (the validator applies the same rule). The input shows the run date (`today:`, UTC) outside the Unit text, and a `date_range` start or end later than it supports nothing, so a future end is read as no end: extraction has defaulted some approved Units' end dates into the future, and an end that has not happened is not evidence. A range with a start and no end supports neither an end date nor "present". Content the Units do not support is omitted, never filled; an empty bullet or skill list is a valid result. Eligibility is unchanged: an approved Unit in the Application's `approved_unit_ids` with at least one approved match to a Requirement the Role still has.
 - The validation layer (see `## Validation layer`) attaches a
   claim-to-Unit map and flags any claim that does not trace to an
   approved Unit. It runs when the user saves a bullet's text or
@@ -144,7 +145,7 @@ Acceptance criteria:
 - The export gate (today in the Application Editor; **Target:** the
   Package, PRD decision 5) blocks export while any validation flag is
   unresolved.
-- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
+- A passing validation result covers the evidence as the validator read it. When the validator's evidence format changes (the evidence version's prefix moves, as it did to `ev3` for #485), every earlier verdict stops covering export and the editor says that validation has been updated; re-running it is a user-triggered model call, and stored verdicts are never recomputed. The app and the functions must agree on the prefix: during a deploy that moves it, export of an attested asset stays blocked, and a re-run does not clear it, until both the functions and hosting are on the new version (both directions fail closed), so the functions deploy first and hosting right after. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
 - **Target:** export to PDF, DOCX, and plain text (#33), from the
   Package. Today the Export control enforces the gate above, but its
   action is a stub.
@@ -278,10 +279,7 @@ document uses it.
   to something the job description no longer asks for. Such matches are
   refused at generation rather than deleted — the approval is the
   user's decision to keep, and a rematch may well reinstate the pair.
-  The check is applied again inside the persist transaction, because
-  the inputs are read minutes before the artifact is written and a
-  re-parse can land in between; a generation whose grounding stops
-  holding mid-flight is discarded rather than saved.
+  The check is applied again inside the persist transaction, because the inputs are read minutes before the artifact is written. The transaction re-verifies the Requirement set (ids, text and must-have), that every cited Unit still has a live approved match, the Role's title, that every Unit shown to the model is unchanged in its evidence text, still approved, owned and listed in `approved_unit_ids`, and that every Unit-to-Requirement link shown to the model is still live and approved. A generation whose inputs changed mid-flight is discarded rather than saved; additions (a newly approved match or Unit) do not discard it, because they cannot make what the model read untrue.
 - `Application.approved_unit_ids` is a snapshot of the Units used to
   generate a specific artifact. Changing a Unit later must not mutate
   a historical Application's grounding set.
@@ -437,6 +435,8 @@ is first shown.
 
 `validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The deadline covers validation's reads and model calls and falls 45 s before the callable's 300 s budget. When it passes, no new call starts, and the callable fails with `deadline-exceeded`, unless an earlier call already failed, in which case it reports that failure. Persisting the verdict runs after the pool closes, outside the deadline; the 45 s margin leaves room for it. The first failed call aborts the pool the same way, and the run then persists nothing. Empty or whitespace-only items are skipped without a call.
 
+Traceability reads each candidate Unit through the formatter generation uses (`functions/src/validation/unitPromptText.ts`), so the two can never see different evidence. It renders `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range`. It deliberately leaves out `business_outcomes`, metric confidence, classification and provenance metadata, approval flags, embeddings and timestamps. `business_outcomes` is user-editable in Unit Review (inline edit and manual add), not only an extraction output; it is left out because the 2026-10-28 #485 evidence decision admits as structured evidence only `skills`, `tools`, `domains`, `seniority_signals` and `scope_signals`, each read in its literal wording, and `date_range`, read as the Unit's own dates; whether user-written outcomes should count is a separate decision. Every value is JSON-encoded on its labelled line except a numeric metric value, which prints as written so `NaN`, `Infinity` and `null` stay distinct; a metric entry that is not an object is skipped. Approved tags and seniority and scope signals count as evidence only in their literal wording: a claim that broadens one ("Python architecture" from "Python") is unsupported unless the Unit's text supports it. The signals are model-extracted, user-editable tags, so neither prompt reads them by meaning: a job title or level is supported only when its own wording appears in a Unit's `raw_text` or `normalized_summary` or as a signal value, and a seniority signal "led" does not support "team lead". A `date_range` supports only the Unit's own dates: durations, tenure, figures combined across Units and "current" from a range with no end are unsupported unless a Unit's text or metrics state them. A start-only range is rendered as stored, with no "ongoing" reading, and that loss is deliberate: the app writes the same shape when a user leaves the end blank to mean "ongoing" and when extraction found a start but no end, and the second is not evidence of current work. The Unit editor therefore labels a blank end "no end date", not "ongoing"; letting a user's "ongoing" support "present" needs an explicit stored marker that only the editor sets, which is a follow-up. Traceability's input shows the run date (`Today:`, UTC) between the claim and the Units, outside the Unit text, so it never changes an evidence version. A `date_range` start or end later than it supports no claim and is read as absent, so a future end leaves the range with no end; extraction has defaulted some approved Units' end dates into the future, and v2 is the first validator that sees `date_range` at all. Passing time only turns future dates into past ones, so a verdict reached on an earlier day is never less strict than one reached today. Ids print bare when safe (every UUID) and JSON-quoted otherwise; a model that cites a quoted id with its quotes is mapped back to the raw id (`citedEntityId`) before the membership check, in both generation and traceability. The traceability v2 system prompt and few-shot are about 8,200 characters (about 2,100 tokens, 3,540 characters more than v1) and are resent with every claim's check, uncached, so a run's fixed input grows with its claim count. A Unit's evidence version (`functions/src/validation/unitEvidenceVersion.ts`) is the prefix `ev3:` plus the SHA-256 of that text. The #485 change to the text moved the prefix from `ev2`, so every verdict recorded before it needs one re-run before export.
+
 **Target:**
 
 - A claim-rule check runs every generated artifact against the user's
@@ -460,7 +460,9 @@ Real-time:
 
 4. Matching (vector + rules, deterministic rationales; no LLM call)
 5. Generation (controlled-generation prompt using approved Units as
-   ground truth)
+   ground truth, rendered through the same Unit formatter as
+   validation; the target role and approved links are relevance, not
+   evidence)
 6. Validation (LLM claim extraction, traceability and specificity; the
    deny-list is a hint to the specificity model, not a verdict)
 
@@ -478,6 +480,8 @@ Model strategy:
   informed by #495.
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
+
+The eval harness does not yet sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing). The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
 
 ## Streaming progress
 

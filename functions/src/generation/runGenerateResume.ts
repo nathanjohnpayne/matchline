@@ -18,26 +18,49 @@
  * checked at LLM-call time, but a between-call deletion or
  * owner_uid swap could still race the persist). Same shape as
  * #109's persistFlags + #99's matching persist.
+ *
+ * Inside that transaction it re-verifies, against freshly read
+ * documents, everything the prompt was built from, because the
+ * inputs are read minutes before the artifact is written:
+ *
+ *   - the Application still has a `role_id` and the asset has content;
+ *   - the Role's Requirement set (ids, text, must-have) is unchanged
+ *     (`requirementSetToken`, #442);
+ *   - every cited Unit still has a live approved match
+ *     (`findStaleGroundingId`, #442);
+ *   - the Role's title is unchanged, every Unit shown to the model is
+ *     unchanged in its evidence text, still approved, owned and listed
+ *     in `approved_unit_ids`, and every Unit-to-Requirement link shown
+ *     to the model is still live and approved (`findSnapshotDrift`,
+ *     #485).
+ *
+ * A failed check aborts the write with `GenerateResumeGroundingStale`.
  */
 
 import { randomUUID } from "node:crypto";
 
 import { getAdminDb } from "../firestore/admin.js";
-import type { AssetRef, GeneratedAssetContent } from "../types/crm.js";
+import type { AssetRef, GeneratedAssetContent, Role } from "../types/crm.js";
 import type {
+  ExperienceUnit,
   JobRequirementUnit,
   UnitMatch,
 } from "../types/capability.js";
 
 import {
+  FIRESTORE_IN_LIMIT,
+  approvedUnitsQuery,
   findStaleGroundingId,
   requirementSetToken,
   runGenerationPipeline,
   type GenerationDeps,
   type RunGenerationContext,
 } from "./pipeline.js";
+import type { GenerationSnapshot } from "./resumeInput.js";
+import { findSnapshotDrift, type SnapshotDrift } from "./snapshot.js";
 
 const APPLICATIONS_COLLECTION = "applications";
+const ROLES_COLLECTION = "roles";
 const REQUIREMENTS_COLLECTION = "jobRequirementUnits";
 const MATCHES_COLLECTION = "unitMatches";
 
@@ -83,6 +106,17 @@ export interface PersistAssetParams {
    * type error instead. CodeRabbit on PR #449.
    */
   readonly requirementSetToken: string;
+  /**
+   * What the prompt rendered beyond the Requirement set: the role
+   * title, each rendered Unit's evidence version and each rendered
+   * approved link (#485). The persist rejects the write if any of it
+   * changed or was withdrawn — see `findSnapshotDrift`.
+   *
+   * **Required**, for the same reason as `requirementSetToken`: an
+   * optional snapshot would let a caller that omits it skip the check
+   * with no compile error.
+   */
+  readonly snapshot: GenerationSnapshot;
   readonly ownerUid: string;
   readonly applicationId: string;
   readonly asset: AssetRef;
@@ -130,6 +164,7 @@ export async function runGenerateResume(
     applicationId: ctx.applicationId,
     asset,
     requirementSetToken: result.requirement_set_token,
+    snapshot: result.snapshot,
   });
 
   return {
@@ -159,6 +194,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
     const app = snap.data() as {
       owner_uid?: string;
       role_id?: string;
+      approved_unit_ids?: string[];
       generated_assets?: AssetRef[];
     };
     if (app.owner_uid !== ownerUid) {
@@ -240,6 +276,25 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
       const requirements = reqSnap.docs.map(
         (d) => ({ ...(d.data() as JobRequirementUnit), id: d.id }),
       );
+      const approvedMatches = matchSnap.docs.map(
+        (d) => ({ ...(d.data() as UnitMatch), id: d.id }),
+      );
+      // The rest of the rendered input (#485), read in the same
+      // transaction so an edit racing this persist contends with it.
+      // The Units come through the loader's own query, with the
+      // loader's `data()` ids, so load and re-check cannot disagree
+      // about which Units exist.
+      const roleSnap = await tx.get(db.collection(ROLES_COLLECTION).doc(roleId));
+      const role = roleSnap.exists ? (roleSnap.data() as Role) : undefined;
+      const roleTitle =
+        role !== undefined && role.owner_uid === ownerUid ? (role.title ?? "") : undefined;
+      const renderedIds = Object.keys(params.snapshot.unitVersions).sort();
+      const units: ExperienceUnit[] = [];
+      for (let i = 0; i < renderedIds.length; i += FIRESTORE_IN_LIMIT) {
+        const chunk = renderedIds.slice(i, i + FIRESTORE_IN_LIMIT);
+        const unitSnap = await tx.get(approvedUnitsQuery(db, ownerUid, chunk));
+        units.push(...unitSnap.docs.map((d) => d.data() as ExperienceUnit));
+      }
 
       // Identity of the SET, not just of the cited grounding.
       //
@@ -279,7 +334,7 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
 
       const staleId = findStaleGroundingId(
         content,
-        matchSnap.docs.map((d) => ({ ...(d.data() as UnitMatch), id: d.id })),
+        approvedMatches,
         requirements,
       );
       if (staleId !== null) {
@@ -299,6 +354,17 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
             `for that Unit on the Matches tab, or generate again without it.`,
         );
       }
+
+      const drift = findSnapshotDrift(params.snapshot, {
+        roleTitle,
+        approvedUnitIds: app.approved_unit_ids,
+        units,
+        requirements,
+        approvedMatches,
+      });
+      if (drift !== null) {
+        throw new GenerateResumeGroundingStale(snapshotDriftMessage(drift));
+      }
     }
 
     const assets = app.generated_assets ?? [];
@@ -308,6 +374,38 @@ async function defaultPersistAsset(params: PersistAssetParams): Promise<void> {
       last_activity_at: asset.created_at,
     });
   });
+}
+
+/** The user-facing reason a snapshot drift discarded the generation. */
+function snapshotDriftMessage(drift: SnapshotDrift): string {
+  switch (drift.kind) {
+    case "role_changed":
+    case "role_title_changed":
+      return (
+        `This application's Role changed while the resume was being generated, ` +
+        `so the content was tailored to a Role that no longer matches. Nothing ` +
+        `was saved; generate again.`
+      );
+    case "unit_withdrawn":
+      return (
+        `Experience Unit ${drift.unitId} was unapproved, removed, or dropped from ` +
+        `this application while the resume was being generated. Nothing was ` +
+        `saved; generate again.`
+      );
+    case "unit_edited":
+      return (
+        `Experience Unit ${drift.unitId} was edited while the resume was being ` +
+        `generated, so the resume was written from text that no longer exists. ` +
+        `Nothing was saved; generate again.`
+      );
+    case "link_withdrawn":
+      return (
+        `The approved match between Experience Unit ${drift.unitId} and one of ` +
+        `this Role's requirements was unapproved or removed while the resume ` +
+        `was being generated. Nothing was saved; approve a current match for ` +
+        `that Unit on the Matches tab, or generate again without it.`
+      );
+  }
 }
 
 /**
@@ -326,9 +424,11 @@ export class GenerateResumePersistNotFound extends Error {
 
 /**
  * Thrown when the grounding a generated asset cites stopped
- * holding between the LLM call and the persist — in practice, a
- * JD re-parse replaced the Role's Requirements mid-generation and
- * stranded the approved matches the content was grounded on.
+ * holding between the LLM call and the persist — a JD re-parse
+ * replaced the Role's Requirements mid-generation and stranded the
+ * approved matches the content was grounded on, or anything else the
+ * prompt rendered (the Role's title, a Unit's evidence, an approved
+ * link) changed or was withdrawn (#485).
  *
  * Nothing is written: the transaction aborts, so the user loses
  * the generation rather than gaining an artifact that cites

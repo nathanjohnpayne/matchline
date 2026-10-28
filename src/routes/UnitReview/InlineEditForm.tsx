@@ -165,9 +165,10 @@ export default function InlineEditForm({
     const value = event.target.value;
     const currentStart = draft.date_range?.start;
     if (value === "") {
-      // Clearing end. If we have a start, drop to start-only
-      // ("ongoing"). If start is also empty/absent, remove the
-      // whole range. Both paths produce valid shapes.
+      // Clearing end. If we have a start, drop to start-only (no
+      // end date; generation and validation do not read that as
+      // "ongoing", #485 review). If start is also empty/absent,
+      // remove the whole range. Both paths produce valid shapes.
       if (currentStart !== undefined && currentStart !== "") {
         onChange({
           ...draft,
@@ -335,8 +336,15 @@ export default function InlineEditForm({
           />
         </label>
         <label className="block">
+          {/*
+            Not "blank = ongoing": a start-only range is stored the
+            same way whether the user means "ongoing" or extraction
+            found no end, so generation and validation cannot read it
+            as current work (#485 review; see `dateRangeLine` in
+            functions/src/validation/unitPromptText.ts).
+          */}
           <span className={LABEL_CLS}>
-            End date (blank = ongoing)
+            End date (blank = no end date)
           </span>
           <input
             type="date"

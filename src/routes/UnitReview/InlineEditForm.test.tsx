@@ -252,6 +252,15 @@ describe("InlineEditForm", () => {
     }
   });
 
+  it("labels a blank end date as no end date, not ongoing (#485 review)", () => {
+    // Generation and validation cannot tell a user's blank end from an
+    // end extraction never found, so neither reads a start-only range
+    // as current work; the label must not promise that it is.
+    const html = render(draftOf(unit({ id: "x", date_range: { start: "2024-01-01" } })), "editing");
+    expect(html).toContain("End date (blank = no end date)");
+    expect(html).not.toMatch(/ongoing/i);
+  });
+
   it("renders an empty date input for a Unit without a date_range", () => {
     const html = render(draftOf(unit({ id: "x" })), "editing");
     // Two date inputs, both value="" — the browser renders these
