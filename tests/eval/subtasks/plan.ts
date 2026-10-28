@@ -18,10 +18,12 @@ import { toolCallRequest } from "../../../functions/src/llm/modelProfile.ts";
 import { loadPromptText } from "../../../functions/src/prompts/loader.ts";
 import type { PromptName, PromptStage } from "../../../functions/src/prompts/config.ts";
 import { canonicalJson } from "../../../functions/src/validation/attestation.ts";
+import { renderTraceabilityInput } from "../../../functions/src/validation/traceability.ts";
+import { formatUnit, promptDate, type UnitPromptFields } from "../../../functions/src/validation/unitPromptText.ts";
 
 import { estimateTokens } from "../tokenSource.ts";
 
-import type { LoadedCase, LoadedSnapshot } from "./fixtures.ts";
+import { fixedRunClock, type LoadedCase, type LoadedSnapshot } from "./fixtures.ts";
 import { STAGE_REQUEST_TABLE, type ResolvedStageSettings, type ResolvedVariant } from "./overrides.ts";
 
 export const MAX_ATTEMPTS = 3;
@@ -64,19 +66,30 @@ const AUTO_TOOL_SUFFIX_CHARS = 160;
  * Input estimate for one request: prompt (system + few-shot, as loaded
  * under the installed overrides), the longest retry reminder, the 5.5
  * tool-use suffix, and the stage inputs, all with a 1.25 margin, then
- * x1.35 for a 5.5 model.
+ * x1.35 for a 5.5 model. A string input is the rendered text itself
+ * (traceability's, from `traceabilityInput`); anything else is
+ * estimated from its canonical JSON.
  */
 export function inputEstimate(stage: Stage, settings: ResolvedStageSettings, stageInputs: unknown): number {
   const text =
     promptText(stage) +
     " ".repeat(RETRY_REMINDER_ALLOWANCE_CHARS + (settings.toolChoice === "auto" ? AUTO_TOOL_SUFFIX_CHARS : 0)) +
-    canonicalJson(stageInputs);
+    (typeof stageInputs === "string" ? stageInputs : canonicalJson(stageInputs));
   const base = Math.ceil(INPUT_MARGIN * estimateTokens(text));
   return Math.ceil(base * (is55(settings.model) ? TOKENIZER_55_FACTOR : 1));
 }
 
 function unitInputs(units: readonly { raw_text: string; normalized_summary: string }[]): unknown {
   return units.map((u) => ({ raw_text: u.raw_text, normalized_summary: u.normalized_summary }));
+}
+
+/**
+ * Traceability's user input exactly as the module renders it (#485's
+ * shared Unit evidence text: metrics, signals, tags and `date_range`
+ * included), with the eval's fixed run date.
+ */
+export function traceabilityInput(claim: string, units: readonly UnitPromptFields[]): string {
+  return renderTraceabilityInput(claim, promptDate(fixedRunClock()), units);
 }
 
 /** Plan one validation variant. Call while the variant's overrides are installed. */
@@ -97,17 +110,18 @@ export function planValidation(cases: readonly LoadedCase[], resolved: ResolvedV
   };
   for (const lc of cases) {
     const c = lc.case;
-    const cited = c.units.filter((u) => c.item.source_unit_ids.includes(u.id));
+    // The runtime Units the suite sends, so the estimate reads the same evidence text.
+    const cited = lc.units.filter((u) => c.item.source_unit_ids.includes(u.id));
     const a = c.gold.assertions.length;
     const longest = c.gold.assertions.reduce((m, x) => (x.text.length > m.length ? x.text : m), "");
     add("claim_extraction", "isolated", 1, c.item);
     // The empty-candidates short-circuit makes no call.
-    add("traceability", "isolated", cited.length > 0 ? a : 0, { claim: longest, units: unitInputs(cited) });
+    add("traceability", "isolated", cited.length > 0 ? a : 0, traceabilityInput(longest, cited));
     // Always a call: the deny-list is a hint, not a skip.
     add("specificity", "isolated", c.gold.assertions.filter((x) => x.specific !== null).length, { claim: longest });
     const wholeClaims = Math.max(2 * a, WHOLE_ASSET_CLAIMS_FLOOR);
     add("claim_extraction", "whole_asset", 1, c.item);
-    add("traceability", "whole_asset", wholeClaims, { claim: c.item.text, units: unitInputs(cited) });
+    add("traceability", "whole_asset", wholeClaims, traceabilityInput(c.item.text, cited));
     add("specificity", "whole_asset", wholeClaims, { claim: c.item.text });
   }
   return out;
@@ -130,11 +144,10 @@ export function defaultSettings(stage: Stage, defaults: Readonly<Record<Stage, M
 /** Units a generated item could cite, largest evidence text first: the downstream traceability input estimate. */
 export const DOWNSTREAM_CITED_UNITS = 3;
 
-/** The `k` Units with the most evidence text (raw_text + normalized_summary). */
-export function largestUnits<U extends { raw_text: string; normalized_summary: string }>(units: readonly U[], k: number): U[] {
-  return [...units]
-    .sort((a, b) => b.raw_text.length + b.normalized_summary.length - (a.raw_text.length + a.normalized_summary.length))
-    .slice(0, k);
+/** The `k` Units with the most evidence text, as `formatUnit` renders it. */
+export function largestUnits<U extends UnitPromptFields>(units: readonly U[], k: number): U[] {
+  const size = new Map(units.map((u) => [u, formatUnit(u).length]));
+  return [...units].sort((a, b) => size.get(b)! - size.get(a)!).slice(0, k);
 }
 
 /** Plan one generation variant. Downstream validation always uses production defaults. */
@@ -158,7 +171,9 @@ export function planGeneration(
       inputEstTokens: inputEstimate("generation", gen, { units: s.units, requirements: s.requirements, role: s.role, matches: s.approved_matches }),
     });
     const items = s.item_upper_bound;
-    const units = unitInputs(largestUnits(s.units, DOWNSTREAM_CITED_UNITS));
+    const largest = largestUnits(s.units, DOWNSTREAM_CITED_UNITS);
+    const units = unitInputs(largest);
+    const claim = "x".repeat(400);
     const counts: Record<string, number> = {
       claim_extraction: items,
       traceability: items * CLAIMS_PER_GENERATED_ITEM,
@@ -173,7 +188,7 @@ export function planGeneration(
         count: counts[stage]! * samples,
         model: st.model,
         maxTokens: st.maxTokens,
-        inputEstTokens: inputEstimate(stage, st, { claim: "x".repeat(400), units }),
+        inputEstTokens: inputEstimate(stage, st, stage === "traceability" ? traceabilityInput(claim, largest) : { claim, units }),
       });
     }
   }

@@ -13,9 +13,12 @@
  *
  * Rates over labeled verdicts are clustered by what was labeled: with
  * `--samples N` the N verdicts on one assertion (or one case) are one
- * observation (their majority, a tie counting against the model), so
- * repeats never shrink an interval. Each such rate reports the distinct
- * count, the pooled sample count and a Wilson 95% interval.
+ * observation, so repeats never shrink an interval. The two fabrication
+ * false-accept rates count a unit as accepted when ANY sample accepted it
+ * (zero fabrication means zero false acceptance across all repetitions);
+ * every other rate uses the majority of the samples, a tie counting
+ * against the model. Each such rate reports the distinct count, the
+ * pooled sample count and a Wilson 95% interval.
  *
  * Invocations that were stopped (budget) or cancelled (the validation
  * call pool aborted them after another call failed) are left out of
@@ -60,9 +63,9 @@ export function wilson(num: number, den: number, z = 1.959964): Interval | null 
 
 /**
  * A rate over labeled units (an assertion, or a case), with repeats
- * clustered: `units` counts each distinct unit once, by the majority of
- * its samples (a tie counts as a hit, i.e. against the model); `samples`
- * pools every verdict; `interval` is Wilson 95% over `units`.
+ * clustered: `units` counts each distinct unit once, as a hit by the
+ * rule of its `UnitRule`; `samples` pools every verdict; `interval` is
+ * Wilson 95% over `units`.
  */
 export interface ClusteredRate {
   readonly units: Ratio;
@@ -70,7 +73,20 @@ export interface ClusteredRate {
   readonly interval: Interval | null;
 }
 
-export function clusteredRate(observations: readonly { readonly unit: string; readonly hit: boolean }[]): ClusteredRate {
+/**
+ * How a unit's samples become one verdict:
+ *   - `"majority"`: a hit when at least half its samples hit (a tie
+ *     counts as a hit, i.e. against the model);
+ *   - `"any"`: a hit when any sample hit. Used for the fabrication
+ *     false-accept rates, where one accepted fabrication in N repetitions
+ *     breaks the zero-fabrication contract (#488 review).
+ */
+export type UnitRule = "majority" | "any";
+
+export function clusteredRate(
+  observations: readonly { readonly unit: string; readonly hit: boolean }[],
+  rule: UnitRule = "majority",
+): ClusteredRate {
   const byUnit = new Map<string, { hits: number; n: number }>();
   for (const o of observations) {
     const u = byUnit.get(o.unit) ?? { hits: 0, n: 0 };
@@ -78,7 +94,8 @@ export function clusteredRate(observations: readonly { readonly unit: string; re
     if (o.hit) u.hits++;
     byUnit.set(o.unit, u);
   }
-  const unitHits = [...byUnit.values()].filter((u) => 2 * u.hits >= u.n).length;
+  const unitHit = rule === "any" ? (u: { hits: number }) => u.hits > 0 : (u: { hits: number; n: number }) => 2 * u.hits >= u.n;
+  const unitHits = [...byUnit.values()].filter(unitHit).length;
   return {
     units: ratio(unitHits, byUnit.size),
     samples: ratio(observations.filter((o) => o.hit).length, observations.length),
@@ -331,7 +348,12 @@ export function traceabilityMetrics(
     }
   }
   return {
-    fabricationFalseAccept: clusteredRate(fa),
+    // Any accepted sample is a false acceptance: zero fabrication holds
+    // across every repetition, not on most of them.
+    fabricationFalseAccept: clusteredRate(fa, "any"),
+    // False flags keep the majority rule: an occasional false flag on a
+    // supported claim costs the user a re-check, not a fabricated claim,
+    // and one noisy sample should not mark the unit as flagged.
     supportedFalseFlag: clusteredRate(ff),
     wrongSupportingUnit: clusteredRate(wu),
     unverifiedFabrications: [...unverified],
@@ -418,7 +440,9 @@ export function assetMetrics(cases: readonly ValidationCase[], results: readonly
     }
   }
   return {
-    fabricationFalseAccept: clusteredRate(fab),
+    // As in traceabilityMetrics: a case is a false acceptance when any
+    // sample passed it; the other two rates keep the majority rule.
+    fabricationFalseAccept: clusteredRate(fab, "any"),
     specificityFalseAccept: clusteredRate(spec),
     falseBlock: clusteredRate(fb),
     errored,

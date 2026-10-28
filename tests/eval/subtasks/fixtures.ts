@@ -45,9 +45,23 @@ export const LABEL_LOCK_FILE = "eval-labels.lock.json";
 
 /** Fixed timestamp stamped on every synthetic document. */
 export const FIXED_ISO = "2026-01-01T00:00:00.000Z";
+
+/**
+ * The run date every eval prompt shows (`Today:` in traceability and
+ * generation), so the inputs stay frozen and replay keys do not change
+ * daily (#485 renders the date from the injected clock). Every fixture
+ * Unit's `date_range` lies before it; the loader refuses one that does
+ * not, so no fixture date reads as a future one. Recorded in each
+ * `RunRecord` as `fixedRunDate`; runs with different dates are not
+ * comparable.
+ */
+export const FIXED_RUN_DATE = "2026-01-15T00:00:00.000Z";
+export const fixedRunClock = (): Date => new Date(FIXED_RUN_DATE);
 export const EVAL_OWNER_UID = "eval-owner";
 
 export const DRAFT_REVIEW_STATUS = "draft-pending-owner-review";
+/** The `labeled_by` of every drafted label; never valid on an owner-reviewed file. */
+export const DRAFT_LABELER = "claude-draft";
 export const REVIEW_STATUSES = [DRAFT_REVIEW_STATUS, "owner-reviewed"] as const;
 export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 
@@ -87,6 +101,8 @@ const MetricSchema = z
   })
   .strict();
 
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 export const FixtureUnitSchema = z
   .object({
     id: z.string().min(1),
@@ -101,6 +117,7 @@ export const FixtureUnitSchema = z
     scope_signals: z.array(z.string()).default([]),
     business_outcomes: z.array(z.string()).default([]),
     evidence_type: z.enum(["verified", "inferred", "user_confirmed"]).default("verified"),
+    date_range: z.object({ start: IsoDateSchema, end: IsoDateSchema.optional() }).strict().optional(),
   })
   .strict();
 export type FixtureUnit = z.infer<typeof FixtureUnitSchema>;
@@ -124,6 +141,7 @@ export const VALIDATION_CATEGORIES = [
   "embedded_prompt_instructions",
   "multi_clause",
   "adversarial_fabrication",
+  "date_drift",
 ] as const;
 
 const LabelMetaShape = {
@@ -131,6 +149,18 @@ const LabelMetaShape = {
   labeled_by: z.string().min(1),
   labeled_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   label_version: z.number().int().positive(),
+};
+
+/**
+ * An owner-reviewed file carries the reviewing owner's own `labeled_by`:
+ * flipping `review_status` alone on a draft must not drop the DRAFT
+ * banner (#488 review).
+ */
+const ownerReviewedByOwner = (v: { readonly review_status: string; readonly labeled_by: string }): boolean =>
+  !(v.review_status === "owner-reviewed" && v.labeled_by === DRAFT_LABELER);
+const OWNER_REVIEW_RULE = {
+  path: ["labeled_by"],
+  message: `an "owner-reviewed" file needs the reviewing owner's labeled_by, not "${DRAFT_LABELER}"`,
 };
 
 export const GoldAssertionSchema = z
@@ -184,7 +214,8 @@ export const ValidationCaseSchema = z
       .strict(),
     notes: z.string(),
   })
-  .strict();
+  .strict()
+  .refine(ownerReviewedByOwner, OWNER_REVIEW_RULE);
 export type ValidationCase = z.infer<typeof ValidationCaseSchema>;
 
 const RequirementSchema = z
@@ -231,7 +262,8 @@ export const GenerationSnapshotSchema = z
     item_upper_bound: z.number().int().positive().default(26),
     notes: z.string(),
   })
-  .strict();
+  .strict()
+  .refine(ownerReviewedByOwner, OWNER_REVIEW_RULE);
 export type GenerationSnapshot = z.infer<typeof GenerationSnapshotSchema>;
 
 // -- Lexical helpers shared with metrics.ts -----------------------------------
@@ -374,6 +406,16 @@ function checkUnits(
     if (CONTACT_DATA.test(u.raw_text)) {
       issues.push({ path: `${p}.raw_text`, message: "contains an email address, phone number or URL" });
     }
+    if (u.date_range !== undefined) {
+      const runDate = FIXED_RUN_DATE.slice(0, 10);
+      const { start, end } = u.date_range;
+      for (const [k, d] of [["start", start], ["end", end]] as const) {
+        if (d !== undefined && d >= runDate) {
+          issues.push({ path: `${p}.date_range.${k}`, message: `${d} is not before the fixed run date ${runDate}` });
+        }
+      }
+      if (end !== undefined && end < start) issues.push({ path: `${p}.date_range`, message: "end is before start" });
+    }
   });
 }
 
@@ -473,6 +515,16 @@ export function parseValidationCase(
         path: "units",
         message:
           "missing_cited_evidence needs an uncited Unit whose raw_text carries every required term of an unsupported assertion",
+      });
+    }
+  }
+
+  if (c.category === "date_drift") {
+    const dated = c.units.some((u) => cited.has(u.id) && u.date_range !== undefined);
+    if (!dated || !c.gold.assertions.some((a) => !a.supported)) {
+      issues.push({
+        path: "units",
+        message: "date_drift needs a cited Unit with a date_range and an unsupported assertion whose dates contradict it",
       });
     }
   }
@@ -604,6 +656,7 @@ export function toExperienceUnit(
     business_outcomes: [...f.business_outcomes],
     metrics: f.metrics.map((m) => ({ ...m })),
     evidence_type: f.evidence_type,
+    ...(f.date_range !== undefined && { date_range: { ...f.date_range } }),
     confidence_score: 1,
     user_approved: true,
     created_at: FIXED_ISO,

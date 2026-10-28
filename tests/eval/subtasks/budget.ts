@@ -93,10 +93,15 @@ export class BudgetLedger {
     return new Reservation(worst);
   }
 
-  /** A response arrived: drop the hold and add the metered cost. */
-  settle(r: Reservation, costUsd: number): void {
+  /**
+   * A response arrived: drop the hold and add the metered cost. A null
+   * cost (a response no rate could price) counts at the reservation's
+   * worst case, never $0, so unpriceable responses still consume
+   * `--max-usd`.
+   */
+  settle(r: Reservation, costUsd: number | null): void {
     this.release(r);
-    this.spent += costUsd;
+    this.spent += costUsd ?? r.worstUsd;
   }
 
   /** No response (transport error, abort): drop the hold with no spend. Idempotent. */

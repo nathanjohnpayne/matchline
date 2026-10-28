@@ -10,12 +10,11 @@ import {
 } from "../llm/config.ts";
 import { zodToToolSchema } from "../llm/zodToolSchema.ts";
 import { loadPromptText } from "../prompts/loader.ts";
-import { TraceabilityResponseV1Schema } from "../prompts/validation/traceability.v1.schema.ts";
+import { TraceabilityResponseV2Schema } from "../prompts/validation/traceability.v2.schema.ts";
 import type { ExperienceUnit } from "../types/capability.ts";
 
 import type { Claim } from "./claimExtraction.ts";
-import { EMPTY_UNITS_RATIONALE, checkTraceability } from "./traceability.ts";
-import { formatUnit, quote } from "./unitPromptText.ts";
+import { EMPTY_UNITS_RATIONALE, checkTraceability, renderTraceabilityInput } from "./traceability.ts";
 
 /**
  * Per-stage model configuration for `traceability` (#489): the request on
@@ -26,10 +25,10 @@ import { formatUnit, quote } from "./unitPromptText.ts";
  * client; no I/O.
  */
 
-// The baseline test rebuilds the pre-#489 user content with `formatUnit`.
-// #485 changes traceability's input (a `Today:` line and `formatUnitBlock`,
-// via an exported `renderTraceabilityInput`); whichever of #485 and #489
-// merges second switches that expectation to the active renderer.
+// The baseline test pins the request the module sends on main: the v2
+// response schema the module enforces and the user content built by
+// `renderTraceabilityInput` (#485's `Today:` line and shared Unit block),
+// with the run date from an injected clock.
 
 function mockMessage(
   toolInput: unknown,
@@ -132,7 +131,7 @@ describe("traceability: separately configurable model stage (#489)", () => {
       {
         name: "record_traceability",
         description: "Record the traceability verdict for one claim against the candidate Experience Units.",
-        input_schema: zodToToolSchema(TraceabilityResponseV1Schema),
+        input_schema: zodToToolSchema(TraceabilityResponseV2Schema),
       },
     ];
   }
@@ -145,30 +144,27 @@ describe("traceability: separately configurable model stage (#489)", () => {
   const runWith = (client: Anthropic, record: typeof RecordUsage) =>
     checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
 
-  it("baseline request is byte-identical to the pre-#489 shape", async () => {
+  it("baseline request is byte-identical to main's (v2 schema, renderTraceabilityInput)", async () => {
     const record = vi.fn<typeof RecordUsage>(async () => 0);
     const { client, create } = mockClient([mockMessage(SUPPORTED)]);
-    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record });
+    const clock = () => new Date("2026-01-15T09:30:00Z");
+    await checkTraceability(CLAIM, [makeUnit()], CTX, { client, record, clock });
     const prompt = loadPromptText("validation", "traceability");
     expect(create).toHaveBeenCalledTimes(1);
-    const body = create.mock.calls[0]![0] as { messages: { role: string; content: string }[] };
-    // Every field the stage split could touch is pinned exactly. The user message's
-    // body belongs to the prompt and its Unit renderer, not to the stage config, so it is
-    // pinned at both ends (few-shot, claim; candidate Units) and may carry other input
-    // lines between them (e.g. a reference date) without this test changing.
-    expect({ ...body, messages: undefined }).toStrictEqual({
+    // Every field, the user message included, in the module's key order.
+    const expected = {
       model: "claude-sonnet-4-6",
       max_tokens: 1024,
       system: prompt.system,
       tools: expectedTools(),
       tool_choice: { type: "tool", name: "record_traceability" },
-      messages: undefined,
+      messages: [
+        { role: "user", content: `${prompt.userFewShot}\n\n${renderTraceabilityInput(CLAIM.text, "2026-01-15", [makeUnit()])}` },
+      ],
       stream: false,
-    });
-    expect(body.messages).toHaveLength(1);
-    expect(body.messages[0]!.role).toBe("user");
-    expect(body.messages[0]!.content.startsWith(`${prompt.userFewShot}\n\nClaim: ${quote(CLAIM.text)}\n\n`)).toBe(true);
-    expect(body.messages[0]!.content.endsWith(`\n\nCandidate Experience Units:\n\n${formatUnit(makeUnit())}`)).toBe(true);
+    };
+    expect(create.mock.calls[0]![0]).toStrictEqual(expected);
+    expect(JSON.stringify(create.mock.calls[0]![0])).toBe(JSON.stringify(expected));
     expect(create.mock.calls[0]![1]).toStrictEqual({ signal: undefined });
   });
 

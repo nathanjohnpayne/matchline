@@ -17,6 +17,11 @@
  * baseline validator's, not as ground truth.
  *
  * Nothing here touches Firestore: every loader is injected.
+ *
+ * Every prompt that shows the run date (`Today:` in traceability and
+ * generation, #485) gets `fixedRunClock` (`FIXED_RUN_DATE`), never the
+ * wall clock, so a case's request bodies, and so its replay keys, are
+ * the same on every day it runs.
  */
 
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
@@ -35,6 +40,7 @@ import { describeError } from "../runForFixture.ts";
 import {
   EVAL_OWNER_UID,
   FIXED_ISO,
+  fixedRunClock,
   toGenerationInputs,
   type LoadedCase,
   type LoadedSnapshot,
@@ -208,7 +214,7 @@ async function validateInMemory(
       }),
     ),
     checkTraceability: wrap("traceability", (_cl, _u, c) => c.signal, (inv, claim: Claim, cands: readonly ExperienceUnit[], c: Parameters<typeof checkTraceability>[2]) =>
-      checkTraceability(claim, cands, { ...c, signal: combine(c.signal, inv.signal) }, { client: inv.client, record: inv.record }),
+      checkTraceability(claim, cands, { ...c, signal: combine(c.signal, inv.signal) }, { client: inv.client, record: inv.record, clock: fixedRunClock }),
     ),
     checkSpecificity: wrap("specificity", (_cl, c) => c.signal, (inv, claim: Claim, c: Parameters<typeof checkSpecificity>[1]) =>
       checkSpecificity(claim, { ...c, signal: combine(c.signal, inv.signal) }, { client: inv.client, record: inv.record }),
@@ -287,7 +293,7 @@ export async function runValidationSuite(
             { id: `${c.id}:${a.id}`, bullet_id: c.item.id, text: a.text },
             candidates,
             { ownerUid: EVAL_OWNER_UID, signal: inv.signal },
-            { client: inv.client, record: inv.record },
+            { client: inv.client, record: inv.record, clock: fixedRunClock },
           ),
         ),
       ).then((v) => [a.id, v] as const),
@@ -361,6 +367,7 @@ export async function runGenerationSuite(
           loadInputs: async () => inputs,
           generateId: ctx.nextId,
           sleep: abortableSleep(ctx.runAbort.signal),
+          clock: fixedRunClock,
         },
       );
       content = result.content;

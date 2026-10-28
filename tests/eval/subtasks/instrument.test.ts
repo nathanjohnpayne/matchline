@@ -23,6 +23,7 @@ import {
   startInvocation,
   type CallRecord,
 } from "./instrument.ts";
+import { worstCaseUsd } from "./budget.ts";
 import { replayKey, ReplayStore, type MiniFs } from "./replay.ts";
 import { defaultValidationAnswer, makeCtx, scriptedClient, textMessage, toolMessage } from "./testSupport.ts";
 
@@ -106,6 +107,19 @@ describe("instrumentClient", () => {
     }
     expect(ctx.ledger.reservedUsd).toBe(0);
     expect(ctx.ledger.spentUsd).toBeCloseTo(ctx.calls[1]!.modeledUsd!, 10);
+  });
+
+  it("counts an unpriceable response against the budget at its worst case, not $0", async () => {
+    // A negative token count makes the response unpriceable (modeledCost returns null).
+    const raw = scriptedClient(() => toolMessage("record_claims", { claims: [{ text: "The user did a thing." }] }, { usage: { input_tokens: -1 } }));
+    const ctx = makeCtx({ rawClient: raw.client, maxUsd: 100 });
+    const inv = startInvocation(ctx, META);
+    await extractClaims(BULLET, { ...CTX, signal: inv.signal }, { client: inv.client, record: inv.record }).catch(() => undefined);
+    const worst = raw.create.mock.calls.reduce((sum, c) => sum + worstCaseUsd(c[0] as Parameters<typeof worstCaseUsd>[0]), 0);
+    expect(ctx.calls.every((c) => c.modeledUsd === null)).toBe(true);
+    expect(ctx.ledger.reservedUsd).toBe(0);
+    expect(worst).toBeGreaterThan(0);
+    expect(ctx.ledger.spentUsd).toBeCloseTo(worst, 10);
   });
 
   it("checks the served model on api and trusts the CLI's own assertion", () => {

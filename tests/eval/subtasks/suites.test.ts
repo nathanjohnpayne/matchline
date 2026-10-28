@@ -14,7 +14,7 @@ import { clearPromptVersionOverrides } from "../../../functions/src/prompts/load
 
 import { SWEEP_SCOPES } from "../sweepScope.ts";
 
-import { loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
+import { FIXED_RUN_DATE, loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
 import { schemaValidity } from "./metrics.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
 import { runGenerationSuite, runValidationSuite } from "./suites.ts";
@@ -130,6 +130,36 @@ describe("runValidationSuite", () => {
     expect(m.hardFailKinds).toEqual({ no_tool_use: 3 });
   });
 
+  it("shows the fixed run date, never the wall clock, so traceability inputs and replay keys stay frozen", async () => {
+    const dated = loadValidationCases({ ids: ["vc-15-date-drift"] }).items;
+    const run = async (wallClock: string) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(wallClock));
+      try {
+        const raw = scriptedClient(defaultValidationAnswer);
+        const ctx = makeCtx({ rawClient: raw.client });
+        await runValidationSuite(dated, "baseline", 0, ctx);
+        const bodies = raw.create.mock.calls.map((c) => c[0] as RequestBody).filter((b) => b.tools[0]!.name === "record_traceability");
+        const keys = ctx.calls.filter((c) => c.stage === "traceability").map((c) => `${c.pass}:${c.requestKey}`).sort();
+        return { bodies, keys };
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const { bodies, keys } = await run("2026-10-28T12:00:00Z");
+    expect(FIXED_RUN_DATE.slice(0, 10)).toBe("2026-01-15");
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const b of bodies) {
+      expect(userOf(b)).toContain('\n\nToday: "2026-01-15"\n\n');
+      expect(userOf(b)).not.toContain("2026-10-28");
+      // vc-15's cited Unit carries its date_range into the request.
+      expect(userOf(b)).toContain('date_range: { start: "2018-01-01", end: "2022-12-31" }');
+    }
+    // Another day, the same request bodies and so the same replay keys.
+    const later = await run("2027-03-01T08:00:00Z");
+    expect(later.keys).toEqual(keys);
+  });
+
   it("marks remaining cases skipped once the budget is reached and makes no further calls", async () => {
     const raw = scriptedClient(defaultValidationAnswer);
     const ctx = makeCtx({ rawClient: raw.client, maxUsd: 0.000001 });
@@ -198,6 +228,25 @@ describe("runGenerationSuite", () => {
     expect(flow!.failureKinds).toHaveLength(3);
     for (const k of flow!.failureKinds) expect(typeof k).toBe("string");
     expect(ctx.calls.map((c) => c.outcome)).toEqual(["invented_id", "invented_id", "invented_id"]);
+  });
+
+  it("shows generation the fixed run date, not the wall clock", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+    try {
+      const raw = scriptedClient((b) => (b.tools[0]!.name === "record_resume" ? resumeAnswer(["u_threadline_mvp"]) : defaultValidationAnswer(b)));
+      const ctx = makeCtx({ rawClient: raw.client, suite: "generation" });
+      await runGenerationSuite(sparse, "baseline", 0, ctx, snapshotDefaults());
+      const bodies = raw.create.mock.calls.map((c) => c[0] as RequestBody);
+      const gen = bodies.find((b) => b.tools[0]!.name === "record_resume")!;
+      expect(userOf(gen)).toContain('today: "2026-01-15"');
+      const trace = bodies.filter((b) => b.tools[0]!.name === "record_traceability");
+      expect(trace.length).toBeGreaterThan(0);
+      for (const b of [gen, ...trace]) expect(userOf(b)).not.toContain("2026-10-28");
+      for (const b of trace) expect(userOf(b)).toContain('Today: "2026-01-15"');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("takes flow spans from the injected clock", async () => {

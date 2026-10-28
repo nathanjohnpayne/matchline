@@ -87,4 +87,16 @@ describe("BudgetLedger", () => {
     expect(ledger.reservedUsd).toBe(0);
     expect(ledger.spentUsd).toBeCloseTo(worst / 2, 10);
   });
+
+  it("settles an unpriceable response (null cost) at the reservation's worst case, never $0", () => {
+    const worst = worstCaseUsd(BODY);
+    const abort = new AbortController();
+    const ledger = new BudgetLedger({ maxUsd: worst * 1.5, abort });
+    ledger.settle(ledger.reserve(BODY), null);
+    expect(ledger.reservedUsd).toBe(0);
+    expect(ledger.spentUsd).toBeCloseTo(worst, 10);
+    // The unpriced spend still counts against the bound.
+    expect(() => ledger.reserve(BODY)).toThrow(BudgetReachedError);
+    expect(abort.signal.aborted).toBe(true);
+  });
 });

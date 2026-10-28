@@ -31,10 +31,11 @@ function variant(p: Partial<VariantRecord> = {}): VariantRecord {
   };
 }
 
-function record(p: Partial<RunRecord> = {}): RunRecord {
+function baseRecord(p: Partial<RunRecord> = {}): RunRecord {
   return {
     schema_version: 1, runId: "eval-20261028T190112Z-3fa9c1", suite: "validation", startedAt: "s", finishedAt: "f", dryRun: false,
     git: { sha: "05272fc0000", dirty: false }, tokenSource: "api", tokenFidelity: "metered", cacheMode: "fresh", samples: 1,
+    fixedRunDate: "2026-01-15T00:00:00.000Z",
     labels: {
       status: "draft",
       fixtureSetHash: "sha256:9c41aaaa",
@@ -48,6 +49,8 @@ function record(p: Partial<RunRecord> = {}): RunRecord {
     plan: null, invocations: [], calls: [call], caveat: CAVEAT, ...p,
   };
 }
+
+const record = baseRecord;
 
 describe("formatSubtaskReport", () => {
   const text = formatSubtaskReport(record());
@@ -106,6 +109,17 @@ describe("formatSubtaskReport", () => {
     expect(labelStatus([{ review_status: "owner-reviewed" }, { review_status: "draft-pending-owner-review" }])).toBe("mixed");
   });
 
+  it("never counts an owner-reviewed file still labeled by claude-draft as reviewed", () => {
+    expect(labelStatus([{ review_status: "owner-reviewed", labeled_by: "claude-draft" }])).toBe("draft");
+    expect(labelStatus([{ review_status: "owner-reviewed", labeled_by: "nathanjohnpayne" }])).toBe("owner-reviewed");
+    const flipped = record({ labels: { ...record().labels, files: record().labels.files.map((f) => ({ ...f, review_status: "owner-reviewed" })) } });
+    expect(formatSubtaskReport(flipped)).toContain("DRAFT LABELS — 1/1 cases");
+  });
+
+  it("prints the fixed run date the prompts showed", () => {
+    expect(text).toContain("run date shown to the model (Today:) 2026-01-15, fixed, never the wall clock");
+  });
+
   it("round-trips the record through JSON", () => {
     const r = record();
     expect(JSON.parse(JSON.stringify(r))).toEqual(r);
@@ -123,8 +137,36 @@ describe("rate", () => {
 });
 
 describe("comparable", () => {
+  // Only valid variants by default: an invalid shared variant refuses the comparison (tested below).
+  const record = (p: Partial<RunRecord> = {}) => baseRecord({ variants: [variant()], ...p });
   const judge = { stages: resolved.stages, promptVersions: resolved.promptVersions };
   const gen = (p: Partial<RunRecord> = {}) => record({ suite: "generation", judge, ...p });
+
+  it("refuses a dry-run record on either side", () => {
+    const reason = "a dry run sent no requests and has no results to compare";
+    expect(comparable(record({ dryRun: true }), record())).toEqual({ ok: false, reason });
+    expect(comparable(record(), record({ dryRun: true }))).toEqual({ ok: false, reason });
+  });
+
+  it("refuses when a variant both runs share is not valid in either", () => {
+    const bad = variant({ label: "spec-haiku", validity: "invalid: served-model" });
+    const good = variant({ label: "spec-haiku" });
+    const a = record({ variants: [variant(), good] });
+    expect(comparable(a, record({ variants: [variant(), bad], runId: "eval-b" }))).toEqual({
+      ok: false,
+      reason: "variant spec-haiku is invalid: served-model in run eval-b",
+    });
+    expect(comparable(record({ variants: [variant({ validity: "invalid: settings-mismatch" })] }), record()).ok).toBe(false);
+    // An invalid variant only one run has is not shared: no refusal.
+    expect(comparable(a, record({ variants: [variant(), variant({ label: "other", validity: "invalid: served-model" })] }))).toEqual({ ok: true, caveats: [] });
+  });
+
+  it("refuses runs whose prompts showed different fixed run dates", () => {
+    expect(comparable(record(), record({ fixedRunDate: "2026-02-01T00:00:00.000Z" }))).toEqual({
+      ok: false,
+      reason: "different fixed run dates (2026-01-15T00:00:00.000Z vs 2026-02-01T00:00:00.000Z): the prompts showed a different Today",
+    });
+  });
 
   it("is false when the fixture set, token source or replay mode differ, true otherwise", () => {
     const a = record();

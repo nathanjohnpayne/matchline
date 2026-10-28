@@ -62,6 +62,7 @@ import {
   loadValidationCases,
   lockedFiles,
   sha256Hex,
+  FIXED_RUN_DATE,
   type LoadedCase,
   type LoadedSnapshot,
   type LoadedSuiteFixtures,
@@ -363,7 +364,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     args.suite === "validation"
       ? (fixtures.items as readonly LoadedCase[]).map((c) => ({ id: c.case.id, path: c.file.path, derivedFrom: c.case.source.derived_from }))
       : (fixtures.items as readonly LoadedSnapshot[]).map((s) => ({ id: s.snapshot.id, path: s.file.path, derivedFrom: null }));
-  const primaryFiles = (fixtures.items as readonly { file: { review_status: string } }[]).map((i) => i.file);
+  const primaryFiles = (fixtures.items as readonly { file: { review_status: string; labeled_by: string } }[]).map((i) => i.file);
 
   const store = new ReplayStore({ mode: args.cacheMode, ...(deps.replayDir !== undefined && { dir: deps.replayDir }) });
   const runAbort = new AbortController();
@@ -382,6 +383,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     tokenFidelity: metered ? "metered" : "estimated",
     cacheMode: args.cacheMode,
     samples: args.samples,
+    fixedRunDate: FIXED_RUN_DATE,
     labels: { status: labelStatus(primaryFiles), fixtureSetHash: fixtures.fixtureSetHash, files, primary },
     schemas,
     judge,

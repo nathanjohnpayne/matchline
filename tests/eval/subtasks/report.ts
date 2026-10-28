@@ -6,13 +6,13 @@
  * fixture and schema hashes, every setting as sent, every attempt).
  * Two records are comparable only when `comparable` says so. There is
  * no ranking and no recommendation: the labels are drafts until the
- * owner reviews them, and 14 cases cannot carry a promotion decision.
+ * owner reviews them, and 15 cases cannot carry a promotion decision.
  */
 
 import type { TokenSourceKind } from "../tokenSource.ts";
 import type { CapCheck } from "../projection.ts";
 
-import type { FixtureFileInfo } from "./fixtures.ts";
+import { DRAFT_LABELER, type FixtureFileInfo } from "./fixtures.ts";
 import type { CallRecord, InvocationRecord, SubtaskSuite } from "./instrument.ts";
 import type {
   AssetMetrics,
@@ -31,7 +31,7 @@ import type { ResolvedJudge, ResolvedStageSettings, ResolvedVariant } from "./ov
 import type { Projection } from "./plan.ts";
 import type { ReplayMode } from "./replay.ts";
 
-export const CAVEAT = "14 cases / 2 snapshots cannot support production p95 or reliability claims.";
+export const CAVEAT = "15 cases / 2 snapshots cannot support production p95 or reliability claims.";
 export const ONBOARDING_NOTE = "Onboarding extraction is not part of this suite; see `npm run eval`.";
 export const GENERATION_SCOPE_NOTE =
   "JD→validated résumé (from frozen approved matches): JD parsing and matching are not re-run.";
@@ -88,6 +88,12 @@ export interface RunRecord {
   readonly tokenFidelity: "metered" | "estimated";
   readonly cacheMode: ReplayMode;
   readonly samples: number;
+  /**
+   * The run date every prompt showed (`Today:`; `FIXED_RUN_DATE` in
+   * fixtures.ts), never the wall clock. Runs with different dates sent
+   * different inputs and are not comparable.
+   */
+  readonly fixedRunDate: string;
   readonly labels: {
     readonly status: "draft" | "mixed" | "owner-reviewed";
     readonly fixtureSetHash: string;
@@ -119,9 +125,14 @@ export interface RunRecord {
   readonly caveat: string;
 }
 
-export function labelStatus(files: readonly { review_status: string }[]): RunRecord["labels"]["status"] {
-  if (files.length > 0 && files.every((f) => f.review_status === "owner-reviewed")) return "owner-reviewed";
-  if (files.every((f) => f.review_status !== "owner-reviewed")) return "draft";
+/** Owner-reviewed by the owner: a draft labeler's file never counts, whatever its review_status says. */
+function ownerReviewed(f: { readonly review_status: string; readonly labeled_by?: string }): boolean {
+  return f.review_status === "owner-reviewed" && f.labeled_by !== DRAFT_LABELER;
+}
+
+export function labelStatus(files: readonly { review_status: string; labeled_by?: string }[]): RunRecord["labels"]["status"] {
+  if (files.length > 0 && files.every(ownerReviewed)) return "owner-reviewed";
+  if (!files.some(ownerReviewed)) return "draft";
   return "mixed";
 }
 
@@ -165,10 +176,12 @@ function settingsDifference(
 
 /**
  * Whether two runs can be compared row for row; the reason when not.
- * Comparable runs share the suite, fixtures and labels, token source,
- * replay mode, sample count, every enforced tool schema, the settings
- * and prompt fingerprints of each variant label they both ran
- * (baseline always), and, for the generation suite, the judge. A
+ * Neither may be a dry run (it sent no requests), and every variant
+ * label both ran must be `valid` in both. Comparable runs share the
+ * suite, fixtures and labels, token source, replay mode, sample count,
+ * fixed run date, every enforced tool schema, the settings and prompt
+ * fingerprints of each variant label they both ran (baseline always),
+ * and, for the generation suite, the judge. A
  * different git sha alone does not refuse the comparison (comparing
  * across commits is the point), but it is returned as a caveat: module
  * code that shapes a request (e.g. how Units are rendered into the
@@ -178,6 +191,7 @@ export function comparable(
   a: RunRecord,
   b: RunRecord,
 ): { ok: true; caveats: readonly string[] } | { ok: false; reason: string } {
+  if (a.dryRun || b.dryRun) return { ok: false, reason: "a dry run sent no requests and has no results to compare" };
   if (a.suite !== b.suite) return { ok: false, reason: `different suites (${a.suite} vs ${b.suite})` };
   if (a.labels.fixtureSetHash !== b.labels.fixtureSetHash) {
     return { ok: false, reason: "different fixtureSetHash: labels or fixtures changed (a relabel invalidates comparison)" };
@@ -187,6 +201,9 @@ export function comparable(
     return { ok: false, reason: "one run replayed local outputs and the other ran live" };
   }
   if (a.samples !== b.samples) return { ok: false, reason: `different samples per case (${a.samples} vs ${b.samples})` };
+  if (a.fixedRunDate !== b.fixedRunDate) {
+    return { ok: false, reason: `different fixed run dates (${a.fixedRunDate} vs ${b.fixedRunDate}): the prompts showed a different Today` };
+  }
   const schema = firstDifference(a.schemas, b.schemas);
   if (schema !== null) return { ok: false, reason: `different enforced tool schema for ${schema}` };
   const baseA = a.variants.find((v) => v.label === "baseline");
@@ -195,6 +212,9 @@ export function comparable(
   for (const va of a.variants) {
     const vb = b.variants.find((v) => v.label === va.label);
     if (vb === undefined) continue;
+    for (const v of [va, vb]) {
+      if (v.validity !== "valid") return { ok: false, reason: `variant ${v.label} is ${v.validity} in run ${v === va ? a.runId : b.runId}` };
+    }
     const diff = settingsDifference(`variant ${va.label}`, va.resolved, vb.resolved);
     if (diff !== null) return { ok: false, reason: diff };
   }
@@ -252,7 +272,10 @@ function table(rows: readonly (readonly string[])[]): string[] {
 function banner(r: RunRecord): string[] {
   const out: string[] = [];
   if (r.labels.status !== "owner-reviewed") {
-    const drafts = r.labels.primary.filter((p) => r.labels.files.find((f) => f.path === p.path)?.review_status !== "owner-reviewed");
+    const drafts = r.labels.primary.filter((p) => {
+      const f = r.labels.files.find((x) => x.path === p.path);
+      return f === undefined || !ownerReviewed(f);
+    });
     const derived = r.labels.primary.filter((p) => p.derivedFrom !== null).length;
     out.push(
       `DRAFT LABELS — ${drafts.length}/${r.labels.primary.length} ${r.suite === "validation" ? "cases" : "snapshots"} draft-pending-owner-review ` +
@@ -272,6 +295,7 @@ export function formatHeader(r: RunRecord): string[] {
   lines.push(...banner(r));
   lines.push(r.suite === "validation" ? ONBOARDING_NOTE : `${GENERATION_SCOPE_NOTE} ${ONBOARDING_NOTE}`);
   lines.push(`fixtureSetHash ${r.labels.fixtureSetHash}   (comparable only with runs that share this hash)`);
+  lines.push(`run date shown to the model (Today:) ${r.fixedRunDate.slice(0, 10)}, fixed, never the wall clock`);
   lines.push("");
   lines.push("fixtures");
   const rows: string[][] = [["path", "label_version", "review_status", "labeled_by", "sha256"]];

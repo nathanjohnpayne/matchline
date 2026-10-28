@@ -7,7 +7,7 @@ import { SWEEP_SCOPES } from "../sweepScope.ts";
 
 import { loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
-import { largestUnits, MAX_ATTEMPTS, planGeneration, planValidation, project, TOKENIZER_55_FACTOR } from "./plan.ts";
+import { largestUnits, MAX_ATTEMPTS, planGeneration, planValidation, project, TOKENIZER_55_FACTOR, traceabilityInput } from "./plan.ts";
 
 afterEach(() => {
   clearModelOverrides();
@@ -52,6 +52,33 @@ describe("planValidation", () => {
     const f = v55.find((r) => r.stage === "traceability" && r.pass === "isolated")!;
     expect(f.maxTokens).toBe(b.maxTokens * 2);
     expect(f.inputEstTokens).toBeGreaterThanOrEqual(Math.floor(b.inputEstTokens * TOKENIZER_55_FACTOR));
+  });
+
+  it("estimates traceability from the rendered evidence text, so it grows when a cited Unit gains tags", async () => {
+    const vc02 = cases[0]!;
+    const tagged = {
+      ...vc02,
+      units: vc02.units.map((u) => ({
+        ...u,
+        skills: [...u.skills, "distributed systems design at very large scale"],
+        tools: [...u.tools, "Kubernetes", "Terraform", "Apache Kafka"],
+        domains: [...u.domains, "payments infrastructure"],
+        date_range: { start: "2019-03-01", end: "2021-06-30" },
+      })),
+    };
+    const est = async (lc: typeof vc02) =>
+      (await withVariantOverrides({ label: "baseline" }, SWEEP_SCOPES.validation, {}, async (r) => planValidation([lc], r, 1))).value.filter(
+        (r) => r.stage === "traceability",
+      );
+    const before = await est(vc02);
+    const after = await est(tagged);
+    expect(after).toHaveLength(before.length);
+    for (let i = 0; i < before.length; i++) expect(after[i]!.inputEstTokens, after[i]!.pass).toBeGreaterThan(before[i]!.inputEstTokens);
+    // The estimate reads the same text the module sends, with the fixed run date.
+    const text = traceabilityInput("claim", tagged.units);
+    expect(text.split("\n").find((l) => l.startsWith("tools: "))).toContain('"Kubernetes"');
+    expect(text).toContain('date_range: { start: "2019-03-01", end: "2021-06-30" }');
+    expect(text).toContain('Today: "2026-01-15"');
   });
 
   it("scales with samples", async () => {

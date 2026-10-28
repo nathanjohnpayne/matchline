@@ -127,6 +127,15 @@
         }
       ]
     },
+    "validation-cases/vc-15-date-drift.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "888f674b75ffd0eebcdfdbfad7dd977585b8c0c323515b05c17ca1668017c5ce"
+        }
+      ]
+    },
     "generation-snapshots/gs-rich-nathan-google.json": {
       "review_status": "draft-pending-owner-review",
       "history": [

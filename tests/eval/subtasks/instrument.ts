@@ -406,7 +406,8 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     const classifier = stageKey === null ? null : await loadClassifier(stageKey);
     const cost = modeledCost(body.model, message);
     if (replayedFrom === null) {
-      ctx.ledger.settle(reservation!, cost ?? 0);
+      // An unpriceable response (cost null) settles at its worst case.
+      ctx.ledger.settle(reservation!, cost);
       ctx.store.put(meta.stage, key, {
         message,
         producedByRunId: ctx.runId,

@@ -8,6 +8,7 @@ import { liveApprovedMatchesOf } from "../../../functions/src/generation/pipelin
 import {
   DRAFT_REVIEW_STATUS,
   FixtureError,
+  FIXED_RUN_DATE,
   FIXTURES_ROOT,
   OWNER_TRACES_DIR,
   loadGenerationSnapshots,
@@ -101,6 +102,23 @@ describe("draft fixtures", () => {
     expect(c.gold.assertions).toHaveLength(4);
     expect(c.gold.assertions.every((a) => !a.supported)).toBe(true);
     expect(c.gold.expected_asset_status).toBe("failed");
+  });
+
+  it("scores vc-15's date drift: the drifted start unsupported, the Unit's own end supported, both dates before the fixed run date", () => {
+    const lc = cases.items.find((x) => x.case.id === "vc-15-date-drift")!;
+    expect(lc.case.category).toBe("date_drift");
+    expect(lc.case.review_status).toBe(DRAFT_REVIEW_STATUS);
+    expect(lc.case.labeled_by).toBe("claude-draft");
+    expect(lc.units[0]!.date_range).toEqual({ start: "2018-01-01", end: "2022-12-31" });
+    const byId = Object.fromEntries(lc.case.gold.assertions.map((a) => [a.id, a.supported]));
+    expect(byId).toEqual({ a1: false, a2: true, a3: true });
+    for (const u of cases.items.flatMap((x) => x.units)) {
+      if (u.date_range === undefined) continue;
+      expect(u.date_range.start < FIXED_RUN_DATE.slice(0, 10)).toBe(true);
+      if (u.date_range.end !== undefined) expect(u.date_range.end < FIXED_RUN_DATE.slice(0, 10)).toBe(true);
+    }
+    // A Unit with no date_range carries none at runtime (its evidence text is unchanged).
+    expect("date_range" in cases.items.find((x) => x.case.id === "vc-07-unsupported-title")!.units[0]!).toBe(false);
   });
 
   it("keeps every expected status consistent with its assertions", () => {
@@ -201,6 +219,29 @@ describe("loader rejections (file and path named)", () => {
     expect(caseError("vc-14-adversarial-fabrication", (c) => (c.item.text = c.item.text.replace("$400M", "$40M")))).toMatch(
       /item\.text: must equal the owner file/,
     );
+  });
+
+  it("rejects owner-reviewed with labeled_by claude-draft, so one flipped field cannot drop the DRAFT banner", () => {
+    expect(caseError(ID, (c) => (c.review_status = "owner-reviewed"))).toMatch(
+      /labeled_by: an "owner-reviewed" file needs the reviewing owner's labeled_by, not "claude-draft"/,
+    );
+    expect(snapError("gs-sparse-sofia-openai", (s) => (s.review_status = "owner-reviewed"))).toMatch(/labeled_by: an "owner-reviewed" file/);
+    // With the owner's own labeled_by, the schema accepts it.
+    const c = rawCase(ID);
+    c.review_status = "owner-reviewed";
+    c.labeled_by = "nathanjohnpayne";
+    expect(parseValidationCase(c, `validation-cases/${ID}.json`).review_status).toBe("owner-reviewed");
+  });
+
+  it("rejects a date_drift case whose cited Unit has no date_range", () => {
+    expect(caseError("vc-15-date-drift", (c) => delete c.units[0].date_range)).toMatch(/date_drift needs a cited Unit with a date_range/);
+  });
+
+  it("rejects a Unit date on or after the fixed run date, and an end before its start", () => {
+    expect(caseError("vc-15-date-drift", (c) => (c.units[0].date_range.end = "2026-01-15"))).toMatch(
+      /units\.0\.date_range\.end: 2026-01-15 is not before the fixed run date 2026-01-15/,
+    );
+    expect(caseError("vc-15-date-drift", (c) => (c.units[0].date_range.end = "2017-01-01"))).toMatch(/units\.0\.date_range: end is before start/);
   });
 
   it("rejects an unknown review status", () => {

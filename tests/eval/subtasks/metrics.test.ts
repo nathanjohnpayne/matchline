@@ -24,6 +24,7 @@ import {
   wallTime,
   wilson,
 } from "./metrics.ts";
+import { rate } from "./report.ts";
 import type { CaseResult } from "./suites.ts";
 
 const A = (id: string, supported: boolean, specific: boolean | null, supporting: string[] = supported ? ["u1"] : []) => ({
@@ -180,6 +181,54 @@ describe("clustered rates", () => {
   });
 });
 
+describe("fabrication false acceptance counts any accepted sample (#488 review)", () => {
+  const accept = ok({ supports: true, supporting_unit_id: "u1", rationale: "" });
+  const reject = ok({ supports: false, rationale: "" });
+  const fab = goldCase([A("a1", false, null)], "failed");
+  const sup = goldCase([A("s1", true, true)], "passed");
+  const asset = (status: "passed" | "failed") => ok({ status, flagCounts: {} });
+
+  it("rule 'any' marks a unit hit by one sample; 'majority' does not", () => {
+    const obs = [{ unit: "a", hit: true }, { unit: "a", hit: false }, { unit: "a", hit: false }];
+    expect(clusteredRate(obs, "any").units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(clusteredRate(obs).units).toEqual({ num: 0, den: 1, value: 0 });
+  });
+
+  it("reports a fabrication accepted once in three samples as a false acceptance (traceability and asset)", () => {
+    const results = [true, false, false].map((accepted, repeat) =>
+      result({ repeat, traceability: { a1: accepted ? accept : reject }, asset: asset(accepted ? "passed" : "failed") }),
+    );
+    const t = traceabilityMetrics([fab], results).fabricationFalseAccept;
+    expect(t.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(t.samples).toEqual({ num: 1, den: 3, value: 1 / 3 });
+    expect(rate(t, "assertions")).toMatch(/^100\.0% \(1\/1 assertions/);
+    const a = assetMetrics([fab], results).fabricationFalseAccept;
+    expect(a.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(a.samples).toEqual({ num: 1, den: 3, value: 1 / 3 });
+  });
+
+  it("keeps a fabrication rejected in all three samples at zero", () => {
+    const results = [0, 1, 2].map((repeat) => result({ repeat, traceability: { a1: reject }, asset: asset("failed") }));
+    expect(traceabilityMetrics([fab], results).fabricationFalseAccept.units).toEqual({ num: 0, den: 1, value: 0 });
+    expect(assetMetrics([fab], results).fabricationFalseAccept.units).toEqual({ num: 0, den: 1, value: 0 });
+  });
+
+  it("keeps the false-flag rates on the majority rule", () => {
+    // One of three samples flags a supported claim, or blocks a passing asset: not a flagged unit.
+    const results = [true, false, false].map((flagged, repeat) =>
+      result({ caseId: sup.id, repeat, traceability: { s1: flagged ? reject : accept }, asset: asset(flagged ? "failed" : "passed") }),
+    );
+    expect(traceabilityMetrics([sup], results).supportedFalseFlag.units).toEqual({ num: 0, den: 1, value: 0 });
+    expect(assetMetrics([sup], results).falseBlock.units).toEqual({ num: 0, den: 1, value: 0 });
+    // Two of three is a majority.
+    const two = [true, true, false].map((flagged, repeat) =>
+      result({ caseId: sup.id, repeat, traceability: { s1: flagged ? reject : accept }, asset: asset(flagged ? "failed" : "passed") }),
+    );
+    expect(traceabilityMetrics([sup], two).supportedFalseFlag.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(assetMetrics([sup], two).falseBlock.units).toEqual({ num: 1, den: 1, value: 1 });
+  });
+});
+
 describe("traceability and specificity", () => {
   const c = goldCase([A("a1", false, null), A("a2", false, null), A("a3", true, true), A("a4", true, true)]);
 
@@ -259,7 +308,7 @@ describe("asset level", () => {
       }),
     );
     const m = assetMetrics(real, results);
-    expect(m.fabricationFalseAccept.units).toEqual({ num: 0, den: 10, value: 0 });
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 0, den: 11, value: 0 });
     expect(m.specificityFalseAccept.units).toEqual({ num: 1, den: 1, value: 1 });
     expect(m.falseBlock.units.num).toBe(0);
   });
