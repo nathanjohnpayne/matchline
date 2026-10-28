@@ -3,11 +3,13 @@
  * (#488). Runs with no keys and constructs no client.
  *
  * Counts follow the suites exactly where they are deterministic
- * (isolated passes) and use conservative upper bounds where the model
- * decides (claims extracted in the whole-asset pass, items generated).
- * The worst case assumes every request uses all 3 attempts at its full
- * output cap; the expected case assumes 1 attempt at half the cap. The
- * per-request budget ledger is the hard stop either way.
+ * (isolated passes) and use heuristics where the model decides (claims
+ * extracted in the whole-asset pass, items generated, claims per
+ * generated item). Neither the generation schema nor the claim schema
+ * bounds those counts, so the "conservative estimate" (`worstCaseUsd`:
+ * every request at all 3 attempts and its full output cap) is NOT an
+ * upper bound on spend; the expected case assumes 1 attempt at half the
+ * cap. The per-request budget ledger (`budget.ts`) is the actual stop.
  */
 
 import { VALIDATION_STAGES, type ModelConfig, type Stage } from "../../../functions/src/llm/config.ts";
@@ -29,9 +31,9 @@ export const INPUT_MARGIN = 1.25;
 export const TOKENIZER_55_FACTOR = 1.35;
 /** Allowance for the longest retry reminder the modules append (they are not exported). */
 export const RETRY_REMINDER_ALLOWANCE_CHARS = 600;
-/** Upper bound on claims the whole-asset pass extracts per item: max(2·|A|, 8). */
+/** Heuristic (not a bound) for claims the whole-asset pass extracts per item: max(2·|A|, 8). */
 export const WHOLE_ASSET_CLAIMS_FLOOR = 8;
-/** Upper bound on claims per generated item in downstream validation. */
+/** Heuristic (not a bound) for claims per generated item in downstream validation. */
 export const CLAIMS_PER_GENERATED_ITEM = 4;
 
 export interface PlannedRequest {
@@ -125,6 +127,16 @@ export function defaultSettings(stage: Stage, defaults: Readonly<Record<Stage, M
   };
 }
 
+/** Units a generated item could cite, largest evidence text first: the downstream traceability input estimate. */
+export const DOWNSTREAM_CITED_UNITS = 3;
+
+/** The `k` Units with the most evidence text (raw_text + normalized_summary). */
+export function largestUnits<U extends { raw_text: string; normalized_summary: string }>(units: readonly U[], k: number): U[] {
+  return [...units]
+    .sort((a, b) => b.raw_text.length + b.normalized_summary.length - (a.raw_text.length + a.normalized_summary.length))
+    .slice(0, k);
+}
+
 /** Plan one generation variant. Downstream validation always uses production defaults. */
 export function planGeneration(
   snaps: readonly LoadedSnapshot[],
@@ -146,7 +158,7 @@ export function planGeneration(
       inputEstTokens: inputEstimate("generation", gen, { units: s.units, requirements: s.requirements, role: s.role, matches: s.approved_matches }),
     });
     const items = s.item_upper_bound;
-    const units = unitInputs(s.units.slice(0, 3));
+    const units = unitInputs(largestUnits(s.units, DOWNSTREAM_CITED_UNITS));
     const counts: Record<string, number> = {
       claim_extraction: items,
       traceability: items * CLAIMS_PER_GENERATED_ITEM,
@@ -171,6 +183,7 @@ export function planGeneration(
 export interface Projection {
   readonly requests: number;
   readonly expectedUsd: number;
+  /** Conservative estimate (3 attempts × full cap at the heuristic counts); not a bound. */
   readonly worstCaseUsd: number;
   readonly rows: readonly (PlannedRequest & { readonly expectedUsd: number; readonly worstCaseUsd: number })[];
 }

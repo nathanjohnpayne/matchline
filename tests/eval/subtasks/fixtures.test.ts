@@ -7,7 +7,9 @@ import { liveApprovedMatchesOf } from "../../../functions/src/generation/pipelin
 
 import {
   DRAFT_REVIEW_STATUS,
+  FixtureError,
   FIXTURES_ROOT,
+  OWNER_TRACES_DIR,
   loadGenerationSnapshots,
   loadValidationCases,
   parseGenerationSnapshot,
@@ -219,6 +221,57 @@ describe("loader rejections (file and path named)", () => {
     expect(snapError("gs-sparse-sofia-openai", (s) => (s.requirements[0].raw_text = "Expert in Elm"))).toMatch(
       /requirements\.0\.raw_text: not a verbatim substring of jds\/openai-sse-fullstack-b2b-2026\.txt/,
     );
+  });
+});
+
+describe("referenced fixture files (shape-checked, file and path named)", () => {
+  const real = (p: string): string => readFileSync(join(FIXTURES_ROOT, p), "utf8");
+  const replacing = (path: string, text: string) => (p: string): string => (p === path ? text : real(p));
+  const ownerPath = `${OWNER_TRACES_DIR}/adversarial-fabrication.json`;
+  const caseFile = "validation-cases/vc-14-adversarial-fabrication.json";
+
+  function errorOf(run: () => unknown): Error {
+    try {
+      run();
+    } catch (err) {
+      return err as Error;
+    }
+    throw new Error("expected a rejection");
+  }
+
+  it("names the referencing file and field when the owner file is not JSON", () => {
+    const e = errorOf(() => parseValidationCase(rawCase("vc-14-adversarial-fabrication"), caseFile, replacing(ownerPath, "{ not json")));
+    expect(e).toBeInstanceOf(FixtureError);
+    expect(e.message).toMatch(new RegExp(`^${caseFile}: source\\.derived_from: referenced fixture ${ownerPath} is not valid JSON`));
+  });
+
+  it("rejects an owner file missing validator_must_flag as a FixtureError, not a TypeError", () => {
+    const owner = JSON.parse(real(ownerPath)) as Record<string, unknown>;
+    delete owner.validator_must_flag;
+    const e = errorOf(() => parseValidationCase(rawCase("vc-14-adversarial-fabrication"), caseFile, replacing(ownerPath, JSON.stringify(owner))));
+    expect(e).toBeInstanceOf(FixtureError);
+    expect(e.message).toContain(`${caseFile}: source.derived_from: ${ownerPath}: validator_must_flag:`);
+  });
+
+  it("rejects an expected-matches file missing expected_requirements, and expected traces of the wrong shape", () => {
+    const id = "gs-rich-nathan-google";
+    const s = rawSnap(id) as { source: { expected_matches: string; expected_traces: string } };
+    const file = `generation-snapshots/${id}.json`;
+    const em = JSON.parse(real(s.source.expected_matches)) as Record<string, unknown>;
+    delete em.expected_requirements;
+    const e1 = errorOf(() => parseGenerationSnapshot(s, file, replacing(s.source.expected_matches, JSON.stringify(em))));
+    expect(e1).toBeInstanceOf(FixtureError);
+    expect(e1.message).toContain(`source.expected_matches: ${s.source.expected_matches}: expected_requirements:`);
+    const e2 = errorOf(() => parseGenerationSnapshot(s, file, replacing(s.source.expected_traces, JSON.stringify({ expected_traces: [{}] }))));
+    expect(e2).toBeInstanceOf(FixtureError);
+    expect(e2.message).toContain(`source.expected_traces: ${s.source.expected_traces}: expected_traces.0.source_unit_ids:`);
+  });
+
+  it("parses the expected traces at load, so the run never re-reads them after the paid calls", () => {
+    const rich = snaps.items.find((i) => i.snapshot.id === "gs-rich-nathan-google")!;
+    const sparse = snaps.items.find((i) => i.snapshot.id === "gs-sparse-sofia-openai")!;
+    expect(rich.expectedTraces!.length).toBeGreaterThan(0);
+    expect(sparse.expectedTraces).toBeNull();
   });
 });
 

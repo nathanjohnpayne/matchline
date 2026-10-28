@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { ValidationCase } from "./fixtures.ts";
-import { loadGenerationSnapshots } from "./fixtures.ts";
+import { loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
 import type { CallRecord, InvocationRecord } from "./instrument.ts";
 import {
   assertionCovered,
   assetMetrics,
+  clusteredRate,
   costMetrics,
   coverageMetrics,
   expectedTraceRecall,
+  liveFlowSpans,
+  matchCoverage,
   normalize,
   relationshipCovered,
   requirementCoverage,
@@ -19,6 +22,7 @@ import {
   unmatchedMustHaves,
   variantValidity,
   wallTime,
+  wilson,
 } from "./metrics.ts";
 import type { CaseResult } from "./suites.ts";
 
@@ -42,7 +46,7 @@ const ok = <T>(value: T) => ({ ok: true as const, value });
 const err = { ok: false as const, error: "boom" };
 
 function result(partial: Partial<CaseResult>): CaseResult {
-  return { caseId: "vc-01-x", category: "c", repeat: 0, claims: null, traceability: {}, specificity: {}, asset: null, ...partial };
+  return { caseId: "vc-01-x", category: "c", repeat: 0, claims: null, traceability: {}, specificity: {}, asset: null, assetSpanMs: null, ...partial };
 }
 
 function call(p: Partial<CallRecord>): CallRecord {
@@ -84,6 +88,67 @@ describe("normalize and coverage", () => {
     expect(m.hardFailedCases).toEqual(["vc-01-x"]);
     expect(m.relationshipCoverage).toBeNull();
   });
+
+  it("leaves a budget-stopped extraction out of the denominator", () => {
+    const c = goldCase([A("alpha", true, true), A("beta", true, true)]);
+    const m = coverageMetrics([c], [result({ claims: { ...err, stopped: "budget_reached" } })]);
+    expect(m.assertionCoverage).toEqual({ num: 0, den: 0, value: null });
+    expect(m.hardFailedCases).toEqual([]);
+    expect(m.stoppedCases).toEqual(["vc-01-x"]);
+  });
+
+  it("credits each claim to at most one assertion, and counts fused claims", () => {
+    const as = [{ required_terms: ["alpha"] }, { required_terms: ["beta"] }, { required_terms: ["gamma"] }];
+    expect(matchCoverage(as, ["alpha beta gamma"])).toEqual({ covered: 1, fused: 1 });
+    expect(matchCoverage(as, ["alpha", "beta", "gamma"])).toEqual({ covered: 3, fused: 0 });
+    // An augmenting path: the fused claim moves to the assertion no other claim covers.
+    expect(matchCoverage(as, ["alpha beta", "alpha", "gamma"])).toEqual({ covered: 3, fused: 1 });
+    expect(matchCoverage(as, [])).toEqual({ covered: 0, fused: 0 });
+  });
+
+  it("scores an extractor that repeats the whole item as 1/|A| per case, not full coverage", () => {
+    const real = loadValidationCases().items.map((i) => i.case);
+    const results = real.map((c) =>
+      result({ caseId: c.id, claims: ok([{ id: "x", bullet_id: c.item.id, text: c.item.text }]) }),
+    );
+    const m = coverageMetrics(real, results);
+    const total = real.reduce((s, c) => s + c.gold.assertions.length, 0);
+    expect(m.assertionCoverage).toEqual({ num: real.length, den: total, value: real.length / total });
+    for (const p of m.perCase) expect(p.covered, p.caseId).toBe(1);
+    expect(m.fusedClaims).toBe(real.filter((c) => c.gold.assertions.length >= 2).length);
+  });
+});
+
+describe("clustered rates", () => {
+  it("computes a Wilson 95% interval", () => {
+    expect(wilson(0, 0)).toBeNull();
+    const w = wilson(0, 4)!;
+    expect(w.low).toBe(0);
+    expect(w.high).toBeCloseTo(0.4899, 3);
+    const h = wilson(5, 10)!;
+    expect(h.low).toBeCloseTo(0.2366, 3);
+    expect(h.high).toBeCloseTo(0.7634, 3);
+  });
+
+  it("counts a unit once by majority, a tie against the model", () => {
+    const r = clusteredRate([
+      { unit: "a", hit: true }, { unit: "a", hit: false }, // tie -> hit
+      { unit: "b", hit: false }, { unit: "b", hit: false }, { unit: "b", hit: true }, // 1/3 -> no hit
+    ]);
+    expect(r.units).toEqual({ num: 1, den: 2, value: 0.5 });
+    expect(r.samples).toEqual({ num: 2, den: 5, value: 0.4 });
+  });
+
+  it("does not shrink the interval when samples=3 repeats samples=1's verdicts", () => {
+    const c = goldCase([A("a1", false, null), A("a2", false, null), A("a3", false, null), A("a4", false, null)]);
+    const verdicts = { a1: ok({ supports: false, rationale: "" }), a2: ok({ supports: false, rationale: "" }), a3: ok({ supports: true, supporting_unit_id: "u1", rationale: "" }), a4: ok({ supports: false, rationale: "" }) };
+    const one = traceabilityMetrics([c], [result({ traceability: verdicts })]).fabricationFalseAccept;
+    const three = traceabilityMetrics([c], [0, 1, 2].map((repeat) => result({ repeat, traceability: verdicts }))).fabricationFalseAccept;
+    expect(three.units).toEqual(one.units);
+    expect(three.interval).toEqual(one.interval);
+    expect(one.units).toEqual({ num: 1, den: 4, value: 0.25 });
+    expect(three.samples).toEqual({ num: 3, den: 12, value: 0.25 });
+  });
 });
 
 describe("traceability and specificity", () => {
@@ -99,16 +164,24 @@ describe("traceability and specificity", () => {
       },
     });
     const m = traceabilityMetrics([c], [r]);
-    expect(m.fabricationFalseAccept).toEqual({ num: 1, den: 2, value: 0.5 });
-    expect(m.supportedFalseFlag).toEqual({ num: 1, den: 2, value: 0.5 });
-    expect(m.wrongSupportingUnit).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 1, den: 2, value: 0.5 });
+    expect(m.supportedFalseFlag.units).toEqual({ num: 1, den: 2, value: 0.5 });
+    expect(m.wrongSupportingUnit.units).toEqual({ num: 1, den: 1, value: 1 });
   });
 
   it("lists a hard-failed fabrication as unverified, outside the denominator", () => {
     const r = result({ traceability: { a1: err, a2: ok({ supports: false, rationale: "" }) } });
     const m = traceabilityMetrics([c], [r]);
     expect(m.unverifiedFabrications).toEqual(["vc-01-x:a1"]);
-    expect(m.fabricationFalseAccept).toEqual({ num: 0, den: 1, value: 0 });
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 0, den: 1, value: 0 });
+  });
+
+  it("leaves a budget-stopped check out: neither counted nor unverified", () => {
+    const r = result({ traceability: { a1: { ...err, stopped: "budget_reached" }, a2: ok({ supports: false, rationale: "" }) } });
+    const m = traceabilityMetrics([c], [r]);
+    expect(m.unverifiedFabrications).toEqual([]);
+    expect(m.hardFailed).toBe(0);
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 0, den: 1, value: 0 });
   });
 
   it("computes specificity false flag and miss", () => {
@@ -121,24 +194,45 @@ describe("traceability and specificity", () => {
       },
     });
     const m = specificityMetrics([s], [r]);
-    expect(m.falseFlag).toEqual({ num: 1, den: 1, value: 1 });
-    expect(m.miss).toEqual({ num: 1, den: 2, value: 0.5 });
+    expect(m.falseFlag.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.miss.units).toEqual({ num: 1, den: 2, value: 0.5 });
   });
 });
 
 describe("asset level", () => {
-  it("computes false accept and false block, and never counts an errored case", () => {
+  it("computes false accept and false block, and never counts an errored or stopped case", () => {
     const failed = { ...goldCase([A("a", false, null)], "failed"), id: "f" } as ValidationCase;
+    const vague = { ...goldCase([A("a", true, false)], "failed"), id: "v" } as ValidationCase;
     const passed = { ...goldCase([A("a", true, true)], "passed"), id: "p" } as ValidationCase;
     const broken = { ...goldCase([A("a", true, true)], "passed"), id: "e" } as ValidationCase;
-    const m = assetMetrics([failed, passed, broken], [
+    const stopped = { ...goldCase([A("a", false, null)], "failed"), id: "s" } as ValidationCase;
+    const m = assetMetrics([failed, vague, passed, broken, stopped], [
       result({ caseId: "f", asset: ok({ status: "passed", flagCounts: {} }) }),
+      result({ caseId: "v", asset: ok({ status: "failed", flagCounts: {} }) }),
       result({ caseId: "p", asset: ok({ status: "failed", flagCounts: {} }) }),
       result({ caseId: "e", asset: err }),
+      result({ caseId: "s", asset: { ...err, stopped: "budget_reached" } }),
     ]);
-    expect(m.fabricationFalseAccept).toEqual({ num: 1, den: 1, value: 1 });
-    expect(m.falseBlock).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.specificityFalseAccept.units).toEqual({ num: 0, den: 1, value: 0 });
+    expect(m.falseBlock.units).toEqual({ num: 1, den: 1, value: 1 });
     expect(m.errored).toEqual(["e"]);
+    expect(m.stopped).toEqual(["s"]);
+  });
+
+  it("reports vc-10 passing as a specificity false accept, never a fabrication false accept", () => {
+    const real = loadValidationCases().items.map((i) => i.case);
+    const results = real.map((c) =>
+      result({
+        caseId: c.id,
+        // A validator that catches every fabrication but misses vc-10's vagueness.
+        asset: ok({ status: c.id.startsWith("vc-10-") ? "passed" : c.gold.expected_asset_status, flagCounts: {} }),
+      }),
+    );
+    const m = assetMetrics(real, results);
+    expect(m.fabricationFalseAccept.units).toEqual({ num: 0, den: 10, value: 0 });
+    expect(m.specificityFalseAccept.units).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.falseBlock.units.num).toBe(0);
   });
 });
 
@@ -154,6 +248,33 @@ describe("schema validity, retries and errors", () => {
     expect(m.errorRate).toBeCloseTo(1 / 3);
     expect(m.attemptOutcomes).toEqual({ tool_use: 2, schema_error: 1, no_tool_use: 1 });
     expect(m.hardFailKinds).toEqual({ schema_error: 2 });
+  });
+
+  it("keeps a no-call invocation out of every rate, so the buckets still sum to 1", () => {
+    const m = schemaValidity([inv({ attempts: 0 }), inv({ attempts: 2 })], []);
+    expect(m.invocations).toBe(1);
+    expect(m.deterministic).toBe(1);
+    expect(m.retryRate).toBe(1);
+    expect(m.firstAttemptPass.num + m.passAfterRetry.num + m.hardFail.num).toBe(m.invocations);
+  });
+
+  it("counts cancelled and budget-stopped invocations apart from hard failures", () => {
+    const m = schemaValidity(
+      [
+        inv({ attempts: 1, ok: false, failureKinds: ["no_tool_use"] }),
+        inv({ attempts: 1, ok: false, failureKinds: ["cancelled"] }),
+        inv({ attempts: 1, ok: false, failureKinds: ["cancelled"] }),
+        inv({ attempts: 0, ok: false, failureKinds: ["budget_reached"] }),
+        inv({ attempts: 1 }),
+      ],
+      [],
+    );
+    expect(m.invocations).toBe(2);
+    expect(m.hardFail).toEqual({ num: 1, den: 2, value: 0.5 });
+    expect(m.errorRate).toBeCloseTo(0.5);
+    expect(m.cancelled).toBe(2);
+    expect(m.budgetStopped).toBe(1);
+    expect(m.hardFailKinds).toEqual({ no_tool_use: 1 });
   });
 });
 
@@ -179,14 +300,23 @@ describe("generation", () => {
 describe("cost", () => {
   it("divides all modeled cost, failed flows included, by completed flows", () => {
     const calls = [call({ modeledUsd: 0.1 }), call({ modeledUsd: 0.2 }), call({ modeledUsd: 0.3 })];
-    expect(costMetrics(calls, 2).costPerCompletedFlow).toBeCloseTo(0.3);
-    expect(costMetrics(calls, 0).costPerCompletedFlow).toBeNull();
+    expect(costMetrics(calls, 2).perFlow.usd).toBeCloseTo(0.3);
+    expect(costMetrics(calls, 0).perFlow.usd).toBeNull();
+  });
+
+  it("counts only the flow passes per validated asset and reports the isolated pass apart", () => {
+    const calls = [call({ pass: "isolated", modeledUsd: 0.4 }), call({ pass: "whole_asset", modeledUsd: 0.2 }), call({ pass: "whole_asset", modeledUsd: 0.1 })];
+    const m = costMetrics(calls, 1, { label: "validated asset (whole-asset pass)", passes: ["whole_asset"] });
+    expect(m.perFlow).toMatchObject({ label: "validated asset (whole-asset pass)", flows: 1 });
+    expect(m.perFlow.usd).toBeCloseTo(0.3);
+    expect(m.modeledByPass.isolated).toBeCloseTo(0.4);
+    expect(m.modeledUsd).toBeCloseTo(0.7);
   });
 
   it("reports an unpriced call as null, never 0", () => {
     const m = costMetrics([call({ modeledUsd: 0.1 }), call({ modeledUsd: null })], 1);
     expect(m.modeledUsd).toBeNull();
-    expect(m.costPerCompletedFlow).toBeNull();
+    expect(m.perFlow.usd).toBeNull();
   });
 
   it("separates actual (live) from modeled (live + replayed) and shows local replay and provider cache", () => {
@@ -208,9 +338,30 @@ describe("wall time", () => {
   it("measures a span, not a sum of concurrent calls", () => {
     expect(span([{ startedAtMs: 0, endedAtMs: 100 }, { startedAtMs: 50, endedAtMs: 150 }])).toBe(150);
     const w = wallTime([call({ startedAtMs: 0, endedAtMs: 100 }), call({ startedAtMs: 50, endedAtMs: 150 })], ["traceability"], [400, 600]);
-    expect(w.stageSpan.traceability).toMatchObject({ n: 1, p50Ms: 150 });
-    expect(w.perCallLatency.traceability).toMatchObject({ n: 2, p50Ms: 100 });
+    expect(w.stageSpan["isolated/traceability"]).toMatchObject({ n: 1, p50Ms: 150 });
+    expect(w.perCallLatency["isolated/traceability"]).toMatchObject({ n: 2, p50Ms: 100 });
     expect(w.e2eSpan).toMatchObject({ n: 2, p50Ms: 400, p95Ms: 600 });
+  });
+
+  it("keeps the isolated and whole-asset passes apart", () => {
+    const w = wallTime(
+      [call({ pass: "isolated", startedAtMs: 0, endedAtMs: 100 }), call({ pass: "whole_asset", startedAtMs: 0, endedAtMs: 900 })],
+      ["traceability"],
+      null,
+    );
+    expect(w.stageSpan["isolated/traceability"]).toMatchObject({ n: 1, p50Ms: 100 });
+    expect(w.stageSpan["whole_asset/traceability"]).toMatchObject({ n: 1, p50Ms: 900 });
+    expect(w.stageSpan.traceability).toBeUndefined();
+  });
+
+  it("leaves a flow with a replayed call out of the end-to-end spans", () => {
+    const flows = [
+      { variant: "v", caseId: "a", repeat: 0, spanMs: 100 },
+      { variant: "v", caseId: "b", repeat: 0, spanMs: 200 },
+      { variant: "v", caseId: "c", repeat: 0, spanMs: null },
+    ];
+    const calls = [call({ caseId: "b", pass: "whole_asset", replayed: true }), call({ caseId: "a", pass: "isolated", replayed: true })];
+    expect(liveFlowSpans(flows, calls, ["whole_asset"])).toEqual([100]);
   });
 });
 
@@ -221,5 +372,20 @@ describe("variant validity", () => {
     expect(variantValidity({ ...base, calls: [call({ servedModelStatus: "cli-asserted", tokenFidelity: "estimated" })] })).toBe("valid");
     expect(variantValidity({ ...base, calls: [], settingsMismatches: 1 })).toBe("invalid: settings-mismatch");
     expect(variantValidity({ ...base, calls: [], budgetReached: true })).toBe("incomplete: budget_reached");
+  });
+
+  it("is invalid when any answer could not be classified", () => {
+    const base = { settingsMismatches: 0, preflightFailed: false, budgetReached: false };
+    expect(variantValidity({ ...base, calls: [call({ outcome: "unclassified" })] })).toBe("invalid: unclassified");
+  });
+
+  it("is incomplete when every invocation failed and no request got a response", () => {
+    const base = { settingsMismatches: 0, preflightFailed: false, budgetReached: false };
+    const failedInv = inv({ ok: false, attempts: 3, failureKinds: ["transport_error", "transport_error", "transport_error"] });
+    const noResponse = call({ outcome: "transport_error", usage: null, servedModel: null, servedModelStatus: "missing" });
+    expect(variantValidity({ ...base, calls: [noResponse], invocations: [failedInv] })).toBe("incomplete: all_failed");
+    // A schema failure got a response: that is a measurement, not a run that measured nothing.
+    expect(variantValidity({ ...base, calls: [call({ outcome: "schema_error" })], invocations: [failedInv] })).toBe("valid");
+    expect(variantValidity({ ...base, calls: [noResponse], invocations: [failedInv, inv({})] })).toBe("valid");
   });
 });

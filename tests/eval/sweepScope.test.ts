@@ -6,8 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { VALIDATION_STAGES } from "../../functions/src/llm/config.ts";
 
+import { PROMPT_CONFIG } from "../../functions/src/prompts/config.ts";
+
+import { CLASSIFIERS } from "./subtasks/instrument.ts";
 import { SWEEPABLE_PROMPT_KEYS, SWEEPABLE_STAGES } from "./sweep.ts";
-import { assertGenerationVariantSupported, SWEEP_SCOPES, SWEEP_SUITES } from "./sweepScope.ts";
+import { assertGenerationVariantSupported, defaultPromptVersion, SWEEP_SCOPES, SWEEP_SUITES } from "./sweepScope.ts";
 
 const PROMPTS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "functions", "src", "prompts");
 
@@ -22,6 +25,21 @@ describe("SWEEP_SCOPES", () => {
   it("scopes the validation suite to the three subtasks", () => {
     expect(SWEEP_SCOPES.validation.stages).toEqual([...VALIDATION_STAGES]);
     expect(SWEEP_SCOPES.generation.stages).toEqual(["generation"]);
+  });
+
+  it("wires the validation and generation schemas at the PROMPT_CONFIG default, each with an outcome classifier", () => {
+    // When a default moves (e.g. traceability or generation/resume to v2), this fails until
+    // instrument.ts has a classifier for the new version, instead of every answer going
+    // `unclassified` and the schema and invented-id metrics silently reading zero.
+    const config = PROMPT_CONFIG as unknown as Record<string, Record<string, string>>;
+    for (const suite of ["validation", "generation"] as const) {
+      for (const key of SWEEP_SCOPES[suite].promptKeys) {
+        const [stage, name] = key.split("/") as [string, string];
+        expect(SWEEP_SCOPES[suite].wiredSchemaVersion[key], key).toBe(config[stage]![name]);
+        expect(defaultPromptVersion(key), key).toBe(config[stage]![name]);
+        expect(CLASSIFIERS[`${key}@${config[stage]![name]}`], `${key}@${config[stage]![name]}`).toBeDefined();
+      }
+    }
   });
 
   it("never lists the reserved rationale stage", () => {

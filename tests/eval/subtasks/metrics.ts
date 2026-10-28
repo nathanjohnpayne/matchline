@@ -6,7 +6,20 @@
  * Coverage is lexical: a gold assertion is covered when ONE extracted
  * claim contains every term group of the assertion (each group satisfied
  * by any of its alternatives, after `normalize`). Paraphrases outside the
- * listed alternatives count as misses, so coverage is conservative.
+ * listed alternatives count as misses, so coverage is conservative. Each
+ * claim is credited to at most one assertion (a maximum one-to-one
+ * matching), so an extractor that stops splitting and repeats the whole
+ * item scores 1/|A|, not |A|/|A|.
+ *
+ * Rates over labeled verdicts are clustered by what was labeled: with
+ * `--samples N` the N verdicts on one assertion (or one case) are one
+ * observation (their majority, a tie counting against the model), so
+ * repeats never shrink an interval. Each such rate reports the distinct
+ * count, the pooled sample count and a Wilson 95% interval.
+ *
+ * Invocations that were stopped (budget) or cancelled (the validation
+ * call pool aborted them after another call failed) are left out of
+ * every denominator and counted on their own.
  */
 
 import type { Stage } from "../../../functions/src/llm/config.ts";
@@ -14,7 +27,7 @@ import type { GeneratedAssetContent } from "../../../functions/src/types/crm.ts"
 import { stats, type LatencyStats } from "../../../scripts/latency/report.ts";
 
 import { groupCovered, normalize, type GenerationSnapshot, type GoldAssertion, type GoldRelationship, type TermGroup, type ValidationCase } from "./fixtures.ts";
-import type { CallOutcome, CallRecord, InvocationRecord } from "./instrument.ts";
+import { stoppedKind, type CallOutcome, type CallPass, type CallRecord, type InvocationRecord } from "./instrument.ts";
 import type { CaseResult, FlowResult } from "./suites.ts";
 
 export { normalize, groupCovered };
@@ -30,14 +43,90 @@ export function ratio(num: number, den: number): Ratio {
   return { num, den, value: den === 0 ? null : num / den };
 }
 
+export interface Interval {
+  readonly low: number;
+  readonly high: number;
+}
+
+/** Wilson score interval for `num` of `den` (95% by default); null when `den` is 0. */
+export function wilson(num: number, den: number, z = 1.959964): Interval | null {
+  if (den === 0) return null;
+  const p = num / den;
+  const z2 = z * z;
+  const centre = (p + z2 / (2 * den)) / (1 + z2 / den);
+  const half = (z * Math.sqrt((p * (1 - p)) / den + z2 / (4 * den * den))) / (1 + z2 / den);
+  return { low: Math.max(0, centre - half), high: Math.min(1, centre + half) };
+}
+
+/**
+ * A rate over labeled units (an assertion, or a case), with repeats
+ * clustered: `units` counts each distinct unit once, by the majority of
+ * its samples (a tie counts as a hit, i.e. against the model); `samples`
+ * pools every verdict; `interval` is Wilson 95% over `units`.
+ */
+export interface ClusteredRate {
+  readonly units: Ratio;
+  readonly samples: Ratio;
+  readonly interval: Interval | null;
+}
+
+export function clusteredRate(observations: readonly { readonly unit: string; readonly hit: boolean }[]): ClusteredRate {
+  const byUnit = new Map<string, { hits: number; n: number }>();
+  for (const o of observations) {
+    const u = byUnit.get(o.unit) ?? { hits: 0, n: 0 };
+    u.n++;
+    if (o.hit) u.hits++;
+    byUnit.set(o.unit, u);
+  }
+  const unitHits = [...byUnit.values()].filter((u) => 2 * u.hits >= u.n).length;
+  return {
+    units: ratio(unitHits, byUnit.size),
+    samples: ratio(observations.filter((o) => o.hit).length, observations.length),
+    interval: wilson(unitHits, byUnit.size),
+  };
+}
+
 /** True when a single text satisfies every group. */
 export function coversAll(groups: readonly TermGroup[], text: string): boolean {
   return groups.every((g) => groupCovered(g, text));
 }
 
-/** Some single claim covers every required term of the assertion. */
+/** Some single claim covers every required term of the assertion (ignoring other assertions). */
 export function assertionCovered(a: Pick<GoldAssertion, "required_terms">, claims: readonly string[]): boolean {
   return claims.some((c) => coversAll(a.required_terms, c));
+}
+
+/**
+ * Coverage with each claim credited to at most one assertion: the size
+ * of a maximum bipartite matching between assertions and claims, where
+ * an edge means the claim covers every term of the assertion (Kuhn's
+ * augmenting paths; |A| and |claims| are small). `fused` counts claims
+ * that cover the terms of two or more assertions: a sign the extractor
+ * did not decompose.
+ */
+export function matchCoverage(
+  assertions: readonly Pick<GoldAssertion, "required_terms">[],
+  claims: readonly string[],
+): { readonly covered: number; readonly fused: number } {
+  const edges = assertions.map((a) => claims.flatMap((c, j) => (coversAll(a.required_terms, c) ? [j] : [])));
+  const owner = new Array<number>(claims.length).fill(-1);
+  const augment = (a: number, seen: boolean[]): boolean => {
+    for (const j of edges[a]!) {
+      if (seen[j]) continue;
+      seen[j] = true;
+      if (owner[j] === -1 || augment(owner[j]!, seen)) {
+        owner[j] = a;
+        return true;
+      }
+    }
+    return false;
+  };
+  let covered = 0;
+  for (let a = 0; a < assertions.length; a++) {
+    if (augment(a, new Array<boolean>(claims.length).fill(false))) covered++;
+  }
+  const fused = claims.filter((_, j) => edges.filter((e) => e.includes(j)).length >= 2).length;
+  return { covered, fused };
 }
 
 export function relationshipCovered(r: Pick<GoldRelationship, "co_terms">, claims: readonly string[]): boolean {
@@ -47,10 +136,15 @@ export function relationshipCovered(r: Pick<GoldRelationship, "co_terms">, claim
 // -- Claim extraction ------------------------------------------------------------
 
 export interface CoverageMetrics {
+  /** One-to-one: each claim credited to at most one assertion. */
   readonly assertionCoverage: Ratio;
   readonly relationshipCoverage: Ratio | null;
+  /** Claims that cover the terms of two or more assertions (summed over cases and samples). */
+  readonly fusedClaims: number;
   readonly hardFailedCases: readonly string[];
-  readonly perCase: readonly { caseId: string; covered: number; total: number; relCovered: number; relTotal: number }[];
+  /** Extractions the budget stopped: left out of the denominators. */
+  readonly stoppedCases: readonly string[];
+  readonly perCase: readonly { caseId: string; covered: number; total: number; relCovered: number; relTotal: number; fused: number }[];
 }
 
 export function coverageMetrics(
@@ -62,25 +156,34 @@ export function coverageMetrics(
   let den = 0;
   let rNum = 0;
   let rDen = 0;
+  let fusedTotal = 0;
   const hardFailed: string[] = [];
+  const stopped: string[] = [];
   const perCase: CoverageMetrics["perCase"][number][] = [];
   for (const r of results) {
     const c = byId.get(r.caseId);
     if (c === undefined || r.skipped !== undefined) continue;
+    if (r.claims?.ok === false && r.claims.stopped !== undefined) {
+      stopped.push(r.caseId);
+      continue;
+    }
     const claims = r.claims?.ok === true ? r.claims.value.map((cl) => cl.text) : [];
     if (r.claims?.ok === false) hardFailed.push(r.caseId);
-    const covered = c.gold.assertions.filter((a) => assertionCovered(a, claims)).length;
+    const { covered, fused } = matchCoverage(c.gold.assertions, claims);
     const relCovered = c.gold.relationships.filter((rel) => relationshipCovered(rel, claims)).length;
     num += covered;
     den += c.gold.assertions.length;
     rNum += relCovered;
     rDen += c.gold.relationships.length;
-    perCase.push({ caseId: r.caseId, covered, total: c.gold.assertions.length, relCovered, relTotal: c.gold.relationships.length });
+    fusedTotal += fused;
+    perCase.push({ caseId: r.caseId, covered, total: c.gold.assertions.length, relCovered, relTotal: c.gold.relationships.length, fused });
   }
   return {
     assertionCoverage: ratio(num, den),
     relationshipCoverage: rDen > 0 ? ratio(rNum, rDen) : null,
+    fusedClaims: fusedTotal,
     hardFailedCases: hardFailed,
+    stoppedCases: stopped,
     perCase,
   };
 }
@@ -88,7 +191,16 @@ export function coverageMetrics(
 // -- Schema validity, retries, errors ----------------------------------------------
 
 export interface SchemaValidity {
+  /** Invocations that made at least one model call and were not stopped or cancelled: the denominator below. */
   readonly invocations: number;
+  /** Finished without a model call (e.g. traceability with no candidate Units). */
+  readonly deterministic: number;
+  /** Failed before sending any request, for a reason other than a stop (e.g. a refused setting). */
+  readonly failedBeforeRequest: number;
+  /** Cancelled by the validation call pool after another call failed. */
+  readonly cancelled: number;
+  /** Stopped by the budget. */
+  readonly budgetStopped: number;
   readonly firstAttemptPass: Ratio;
   readonly passAfterRetry: Ratio;
   readonly hardFail: Ratio;
@@ -108,13 +220,23 @@ export function schemaValidity(
   invocations: readonly InvocationRecord[],
   calls: readonly CallRecord[],
 ): SchemaValidity {
-  const n = invocations.length;
-  const ok1 = invocations.filter((i) => i.ok && i.attempts === 1).length;
-  const okN = invocations.filter((i) => i.ok && i.attempts > 1).length;
-  const bad = invocations.filter((i) => !i.ok);
-  const attempts = invocations.reduce((s, i) => s + i.attempts, 0);
+  const cancelled = invocations.filter((i) => stoppedKind(i) === "cancelled").length;
+  const budgetStopped = invocations.filter((i) => stoppedKind(i) === "budget_reached").length;
+  const live = invocations.filter((i) => stoppedKind(i) === null);
+  const deterministic = live.filter((i) => i.attempts === 0 && i.ok).length;
+  const failedBeforeRequest = live.filter((i) => i.attempts === 0 && !i.ok).length;
+  const counted = live.filter((i) => i.attempts > 0);
+  const n = counted.length;
+  const ok1 = counted.filter((i) => i.ok && i.attempts === 1).length;
+  const okN = counted.filter((i) => i.ok && i.attempts > 1).length;
+  const bad = counted.filter((i) => !i.ok);
+  const attempts = counted.reduce((s, i) => s + i.attempts, 0);
   return {
     invocations: n,
+    deterministic,
+    failedBeforeRequest,
+    cancelled,
+    budgetStopped,
     firstAttemptPass: ratio(ok1, n),
     passAfterRetry: ratio(okN, n),
     hardFail: ratio(bad.length, n),
@@ -144,9 +266,9 @@ export function schemaByStage(
 // -- Traceability and specificity ----------------------------------------------------
 
 export interface TraceabilityMetrics {
-  readonly fabricationFalseAccept: Ratio;
-  readonly supportedFalseFlag: Ratio;
-  readonly wrongSupportingUnit: Ratio;
+  readonly fabricationFalseAccept: ClusteredRate;
+  readonly supportedFalseFlag: ClusteredRate;
+  readonly wrongSupportingUnit: ClusteredRate;
   /** Unsupported assertions whose check hard-failed: never counted as caught. */
   readonly unverifiedFabrications: readonly string[];
   readonly hardFailed: number;
@@ -157,44 +279,49 @@ export function traceabilityMetrics(
   results: readonly CaseResult[],
 ): TraceabilityMetrics {
   const byId = new Map(cases.map((c) => [c.id, c]));
-  let fa = 0, faDen = 0, ff = 0, ffDen = 0, wu = 0, wuDen = 0, hardFailed = 0;
-  const unverified: string[] = [];
+  const fa: Obs[] = [], ff: Obs[] = [], wu: Obs[] = [];
+  let hardFailed = 0;
+  const unverified = new Set<string>();
   for (const r of results) {
     const c = byId.get(r.caseId);
     if (c === undefined || r.skipped !== undefined) continue;
     for (const a of c.gold.assertions) {
       const v = r.traceability[a.id];
       if (v === undefined) continue;
+      const unit = `${c.id}:${a.id}`;
       if (!v.ok) {
+        if (v.stopped !== undefined) continue;
         hardFailed++;
-        if (!a.supported) unverified.push(`${c.id}:${a.id}`);
+        if (!a.supported) unverified.add(unit);
         continue;
       }
       if (!a.supported) {
-        faDen++;
-        if (v.value.supports) fa++;
+        fa.push({ unit, hit: v.value.supports });
       } else {
-        ffDen++;
-        if (!v.value.supports) ff++;
-        else {
-          wuDen++;
-          if (v.value.supporting_unit_id === undefined || !a.supporting_unit_ids.includes(v.value.supporting_unit_id)) wu++;
+        ff.push({ unit, hit: !v.value.supports });
+        if (v.value.supports) {
+          wu.push({
+            unit,
+            hit: v.value.supporting_unit_id === undefined || !a.supporting_unit_ids.includes(v.value.supporting_unit_id),
+          });
         }
       }
     }
   }
   return {
-    fabricationFalseAccept: ratio(fa, faDen),
-    supportedFalseFlag: ratio(ff, ffDen),
-    wrongSupportingUnit: ratio(wu, wuDen),
-    unverifiedFabrications: unverified,
+    fabricationFalseAccept: clusteredRate(fa),
+    supportedFalseFlag: clusteredRate(ff),
+    wrongSupportingUnit: clusteredRate(wu),
+    unverifiedFabrications: [...unverified],
     hardFailed,
   };
 }
 
+type Obs = { readonly unit: string; readonly hit: boolean };
+
 export interface SpecificityMetrics {
-  readonly falseFlag: Ratio;
-  readonly miss: Ratio;
+  readonly falseFlag: ClusteredRate;
+  readonly miss: ClusteredRate;
   readonly hardFailed: number;
 }
 
@@ -203,7 +330,8 @@ export function specificityMetrics(
   results: readonly CaseResult[],
 ): SpecificityMetrics {
   const byId = new Map(cases.map((c) => [c.id, c]));
-  let ff = 0, ffDen = 0, miss = 0, missDen = 0, hardFailed = 0;
+  const ff: Obs[] = [], miss: Obs[] = [];
+  let hardFailed = 0;
   for (const r of results) {
     const c = byId.get(r.caseId);
     if (c === undefined || r.skipped !== undefined) continue;
@@ -212,48 +340,68 @@ export function specificityMetrics(
       const v = r.specificity[a.id];
       if (v === undefined) continue;
       if (!v.ok) {
-        hardFailed++;
+        if (v.stopped === undefined) hardFailed++;
         continue;
       }
-      if (a.specific) {
-        ffDen++;
-        if (!v.value.specific) ff++;
-      } else {
-        missDen++;
-        if (v.value.specific) miss++;
-      }
+      const unit = `${c.id}:${a.id}`;
+      if (a.specific) ff.push({ unit, hit: !v.value.specific });
+      else miss.push({ unit, hit: v.value.specific });
     }
   }
-  return { falseFlag: ratio(ff, ffDen), miss: ratio(miss, missDen), hardFailed };
+  return { falseFlag: clusteredRate(ff), miss: clusteredRate(miss), hardFailed };
 }
 
+/**
+ * Whole-asset rates, split by WHY the gold expects the asset to fail, so
+ * a specificity regression is never reported as a fabrication accepted:
+ *   - `fabricationFalseAccept`: cases with an unsupported assertion that
+ *     the asset passed (the zero-fabrication contract);
+ *   - `specificityFalseAccept`: cases expected to fail only on
+ *     specificity (every assertion supported, some not specific) that
+ *     the asset passed;
+ *   - `falseBlock`: cases expected to pass that the asset failed.
+ */
 export interface AssetMetrics {
-  readonly fabricationFalseAccept: Ratio;
-  readonly falseBlock: Ratio;
+  readonly fabricationFalseAccept: ClusteredRate;
+  readonly specificityFalseAccept: ClusteredRate;
+  readonly falseBlock: ClusteredRate;
   /** A thrown `validateAsset`: neither passed nor failed. */
   readonly errored: readonly string[];
+  /** Stopped by the budget: left out of every denominator. */
+  readonly stopped: readonly string[];
 }
 
 export function assetMetrics(cases: readonly ValidationCase[], results: readonly CaseResult[]): AssetMetrics {
   const byId = new Map(cases.map((c) => [c.id, c]));
-  let fa = 0, faDen = 0, fb = 0, fbDen = 0;
+  const fab: Obs[] = [], spec: Obs[] = [], fb: Obs[] = [];
   const errored: string[] = [];
+  const stopped: string[] = [];
   for (const r of results) {
     const c = byId.get(r.caseId);
     if (c === undefined || r.asset === null) continue;
     if (!r.asset.ok) {
-      errored.push(r.caseId);
+      (r.asset.stopped !== undefined ? stopped : errored).push(r.caseId);
       continue;
     }
-    if (c.gold.expected_asset_status === "failed") {
-      faDen++;
-      if (r.asset.value.status === "passed") fa++;
+    const passed = r.asset.value.status === "passed";
+    const fabricated = c.gold.assertions.some((a) => !a.supported);
+    if (fabricated) {
+      fab.push({ unit: c.id, hit: passed });
+    } else if (c.gold.expected_asset_status === "failed") {
+      // The loader's status rule: with every assertion supported, only a
+      // not-specific assertion makes the asset fail.
+      spec.push({ unit: c.id, hit: passed });
     } else {
-      fbDen++;
-      if (r.asset.value.status === "failed") fb++;
+      fb.push({ unit: c.id, hit: !passed });
     }
   }
-  return { fabricationFalseAccept: ratio(fa, faDen), falseBlock: ratio(fb, fbDen), errored };
+  return {
+    fabricationFalseAccept: clusteredRate(fab),
+    specificityFalseAccept: clusteredRate(spec),
+    falseBlock: clusteredRate(fb),
+    errored,
+    stopped,
+  };
 }
 
 // -- Generation -------------------------------------------------------------------
@@ -356,16 +504,25 @@ export function generationMetrics(
 
 // -- Cost ---------------------------------------------------------------------------
 
+export interface PerFlowCost {
+  /** What one flow is: "completed flow" (generation) or "validated asset (whole-asset pass)" (validation). */
+  readonly label: string;
+  /** Modeled cost of the flow passes' calls (failed flows included) / completed flows; null when none completed or unpriced. */
+  readonly usd: number | null;
+  readonly flows: number;
+}
+
 export interface CostMetrics {
   /** Live and replayed calls; null ("unpriced") if any call could not be priced. */
   readonly modeledUsd: number | null;
+  /** Modeled cost by pass, so an evaluation-only pass (isolated) is never folded into a flow cost. */
+  readonly modeledByPass: Readonly<Partial<Record<CallPass, number | null>>>;
   /** Live calls only; 0 for a CLI source (unmetered), then marked estimated. */
   readonly actualUsd: number;
   readonly actualIsEstimated: boolean;
   readonly providerCache: { readonly read: number; readonly write: number };
   readonly localReplay: { readonly calls: number; readonly modeledUsd: number | null };
-  /** modeled cost of every flow (failed included) / completed flows; null when none completed. */
-  readonly costPerCompletedFlow: number | null;
+  readonly perFlow: PerFlowCost;
 }
 
 function sumOrNull(values: readonly (number | null)[]): number | null {
@@ -377,8 +534,24 @@ function sumOrNull(values: readonly (number | null)[]): number | null {
   return total;
 }
 
-export function costMetrics(calls: readonly CallRecord[], completedFlows: number): CostMetrics {
-  const modeled = sumOrNull(calls.filter((c) => c.usage !== null).map((c) => c.modeledUsd));
+/**
+ * `perFlow.passes` names the passes that make up one flow; calls of other
+ * passes count in the totals but not in the per-flow figure. Generation:
+ * every pass (generation + downstream). Validation: the whole-asset pass
+ * only, because the isolated pass is an evaluation artifact production
+ * never runs.
+ */
+export function costMetrics(
+  calls: readonly CallRecord[],
+  completedFlows: number,
+  perFlow: { readonly label: string; readonly passes?: readonly CallPass[] } = { label: "completed flow" },
+): CostMetrics {
+  const priced = (cs: readonly CallRecord[]): number | null => sumOrNull(cs.filter((c) => c.usage !== null).map((c) => c.modeledUsd));
+  const modeled = priced(calls);
+  const flowCalls = perFlow.passes === undefined ? calls : calls.filter((c) => perFlow.passes!.includes(c.pass));
+  const flowModeled = priced(flowCalls);
+  const modeledByPass: Partial<Record<CallPass, number | null>> = {};
+  for (const pass of new Set(calls.map((c) => c.pass))) modeledByPass[pass] = priced(calls.filter((c) => c.pass === pass));
   const live = calls.filter((c) => !c.replayed && c.usage !== null);
   const estimated = calls.some((c) => c.tokenFidelity === "estimated");
   const replayed = calls.filter((c) => c.replayed);
@@ -391,7 +564,12 @@ export function costMetrics(calls: readonly CallRecord[], completedFlows: number
       write: calls.reduce((s, c) => s + (c.usage?.cacheCreationInputTokens ?? 0), 0),
     },
     localReplay: { calls: replayed.length, modeledUsd: sumOrNull(replayed.map((c) => c.modeledUsd)) },
-    costPerCompletedFlow: modeled === null || completedFlows === 0 ? null : modeled / completedFlows,
+    modeledByPass,
+    perFlow: {
+      label: perFlow.label,
+      usd: flowModeled === null || completedFlows === 0 ? null : flowModeled / completedFlows,
+      flows: completedFlows,
+    },
   };
 }
 
@@ -404,8 +582,10 @@ export function span(calls: readonly Pick<CallRecord, "startedAtMs" | "endedAtMs
 }
 
 export interface WallTime {
+  /** Keyed `<pass>/<stage>`: the isolated pass (one gold assertion per call) and the whole-asset pass are different workloads. */
   readonly stageSpan: Readonly<Record<string, LatencyStats>>;
   readonly e2eSpan: LatencyStats | null;
+  /** Keyed `<pass>/<stage>`. */
   readonly perCallLatency: Readonly<Record<string, LatencyStats>>;
 }
 
@@ -418,15 +598,36 @@ export function wallTime(
   const perCall: Record<string, LatencyStats> = {};
   for (const s of stages) {
     const mine = calls.filter((c) => c.stage === s && !c.replayed);
-    const groups = new Map<string, CallRecord[]>();
-    for (const c of mine) {
-      const k = `${c.variant}/${c.caseId}/${c.repeat}/${c.pass}`;
-      groups.set(k, [...(groups.get(k) ?? []), c]);
+    for (const pass of [...new Set(mine.map((c) => c.pass))].sort()) {
+      const inPass = mine.filter((c) => c.pass === pass);
+      const groups = new Map<string, CallRecord[]>();
+      for (const c of inPass) {
+        const k = `${c.variant}/${c.caseId}/${c.repeat}`;
+        groups.set(k, [...(groups.get(k) ?? []), c]);
+      }
+      const key = `${pass}/${s}`;
+      stageSpan[key] = stats([...groups.values()].map((g) => span(g)).filter((v): v is number => v !== null));
+      perCall[key] = stats(inPass.map((c) => c.endedAtMs - c.startedAtMs));
     }
-    stageSpan[s] = stats([...groups.values()].map((g) => span(g)!).filter((v) => v !== null));
-    perCall[s] = stats(mine.map((c) => c.endedAtMs - c.startedAtMs));
   }
   return { stageSpan, e2eSpan: e2eSpans === null ? null : stats(e2eSpans), perCallLatency: perCall };
+}
+
+/**
+ * End-to-end spans of the flows that ran live: a flow with any replayed
+ * call in `passes` is left out, as replayed calls are for per-call stats.
+ */
+export function liveFlowSpans(
+  flows: readonly { readonly variant: string; readonly caseId: string; readonly repeat: number; readonly spanMs: number | null }[],
+  calls: readonly CallRecord[],
+  passes: readonly CallPass[],
+): number[] {
+  const replayed = new Set(
+    calls.filter((c) => c.replayed && passes.includes(c.pass)).map((c) => `${c.variant}/${c.caseId}/${c.repeat}`),
+  );
+  return flows
+    .filter((f) => f.spanMs !== null && !replayed.has(`${f.variant}/${f.caseId}/${f.repeat}`))
+    .map((f) => f.spanMs!);
 }
 
 // -- Variant validity ------------------------------------------------------------------
@@ -435,11 +636,22 @@ export type Validity =
   | "valid"
   | "invalid: served-model"
   | "invalid: settings-mismatch"
+  | "invalid: unclassified"
   | "failed-preflight"
-  | "incomplete: budget_reached";
+  | "incomplete: budget_reached"
+  | "incomplete: all_failed";
 
+/**
+ * `invalid: unclassified`: some answer could not be classified (no
+ * outcome schema for the module's prompt version), so the schema and
+ * invented-id metrics would silently read as clean.
+ * `incomplete: all_failed`: every invocation failed and no request got a
+ * response (a bad key, an outage, an offline replay miss): the run
+ * measured nothing.
+ */
 export function variantValidity(args: {
   readonly calls: readonly CallRecord[];
+  readonly invocations?: readonly InvocationRecord[];
   readonly settingsMismatches: number;
   readonly preflightFailed: boolean;
   readonly budgetReached: boolean;
@@ -449,7 +661,10 @@ export function variantValidity(args: {
     return "invalid: served-model";
   }
   if (args.settingsMismatches > 0) return "invalid: settings-mismatch";
+  if (args.calls.some((c) => c.outcome === "unclassified")) return "invalid: unclassified";
   if (args.budgetReached) return "incomplete: budget_reached";
+  const invs = args.invocations ?? [];
+  if (invs.length > 0 && invs.every((i) => !i.ok) && args.calls.every((c) => c.usage === null)) return "incomplete: all_failed";
   return "valid";
 }
 

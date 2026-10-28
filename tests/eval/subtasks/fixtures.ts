@@ -282,6 +282,15 @@ function parseWith<T>(schema: z.ZodType<T>, raw: unknown, file: string): T {
   return parsed.data;
 }
 
+/** `JSON.parse`, with a parse error reported as a FixtureError naming the file. */
+export function parseJsonText(text: string, relPath: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (err) {
+    throw new FixtureError(`${relPath}: not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function readJson(read: FixtureReader, relPath: string, file: string, path: string): unknown {
   let text: string;
   try {
@@ -289,13 +298,55 @@ function readJson(read: FixtureReader, relPath: string, file: string, path: stri
   } catch {
     fail(file, [{ path, message: `referenced fixture ${relPath} does not exist` }]);
   }
-  return JSON.parse(text) as unknown;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (err) {
+    fail(file, [{ path, message: `referenced fixture ${relPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}` }]);
+  }
 }
 
+/**
+ * Read a referenced fixture and check its shape: every error names the
+ * referencing file, the field that references it, and the JSON path
+ * inside the referenced file.
+ */
+function readJsonAs<T>(schema: z.ZodType<T>, read: FixtureReader, relPath: string, file: string, path: string): T {
+  const parsed = schema.safeParse(readJson(read, relPath, file, path));
+  if (!parsed.success) {
+    fail(
+      file,
+      parsed.error.issues.map((i) => ({
+        path,
+        message: `${relPath}: ${i.path.map(String).join(".") || "(root)"}: ${i.message}`,
+      })),
+    );
+  }
+  return parsed.data;
+}
+
+// Shapes of the files a fixture references. Only the fields the loader
+// reads are checked; other fields are allowed.
+const ExpectedUnitsFileSchema = z.object({ expected_units: z.array(z.object({ id: z.string().min(1) })).optional() });
+
+export const OwnerAdversarialSchema = z.object({
+  adversarial_fabricated_claim: z.string().min(1),
+  validator_must_flag: z.object({
+    untraceable_claims: z.array(z.string()),
+    expected_validation_status: z.enum(["passed", "failed"]),
+  }),
+});
+
+export const ExpectedMatchesFileSchema = z.object({
+  expected_requirements: z.array(z.object({ id: z.string().min(1) })),
+  expected_top_matches: z.array(z.string()),
+});
+
+export const ExpectedTracesFileSchema = z.object({
+  expected_traces: z.array(z.object({ source_unit_ids: z.array(z.string().min(1)) })),
+});
+
 function expectedUnitIds(read: FixtureReader, resumeId: string, file: string): Set<string> {
-  const raw = readJson(read, `expected-units/${resumeId}.json`, file, "source.resume_fixture_id") as {
-    expected_units?: { id: string }[];
-  };
+  const raw = readJsonAs(ExpectedUnitsFileSchema, read, `expected-units/${resumeId}.json`, file, "source.resume_fixture_id");
   return new Set((raw.expected_units ?? []).map((u) => u.id));
 }
 
@@ -332,14 +383,6 @@ function checkUnique(ids: readonly string[], path: string, issues: Issue[]): voi
     if (seen.has(id)) issues.push({ path: `${path}.${i}.id`, message: `duplicate id ${id}` });
     seen.add(id);
   });
-}
-
-interface OwnerAdversarial {
-  readonly adversarial_fabricated_claim: string;
-  readonly validator_must_flag: {
-    readonly untraceable_claims: readonly string[];
-    readonly expected_validation_status: "passed" | "failed";
-  };
 }
 
 /**
@@ -439,7 +482,7 @@ export function parseValidationCase(
     if (c.source.derived_from !== expected) {
       issues.push({ path: "source.derived_from", message: `must be ${expected}` });
     } else {
-      const owner = readJson(read, expected, file, "source.derived_from") as OwnerAdversarial;
+      const owner = readJsonAs(OwnerAdversarialSchema, read, expected, file, "source.derived_from");
       if (c.item.text !== owner.adversarial_fabricated_claim) {
         issues.push({ path: "item.text", message: "must equal the owner file's adversarial_fabricated_claim" });
       }
@@ -462,13 +505,13 @@ export function parseValidationCase(
   return c;
 }
 
-interface ExpectedMatchesFile {
-  readonly expected_requirements: readonly { id: string }[];
-  readonly expected_top_matches: readonly string[];
-}
-
-interface ExpectedTracesFile {
-  readonly expected_traces: readonly { source_unit_ids: readonly string[] }[];
+/** The expected traces a snapshot references, shape-checked. */
+export function readExpectedTraces(
+  read: FixtureReader,
+  relPath: string,
+  file: string,
+): readonly { readonly source_unit_ids: readonly string[] }[] {
+  return readJsonAs(ExpectedTracesFileSchema, read, relPath, file, "source.expected_traces").expected_traces;
 }
 
 export function parseGenerationSnapshot(
@@ -495,7 +538,7 @@ export function parseGenerationSnapshot(
   checkUnits(s.units, s.source.resume_fixture_id, resumeText, read, file, issues);
   checkUnique(s.requirements.map((r) => r.id), "requirements", issues);
 
-  const em = readJson(read, s.source.expected_matches, file, "source.expected_matches") as ExpectedMatchesFile;
+  const em = readJsonAs(ExpectedMatchesFileSchema, read, s.source.expected_matches, file, "source.expected_matches");
   const labeledReqs = new Set(em.expected_requirements.map((r) => r.id));
   const labeledMatches = new Set(em.expected_top_matches);
   const jdHay = whitespaceNormalize(jdText);
@@ -523,8 +566,8 @@ export function parseGenerationSnapshot(
   });
 
   if (s.source.expected_traces !== null) {
-    const tr = readJson(read, s.source.expected_traces, file, "source.expected_traces") as ExpectedTracesFile;
-    tr.expected_traces.forEach((t, i) => {
+    const tr = readExpectedTraces(read, s.source.expected_traces, file);
+    tr.forEach((t, i) => {
       for (const id of t.source_unit_ids) {
         if (!unitIds.has(id)) {
           issues.push({ path: "units", message: `expected trace ${i} cites ${id}, which is not a Unit in this snapshot` });
@@ -646,6 +689,8 @@ export interface LoadedSnapshot {
   readonly file: FixtureFileInfo;
   readonly resumeText: string;
   readonly jdText: string;
+  /** The referenced expected traces, parsed at load (before any request); null when the snapshot has none. */
+  readonly expectedTraces: readonly { readonly source_unit_ids: readonly string[] }[] | null;
 }
 
 export interface LoadedSuiteFixtures<T> {
@@ -673,7 +718,7 @@ function listJson(root: string, dir: string): string[] {
 }
 
 function infoFor(relPath: string, text: string): FixtureFileInfo {
-  const raw = JSON.parse(text) as Record<string, unknown>;
+  const raw = parseJsonText(text, relPath) as Record<string, unknown>;
   return {
     path: relPath,
     sha256: sha256Hex(text),
@@ -718,7 +763,7 @@ export function loadValidationCases(
   const read_: string[] = [];
   for (const rel of listJson(root, VALIDATION_CASES_DIR)) {
     const text = read(rel);
-    const c = parseValidationCase(JSON.parse(text) as unknown, rel, read);
+    const c = parseValidationCase(parseJsonText(text, rel), rel, read);
     if (opts.ids !== undefined && !opts.ids.includes(c.id)) continue;
     const resumeText = read(`resumes/${c.source.resume_fixture_id}.txt`);
     read_.push(rel);
@@ -746,7 +791,7 @@ export function loadGenerationSnapshots(
   const read_: string[] = [];
   for (const rel of listJson(root, GENERATION_SNAPSHOTS_DIR)) {
     const text = read(rel);
-    const s = parseGenerationSnapshot(JSON.parse(text) as unknown, rel, read);
+    const s = parseGenerationSnapshot(parseJsonText(text, rel), rel, read);
     if (opts.ids !== undefined && !opts.ids.includes(s.id)) continue;
     read_.push(rel, s.source.expected_matches);
     if (s.source.expected_traces !== null) read_.push(s.source.expected_traces);
@@ -756,6 +801,7 @@ export function loadGenerationSnapshots(
         file: infoFor(rel, text),
         resumeText: read(`resumes/${s.source.resume_fixture_id}.txt`),
         jdText: read(`jds/${s.source.jd_fixture_id}.txt`),
+        expectedTraces: s.source.expected_traces === null ? null : readExpectedTraces(read, s.source.expected_traces, rel),
       }),
     );
   }
@@ -799,7 +845,7 @@ export const RELABEL_PROCEDURE =
 
 export function loadLabelLock(root: string = FIXTURES_ROOT): LabelLock {
   const text = readFileSync(join(root, LABEL_LOCK_FILE), "utf8");
-  return parseWith(LabelLockSchema, JSON.parse(text) as unknown, LABEL_LOCK_FILE);
+  return parseWith(LabelLockSchema, parseJsonText(text, LABEL_LOCK_FILE), LABEL_LOCK_FILE);
 }
 
 /** Every file under the locked directories, with its label metadata. */

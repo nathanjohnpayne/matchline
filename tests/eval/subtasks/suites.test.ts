@@ -15,9 +15,10 @@ import { clearPromptVersionOverrides } from "../../../functions/src/prompts/load
 import { SWEEP_SCOPES } from "../sweepScope.ts";
 
 import { loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
+import { schemaValidity } from "./metrics.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
 import { runGenerationSuite, runValidationSuite } from "./suites.ts";
-import { defaultValidationAnswer, makeCtx, scriptedClient, toolMessage, type RequestBody } from "./testSupport.ts";
+import { defaultValidationAnswer, makeCtx, scriptedClient, textMessage, toolMessage, type RequestBody } from "./testSupport.ts";
 
 afterEach(() => {
   clearModelOverrides();
@@ -89,6 +90,44 @@ describe("runValidationSuite", () => {
     for (const c of ctx.calls) {
       expect(c.requestedModel, c.stage).toBe(c.stage === "specificity" ? "claude-haiku-4-5-20251001" : "claude-sonnet-4-6");
     }
+  });
+
+  it("records siblings the call pool cancelled as cancelled, not as hard failures", async () => {
+    // vc-03 whole-asset pass: four extracted claims; one claim's traceability check
+    // genuinely fails (no tool call, three times) while the other three are in flight.
+    const vc03 = loadValidationCases({ ids: ["vc-03-swapped-employer-project"] }).items;
+    const create = vi.fn((body: RequestBody, opts?: { signal?: AbortSignal }) => {
+      const tool = body.tools[0]!.name;
+      const user = body.messages[0]!.content;
+      if (tool === "record_claims") {
+        return Promise.resolve(
+          toolMessage("record_claims", { claims: ["FAILING claim one.", "Healthy claim two.", "Healthy claim three.", "Healthy claim four."].map((text) => ({ text })) }),
+        );
+      }
+      if (tool === "record_traceability" && user.includes("FAILING")) return Promise.resolve(textMessage("I cannot call tools."));
+      if (tool === "record_traceability" && user.includes("Healthy claim")) {
+        // Like the SDK: in flight until the signal aborts, then an abort error.
+        return new Promise((_, reject) => {
+          const abort = () => reject(Object.assign(new Error("Request was aborted."), { name: "AbortError" }));
+          if (opts?.signal?.aborted) abort();
+          opts?.signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+      return Promise.resolve(defaultValidationAnswer(body));
+    });
+    const ctx = makeCtx({ rawClient: { messages: { create } } as never });
+    // The isolated pass checks gold assertion text, so its traceability calls get the default answers.
+    const [result] = await runValidationSuite(vc03, "baseline", 0, ctx);
+    expect(result!.asset).toMatchObject({ ok: false });
+
+    const whole = ctx.invocations.filter((i) => i.pass === "whole_asset" && i.stage === "traceability");
+    expect(whole.map((i) => i.failureKinds).sort()).toEqual([["cancelled"], ["cancelled"], ["cancelled"], ["no_tool_use", "no_tool_use", "no_tool_use"]]);
+    const m = schemaValidity(whole, ctx.calls.filter((c) => c.pass === "whole_asset" && c.stage === "traceability"));
+    expect(m.invocations).toBe(1);
+    expect(m.hardFail).toEqual({ num: 1, den: 1, value: 1 });
+    expect(m.errorRate).toBe(1);
+    expect(m.cancelled).toBe(3);
+    expect(m.hardFailKinds).toEqual({ no_tool_use: 3 });
   });
 
   it("marks remaining cases skipped once the budget is reached and makes no further calls", async () => {

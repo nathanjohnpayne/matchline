@@ -17,14 +17,14 @@
  * its overrides (an unsupported effort refuses here) and the overrides
  * are proven removed; the plan and projection print (`--dry-run` stops
  * here, with no keys and no client); then keys, `--max-usd` and the
- * monthly caps are checked.
+ * monthly caps are checked. The projection is a conservative estimate,
+ * not a bound (its claim and item counts are heuristics); the budget
+ * ledger stops live spend per request.
  */
 
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { anthropicForCli } from "../../../functions/src/llm/anthropic.ts";
@@ -50,14 +50,13 @@ import {
   parseVariants,
   type SweepVariant,
 } from "../sweep.ts";
-import { SWEEP_SCOPES, type SweepScope } from "../sweepScope.ts";
+import { defaultPromptVersion, SWEEP_SCOPES, type SweepScope } from "../sweepScope.ts";
 import { claudeCliClient, type TokenSourceKind } from "../tokenSource.ts";
 
 import { BudgetLedger } from "./budget.ts";
 import {
   checkLabelLock,
   FixtureError,
-  FIXTURES_ROOT,
   loadGenerationSnapshots,
   loadLabelLock,
   loadValidationCases,
@@ -67,13 +66,14 @@ import {
   type LoadedSnapshot,
   type LoadedSuiteFixtures,
 } from "./fixtures.ts";
-import { CLASSIFIERS, type RunCtx, type SubtaskSuite } from "./instrument.ts";
+import { CLASSIFIERS, missingClassifiers, type RunCtx, type SubtaskSuite } from "./instrument.ts";
 import {
-  assertionCovered,
   assetMetrics,
   costMetrics,
   coverageMetrics,
   generationMetrics,
+  liveFlowSpans,
+  matchCoverage,
   schemaByStage,
   specificityMetrics,
   traceabilityMetrics,
@@ -219,12 +219,18 @@ function defaultGit(): { sha: string | null; dirty: boolean | null } {
 
 const BASELINE: SweepVariant = Object.freeze({ label: "baseline", models: {}, promptVersions: {} });
 
-/** sha256 of each tool schema the suite's modules enforce, by `promptKey@version`. */
+/**
+ * sha256 of each tool schema the suite's modules enforce, by
+ * `promptKey@version`, at the version the module imports (the
+ * `PROMPT_CONFIG` default). The generation suite also runs validation.
+ */
 function schemaHashes(suite: SubtaskSuite): Record<string, string> {
+  const keys = suite === "validation" ? SWEEP_SCOPES.validation.promptKeys : [...SWEEP_SCOPES.generation.promptKeys, ...SWEEP_SCOPES.validation.promptKeys];
   const out: Record<string, string> = {};
-  for (const [key, schema] of Object.entries(CLASSIFIERS)) {
-    if (suite === "validation" && key.startsWith("generation/")) continue;
-    out[key] = sha256Hex(canonicalJson(zodToToolSchema(schema as Parameters<typeof zodToToolSchema>[0])));
+  for (const k of keys) {
+    const key = `${k}@${defaultPromptVersion(k)}`;
+    const schema = CLASSIFIERS[key];
+    out[key] = schema === undefined ? "missing" : sha256Hex(canonicalJson(zodToToolSchema(schema as Parameters<typeof zodToToolSchema>[0])));
   }
   return out;
 }
@@ -243,12 +249,17 @@ function caseDetails(cases: readonly LoadedCase[], results: readonly CaseResult[
       return { caseId: r.caseId, category: r.category, repeat: r.repeat, covered: "skipped", traceability: "-", specificity: "-", asset: r.skipped };
     }
     const claims = r.claims?.ok === true ? r.claims.value.map((x) => x.text) : [];
-    const covered = c.gold.assertions.filter((a) => assertionCovered(a, claims)).length;
+    const { covered, fused } = matchCoverage(c.gold.assertions, claims);
     return {
       caseId: r.caseId,
       category: r.category,
       repeat: r.repeat,
-      covered: r.claims?.ok === false ? "extraction failed" : `${covered}/${c.gold.assertions.length}`,
+      covered:
+        r.claims?.ok === false
+          ? r.claims.stopped !== undefined
+            ? `extraction ${r.claims.stopped}`
+            : "extraction failed"
+          : `${covered}/${c.gold.assertions.length}${fused > 0 ? ` (${fused} fused)` : ""}`,
       traceability: c.gold.assertions
         .map((a) => `${a.id}:${verdictLabel(r.traceability[a.id] as never, "supports")}/${a.supported ? "yes" : "no"}`)
         .join(" "),
@@ -256,7 +267,14 @@ function caseDetails(cases: readonly LoadedCase[], results: readonly CaseResult[
         .filter((a) => a.specific !== null)
         .map((a) => `${a.id}:${verdictLabel(r.specificity[a.id] as never, "specific")}/${a.specific ? "yes" : "no"}`)
         .join(" ") || "-",
-      asset: r.asset === null ? "not run" : r.asset.ok ? `${r.asset.value.status} (expected ${c.gold.expected_asset_status})` : "errored",
+      asset:
+        r.asset === null
+          ? "not run"
+          : r.asset.ok
+            ? `${r.asset.value.status} (expected ${c.gold.expected_asset_status})`
+            : r.asset.stopped !== undefined
+              ? r.asset.stopped
+              : "errored",
     };
   });
 }
@@ -289,6 +307,12 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     assertModelsPriced(args.variants);
     assertPromptSchemasCompatible(args.variants, args.basePrompts, undefined, scope);
     assertVariantsCallable(args.variants, scope);
+    const unclassifiable = missingClassifiers(args.suite === "validation" ? scope.promptKeys : [...scope.promptKeys, ...SWEEP_SCOPES.validation.promptKeys]);
+    if (unclassifiable.length > 0) {
+      throw new Error(
+        `no outcome classifier for ${unclassifiable.join(", ")} (the version the module imports); add it to CLASSIFIERS in instrument.ts`,
+      );
+    }
     const opts = { ...(deps.fixturesRoot !== undefined && { root: deps.fixturesRoot }), ...(args.caseIds !== undefined && { ids: args.caseIds }) };
     fixtures = args.suite === "validation" ? loadValidationCases(opts) : loadGenerationSnapshots(opts);
     const problems = checkLabelLock(loadLabelLock(deps.fixturesRoot), lockedFiles(deps.fixturesRoot));
@@ -320,9 +344,14 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   }
   const plan = project(planRows);
   const metered = args.tokenSource === "api";
+  const haveKey = (deps.env.ANTHROPIC_API_KEY ?? "").trim().length > 0;
+  // A replay with no key runs on `offlineOnlyClient`: a miss throws and
+  // nothing can be spent, so it projects $0 against the monthly caps. A
+  // replay WITH a key can still go live on a miss and keeps the check.
+  const offlineReplay = metered && args.cacheMode === "replay" && !haveKey;
   const capChecks = checkCaps(
     { anthropicUsd: 0, openaiUsd: 0, firebaseUsd: 0 },
-    { anthropicUsd: metered ? plan.worstCaseUsd : 0, openaiUsd: 0, firebaseUsd: 0 },
+    { anthropicUsd: metered && !offlineReplay ? plan.worstCaseUsd : 0, openaiUsd: 0, firebaseUsd: 0 },
     DEFAULT_CAPS,
   );
 
@@ -356,6 +385,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
       maxUsd: args.maxUsd,
       projected: { expectedUsd: plan.expectedUsd, worstCaseUsd: plan.worstCaseUsd, requests: plan.requests },
       capChecks,
+      offlineReplay,
       spentUsd: ledger.spentUsd,
       budgetReached: runAbort.signal.aborted,
     },
@@ -390,17 +420,16 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   }
 
   // 4-6. Keys, bound, caps.
-  const haveKey = (deps.env.ANTHROPIC_API_KEY ?? "").trim().length > 0;
   if (metered && !haveKey && args.cacheMode !== "replay") {
     deps.stderr("eval:subtasks: set ANTHROPIC_API_KEY or use --dry-run");
     return 2;
   }
   if (metered && haveKey && args.maxUsd === null) {
-    deps.stderr(`eval:subtasks: a live api run needs --max-usd (worst case $${plan.worstCaseUsd.toFixed(2)}); post the projection on #495 first`);
+    deps.stderr(`eval:subtasks: a live api run needs --max-usd (conservative estimate $${plan.worstCaseUsd.toFixed(2)}); post the projection on #495 first`);
     return 2;
   }
   if (metered && haveKey && args.maxUsd !== null && plan.worstCaseUsd > args.maxUsd) {
-    deps.stderr(`eval:subtasks: worst-case projection $${plan.worstCaseUsd.toFixed(2)} exceeds --max-usd $${args.maxUsd.toFixed(2)}; refusing before any request`);
+    deps.stderr(`eval:subtasks: conservative estimate $${plan.worstCaseUsd.toFixed(2)} exceeds --max-usd $${args.maxUsd.toFixed(2)}; refusing before any request`);
     return 1;
   }
   if (shouldBlock(capChecks)) {
@@ -461,10 +490,10 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
       if (!list.includes(c.servedModel)) list.push(c.servedModel);
     }
     const budgetReached = caseResults.some((r) => r.skipped !== undefined) || flowResults.some((f) => f.skipped !== undefined) || runAbort.signal.aborted;
-    const validity = variantValidity({ calls, settingsMismatches: mismatches.length, preflightFailed, budgetReached });
+    const validity = variantValidity({ calls, invocations, settingsMismatches: mismatches.length, preflightFailed, budgetReached });
     let metrics: VariantRecord["metrics"];
-    let completedFlows: number;
-    let e2e: number[] | null = null;
+    let usage: VariantRecord["usage"];
+    let e2e: number[];
     if (args.suite === "validation") {
       const cases = (fixtures.items as readonly LoadedCase[]).map((c) => c.case);
       const isolated = { inv: invocations.filter((i) => i.pass === "isolated" || i.pass === "whole_asset"), calls };
@@ -477,16 +506,20 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
         asset: assetMetrics(cases, caseResults),
         perCase: caseDetails(fixtures.items as readonly LoadedCase[], caseResults),
       };
-      completedFlows = caseResults.filter((r) => r.asset?.ok === true).length;
+      // Per validated asset: the whole-asset pass is what production runs;
+      // the isolated pass is evaluation-only and reported on its own line.
+      usage = costMetrics(calls, caseResults.filter((r) => r.asset?.ok === true).length, {
+        label: "validated asset (whole-asset pass)",
+        passes: ["whole_asset"],
+      });
+      e2e = liveFlowSpans(
+        caseResults.map((r) => ({ variant: v.label, caseId: r.caseId, repeat: r.repeat, spanMs: r.assetSpanMs })),
+        calls,
+        ["whole_asset"],
+      );
     } else {
       const snaps = new Map(
-        (fixtures.items as readonly LoadedSnapshot[]).map((s) => [
-          s.snapshot.id,
-          {
-            snapshot: s.snapshot,
-            traces: s.snapshot.source.expected_traces === null ? null : traceList(s.snapshot.source.expected_traces, deps.fixturesRoot),
-          },
-        ]),
+        (fixtures.items as readonly LoadedSnapshot[]).map((s) => [s.snapshot.id, { snapshot: s.snapshot, traces: s.expectedTraces }]),
       );
       metrics = {
         kind: "generation",
@@ -494,8 +527,12 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
         schema: schemaByStage(invocations, calls, ["generation", ...VALIDATION_STAGES]),
         perSnapshot: flowResults.map((f) => ({ snapshotId: f.snapshotId, repeat: f.repeat, detail: snapshotDetail(f) })),
       };
-      completedFlows = flowResults.filter((f) => f.completed).length;
-      e2e = flowResults.filter((f) => f.spans !== null).map((f) => f.spans!.e2eMs);
+      usage = costMetrics(calls, flowResults.filter((f) => f.completed).length, { label: "completed flow" });
+      e2e = liveFlowSpans(
+        flowResults.map((f) => ({ variant: v.label, caseId: f.snapshotId, repeat: f.repeat, spanMs: f.spans?.e2eMs ?? null })),
+        calls,
+        ["generation", "downstream"],
+      );
     }
     variantRecords.push({
       ...emptyVariant(v.label),
@@ -503,7 +540,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
       servedModels,
       metrics,
       wallTime: wallTime(calls, args.suite === "validation" ? VALIDATION_STAGES : ["generation", ...VALIDATION_STAGES], e2e),
-      usage: costMetrics(calls, completedFlows),
+      usage,
       notes,
     });
   }
@@ -520,15 +557,6 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   }
   if (baselineInvalid || allInvalid) return 1;
   return 0;
-}
-
-function traceList(relPath: string, root: string | undefined): { source_unit_ids: readonly string[] }[] {
-  const text = readFixture(relPath, root);
-  return (JSON.parse(text) as { expected_traces: { source_unit_ids: string[] }[] }).expected_traces;
-}
-
-function readFixture(relPath: string, root: string | undefined): string {
-  return readFileSync(join(root ?? FIXTURES_ROOT, relPath), "utf8");
 }
 
 const isScriptEntry = process.argv[1] === fileURLToPath(import.meta.url);

@@ -39,10 +39,18 @@ import {
   type LoadedCase,
   type LoadedSnapshot,
 } from "./fixtures.ts";
-import { startInvocation, type CallPass, type RunCtx } from "./instrument.ts";
+import { startInvocation, stoppedKind, type CallPass, type RunCtx } from "./instrument.ts";
 import { assertValidationAtDefaults } from "./overrides.ts";
 
-export type Verdict<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
+/**
+ * A module's result, or its failure. `stopped` marks a failure that is
+ * not the module's own: the run's budget stopped it, or the validation
+ * call pool cancelled it after another call failed. Metrics leave
+ * stopped verdicts out of their denominators.
+ */
+export type Verdict<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: string; readonly stopped?: "budget_reached" | "cancelled" };
 
 export interface CaseResult {
   readonly caseId: string;
@@ -53,6 +61,8 @@ export interface CaseResult {
   readonly traceability: Readonly<Record<string, Verdict<TraceabilityResult>>>;
   readonly specificity: Readonly<Record<string, Verdict<SpecificityResult>>>;
   readonly asset: Verdict<{ readonly status: ValidationStatus; readonly flagCounts: Readonly<Record<string, number>> }> | null;
+  /** Wall time of the whole-asset `validateAsset` run (the validation suite's end-to-end span); null when it did not run. */
+  readonly assetSpanMs: number | null;
 }
 
 export interface FlowSpans {
@@ -128,8 +138,9 @@ async function invoke<T>(
     inv.finish(true);
     return { ok: true, value };
   } catch (err) {
-    inv.finish(false, err);
-    return { ok: false, error: describeError(err) };
+    const rec = inv.finish(false, err);
+    const stopped = stoppedKind(rec);
+    return { ok: false, error: describeError(err), ...(stopped !== null && { stopped }) };
   }
 }
 
@@ -166,8 +177,11 @@ async function validateInMemory(
     validation_status: "pending",
     created_at: FIXED_ISO,
   };
+  // `poolSignal` is the call pool's signal from the module's context: a
+  // failure caused by the pool aborting is recorded as `cancelled`.
   const wrap = <A extends unknown[], R>(
     stage: Stage,
+    poolSignal: (...args: A) => AbortSignal | undefined,
     call: (inv: { client: Anthropic; record: ReturnType<typeof startInvocation>["record"]; signal: AbortSignal }, ...args: A) => Promise<R>,
   ) =>
     async (...args: A): Promise<R> => {
@@ -177,7 +191,8 @@ async function validateInMemory(
         inv.finish(true);
         return value;
       } catch (err) {
-        inv.finish(false, err);
+        const signal = poolSignal(...args);
+        inv.finish(false, err, signal === undefined ? undefined : { poolSignal: signal });
         throw err;
       }
     };
@@ -185,17 +200,17 @@ async function validateInMemory(
     loadAsset: async () => ({ asset, content }),
     loadUnits: async (ids) => ids.map((id) => unitsById.get(id)).filter((u): u is ExperienceUnit => u !== undefined),
     persistFlags: async () => {},
-    extractClaims: wrap("claim_extraction", (inv, bullet: Parameters<typeof extractClaims>[0], c: Parameters<typeof extractClaims>[1]) =>
+    extractClaims: wrap("claim_extraction", (_b, c) => c.signal, (inv, bullet: Parameters<typeof extractClaims>[0], c: Parameters<typeof extractClaims>[1]) =>
       extractClaims(bullet, { ...c, signal: combine(c.signal, inv.signal) }, {
         client: inv.client,
         record: inv.record,
         generateId: (b, i) => `${b}::c${i}`,
       }),
     ),
-    checkTraceability: wrap("traceability", (inv, claim: Claim, cands: readonly ExperienceUnit[], c: Parameters<typeof checkTraceability>[2]) =>
+    checkTraceability: wrap("traceability", (_cl, _u, c) => c.signal, (inv, claim: Claim, cands: readonly ExperienceUnit[], c: Parameters<typeof checkTraceability>[2]) =>
       checkTraceability(claim, cands, { ...c, signal: combine(c.signal, inv.signal) }, { client: inv.client, record: inv.record }),
     ),
-    checkSpecificity: wrap("specificity", (inv, claim: Claim, c: Parameters<typeof checkSpecificity>[1]) =>
+    checkSpecificity: wrap("specificity", (_cl, c) => c.signal, (inv, claim: Claim, c: Parameters<typeof checkSpecificity>[1]) =>
       checkSpecificity(claim, { ...c, signal: combine(c.signal, inv.signal) }, { client: inv.client, record: inv.record }),
     ),
     generateId: ctx.nextId,
@@ -209,7 +224,11 @@ async function validateInMemory(
     );
     return { ok: true, value: { status: result.status, flagCounts: flagCounts(result.flags) } };
   } catch (err) {
-    return { ok: false, error: describeError(err) };
+    return {
+      ok: false,
+      error: describeError(err),
+      ...(ctx.runAbort.signal.aborted && { stopped: "budget_reached" as const }),
+    };
   }
 }
 
@@ -243,7 +262,7 @@ export async function runValidationSuite(
   for (const lc of cases) {
     const c = lc.case;
     if (ctx.runAbort.signal.aborted) {
-      results.push({ caseId: c.id, category: c.category, repeat, skipped: "budget_reached", claims: null, traceability: {}, specificity: {}, asset: null });
+      results.push({ caseId: c.id, category: c.category, repeat, skipped: "budget_reached", claims: null, traceability: {}, specificity: {}, asset: null, assetSpanMs: null });
       continue;
     }
     const meta = { variant, caseId: c.id, repeat };
@@ -288,9 +307,13 @@ export async function runValidationSuite(
       );
     const [claims, trace, spec] = await Promise.all([claimsP, Promise.all(traceP), Promise.all(specP)]);
 
-    const asset = ctx.runAbort.signal.aborted
-      ? null
-      : await validateInMemory(ctx, { ...meta, pass: "whole_asset" }, caseContent(lc), lc.units);
+    let asset: CaseResult["asset"] = null;
+    let assetSpanMs: number | null = null;
+    if (!ctx.runAbort.signal.aborted) {
+      const assetStart = ctx.clock();
+      asset = await validateInMemory(ctx, { ...meta, pass: "whole_asset" }, caseContent(lc), lc.units);
+      assetSpanMs = ctx.clock() - assetStart;
+    }
 
     results.push({
       caseId: c.id,
@@ -300,6 +323,7 @@ export async function runValidationSuite(
       traceability: Object.fromEntries(trace),
       specificity: Object.fromEntries(spec),
       asset,
+      assetSpanMs,
     });
   }
   return results;

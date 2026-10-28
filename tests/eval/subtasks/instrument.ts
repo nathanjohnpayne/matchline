@@ -21,17 +21,17 @@ import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/an
 
 import type { Stage } from "../../../functions/src/llm/config.ts";
 import { anthropicUsageFields, priceUsage, type UsageRecord } from "../../../functions/src/llm/cost.ts";
-import { resolvePromptVersion } from "../../../functions/src/prompts/loader.ts";
-import type { PromptName, PromptStage } from "../../../functions/src/prompts/config.ts";
 import { ResumeGenerationResponseV1Schema } from "../../../functions/src/prompts/generation/resume.v1.schema.ts";
 import { ClaimExtractionResponseV1Schema } from "../../../functions/src/prompts/validation/claimExtraction.v1.schema.ts";
 import { SpecificityResponseV1Schema } from "../../../functions/src/prompts/validation/specificity.v1.schema.ts";
 import { TraceabilityResponseV1Schema } from "../../../functions/src/prompts/validation/traceability.v1.schema.ts";
+import { CallPoolAborted } from "../../../functions/src/validation/callPool.ts";
 
 import { describeError } from "../runForFixture.ts";
+import { defaultPromptVersion } from "../sweepScope.ts";
 import { assertModelMatches, type TokenSourceKind } from "../tokenSource.ts";
 
-import { BudgetReachedError, type BudgetLedger } from "./budget.ts";
+import { BudgetReachedError, type BudgetLedger, type Reservation } from "./budget.ts";
 import { replayKey, type ReplayStore } from "./replay.ts";
 
 export type CallOutcome =
@@ -83,6 +83,21 @@ export interface CallRecord {
   readonly modeledUsd: number | null;
 }
 
+/**
+ * Failure kinds that say the invocation never got to finish, rather than
+ * that the model failed: `budget_reached` (the run stopped) and
+ * `cancelled` (the validation call pool aborted it after ANOTHER call
+ * failed). Metrics leave such invocations out of their denominators.
+ */
+export const STOPPED_KINDS: readonly string[] = Object.freeze(["budget_reached", "cancelled"]);
+
+/** The invocation stopped before it could finish (see `STOPPED_KINDS`). */
+export function stoppedKind(i: Pick<InvocationRecord, "ok" | "failureKinds">): "budget_reached" | "cancelled" | null {
+  if (i.ok || i.failureKinds.length !== 1) return null;
+  const k = i.failureKinds[0]!;
+  return k === "budget_reached" || k === "cancelled" ? k : null;
+}
+
 export interface InvocationRecord {
   readonly invocationId: string;
   readonly stage: Stage;
@@ -91,6 +106,7 @@ export interface InvocationRecord {
   readonly caseId: string;
   readonly repeat: number;
   readonly ok: boolean;
+  /** Requests sent (or replayed). A refused pre-request budget check is not an attempt. */
   readonly attempts: number;
   readonly failureKinds: readonly string[];
   readonly startedAtMs: number;
@@ -132,7 +148,13 @@ export interface Invocation {
   readonly record: (u: UsageRecord) => Promise<number>;
   readonly signal: AbortSignal;
   readonly usage: UsageRecord[];
-  finish(ok: boolean, err?: unknown): InvocationRecord;
+  /**
+   * Close the invocation. `poolSignal` is the validation call pool's
+   * signal, when the module ran inside `validateAsset`: a failure that
+   * comes from that pool aborting (another call failed first) is
+   * recorded as `cancelled`, not as this invocation's own failure.
+   */
+  finish(ok: boolean, err?: unknown, opts?: { readonly poolSignal?: AbortSignal }): InvocationRecord;
 }
 
 /** The prompt each stage loads, for outcome classification. */
@@ -147,7 +169,15 @@ interface Classifier {
   readonly safeParse: (input: unknown) => { success: boolean; data?: unknown };
 }
 
-/** Tool-input schemas by `promptKey@version`. An unknown version classifies as `unclassified`. */
+/**
+ * Tool-input schemas by `promptKey@version`. The key's version is the
+ * one whose schema the module imports (the `PROMPT_CONFIG` default; see
+ * `defaultPromptVersion`), never a prompt override: an override only
+ * runs once `assertPromptSchemasCompatible` has shown that it enforces
+ * the same schema. A missing entry classifies every attempt as
+ * `unclassified`, which makes the variant invalid; `sweepScope.test.ts`
+ * fails first when a default moves to a version with no entry here.
+ */
 export const CLASSIFIERS: Readonly<Record<string, Classifier>> = {
   "validation/claimExtraction@v1": ClaimExtractionResponseV1Schema,
   "validation/traceability@v1": TraceabilityResponseV1Schema,
@@ -155,11 +185,16 @@ export const CLASSIFIERS: Readonly<Record<string, Classifier>> = {
   "generation/resume@v1": ResumeGenerationResponseV1Schema,
 };
 
-function promptKeyAt(stage: Stage): string | null {
+/** `promptKey@version` of the schema the stage's module enforces. */
+export function classifierKeyFor(stage: Stage): string | null {
   const key = STAGE_PROMPT[stage];
   if (key === undefined) return null;
-  const [s, n] = key.split("/") as [PromptStage, string];
-  return `${key}@${resolvePromptVersion(s, n as PromptName<typeof s>)}`;
+  return `${key}@${defaultPromptVersion(key)}`;
+}
+
+/** Prompt keys whose enforced schema has no classifier (refused before a run). */
+export function missingClassifiers(promptKeys: readonly string[]): string[] {
+  return promptKeys.map((k) => `${k}@${defaultPromptVersion(k)}`).filter((k) => CLASSIFIERS[k] === undefined);
 }
 
 function citedIds(data: unknown): string[] {
@@ -235,8 +270,12 @@ interface WireBody {
   readonly tools?: unknown;
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "APIUserAbortError");
+}
+
 function isAbort(err: unknown, signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true || (err instanceof Error && err.name === "AbortError");
+  return signal?.aborted === true || isAbortError(err);
 }
 
 /**
@@ -299,12 +338,13 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     const stored = ctx.store.get(meta.stage, key);
     let message: Anthropic.Messages.Message;
     let replayedFrom: string | null = null;
+    let reservation: Reservation | null = null;
     if (stored !== null) {
       message = stored.message;
       replayedFrom = stored.producedByRunId;
     } else {
       try {
-        ctx.ledger.reserve(body);
+        reservation = ctx.ledger.reserve(body);
       } catch (err) {
         push(failed("budget_reached"));
         throw err;
@@ -316,6 +356,8 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
           { ...opts, signal: AbortSignal.any(signals) },
         );
       } catch (err) {
+        // No response, no spend: free this request's hold on the budget.
+        ctx.ledger.release(reservation);
         push(
           failed(
             err instanceof BudgetReachedError
@@ -332,7 +374,7 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     const ended = ctx.clock();
     const cost = modeledCost(body.model, message);
     if (replayedFrom === null) {
-      ctx.ledger.settle(cost ?? 0);
+      ctx.ledger.settle(reservation!, cost ?? 0);
       ctx.store.put(meta.stage, key, {
         message,
         producedByRunId: ctx.runId,
@@ -345,7 +387,7 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
       servedModelStatus: servedModelStatus(ctx.tokenSource, body.model, message.model),
       startedAtMs: started,
       endedAtMs: ended,
-      outcome: classifyMessage(message, promptKeyAt(meta.stage), meta.eligibleUnitIds),
+      outcome: classifyMessage(message, classifierKeyFor(meta.stage), meta.eligibleUnitIds),
       usage: usageOf(message),
       replayed: replayedFrom !== null,
       replayedFromRunId: replayedFrom,
@@ -363,8 +405,22 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     record,
     signal: runSignal,
     usage,
-    finish(ok: boolean, err?: unknown): InvocationRecord {
+    finish(ok: boolean, err?: unknown, opts?: { readonly poolSignal?: AbortSignal }): InvocationRecord {
       const failures = (err as { failures?: { kind?: unknown }[] } | undefined)?.failures;
+      const pool = opts?.poolSignal;
+      // Cancelled by the pool after another call failed: the error is an
+      // abort, the pool's skip, or the pool's reason (the OTHER call's
+      // error, rethrown by `throwIfAborted`), or this invocation's own
+      // last request ended aborted. The run-level budget stop is not a
+      // cancellation.
+      const cancelled =
+        !ok &&
+        !runSignal.aborted &&
+        pool?.aborted === true &&
+        (err instanceof CallPoolAborted ||
+          isAbortError(err) ||
+          err === pool.reason ||
+          myCalls[myCalls.length - 1]?.outcome === "aborted");
       const rec: InvocationRecord = {
         invocationId: id,
         stage: meta.stage,
@@ -373,14 +429,16 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
         caseId: meta.caseId,
         repeat: meta.repeat,
         ok,
-        attempts: myCalls.length,
+        attempts: myCalls.filter((c) => c.outcome !== "budget_reached").length,
         failureKinds: ok
           ? []
-          : Array.isArray(failures)
-            ? failures.map((f) => (typeof f.kind === "string" ? f.kind : "unknown"))
-            : err instanceof BudgetReachedError || runSignal.aborted
-              ? ["budget_reached"]
-              : ["thrown"],
+          : cancelled
+            ? ["cancelled"]
+            : Array.isArray(failures)
+              ? failures.map((f) => (typeof f.kind === "string" ? f.kind : "unknown"))
+              : err instanceof BudgetReachedError || runSignal.aborted
+                ? ["budget_reached"]
+                : ["thrown"],
         startedAtMs: startedAtMs,
         endedAtMs: ctx.clock(),
         ...(err !== undefined && { error: describeError(err) }),

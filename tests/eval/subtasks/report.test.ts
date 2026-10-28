@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { CallRecord } from "./instrument.ts";
-import { costMetrics, wallTime } from "./metrics.ts";
-import { CAVEAT, comparable, formatSubtaskReport, labelStatus, type RunRecord, type VariantRecord } from "./report.ts";
+import { clusteredRate, costMetrics, wallTime } from "./metrics.ts";
+import { CAVEAT, comparable, formatSubtaskReport, labelStatus, rate, type RunRecord, type VariantRecord } from "./report.ts";
 
 const resolved = {
   label: "baseline",
@@ -43,7 +43,7 @@ function record(p: Partial<RunRecord> = {}): RunRecord {
     },
     schemas: { "validation/traceability@v1": "5e3d".padEnd(64, "0") },
     variants: [variant(), variant({ label: "bad", validity: "invalid: served-model" })],
-    guards: { maxUsd: 5, projected: { expectedUsd: 1, worstCaseUsd: 2, requests: 10 }, capChecks: [], spentUsd: 0.5, budgetReached: false },
+    guards: { maxUsd: 5, projected: { expectedUsd: 1, worstCaseUsd: 2, requests: 10 }, capChecks: [], offlineReplay: false, spentUsd: 0.5, budgetReached: false },
     plan: null, invocations: [], calls: [call], caveat: CAVEAT, ...p,
   };
 }
@@ -79,6 +79,24 @@ describe("formatSubtaskReport", () => {
     expect(text).toContain(`caveat: ${CAVEAT}`);
   });
 
+  it("keys wall time by pass and stage", () => {
+    const live = { ...call, replayed: false, replayedFromRunId: null };
+    const out = formatSubtaskReport(record({ variants: [variant({ wallTime: wallTime([live], ["traceability"], [250]) })] }));
+    expect(out).toContain("isolated/traceability: span p50 100ms");
+    expect(out).toContain("end to end (validateAsset, whole-asset pass): p50 250ms");
+  });
+
+  it("labels the per-flow cost and reports the isolated pass on its own line", () => {
+    const whole = { ...call, pass: "whole_asset" as const, replayed: false, modeledUsd: 0.01 };
+    const v = variant({ usage: costMetrics([call, whole], 1, { label: "validated asset (whole-asset pass)", passes: ["whole_asset"] }) });
+    const out = formatSubtaskReport(record({ variants: [v] }));
+    expect(out).toContain("cost per validated asset (whole-asset pass) $0.0100 (n=1)");
+    expect(out).toContain("isolated pass (evaluation only, not a production cost) modeled $0.0020");
+    expect(out).not.toContain("cost per completed flow");
+    const none = formatSubtaskReport(record({ variants: [variant({ usage: costMetrics([call], 0) })] }));
+    expect(none).toContain("cost per completed flow n/a (none completed) (n=0)");
+  });
+
   it("drops the DRAFT banner only when every file is owner-reviewed", () => {
     const owner = record({
       labels: { ...record().labels, status: "owner-reviewed", files: record().labels.files.map((f) => ({ ...f, review_status: "owner-reviewed" })) },
@@ -90,6 +108,16 @@ describe("formatSubtaskReport", () => {
   it("round-trips the record through JSON", () => {
     const r = record();
     expect(JSON.parse(JSON.stringify(r))).toEqual(r);
+  });
+});
+
+describe("rate", () => {
+  it("prints distinct units, a Wilson interval, and pooled samples only when repeats exist", () => {
+    const once = clusteredRate([{ unit: "a", hit: false }, { unit: "b", hit: false }, { unit: "c", hit: false }, { unit: "d", hit: false }]);
+    expect(rate(once, "assertions")).toMatch(/^0\.0% \(0\/4 assertions, 95% CI 0\.0%–49\.0%\)$/);
+    const thrice = clusteredRate(["a", "b", "c", "d"].flatMap((unit) => [0, 1, 2].map(() => ({ unit, hit: false }))));
+    expect(rate(thrice, "assertions")).toBe(`${rate(once, "assertions").slice(0, -1)}; 0/12 samples)`);
+    expect(rate(clusteredRate([]), "cases")).toBe("— (0/0 cases)");
   });
 });
 

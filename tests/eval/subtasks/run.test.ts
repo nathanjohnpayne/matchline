@@ -21,7 +21,23 @@ afterEach(() => {
   clearModelOverrides();
   clearEffortOverrides();
   clearPromptVersionOverrides();
+  vi.useRealTimers();
 });
+
+/**
+ * Run `p` with the modules' transport backoff on fake timers: failing
+ * calls retry after real-time sleeps, which would make a test that
+ * exercises them slow. Only timers are faked; `Date` is real.
+ */
+async function withFastBackoff<T>(start: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let done = false;
+  const p = start().finally(() => {
+    done = true;
+  });
+  while (!done) await vi.advanceTimersByTimeAsync(60_000);
+  return p;
+}
 
 function deps(env: Record<string, string> = {}, extra: Partial<SubtaskDeps> = {}) {
   const out: string[] = [];
@@ -78,7 +94,8 @@ describe("eval:subtasks CLI", () => {
     expect(text).toContain("variant spec-haiku");
     expect(text).toContain("planned requests");
     expect(text).toMatch(/expected \$\d/);
-    expect(text).toMatch(/worst case \$\d/);
+    expect(text).toMatch(/conservative estimate \$\d/);
+    expect(text).toContain("not a bound");
     expect(factory).not.toHaveBeenCalled();
   });
 
@@ -101,6 +118,56 @@ describe("eval:subtasks CLI", () => {
     expect(await main(["--suite", "validation", "--max-usd", "0.01"], d)).toBe(1);
     expect(err.join("\n")).toMatch(/exceeds --max-usd/);
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("does not hold an offline replay (no key) to the monthly caps: it cannot spend", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "subtasks-"));
+    try {
+      const path = join(dir, "report.json");
+      const { d, err, factory } = deps({}, { replayDir: join(dir, "replay"), writeFile: (p, data) => writeFileSync(p, data) });
+      // The generation suite's conservative estimate is over the $25 cap, so a metered projection would refuse.
+      const code = await withFastBackoff(() => main(["--suite", "generation", "--replay", "--report-json", path], d));
+      expect(err.join("\n")).not.toMatch(/monthly cap/);
+      expect(factory).not.toHaveBeenCalled();
+      const rec = JSON.parse(readFileSync(path, "utf8"));
+      expect(rec.guards.offlineReplay).toBe(true);
+      expect(rec.guards.capChecks.find((c: { provider: string }) => c.provider === "anthropic").projectedUsd).toBe(0);
+      expect(rec.plan.worstCaseUsd).toBeGreaterThan(25);
+      // Every replay missed, so nothing was measured: the run is incomplete, not a success.
+      expect(rec.variants[0].validity).toBe("incomplete: all_failed");
+      expect(code).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the cap check for a replay that has a key (a miss can go live)", async () => {
+    const { d, err, factory } = deps({ ANTHROPIC_API_KEY: "sk-test" });
+    expect(await main(["--suite", "generation", "--replay", "--max-usd", "100"], d)).toBe(1);
+    expect(err.join("\n")).toMatch(/monthly cap/);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("exits 1 when every call fails and nothing was measured", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "subtasks-"));
+    try {
+      const path = join(dir, "report.json");
+      const failing = scriptedClient(() => new Error("401 invalid x-api-key"));
+      const { d } = deps({ ANTHROPIC_API_KEY: "sk-revoked" }, {
+        clientFactory: () => failing.client,
+        replayDir: join(dir, "replay"),
+        writeFile: (p, data) => writeFileSync(p, data),
+      });
+      const code = await withFastBackoff(() =>
+        main(["--suite", "validation", "--case", "vc-02-equivalent-numeric-notation", "--max-usd", "100", "--report-json", path], d),
+      );
+      expect(code).toBe(1);
+      const rec = JSON.parse(readFileSync(path, "utf8"));
+      expect(rec.variants[0].validity).toBe("incomplete: all_failed");
+      expect(failing.create).toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("runs a mocked live run: baseline first, overrides cleared after, report written", async () => {

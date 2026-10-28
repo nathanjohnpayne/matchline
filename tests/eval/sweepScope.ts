@@ -14,6 +14,7 @@
 
 import { VALIDATION_STAGES, type ModelConfig, type Stage } from "../../functions/src/llm/config.ts";
 import { profileFor, type Effort } from "../../functions/src/llm/modelProfile.ts";
+import { PROMPT_CONFIG } from "../../functions/src/prompts/config.ts";
 
 export type SweepSuite = "corpus" | "validation" | "generation";
 
@@ -45,6 +46,30 @@ function scope(s: SweepScope): SweepScope {
   });
 }
 
+/**
+ * The production-default version of a `<stage>/<name>` prompt key. The
+ * validation and generation modules import the co-located schema of
+ * their active version, so the subtask scopes derive their wired
+ * versions from `PROMPT_CONFIG` instead of repeating it: a change that
+ * moves a default (and the module's schema import with it) moves the
+ * scope, the outcome classifier key and the schema hash together, and
+ * `sweepScope.test.ts` fails until the classifier for the new version
+ * exists.
+ */
+export function defaultPromptVersion(key: string): string {
+  const [stage, name] = key.split("/") as [string, string];
+  const version = (PROMPT_CONFIG as unknown as Record<string, Record<string, string> | undefined>)[stage]?.[name];
+  if (version === undefined) throw new Error(`no PROMPT_CONFIG entry for ${key}`);
+  return version;
+}
+
+function defaultsFor(keys: readonly string[]): Record<string, string> {
+  return Object.fromEntries(keys.map((k) => [k, defaultPromptVersion(k)]));
+}
+
+const VALIDATION_PROMPT_KEYS = ["validation/claimExtraction", "validation/traceability", "validation/specificity"];
+const GENERATION_PROMPT_KEYS = ["generation/resume"];
+
 export const SWEEP_SCOPES: Readonly<Record<SweepSuite, SweepScope>> = Object.freeze({
   corpus: scope({
     suite: "corpus",
@@ -55,18 +80,14 @@ export const SWEEP_SCOPES: Readonly<Record<SweepSuite, SweepScope>> = Object.fre
   validation: scope({
     suite: "validation",
     stages: VALIDATION_STAGES,
-    promptKeys: ["validation/claimExtraction", "validation/traceability", "validation/specificity"],
-    wiredSchemaVersion: {
-      "validation/claimExtraction": "v1",
-      "validation/traceability": "v1",
-      "validation/specificity": "v1",
-    },
+    promptKeys: VALIDATION_PROMPT_KEYS,
+    wiredSchemaVersion: defaultsFor(VALIDATION_PROMPT_KEYS),
   }),
   generation: scope({
     suite: "generation",
     stages: ["generation"],
-    promptKeys: ["generation/resume"],
-    wiredSchemaVersion: { "generation/resume": "v1" },
+    promptKeys: GENERATION_PROMPT_KEYS,
+    wiredSchemaVersion: defaultsFor(GENERATION_PROMPT_KEYS),
   }),
 });
 

@@ -6,7 +6,7 @@ import { extractClaims } from "../../../functions/src/validation/claimExtraction
 import { checkTraceability } from "../../../functions/src/validation/traceability.ts";
 
 import { loadValidationCases } from "./fixtures.ts";
-import { crossCheckSettings, servedModelStatus, startInvocation, type CallRecord } from "./instrument.ts";
+import { classifierKeyFor, crossCheckSettings, missingClassifiers, servedModelStatus, startInvocation, type CallRecord } from "./instrument.ts";
 import { replayKey, ReplayStore, type MiniFs } from "./replay.ts";
 import { defaultValidationAnswer, makeCtx, scriptedClient, textMessage, toolMessage } from "./testSupport.ts";
 
@@ -75,6 +75,23 @@ describe("instrumentClient", () => {
     expect(ctx.calls[1]).toMatchObject({ outcome: "tool_use", attemptIndex: 1 });
   });
 
+  it("releases a failed request's budget hold and settles a response's", async () => {
+    const answers: (Error | ReturnType<typeof toolMessage>)[] = [new Error("ECONNRESET"), toolMessage("record_claims", { claims: [{ text: "The user did a thing." }] })];
+    const raw = scriptedClient(() => answers.shift()!);
+    const ctx = makeCtx({ rawClient: raw.client, maxUsd: 100 });
+    const inv = startInvocation(ctx, META);
+    vi.useFakeTimers();
+    try {
+      const p = extractClaims(BULLET, { ...CTX, signal: inv.signal }, { client: inv.client, record: inv.record });
+      await vi.runAllTimersAsync();
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(ctx.ledger.reservedUsd).toBe(0);
+    expect(ctx.ledger.spentUsd).toBeCloseTo(ctx.calls[1]!.modeledUsd!, 10);
+  });
+
   it("checks the served model on api and trusts the CLI's own assertion", () => {
     expect(servedModelStatus("api", "claude-sonnet-4-6", "claude-sonnet-4-6")).toBe("ok");
     expect(servedModelStatus("api", "claude-sonnet-4-6", "claude-sonnet-4-6-20260101")).toBe("ok");
@@ -103,6 +120,8 @@ describe("instrumentClient", () => {
     expect(ctx.runAbort.signal.aborted).toBe(true);
     expect(raw.create).not.toHaveBeenCalled();
     expect(ctx.calls.map((c) => c.outcome)).toEqual(["budget_reached"]);
+    // The refused request was never sent: not an attempt.
+    expect(inv.finish(false, new Error("Spend bound reached"))).toMatchObject({ attempts: 0, failureKinds: ["budget_reached"] });
 
     const inv2 = startInvocation(ctx, META);
     await expect(inv2.client.messages.create({ model: "claude-sonnet-4-6", max_tokens: 10, messages: [] } as never)).rejects.toThrow(
@@ -140,6 +159,15 @@ describe("instrumentClient", () => {
     expect(inv.usage).toHaveLength(1);
     expect(inv.usage[0]).toMatchObject({ runId: "eval-test", subtask: "claim_extraction", maxTokens: 2048 });
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("outcome classifiers", () => {
+  it("key on the version the module imports (the PROMPT_CONFIG default), and every suite key has one", () => {
+    expect(classifierKeyFor("traceability")).toBe("validation/traceability@v1");
+    expect(classifierKeyFor("generation")).toBe("generation/resume@v1");
+    expect(classifierKeyFor("extraction")).toBeNull();
+    expect(missingClassifiers(["validation/claimExtraction", "validation/traceability", "validation/specificity", "generation/resume"])).toEqual([]);
   });
 });
 

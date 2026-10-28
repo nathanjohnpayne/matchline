@@ -16,6 +16,7 @@ import type { FixtureFileInfo } from "./fixtures.ts";
 import type { CallRecord, InvocationRecord, SubtaskSuite } from "./instrument.ts";
 import type {
   AssetMetrics,
+  ClusteredRate,
   CostMetrics,
   CoverageMetrics,
   GenerationMetrics,
@@ -100,6 +101,8 @@ export interface RunRecord {
     readonly maxUsd: number | null;
     readonly projected: { readonly expectedUsd: number; readonly worstCaseUsd: number; readonly requests: number };
     readonly capChecks: readonly CapCheck[];
+    /** Replay with no key: every request is served offline or fails, so the caps were checked against $0. */
+    readonly offlineReplay: boolean;
     readonly spentUsd: number;
     readonly budgetReached: boolean;
   };
@@ -133,6 +136,21 @@ export function comparable(a: RunRecord, b: RunRecord): { ok: true } | { ok: fal
 function pct(r: Ratio | null): string {
   if (r === null) return "n/a";
   return r.value === null ? `— (0/0)` : `${(r.value * 100).toFixed(1)}% (${r.num}/${r.den})`;
+}
+
+function pct1(v: number): string {
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+/**
+ * A clustered rate: the distinct count (assertions or cases) with its
+ * Wilson 95% interval, and the pooled sample count when repeats exist.
+ */
+export function rate(r: ClusteredRate, unit: "assertions" | "cases"): string {
+  if (r.units.value === null) return `— (0/0 ${unit})`;
+  const ci = r.interval === null ? "" : `, 95% CI ${pct1(r.interval.low)}–${pct1(r.interval.high)}`;
+  const samples = r.samples.den !== r.units.den ? `; ${r.samples.num}/${r.samples.den} samples` : "";
+  return `${pct1(r.units.value)} (${r.units.num}/${r.units.den} ${unit}${ci}${samples})`;
 }
 
 function usd(v: number | null): string {
@@ -214,7 +232,7 @@ function promptStage(key: string): string {
 export function formatPlan(r: RunRecord): string[] {
   if (r.plan === null) return [];
   const lines: string[] = ["", `planned requests (samples=${r.samples}, attempts ≤3 each)`];
-  const rows: string[][] = [["variant", "pass", "stage", "requests", "max est input tok/req", "output cap", "expected USD", "worst-case USD"]];
+  const rows: string[][] = [["variant", "pass", "stage", "requests", "max est input tok/req", "output cap", "expected USD", "conservative USD"]];
   // One row per variant, pass, stage and model: requests and USD summed, the largest per-request input shown.
   const groups = new Map<string, { variant: string; pass: string; stage: string; count: number; input: number; cap: number; expected: number; worst: number }>();
   for (const p of r.plan.rows) {
@@ -231,22 +249,42 @@ export function formatPlan(r: RunRecord): string[] {
   }
   lines.push(...table(rows));
   lines.push(
-    `total: ${r.plan.requests} requests   expected $${r.plan.expectedUsd.toFixed(2)}   worst case $${r.plan.worstCaseUsd.toFixed(2)} ` +
-      `(3 attempts × full cap, input ×1.25 margin)`,
+    `total: ${r.plan.requests} requests   expected $${r.plan.expectedUsd.toFixed(2)}   conservative estimate $${r.plan.worstCaseUsd.toFixed(2)} ` +
+      `(3 attempts × full cap, input ×1.25 margin; claim and item counts are heuristics, so not a bound)`,
   );
   for (const c of r.guards.capChecks.filter((c) => c.provider === "anthropic")) {
-    lines.push(`cap check (worst case): anthropic $${c.projectedUsd.toFixed(2)} of $${c.cap.toFixed(2)} — ${c.exceedsCap ? "BLOCKED" : c.exceedsWarn ? "WARN" : "OK"}`);
+    lines.push(
+      `cap check (conservative estimate${r.guards.offlineReplay ? "; offline replay, no live request possible" : ""}): ` +
+        `anthropic $${c.projectedUsd.toFixed(2)} of $${c.cap.toFixed(2)} — ${c.exceedsCap ? "BLOCKED" : c.exceedsWarn ? "WARN" : "OK"}`,
+    );
   }
-  lines.push(`a paid run needs: --max-usd ≥ ${r.plan.worstCaseUsd.toFixed(2)} (live spend is also stopped per request by the budget ledger)`);
+  lines.push(`a paid run needs: --max-usd ≥ ${r.plan.worstCaseUsd.toFixed(2)}; the budget ledger is the actual stop, checked before every request`);
   return lines;
 }
 
 function schemaRows(schema: Readonly<Record<string, SchemaValidity>>): string[] {
-  const rows: string[][] = [["stage", "invocations", "first-attempt pass", "pass after retry", "hard fail", "retry rate", "error rate"]];
+  const rows: string[][] = [
+    ["stage", "invocations", "first-attempt pass", "pass after retry", "hard fail", "retry rate", "error rate", "no call", "cancelled", "budget stop"],
+  ];
   for (const [stage, s] of Object.entries(schema)) {
-    rows.push([stage, String(s.invocations), pct(s.firstAttemptPass), pct(s.passAfterRetry), pct(s.hardFail), s.retryRate === null ? "n/a" : s.retryRate.toFixed(2), s.errorRate === null ? "n/a" : s.errorRate.toFixed(2)]);
+    rows.push([
+      stage,
+      String(s.invocations),
+      pct(s.firstAttemptPass),
+      pct(s.passAfterRetry),
+      pct(s.hardFail),
+      s.retryRate === null ? "n/a" : s.retryRate.toFixed(2),
+      s.errorRate === null ? "n/a" : s.errorRate.toFixed(2),
+      String(s.deterministic + s.failedBeforeRequest),
+      String(s.cancelled),
+      String(s.budgetStopped),
+    ]);
   }
-  return table(rows);
+  const lines = table(rows);
+  lines.push(
+    "  (rates count invocations that made a model call; \"no call\" finished or failed without one, \"cancelled\" were aborted by the call pool after another call failed, \"budget stop\" were stopped by --max-usd)",
+  );
+  return lines;
 }
 
 export function formatMetrics(r: RunRecord): string[] {
@@ -258,16 +296,24 @@ export function formatMetrics(r: RunRecord): string[] {
       lines.push("  no metrics (the variant did not run)");
     } else if (v.metrics.kind === "validation") {
       const m = v.metrics;
-      lines.push(`  claim extraction: assertion coverage ${pct(m.coverage.assertionCoverage)}   relationship coverage ${pct(m.coverage.relationshipCoverage)}`);
-      if (m.coverage.hardFailedCases.length > 0) lines.push(`    hard-failed extraction (counted uncovered): ${m.coverage.hardFailedCases.join(", ")}`);
       lines.push(
-        `  traceability: fabrication false accept ${pct(m.traceability.fabricationFalseAccept)}   supported false flag ${pct(m.traceability.supportedFalseFlag)}   wrong supporting Unit ${pct(m.traceability.wrongSupportingUnit)}`,
+        `  claim extraction: assertion coverage ${pct(m.coverage.assertionCoverage)} (one claim per assertion)   ` +
+          `fused claims ${m.coverage.fusedClaims}   relationship coverage ${pct(m.coverage.relationshipCoverage)}`,
       );
+      if (m.coverage.hardFailedCases.length > 0) lines.push(`    hard-failed extraction (counted uncovered): ${m.coverage.hardFailedCases.join(", ")}`);
+      if (m.coverage.stoppedCases.length > 0) lines.push(`    budget-stopped extraction (not counted): ${m.coverage.stoppedCases.join(", ")}`);
+      lines.push(`  traceability: fabrication false accept ${rate(m.traceability.fabricationFalseAccept, "assertions")}`);
+      lines.push(`    supported false flag ${rate(m.traceability.supportedFalseFlag, "assertions")}`);
+      lines.push(`    wrong supporting Unit ${rate(m.traceability.wrongSupportingUnit, "assertions")}`);
       if (m.traceability.unverifiedFabrications.length > 0) {
         lines.push(`    unverified fabrications (check hard-failed; not counted as caught): ${m.traceability.unverifiedFabrications.join(", ")}`);
       }
-      lines.push(`  specificity: false flag ${pct(m.specificity.falseFlag)}   miss ${pct(m.specificity.miss)}`);
-      lines.push(`  whole asset: fabrication false accept ${pct(m.asset.fabricationFalseAccept)}   false block ${pct(m.asset.falseBlock)}   errored ${m.asset.errored.length}`);
+      lines.push(`  specificity: false flag ${rate(m.specificity.falseFlag, "assertions")}   miss ${rate(m.specificity.miss, "assertions")}`);
+      lines.push(`  whole asset: fabrication false accept ${rate(m.asset.fabricationFalseAccept, "cases")}`);
+      lines.push(`    specificity false accept ${rate(m.asset.specificityFalseAccept, "cases")}`);
+      lines.push(
+        `    false block ${rate(m.asset.falseBlock, "cases")}   errored ${m.asset.errored.length}${m.asset.stopped.length > 0 ? `   budget-stopped ${m.asset.stopped.length}` : ""}`,
+      );
       lines.push("  schema validity (isolated and whole-asset calls)");
       lines.push(...schemaRows(m.schema));
       lines.push("  per case");
@@ -287,18 +333,23 @@ export function formatMetrics(r: RunRecord): string[] {
       for (const d of v.metrics.perSnapshot) lines.push(`  ${d.snapshotId} r${d.repeat}: ${d.detail}`);
     }
     if (v.wallTime !== null) {
-      lines.push("  wall time (span, not sum)");
-      for (const [stage, s] of Object.entries(v.wallTime.stageSpan)) {
-        lines.push(`    ${stage}: span p50 ${s.p50Ms}ms p95 ${s.p95Ms}ms (n=${s.n})   per call p50 ${v.wallTime.perCallLatency[stage]?.p50Ms ?? 0}ms`);
+      lines.push("  wall time (span, not sum; live calls only)");
+      for (const [key, s] of Object.entries(v.wallTime.stageSpan)) {
+        lines.push(`    ${key}: span p50 ${s.p50Ms}ms p95 ${s.p95Ms}ms (n=${s.n})   per call p50 ${v.wallTime.perCallLatency[key]?.p50Ms ?? 0}ms`);
       }
       if (v.wallTime.e2eSpan !== null) {
-        lines.push(`    end to end: p50 ${v.wallTime.e2eSpan.p50Ms}ms p95 ${v.wallTime.e2eSpan.p95Ms}ms (n=${v.wallTime.e2eSpan.n})`);
+        const what = r.suite === "validation" ? "validateAsset, whole-asset pass" : "generation + baseline validation";
+        lines.push(`    end to end (${what}): p50 ${v.wallTime.e2eSpan.p50Ms}ms p95 ${v.wallTime.e2eSpan.p95Ms}ms (n=${v.wallTime.e2eSpan.n})`);
       }
     }
     if (v.usage !== null) {
       const u = v.usage;
       lines.push("  usage");
-      lines.push(`    actual ${usd(u.actualUsd)}${u.actualIsEstimated ? " (estimated: unmetered token source)" : ""}   modeled ${usd(u.modeledUsd)}   cost per completed flow ${usd(u.costPerCompletedFlow)}`);
+      lines.push(`    actual ${usd(u.actualUsd)}${u.actualIsEstimated ? " (estimated: unmetered token source)" : ""}   modeled ${usd(u.modeledUsd)} (all passes)`);
+      lines.push(`    cost per ${u.perFlow.label} ${u.perFlow.flows === 0 ? "n/a (none completed)" : usd(u.perFlow.usd)} (n=${u.perFlow.flows})`);
+      if (u.modeledByPass.isolated !== undefined) {
+        lines.push(`    isolated pass (evaluation only, not a production cost) modeled ${usd(u.modeledByPass.isolated)}`);
+      }
       lines.push(`    provider cache tokens: read ${u.providerCache.read}, write ${u.providerCache.write}`);
       lines.push(`    local replay: ${u.localReplay.calls} calls, modeled ${usd(u.localReplay.modeledUsd)}`);
     }

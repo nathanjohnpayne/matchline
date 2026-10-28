@@ -7,7 +7,7 @@ import { SWEEP_SCOPES } from "../sweepScope.ts";
 
 import { loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
-import { MAX_ATTEMPTS, planGeneration, planValidation, project, TOKENIZER_55_FACTOR } from "./plan.ts";
+import { largestUnits, MAX_ATTEMPTS, planGeneration, planValidation, project, TOKENIZER_55_FACTOR } from "./plan.ts";
 
 afterEach(() => {
   clearModelOverrides();
@@ -84,5 +84,15 @@ describe("planGeneration", () => {
     const downstream = value.filter((r) => r.pass === "downstream");
     expect(downstream.every((r) => r.model === "claude-sonnet-4-6")).toBe(true);
     expect(count(downstream, "downstream", "claim_extraction")).toBe(26 * 2);
+  });
+});
+
+describe("largestUnits", () => {
+  it("picks the Units with the most evidence text, not the first ones", () => {
+    const u = (id: string, raw: number, sum: number) => ({ id, raw_text: "r".repeat(raw), normalized_summary: "s".repeat(sum) });
+    const units = [u("small", 10, 10), u("big", 300, 50), u("mid", 100, 100), u("huge", 50, 500)];
+    expect(largestUnits(units, 2).map((x) => x.id)).toEqual(["huge", "big"]);
+    expect(largestUnits(units, 9)).toHaveLength(4);
+    expect(units.map((x) => x.id)).toEqual(["small", "big", "mid", "huge"]);
   });
 });
