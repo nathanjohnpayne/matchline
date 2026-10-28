@@ -84,6 +84,12 @@ export const RATES: Readonly<Record<string, Readonly<ModelRate>>> = Object.freez
     }),
   }),
 
+  // Anthropic — Claude Fable 5.1, the frontier tier, registered for the
+  // #495 comparison by design amendment 1 (2026-10-28). Not pinned by
+  // config.ts. List price $10 / $50 per MTok; 5-minute cache writes
+  // $12.50; cache reads $0.25 (0.025× input, lower than the 5.5 family).
+  "claude-fable-5-1": perMTok({ input: 10, output: 50, cacheWrite: 12.5, cacheRead: 0.25 }),
+
   // OpenAI — text-embedding-3-small. Single input-token rate; no output tokens.
   "text-embedding-3-small": perMTok({ input: 0.02, output: 0 }),
 });

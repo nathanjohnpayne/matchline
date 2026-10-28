@@ -75,6 +75,17 @@ export const MODEL_PROFILES: Readonly<Record<string, ModelProfile>> = Object.fre
     defaultEffort: "medium",
     outputBudgetFactor: 2,
   }),
+  // Claude Fable 5.1 (frontier tier), registered for the #495 comparison
+  // by design amendment 1. Like Opus/Sonnet 5.5 it rejects a forced
+  // tool_choice (400) and thinks adaptively on every request; its effort
+  // default is high; same tokenizer as Opus 4.8, so the doubled output
+  // budget applies.
+  "claude-fable-5-1": Object.freeze({
+    forcedToolChoice: false,
+    efforts: EFFORTS,
+    defaultEffort: "high",
+    outputBudgetFactor: 2,
+  }),
 });
 
 export function profileFor(model: string): ModelProfile {

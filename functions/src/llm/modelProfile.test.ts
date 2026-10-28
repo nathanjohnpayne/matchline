@@ -51,6 +51,14 @@ describe("toolCallRequest", () => {
     ).toEqual({ type: "auto" });
   });
 
+  it("asks Fable 5.1 for the tool through tool_choice auto, defaulting to high effort", () => {
+    const req = toolCallRequest({ model: "claude-fable-5-1", toolName: "t", baseMaxTokens: 1000 });
+    expect(req.tool_choice).toEqual({ type: "auto" });
+    expect(req.output_config).toEqual({ effort: "high" });
+    expect(req.effort).toBe("high");
+    expect(req.max_tokens).toBe(2000);
+  });
+
   it("keeps a forced tool choice for Haiku 5.5, which accepts one", () => {
     const req = toolCallRequest({ model: "claude-haiku-5-5", toolName: "t", baseMaxTokens: 1000 });
     expect(req.tool_choice).toEqual({ type: "tool", name: "t" });

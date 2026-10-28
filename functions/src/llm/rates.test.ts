@@ -55,6 +55,21 @@ describe("rates", () => {
     });
   });
 
+  it("registers Claude Fable 5.1 for the #495 comparison (design amendment 1)", () => {
+    expect(rateFor("claude-fable-5-1")).toMatchObject({
+      inputUsdPer1k: 0.01,
+      outputUsdPer1k: 0.05,
+      cacheWriteUsdPer1k: 0.0125,
+      cacheReadUsdPer1k: 0.00025,
+    });
+    expect(rateFor("claude-fable-5-1").longPrompt).toBeUndefined();
+  });
+
+  it("Fable 5.1 cache reads are 0.025x input", () => {
+    const r = rateFor("claude-fable-5-1");
+    expect(r.cacheReadUsdPer1k).toBeCloseTo(r.inputUsdPer1k * 0.025, 12);
+  });
+
   it("Opus/Sonnet 5.5 cache reads are 0.05x input; older models 0.1x", () => {
     for (const model of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
       const r = rateFor(model);
