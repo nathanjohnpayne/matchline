@@ -48,6 +48,22 @@ describe("latency report (#616)", () => {
     expect(stages[1]).toMatchObject({ n: 2, p50Ms: 2000, p95Ms: 4000, maxMs: 4000 });
   });
 
+  it("counts each stage's recovered calls and prints them in the stage table (#650)", () => {
+    const rows = [
+      row({ stage: "extraction", latencyMs: 110_000, recovered: "units-string" }),
+      row({ stage: "extraction", latencyMs: 100_000, recovered: "units-string" }),
+      row({ stage: "extraction", latencyMs: 120_000, attempt: 1 }),
+      row({ subtask: "traceability" }),
+    ];
+    const stages = byStage(rows);
+    expect(stages.find((s) => s.stage === "extraction")).toMatchObject({ n: 3, recovered: 2 });
+    expect(stages.find((s) => s.subtask === "traceability")).toMatchObject({ n: 1, recovered: 0 });
+    const md = renderMarkdown(rows, { sinceMs: 0, untilMs: 86_400_000 });
+    expect(md).toContain("| Stage | Subtask | Models | n | p50 | p95 | max | recovered |");
+    expect(md).toContain("| extraction | - | claude-sonnet-4-6 | 3 | 110.0 s | 120.0 s | 120.0 s | 2 |");
+    expect(md).toContain("| validation | traceability | claude-sonnet-4-6 | 1 | 1.0 s | 1.0 s | 1.0 s | 0 |");
+  });
+
   it("spans a run from the first call's start to the last call's end", () => {
     // Serial calls: 0-3 s, 3-5 s, 5-6 s. Sum 6 s, span 6 s.
     const rows = [

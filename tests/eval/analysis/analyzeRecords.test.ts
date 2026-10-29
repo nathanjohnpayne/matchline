@@ -329,6 +329,62 @@ describe("analyzeRecords", () => {
     expect(md).not.toContain("SECRET-UNIT-TEXT");
   });
 
+  it("counts recovered live calls by kind, and those that avoided a retry, in the Arms table and the JSON (#650)", () => {
+    seq = 0;
+    const flows = [
+      // Recovered on the only attempt: avoided a retry.
+      flow("inc", "r1", [GOOD], { calls: [call({ recovered: "units-string" })] }),
+      // A replayed call repeats one measured earlier, so its recovery is not counted again.
+      flow("inc", "r1", [GOOD], { calls: [call({ recovered: "units-string" }), call({ replayed: true, recovered: "units-string" })] }),
+      // Recovered, then the decoded array failed validation and attempt 1 succeeded.
+      flow("inc", "r1", [GOOD], { calls: [call({ recovered: "units-string" }), call({ attempt: 1, retry: true })] }),
+      // Recovered, failed validation, then two transport errors (no usage recorded): only `failures` shows it.
+      flow("inc", "r2", null, {
+        ok: false,
+        error: { kind: "transport_error", name: "ExtractionError", message: "failed", step: "extraction" },
+        calls: [call({ recovered: "units-string" })],
+        failures: [
+          { attempt: 0, kind: "schema_error", recovered: "units-string" },
+          { attempt: 1, kind: "transport_error" },
+          { attempt: 2, kind: "transport_error" },
+        ],
+      }),
+      // Unrecovered: a string that did not decode failed all three attempts.
+      flow("inc", "r2", null, {
+        ok: false,
+        error: { kind: "schema_error", name: "ExtractionError", message: "failed", step: "extraction" },
+        calls: [call(), call({ attempt: 1, retry: true }), call({ attempt: 2, retry: true })],
+      }),
+      flow("cand", "r1", [GOOD]),
+      flow("cand", "r2", [GOOD]),
+    ];
+
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+
+    expect(r.arms[0]).toMatchObject({
+      label: "inc",
+      failedFlows: 2,
+      errorKinds: { schema_error: 1, transport_error: 1 },
+      recoveries: { "units-string": 4 },
+      recoveriesWithoutRetry: { "units-string": 2 },
+    });
+    expect(r.arms[1]).toMatchObject({ label: "cand", errorKinds: {}, recoveries: {}, recoveriesWithoutRetry: {} });
+    const md = formatAnalysisMarkdown(r);
+    expect(md).toContain("| refusals | error kinds | recoveries | recoveries without retry | task outputs |");
+    // flows, failed, failed in the task step, refusals, error kinds, recoveries, recoveries without retry.
+    expect(md).toMatch(/\| inc \| 5 \| 2 \| 2 \| 0 \| schema_error 1, transport_error 1 \| units-string 4 \| units-string 2 \|/);
+    expect(md).toMatch(/\| cand \| 2 \| 0 \| 0 \| 0 \| — \| — \| — \|/);
+    // Every Arms row has as many cells as the header.
+    const armsRows = md.split("\n").filter((l) => l.startsWith("| inc |") || l.startsWith("| cand |") || l.startsWith("| arm | flows"));
+    const cells = (l: string) => l.split(" | ").length;
+    expect(new Set(armsRows.slice(0, 3).map(cells)).size).toBe(1);
+    // `analysis-<task>.json` is this result serialized.
+    expect(JSON.parse(JSON.stringify(r)).arms[0]).toMatchObject({
+      recoveries: { "units-string": 4 },
+      recoveriesWithoutRetry: { "units-string": 2 },
+    });
+  });
+
   describe("a cell both arms ran but one arm has no values in (guard ran-cell-no-values)", () => {
     const refused = { ok: false, matchAccuracy: null, requirements: null, error: { kind: "refusal", name: null, message: "", step: "requirement_parsing" } };
     function dropCell(candR2: "refused" | "answered"): FlowRecord[] {

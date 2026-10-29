@@ -8,6 +8,13 @@
  * `specs/matchline.md § Execution targets / Reliability`.
  */
 
+/**
+ * A tolerant pre-parse applied to the tool call's input before
+ * validation (#650). `"units-string"`: `units` arrived as a string that
+ * `JSON.parse`s to an array, and that array was validated in its place.
+ */
+export type ExtractionRecovery = "units-string";
+
 export interface ExtractionAttemptFailure {
   readonly attempt: number;
   readonly kind:
@@ -28,6 +35,11 @@ export interface ExtractionAttemptFailure {
   readonly message: string;
   /** Populated for schema_error; Zod's formatted issues. */
   readonly zodIssues?: readonly unknown[];
+  /**
+   * Set on a schema_error whose input was recovered before validation,
+   * so the issues describe the decoded array's contents, not its type.
+   */
+  readonly recovered?: ExtractionRecovery;
 }
 
 export class ExtractionError extends Error {

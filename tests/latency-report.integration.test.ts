@@ -67,6 +67,7 @@ describe("latency report Firestore read (#616)", () => {
       latencyMs: 2_000,
       attempt: 1,
       costUsd: 0.002,
+      recovered: "units-string",
       applicationId: "app-private-id",
       createdAt: new Date(SINCE_MS + 10_000),
     });
@@ -107,6 +108,7 @@ describe("latency report Firestore read (#616)", () => {
         runId: undefined,
         attempt: 1,
         costUsd: 0.002,
+        recovered: "units-string",
       },
       {
         stage: "validation",

@@ -575,6 +575,7 @@ Reliability:
 - Structured-output failures retry with stricter prompts up to twice,
   then surface as "needs manual review" for extraction, parsing and
   generation. **Target:** the same for validation. Today the Application Editor says validation "ran out of time" when a run hits its deadline (#621) and shows a generic "Validation couldn't run" for any other failure.
+- Before validating, extraction decodes a tool-call `units` array the model returned as a JSON string and validates the decoded array, so a well-formed one succeeds without a retry; that attempt's `llm_calls` record carries `recovered: "units-string"` whether or not the decoded array then passes. A string that does not decode to an array fails as before, and after any attempt whose `units` arrived as a string, decoded or not, the retry reminder adds that `units` must be a JSON array, not a string (#650).
 - Validation failures never auto-regenerate. They always surface for
   explicit user approval.
 - No silent fallbacks. If the system cannot produce a confident result,
