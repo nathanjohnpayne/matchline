@@ -280,6 +280,22 @@ Exit codes: 0 done (or a dry run); 1 refused (over `--max-usd`, no key for uncac
 
 `tests/eval/fixedInputs/diagnosticReproduction.test.ts` reproduces the read-only matching diagnostic from its saved vectors without a request. It is skipped unless `MATCHLINE_DIAG_EMBEDDINGS` (the diagnostic's `emb-all.json`) and `MATCHLINE_DIAG_RECORDS` (the directory holding `2a-inc-ext-1/` and `2a-sonnet55-high-1/`) are set. It seeds a cache first-wins in the diagnostic's order (incumbent flows, Sonnet flows, gold texts) and checks incumbent 22.6, Sonnet 5.5 high 20.1 and gold + gold 0.3125 (90 of 288 pairs, which the diagnostic printed as 31.2) with the current scorer.
 
+### Extraction only (`npm run eval -- --extraction-only`, #648)
+
+```bash
+npm run eval -- --extraction-only [--samples N] [--variant '<label>:model.extraction=...'] [--prompt extraction/resume=vN] \
+  [--token-source api|claude-cli] [--record ~/.matchline/eval-records/<run>] [--no-cache|--refresh-cache]
+```
+
+Runs extraction alone over every labelled résumé, with no JD parsing, embedding or matching, so extraction arms can be compared on all résumés instead of only the cells that have match labels.
+
+- **Corpus.** A labelled résumé is `tests/fixtures/resumes/<id>.txt` with `tests/fixtures/expected-units/<id>.json`. The set is read from the fixtures (10 today), not hard-coded. A résumé without a label is listed as skipped; a label without a résumé is an error. `--full` and `--smoke` do not apply and are refused.
+- **Flow.** Each sample runs the full flow's extraction stage through `runExtractionForFixture` (same stage-cache key and discriminators, so extraction-only and full runs share cache entries; same cost and modeled-cost accounting), then scores `unitSetAccuracy`. The OpenAI client is never called, so `OPENAI_API_KEY` is not needed: `--token-source api` needs `ANTHROPIC_API_KEY` (or a warm cache in read-write mode, served offline), and `claude-cli` needs neither.
+- **Table.** Per arm (variant label) and résumé, over the flows that returned Units: extraction accuracy, Unit precision (extracted Units mapped to a label at ≥ 0.5), extracted-Unit count, summary tokens (mean whitespace-delimited words) and grounding share (Units whose `raw_text` appears within one résumé line), plus the equal-weight mean of résumé means. The values are `analysis/metrics.ts` `extractionMetrics` on the same flow record `--record` writes, so they equal what `eval:analyze --task extraction` later computes from the records.
+- **Records.** With `--record`, each flow is written with the sentinel JD id `extraction-only` and the cell `<resumeId>__extraction-only` (hyphenated so tools that split cells on `__` still work; a fixture named `extraction-only` is refused). `matchAccuracy`, `matchCount` and `requirements` are null, `calls` and `stepCacheHits` hold only the `extraction` step, `stages` lists only `extraction`, and `invocation.json` has `mode: "extraction-only"`. `eval:analyze --task extraction` reads these records (its labels are keyed by résumé). An extraction-only cell never equals a full-flow cell (`<resumeId>__<jdId>`), so `eval:analyze` prints no comparison between an extraction-only arm and a full-flow arm: compare extraction-only arms with each other.
+- **Projection guard.** Checked before any flow runs, on résumés × samples × max(1, variants) flows, with the same per-flow estimate as the full flow's Anthropic share (conservative, since a full flow also parses a JD) and no OpenAI spend. With `--token-source api` that refuses runs of more than about 45 flows against the $25 cap's hard threshold; use fewer samples or `--token-source claude-cli`. A refused run leaves no record files. A run in which every flow failed exits 1.
+- **Variants.** `--variant` takes extraction knobs only. A variant that sets `model.requirement_parsing`, `effort.requirement_parsing` or `prompt.parsing/jd`, and a command-wide `--prompt parsing/jd=...`, are refused: they would change nothing while being reported as part of the arm.
+
 ### Fit-brief eval — private corpus (#495 Phase 3)
 
 `npm run eval:fit-brief` generates a fit brief for each job description in a **private** corpus and scores it against the brief the owner wrote and approved for that role. The corpus is the owner's real job search, and this repository is public, so the harness enforces three rules:
@@ -397,7 +413,8 @@ once the corpus is large enough for stable percentiles.
 ```text
 tests/eval/
 ├── run.ts             CLI entry point
-├── runForFixture.ts   per-fixture orchestration (#136)
+├── runForFixture.ts   per-fixture orchestration (#136); extraction-only flow (#648)
+├── extractionOnly.ts  --extraction-only: extraction over every labelled résumé (#648)
 ├── flowTrace.ts       pure: per-flow trace collector (--record)
 ├── flowRecord.ts      pure: flow/invocation record shapes, derived flags, JSONL parser
 ├── recorder.ts        --record: writes invocation.json + flows.jsonl

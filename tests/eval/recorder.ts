@@ -438,6 +438,15 @@ export class FlowRecorder {
 
 export type FlowRunner = (input: RunForFixtureInput, deps: RunForFixtureDeps) => Promise<RunForFixtureResult>;
 
+export interface RecordingOptions {
+  /**
+   * Rewrites each flow record before it is appended, e.g. the
+   * extraction-only mode nulls the match fields its runner reports as 0.
+   * Defaults to no change.
+   */
+  readonly adjust?: (record: FlowRecord) => FlowRecord;
+}
+
 /**
  * Wrap `runForFixture` so every flow is recorded. Without a recorder the
  * runner is returned unchanged, so a run without `--record` does exactly
@@ -447,7 +456,9 @@ export function recordingRunner(
   recorder: FlowRecorder | undefined,
   tokenSource: string,
   run: FlowRunner = runForFixture,
+  options: RecordingOptions = {},
 ): FlowRunner {
+  const adjust = options.adjust ?? ((r: FlowRecord): FlowRecord => r);
   if (recorder === undefined) return run;
   return async (input, deps) => {
     if (recorder.disabled) return run(input, deps);
@@ -471,7 +482,7 @@ export function recordingRunner(
     try {
       const finishedAt = recorder.now().toISOString();
       recorder.append(
-        buildFlowRecord(
+        adjust(buildFlowRecord(
           {
             invocationId: recorder.invocationId,
             variant,
@@ -486,7 +497,7 @@ export function recordingRunner(
           },
           result,
           trace,
-        ),
+        )),
       );
     } catch (err) {
       recorder.disable(err);
