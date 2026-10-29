@@ -150,6 +150,15 @@ Acceptance criteria:
   Package. Today the Export control enforces the gate above, but its
   action is a stub.
 
+### Export
+
+Export turns a validated résumé into a file someone else can receive (#33). The server path is built for plain text (#517, #521); the Application Editor's Export control is wired to it in #523. PDF and DOCX are **Target** (#525, #527).
+
+- **Callable.** `exportAsset({ applicationId, assetId, format })` checks the owner, re-checks the export gate on the server (see Validation layer), renders, writes exactly one object at `applications/{applicationId}/{assetId}.{ext}` in the default bucket (re-export overwrites it), and returns a V4 signed URL valid for 5 minutes with the file name, format, content type and expiry. It writes no Firestore data. An unregistered format (`pdf` and `docx` today, `json`, or anything else) is `invalid-argument` before any read.
+- **Renderers.** Each format implements one contract (`functions/src/export/types.ts`) and registers in `functions/src/export/registry.ts`. A renderer changes presentation only; it never adds, drops, reorders or rewrites an item, and it renders exactly the content object the gate checked. Plain text (`functions/src/export/text.ts`) is deterministic: UTF-8 without a byte-order mark, LF line endings, no trailing whitespace, section headings SUMMARY, EXPERIENCE, SKILLS and EDUCATION in the editor's order, items in stored order, Markdown reduced to plain text, and every other character, including em dashes and non-ASCII text, passed through unnormalized.
+- **File name.** `{Company} — {Title} — Resume.{ext}`, with a real em dash. A missing part is left out rather than filled in (Roles created today have no Company document, so the name is usually `{Title} — Resume.{ext}`). The name travels in a `Content-Disposition: attachment` header carried by the signed URL, with an RFC 5987 `filename*` for the exact UTF-8 name and an ASCII `filename` fallback (`functions/src/export/filename.ts`).
+- **Emulator.** Under the Storage emulator the callable returns the emulator's object URL instead of signing; production always signs. Provisioning and the runtime service account's Storage and signing grants: `DEPLOYMENT.md`.
+
 ### End-to-end acceptance
 
 - **Full flow (Target, not met).** From a populated Capability Graph, a user can paste a JD and produce a validated, exportable resume in under 20 s at p95. One timed run on matchline-dev took about 88 s of callable time, measured in the browser, to a saved validation verdict, about 4.4× the 20 s figure (n = 1, #619; see Execution targets). One run does not measure the p95; the target is still not met, because JD parsing alone exceeds 20 s (production p95 31.9 s, n = 5). The 236 s p95 from #177 timed résumé extraction through matching in the eval harness, not this flow. Export is not built (#33).
@@ -448,6 +457,8 @@ Traceability reads each candidate Unit through the formatter generation uses (`f
 
 The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. This `stale` means the asset changed since its last validation run, and it blocks export; it is unrelated to staleness against the canonical, which is a non-blocking warning. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
 
+The server repeats this check before it exports anything, so a client that ignores the disabled control still cannot export. `exportAsset` (#521) reads the Application once, computes the current content's fingerprint, and requires the attestation stored under that fingerprint to name the same owner, Application and asset and to say `passed`, and every cited Unit to exist, be approved and match its recorded evidence version (`functions/src/validation/exportGate.ts`, shared with the editor's gate). Otherwise it refuses with `failed-precondition` (the reason in `details.reason`) and writes nothing. A pass recorded for earlier content lives under a different fingerprint, so a stale pass never exports. The asset's own `validation_status` is not consulted.
+
 Each validation subtask (claim extraction, traceability, specificity) is a separately configured model stage (#489), and `npm run eval:subtasks` evaluates each one in isolation against labeled cases, plus generation followed by validation pinned to production defaults (#488; see `tests/eval/README.md`). Its labeled cases and generation snapshots are drafts until the owner reviews them, so no result from them is a comparison of record.
 
 ## AI pipeline
@@ -651,6 +662,7 @@ V1 is single-user, and that is an authorization rule, not only a product scope. 
 - **No self-service.** The sign-in surface offers no account creation, and no client can read or write `config/`.
 - **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and pipeline-only writes (`llm_calls`, plus creates and deletes of `jobRequirementUnits` and `unitMatches`) are closed to clients; the owner may edit only a parsed Requirement's content fields and a match's approve/reject decision. Server-owned fields (`experienceUnits.embedding`, asset creation) are not client-writable; the client sets an Application's `approved_unit_ids` once, at create, and no update may change it.
 - **Bounded input.** Pasted resume and JD text is capped at 100 KB (UTF-8) per call.
+- **Storage is closed to clients.** `storage.rules` deny every client read, list, write and delete, for the owner as much as anyone else (`tests/storage-rules.test.ts`). Export files are written by the `exportAsset` callable with the admin SDK and read only through the 5-minute V4 signed URL it returns to the owner; no public URL, `allUsers` ACL or Firebase download token is ever created. The callable sits behind the same owner allowlist, and a missing or not-owned Application or asset is the same `permission-denied`.
 
 Configuration and deploy order: `DEPLOYMENT.md` § Owner allowlist.
 
@@ -666,8 +678,7 @@ V1:
 - LLMs: Anthropic + OpenAI; keys in Firebase secrets
 - Embeddings: OpenAI `text-embedding-3-small`, stored on Firestore
   documents
-- Firebase Storage is not configured. It is **Target** for export
-  files (#521) and **Deferred** with artifact upload (#519).
+- Storage: Firebase Storage holds résumé export files only (#521), at `applications/{applicationId}/{assetId}.{ext}` in the default bucket, written only by the `exportAsset` callable. Artifact upload stays **Deferred** (#519).
 
 Data-model discipline (even on Firestore):
 

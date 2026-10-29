@@ -849,6 +849,7 @@ So when you add a function to `functions/src/index.ts`, add a row here and set t
 | `reembedExperienceUnit` | `reembedexperienceunit` | required |
 | `runMatching` | `runmatching` | required |
 | `deriveMatchEvidence` | `derivematchevidence` | required |
+| `exportAsset` | `exportasset` | required |
 
 > **Every new `required` row needs this once per region.** Only rows this
 > table marks `required` — never a `must not` row. `firebase deploy` creates the
@@ -878,6 +879,29 @@ gcloud projects add-iam-policy-binding <proj> \
 ```bash
 gcloud firestore indexes composite list --project=<proj>
 ```
+
+**4. Storage holds résumé exports (#521).** `exportAsset` writes one private object per asset at `applications/{applicationId}/{assetId}.{ext}` in the project's default bucket and returns a 5-minute V4 signed URL; `storage.rules` deny every client read and write. Before the first full deploy that includes the `storage` block in `firebase.json`, and before export works on a project:
+
+- **Provision the default bucket** in the Firebase console (Storage → Get started) for each project. A full `scripts/deploy.sh` also deploys `storage.rules` and fails if no default bucket exists; `scripts/deploy.sh -- --only storage` deploys only the rules.
+- **Let the runtime SA write and overwrite objects.** Re-export overwrites, which needs delete as well as create, so `roles/storage.objectCreator` is not enough:
+
+  ```bash
+  gcloud storage buckets add-iam-policy-binding gs://<default-bucket> \
+    --member=serviceAccount:<project-number>-compute@developer.gserviceaccount.com \
+    --role=roles/storage.objectUser
+  ```
+
+- **Let the runtime SA sign URLs as itself.** Cloud Run has no private key, so `getSignedUrl` signs through IAM `signBlob`, which needs Token Creator on the SA itself and the IAM Credentials API:
+
+  ```bash
+  gcloud services enable iamcredentials.googleapis.com --project=<proj>
+  gcloud iam service-accounts add-iam-policy-binding \
+    <project-number>-compute@developer.gserviceaccount.com \
+    --member=serviceAccount:<project-number>-compute@developer.gserviceaccount.com \
+    --role=roles/iam.serviceAccountTokenCreator --project=<proj>
+  ```
+
+A missing grant surfaces as the callable's generic `internal` "The export file couldn't be prepared" message, with the cause in the function log (`exportAsset: storage write or URL signing failed`). No bucket CORS configuration is needed: the browser navigates to the signed URL rather than fetching it. Under the Storage emulator the callable returns the emulator's object URL instead of signing.
 
 ### Triage order when a callable fails
 

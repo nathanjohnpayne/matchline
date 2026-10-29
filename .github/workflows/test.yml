@@ -80,7 +80,7 @@ jobs:
             package-lock.json
             functions/package-lock.json
 
-      - name: Setup Java 21 (Firestore emulator dependency)
+      - name: Setup Java 21 (Firestore and Storage emulator dependency)
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: 'temurin'
@@ -92,7 +92,7 @@ jobs:
       - name: Install functions deps
         run: npm --prefix functions ci
 
-      - name: Rules + integration tests (Firestore emulator)
+      - name: Rules + integration tests (Firestore + Storage emulators)
         # `test:rules` names its suites EXPLICITLY in
         # package.json — it is not a glob. A new
         # *.integration.test.ts that is not added to that list
@@ -106,6 +106,10 @@ jobs:
         #   - matching-replace, validation-fabrication,
         #     generation-persistence, and derive-match-evidence
         #     (#441, read-only: asserts no write happens)
+        #   - tests/storage-rules.test.ts (#521: no client read
+        #     or write under applications/) and
+        #     export-asset (#521: server-side export gate, object
+        #     path, overwrite) on the Storage emulator
         run: npm run test:rules
 
   e2e:

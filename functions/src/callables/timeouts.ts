@@ -109,6 +109,15 @@ export const CALLABLE_TIMEOUT_SECONDS = {
    * rather than a tighter one guessed from its p50.
    */
   deriveMatchEvidence: 120,
+
+  /**
+   * Résumé export (#521). No LLM call: a few `get()`s, a pure render,
+   * one Storage upload and one IAM `signBlob` round trip for the
+   * signed URL. Fast in practice; the budget is headroom for a slow
+   * upload or signing response, not for a long pipeline, and it keeps
+   * the server above the client SDK's 70s default like its siblings.
+   */
+  exportAsset: 120,
 } as const;
 
 export type CallableName = keyof typeof CALLABLE_TIMEOUT_SECONDS;
