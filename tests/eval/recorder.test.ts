@@ -166,6 +166,36 @@ describe("FlowRecorder.prepare", () => {
 describe("recordingRunner", () => {
   it("returns the runner untouched without a recorder", () => {
     expect(recordingRunner(undefined, "api", fakeRun)).toBe(fakeRun);
+    expect(recordingRunner(undefined, "api", fakeRun, { adjust: (r) => r })).toBe(fakeRun);
+  });
+
+  it("applies the adjust hook to each record before it is appended; without one the record is unchanged", async () => {
+    const root = gitRepo(mkdtempSync(join(tmpdir(), "matchline-root-")));
+    try {
+      const deps = { anthropicClient: {} as never, openaiClient: {} as never };
+      const plainDir = join(base, "plain");
+      const plain = FlowRecorder.prepare(plainDir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+      await recordingRunner(plain, "api", fakeRun)({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+      const adjustedDir = join(base, "adjusted");
+      const adjusted = FlowRecorder.prepare(adjustedDir, INVOCATION, { root, clock: clock(), head: { sha: null, dirty: null } });
+      const seen: string[] = [];
+      await recordingRunner(adjusted, "api", fakeRun, {
+        adjust: (r) => {
+          seen.push(r.cell);
+          return { ...r, matchAccuracy: null, matchCount: null };
+        },
+      })({ resumeFixtureId: "r1", jdFixtureId: "j1" }, deps);
+      const [p] = parseFlowsJsonl(readFileSync(join(plainDir, "flows.jsonl"), "utf8"), "plain");
+      const [a] = parseFlowsJsonl(readFileSync(join(adjustedDir, "flows.jsonl"), "utf8"), "adjusted");
+      expect(p!.matchAccuracy).toBe(0.4);
+      expect(p!.matchCount).toBe(1);
+      expect(seen).toEqual(["r1__j1"]);
+      expect(a!.matchAccuracy).toBeNull();
+      expect(a!.matchCount).toBeNull();
+      expect(a!.extractionAccuracy).toBe(0.5);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("writes invocation.json and one line per flow, labelled, sampled and timed", async () => {

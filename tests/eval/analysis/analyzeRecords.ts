@@ -217,13 +217,13 @@ function replayedTaskStep(flow: FlowRecord, task: Task): boolean {
  * parsing) from the stage cache. Matching then runs on inputs a counted
  * flow may already have had, so its match accuracy can be a copy.
  */
-function replayedBothSides(flow: FlowRecord): boolean {
+export function replayedBothSides(flow: FlowRecord): boolean {
   const hits = (flow.stepCacheHits as Readonly<Record<string, boolean>> | undefined) ?? {};
   return hits[TASK_STEP.extraction] === true && hits[TASK_STEP.jd] === true;
 }
 
 /** The matching inputs a flow scored: its saved Units and Requirements. */
-function matchInputKey(flow: FlowRecord): string {
+export function matchInputKey(flow: FlowRecord): string {
   return JSON.stringify([flow.units, flow.requirements]);
 }
 

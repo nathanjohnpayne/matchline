@@ -24,6 +24,13 @@
  * Per-flow records (--record hook; see recorder.ts and the README):
  *   --record <dir>             — write invocation.json + flows.jsonl to a
  *                                directory outside the repository
+ *
+ * Extraction only (#648; see extractionOnly.ts and the README):
+ *   --extraction-only          — extraction over every labelled résumé, no
+ *                                JD parsing, embedding or matching; takes
+ *                                --samples, --variant, --prompt, --record,
+ *                                --token-source and the cache flags, not
+ *                                --full/--smoke
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -40,7 +47,8 @@ import {
   setPromptVersionOverrides,
 } from "../../functions/src/prompts/loader.js";
 
-import { resolveCacheMode, StageCache } from "./cache.js";
+import { resolveCacheMode, StageCache, type StageCacheMode } from "./cache.js";
+import { EXTRACTION_ONLY_MODE, runExtractionOnly, type PlannedSpend } from "./extractionOnly.js";
 import {
   claudeCliClient,
   CLI_ADAPTER_VERSION,
@@ -54,6 +62,7 @@ import {
   assertVariantsCallable,
   parseVariants,
   runSweep,
+  type SweepVariant,
 } from "./sweep.js";
 import { formatReport, type EvalReport, type FixtureResult } from "./report.js";
 import { type RunForFixtureResult } from "./runForFixture.js";
@@ -133,6 +142,7 @@ const BOOLEAN_FLAGS: readonly string[] = [
   "--smoke",
   "--no-cache",
   "--refresh-cache",
+  "--extraction-only", // #648: extraction alone over every labelled résumé
 ];
 
 /** Every flag `main` understands. Anything else is an operator typo. */
@@ -289,6 +299,17 @@ export function estimateSpendForSource(
     openaiUsd: flowCount * PER_FLOW_EMBEDDINGS_ONLY_USD,
     firebaseUsd: 0,
   };
+}
+
+/**
+ * The planned spend `--extraction-only` checks before any flow (#648):
+ * the full flow's per-flow estimate for the token source, with the
+ * OpenAI share dropped because extraction embeds nothing. With `api`
+ * that is $0.525 of Anthropic spend per flow, so 45 flows ($23.625) pass
+ * the $25 cap's $23.75 hard threshold and 46 ($24.15) are refused.
+ */
+export function extractionOnlyEstimate(tokenSource: TokenSourceKind): (flowCount: number) => PlannedSpend {
+  return (flowCount) => ({ ...estimateSpendForSource("full", flowCount, tokenSource), openaiUsd: 0 });
 }
 
 export function parseSamples(argv: readonly string[]): number {
@@ -529,6 +550,11 @@ async function main(): Promise<number> {
   assertVariantsCallable(variants);
   const cacheMode = resolveCacheMode(argv, samples);
   const cache = new StageCache({ mode: cacheMode });
+  // #648: extraction-only has its own corpus (labelled résumés), guard and
+  // table, so it branches before the (resume, JD) pair selection.
+  if (argv.includes("--extraction-only")) {
+    return runExtractionOnlyCli({ argv, samples, promptOverrides, tokenSource, variants, cacheMode, cache });
+  }
   // --record hook (per-flow recorder): validated here, before any spend;
   // an in-repo or already-used directory is refused. Files appear with
   // the first recorded flow.
@@ -924,6 +950,79 @@ async function main(): Promise<number> {
   }
 
   return 0;
+}
+
+/**
+ * `--extraction-only` (#648): credentials, recorder and dispatch. The
+ * projection guard runs inside `runExtractionOnly`, before any flow.
+ * Only the Anthropic side is needed: nothing is embedded, so
+ * OPENAI_API_KEY is not required.
+ */
+async function runExtractionOnlyCli(ctx: {
+  readonly argv: readonly string[];
+  readonly samples: number;
+  readonly promptOverrides: Readonly<Record<string, string>>;
+  readonly tokenSource: TokenSourceKind;
+  readonly variants: readonly SweepVariant[];
+  readonly cacheMode: StageCacheMode;
+  readonly cache: StageCache;
+}): Promise<number> {
+  const { argv, samples, promptOverrides, tokenSource, variants, cacheMode, cache } = ctx;
+  if (argv.includes("--full") || argv.includes("--smoke")) {
+    console.error("--extraction-only runs every labelled résumé; drop --full/--smoke.");
+    return 2;
+  }
+  const haveAnthropicKey =
+    typeof process.env.ANTHROPIC_API_KEY === "string" && process.env.ANTHROPIC_API_KEY.length > 0;
+  const canAttemptOffline = cacheMode === "read-write" && cache.hasEntries();
+  if (tokenSource === "api" && !haveAnthropicKey && !canAttemptOffline) {
+    console.error(
+      "--extraction-only needs ANTHROPIC_API_KEY, --token-source claude-cli, or a warm stage cache in read-write mode. Nothing ran.",
+    );
+    return 2;
+  }
+  const anthropicClient =
+    tokenSource === "claude-cli"
+      ? claudeCliClient()
+      : haveAnthropicKey
+        ? anthropicForCli()
+        : offlineOnlyClient<ReturnType<typeof anthropicForCli>>("Anthropic", "ANTHROPIC_API_KEY");
+  const recordDir = parseRecordDir(argv);
+  const recorder =
+    recordDir === undefined
+      ? undefined
+      : FlowRecorder.prepare(recordDir, {
+          argv,
+          tokenSource,
+          cacheMode,
+          samples,
+          mode: EXTRACTION_ONLY_MODE,
+          promptOverrides,
+          variants: describeVariants(variants, tokenSource, promptOverrides),
+        });
+  let outcome: Awaited<ReturnType<typeof runExtractionOnly>> | undefined;
+  try {
+    outcome = await runExtractionOnly(
+      {
+        fixturesDir: join(process.cwd(), "tests", "fixtures"),
+        samples,
+        variants,
+        promptOverrides,
+        tokenSource,
+        // Extraction embeds nothing, so only the Anthropic share is planned.
+        estimate: extractionOnlyEstimate(tokenSource),
+        ...(recorder !== undefined && { recorder }),
+        cache,
+        ...(cacheDiscriminatorsFor(tokenSource) !== undefined && { cacheDiscriminators: cacheDiscriminatorsFor(tokenSource)! }),
+      },
+      { anthropicClient, anthropicIsMetered: tokenSource === "api" },
+    );
+  } finally {
+    finishRecording(recorder);
+  }
+  if (outcome.stdout !== "") console.log(outcome.stdout);
+  if (outcome.stderr !== "") console.error(outcome.stderr);
+  return outcome.code;
 }
 
 /**
