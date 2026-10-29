@@ -130,6 +130,22 @@ describe("importLabels", () => {
     expect(cell(forced.sheet, "ext:u_gizmo_launch:A", "verbatim?")).toBe("");
   });
 
+  it("clears an imported note when a forced re-import judges the whole row without one", () => {
+    const once = importLabels(sheet, scaffold, LABELS);
+    expect(cell(once.sheet, "ext:u_sprocket_api:A", "note")).not.toBe("");
+    const corrected: LabelsFile = {
+      ...LABELS,
+      items: [item("ext:u_sprocket_api:A/fact-correct", "true"), item("ext:u_sprocket_api:A/verbatim", "true")],
+    };
+    expect(() => importLabels(once.sheet, null, corrected)).toThrow(ImportConflictError);
+    const forced = importLabels(once.sheet, null, corrected, { force: true });
+    expect(cell(forced.sheet, "ext:u_sprocket_api:A", "fact correct?")).toBe("Y");
+    expect(cell(forced.sheet, "ext:u_sprocket_api:A", "note")).toBe("");
+    // Judging one card of a two-card row leaves the other card's note alone.
+    const one = importLabels(once.sheet, null, { ...LABELS, items: [item("ext:u_sprocket_api:A/verbatim", "true")] }, { force: true });
+    expect(cell(one.sheet, "ext:u_sprocket_api:A", "note")).toBe("fact: invented metric; verbatim: paraphrased");
+  });
+
   it("keeps CRLF line endings on rewritten rows", () => {
     const crlf = sheet.replace(/\n/g, "\r\n");
     const out = importLabels(crlf, null, LABELS).sheet;

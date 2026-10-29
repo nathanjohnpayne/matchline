@@ -49,11 +49,22 @@
     return MIXED_TYPES.includes(type);
   }
 
+  // FNV-1a over the deck's cards and sources. Saved progress is tied to it, so
+  // a regenerated deck with the same item ids but changed text starts fresh.
+  // Only the hash is stored, never the text.
+  function deckFingerprint(deck) {
+    const text = JSON.stringify([deck.cards, deck.sources]);
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i += 1) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(16).padStart(8, "0") + ":" + text.length;
+  }
+
   function initState(deck, seed) {
     const types = {};
     for (const card of deck.cards) types[card.item_id] = card.type;
     return {
       deck_id: deck.deck_id,
+      fingerprint: deckFingerprint(deck),
       seed,
       queue: shuffle(
         deck.cards.map((c) => c.item_id),
@@ -197,6 +208,7 @@
   // A persisted state is usable only if it describes exactly this deck.
   function stateMatchesDeck(state, deck) {
     if (!state || state.deck_id !== deck.deck_id || !state.types) return false;
+    if (state.fingerprint !== deckFingerprint(deck)) return false;
     // A partial write or a hand edit must start a fresh session, not throw later.
     if (!Array.isArray(state.queue) || !Array.isArray(state.history)) return false;
     for (const field of ["decisions", "requeued", "undos", "elapsed"]) if (!state[field] || typeof state[field] !== "object") return false;
@@ -221,5 +233,6 @@
     buildExport,
     exportFilename,
     stateMatchesDeck,
+    deckFingerprint,
   };
 })();

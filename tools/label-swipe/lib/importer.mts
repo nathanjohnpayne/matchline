@@ -77,6 +77,7 @@ type Note = { item: LabelItem; text: string };
 
 /** One row's note: the bare note, or `fact: …; verbatim: …` when two cards have one. */
 function formatNotes(notes: Note[]): string {
+  if (notes.length === 0) return "";
   return notes.length === 1 ? notes[0].text : notes.map((n) => `${TYPE_COLUMN[n.item.type].short}: ${n.text}`).join("; ");
 }
 
@@ -170,7 +171,12 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
       }
     }
     const notes = items.map((item) => ({ item, text: noteText(item) })).filter((n) => n.text);
-    if (notes.length) set("note", formatNotes(notes), "note", subsets(notes).map(formatNotes));
+    // When this import judges every card of the row, the note is wholly its
+    // own: a now-empty note clears an old one (a conflict without --force,
+    // since the old note may be hand-written). Otherwise only add notes.
+    const rowTypes = Object.keys(TYPE_COLUMN).filter((t) => TYPE_COLUMN[t].section === row.section);
+    const coversRow = rowTypes.every((t) => items.some((item) => item.type === t));
+    if (notes.length || coversRow) set("note", formatNotes(notes), "note", subsets(notes).map(formatNotes));
     // Keep the line ending of a CRLF sheet.
     lines[row.line] = joinRow(cells) + (lines[row.line].endsWith("\r") ? "\r" : "");
 

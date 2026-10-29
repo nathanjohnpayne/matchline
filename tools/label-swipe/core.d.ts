@@ -13,6 +13,7 @@ export interface DeckCardLike {
 export interface DeckLike {
   deck_id: string;
   cards: DeckCardLike[];
+  sources?: unknown;
 }
 
 export interface Decision {
@@ -24,6 +25,7 @@ export interface Decision {
 
 export interface LabelState {
   deck_id: string;
+  fingerprint: string;
   seed: number;
   queue: string[];
   types: Record<string, string>;
@@ -60,6 +62,7 @@ export interface LabelCoreApi {
   buildExport(deck: DeckLike, state: LabelState, sessionId: string): LabelsExport;
   exportFilename(deckId: string, date: Date): string;
   stateMatchesDeck(state: unknown, deck: DeckLike): boolean;
+  deckFingerprint(deck: DeckLike): string;
 }
 
 declare global {

@@ -155,4 +155,12 @@ describe("export", () => {
     expect(Core.stateMatchesDeck(noQueue, deck)).toBe(false);
     expect(Core.stateMatchesDeck({ ...s, decisions: null }, deck)).toBe(false);
   });
+
+  it("does not resume a session on a deck whose content changed under the same ids", () => {
+    const s = Core.initState(deck, 3);
+    const edited: DeckLike = { ...deck, cards: deck.cards.map((c, i) => (i === 0 ? { ...c, claim: "changed text" } : c)) as DeckLike["cards"] };
+    expect(Core.stateMatchesDeck(s, edited)).toBe(false);
+    expect(Core.stateMatchesDeck(s, { ...deck, cards: deck.cards.map((c) => ({ ...c })) })).toBe(true);
+    expect(JSON.stringify(s)).not.toContain("changed text");
+  });
 });
