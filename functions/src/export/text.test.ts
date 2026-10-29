@@ -331,6 +331,92 @@ describe("markdown reduction", () => {
   });
 });
 
+// Code spans are held before escapes outside them are reduced: a backslash inside a code span is
+// literal, as in CommonMark. Reducing escapes first turned `\d+\.\d+` into `\d+.\d+` (a literal
+// decimal separator became a wildcard) and `C:\*` into `C:*` (external review, P2, zero fabrication).
+describe("code spans export as typed", () => {
+  it.each([
+    ["Parsed versions with `\\d+\\.\\d+`", "Parsed versions with \\d+\\.\\d+"],
+    ["Globbed `C:\\*` on build hosts", "Globbed C:\\* on build hosts"],
+    ["Profiles in `C:\\Users\\me`", "Profiles in C:\\Users\\me"],
+    ["Root is `C:\\`", "Root is C:\\"],
+    ["Matched `\\*` and `\\_` literally", "Matched \\* and \\_ literally"],
+    ["`a\\*b\\_c\\#d\\>e\\~f`", "a\\*b\\_c\\#d\\>e\\~f"],
+    ["Wrote `[docs](https://example.com/a_b) **not bold**`", "Wrote [docs](https://example.com/a_b) **not bold**"],
+    ["Used `**kwargs` and `*args` and `__init__`", "Used **kwargs and *args and __init__"],
+    ["Kept `~~12%~~`, `# 1` and `> 5`", "Kept ~~12%~~, # 1 and > 5"],
+    ["See `<https://example.com/_x_>`", "See <https://example.com/_x_>"],
+  ])("keeps the text of a code span exactly as typed: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // A double-backtick span holds a single backtick, and its backslashes too.
+    ["Quoted ``a ` b\\*`` here", "Quoted a ` b\\* here"],
+    ["Ran `` `pwd` `` nightly", "Ran `pwd` nightly"],
+    // A backtick run with no closer of the same length is literal text.
+    ["a ``b` c", "a ``b` c"],
+  ])("closes a code span only on a backtick run of the same length: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // Outside code spans escapes still reduce, and an escaped backtick opens no span.
+    ["Escaped \\`not code\\` here", "Escaped `not code` here"],
+    ["\\`raw\\` and `co\\de`", "`raw` and co\\de"],
+    ["Escaped \\*stars\\* and `\\*code\\*`", "Escaped *stars* and \\*code\\*"],
+    ["\\\\`code`", "\\code"],
+    ["- `dbt` and \\*stars\\*", "dbt and *stars*"],
+  ])("still reduces escapes outside code spans: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // A code span at the start is read by the first non-whitespace character of its text.
+    ["- `-30%` cost", "- -30% cost"],
+    ["+ `+12%` NRR", "+ +12% NRR"],
+    ["- `$2M` saved", "- $2M saved"],
+    ["* `−5%` churn", "* −5% churn"],
+    ["# ` 1` ranked", "# 1 ranked"],
+    ["- ` ` 30% cost", "- 30% cost"],
+  ])("keeps a marker before a code span that starts with a number or sign: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // Code-span text is never an escape: a leading backslash in it is just its first character.
+    ["- `\\d+` parsing", "\\d+ parsing"],
+    ["- `C:\\Users` profiles", "C:\\Users profiles"],
+    ["- `*` wildcard", "* wildcard"],
+  ])("still strips a marker before a code span that starts with another character: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it("renders the exact expected text through the full render", () => {
+    const content: GeneratedAssetContent = {
+      summary: item("Parsed `\\d+\\.\\d+` versions and \\*starred\\* notes."),
+      bullets: [item("- `-30%` cost on `C:\\Users\\me` builds"), item("Escaped \\`tick\\` beside ``a ` b\\*``"), item("+ `dbt` models")],
+      skills: [item("`C:\\*`"), item("`**kwargs`, `[docs](https://example.com/a_b)`")],
+    };
+    expect(renderPlainText(content)).toBe(
+      [
+        "SUMMARY",
+        "Parsed \\d+\\.\\d+ versions and *starred* notes.",
+        "",
+        "EXPERIENCE",
+        "- - -30% cost on C:\\Users\\me builds",
+        "- Escaped `tick` beside a ` b\\*",
+        "- dbt models",
+        "",
+        "SKILLS",
+        "- C:\\*",
+        "- **kwargs, [docs](https://example.com/a_b)",
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("Unicode preservation (#141 glyph-loss guard)", () => {
   const glyphs = [
     "—",

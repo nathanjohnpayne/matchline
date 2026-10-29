@@ -24,29 +24,50 @@
  *     (never re-sorted or de-duplicated); an item whose text is empty
  *     after markup reduction is skipped, and a section with no lines
  *     emits no heading;
- *   - inline markdown markup (`**`, `*`, `__`, `_`, code spans, links,
- *     images, autolinks, escapes) is reduced to plain text, with one
- *     exception: `__…__` is reduced only when its inner text has
- *     whitespace or a non-word character, and around a single
- *     identifier-like token (letters, digits and `_`, as in `__init__` or
- *     `__slots__`) it is a dunder name and keeps its underscores,
- *     whatever follows it. A word-only `__x__` is kept on purpose, even
- *     where Markdown would bold it: keeping characters is the safe side
- *     of the zero-fabrication invariant;
+ *   - inline markdown markup (`**`, `*`, `__`, `_`, links, images,
+ *     autolinks, escapes) is reduced to plain text, with one exception:
+ *     `__…__` is reduced only when its inner text has whitespace or a
+ *     non-word character, and around a single identifier-like token
+ *     (letters, digits and `_`, as in `__init__` or `__slots__`) it is a
+ *     dunder name and keeps its underscores, whatever follows it. A
+ *     word-only `__x__` is kept on purpose, even where Markdown would bold
+ *     it: keeping characters is the safe side of the zero-fabrication
+ *     invariant;
+ *   - a code span's backticks are removed and its text is exported as
+ *     typed, with backslashes, `*`, `_`, `~`, `#`, `>` and link syntax
+ *     kept literal (a backslash inside a code span escapes nothing, as in
+ *     CommonMark), so `\d+\.\d+` and `C:\*` keep every character. Only
+ *     its whitespace is laid out: a line break in it becomes a space, one
+ *     space is trimmed from each side when both sides have one, and ASCII
+ *     whitespace runs collapse as everywhere else;
  *   - at a line start only a `#` heading marker, a `-`/`*`/`+` bullet
  *     marker (neither when the first visible character after it is a
  *     number, a sign or a backslash-escaped literal: the guard looks
- *     through any whitespace, inline formatting (`*`, `_`, a code-span
- *     backtick, `~`, the `[` or `![` of a link or image whose label starts
- *     the content) and escapes, so `- **30%** cost` and `- \-30% cost`
- *     keep their minus) and a thematic break are removed, and blockquote
- *     `>`, ordered-list `1.` and strikethrough `~~` are kept as typed, so
- *     no character that can carry a claim is dropped;
+ *     through any whitespace, inline formatting (`*`, `_`, `~`, a stray
+ *     backtick, the `[` or `![` of a link or image whose label starts the
+ *     content) and escapes, and reads a code span by the first
+ *     non-whitespace character of its text, so `- **30%** cost`,
+ *     `` - `-30%` cost `` and `- \-30% cost` keep their minus) and a
+ *     thematic break are removed, and blockquote `>`, ordered-list `1.`
+ *     and strikethrough `~~` are kept as typed, so no character that can
+ *     carry a claim is dropped;
  *   - Unicode passes through untouched: em dashes, arrows, curly quotes,
  *     accents, CJK and emoji are kept as typed, with no normalization
  *     (the #141 glyph-loss failure must not recur here);
  *   - no name or contact header: the content carries none, and nothing
  *     is invented.
+ *
+ * Processing order, per item ({@link plainTextOf}):
+ *   1. one left-to-right pass holds code spans and backslash escapes. A
+ *      code span is held as typed before any escape is reduced, and
+ *      outside code spans an escape holds the character it escapes, so an
+ *      escaped backtick never opens a span;
+ *   2. block markers are stripped per line, guarded by the first visible
+ *      character, and the lines are joined into one;
+ *   3. inline markup (images, links, autolinks, emphasis) is reduced, with
+ *      every URL held;
+ *   4. the held text is restored, ASCII whitespace runs collapse to one
+ *      space, and the edges are trimmed.
  *
  * Pure: no network, Firestore or Storage access.
  */
@@ -61,8 +82,8 @@ export const TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
 const LINE_BREAKS = /\r\n|[\r\n\u0085\u2028\u2029]/;
 /** ASCII horizontal whitespace; NBSP and other Unicode spaces are content. */
 const ASCII_SPACE_RUN = /[ \t\f\v]+/g;
-/** Characters a backslash escapes in CommonMark. */
-const ESCAPABLE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+/** ASCII punctuation: the characters a backslash escapes in CommonMark. */
+const ESCAPABLE = /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/;
 
 /** Letter, digit or underscore: the "word" side of an emphasis boundary. */
 const W = String.raw`[\p{L}\p{N}_]`;
@@ -90,6 +111,72 @@ function sentinelFor(text: string): string {
 interface Held {
   readonly sentinel: string;
   readonly literals: readonly string[];
+  /** Indices of the literals that are code-span text; the others are escaped characters and URLs. */
+  readonly codeSpans: ReadonlySet<number>;
+}
+
+/** The end of the run of backticks that starts at `start`. */
+function backtickRunEnd(text: string, start: number): number {
+  let end = start;
+  while (text.charAt(end) === "`") end += 1;
+  return end;
+}
+
+/** Where the next run of exactly `length` backticks at or after `from` starts, or -1 when there is none. */
+function closingRun(text: string, from: number, length: number): number {
+  for (let start = text.indexOf("`", from); start !== -1; ) {
+    const end = backtickRunEnd(text, start);
+    if (end - start === length) return start;
+    start = text.indexOf("`", end);
+  }
+  return -1;
+}
+
+/**
+ * A code span's text as CommonMark reads it: line breaks become spaces,
+ * then one space is trimmed from each side when both sides have one and
+ * the text is not all whitespace. Every other character is kept as typed.
+ */
+function codeSpanText(raw: string): string {
+  const code = raw.split(LINE_BREAKS).join(" ");
+  return code.trim() === "" ? code : code.replace(/^ (.*) $/, "$1");
+}
+
+/**
+ * Step 1 of {@link plainTextOf}: one left-to-right pass that holds code
+ * spans and backslash escapes, with CommonMark's precedence between them.
+ * A run of N backticks opens a code span that the next run of exactly N
+ * backticks closes, and the text between is held as typed
+ * ({@link codeSpanText}): a backslash inside a code span is literal, so
+ * `\d+\.\d+` and `C:\*` keep every character. A backtick run with no
+ * closer is literal text, and the scan resumes after it. Outside code
+ * spans, a backslash before ASCII punctuation holds that character as a
+ * literal, so an escaped backtick never opens a span.
+ */
+function holdCodeSpansAndEscapes(text: string, hold: (literal: string) => string, holdCode: (code: string) => string): string {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const char = text.charAt(i);
+    const next = text.charAt(i + 1);
+    if (char === "\\" && ESCAPABLE.test(next)) {
+      out += hold(next);
+      i += 2;
+    } else if (char === "`") {
+      const end = backtickRunEnd(text, i);
+      const close = closingRun(text, end, end - i);
+      if (close === -1) {
+        out += text.slice(i, end);
+        i = end;
+      } else {
+        out += holdCode(codeSpanText(text.slice(end, close)));
+        i = close + (end - i);
+      }
+    } else {
+      out += char;
+      i += 1;
+    }
+  }
+  return out;
 }
 
 /** An image and a link, as step 3 of {@link plainTextOf} reduces them. */
@@ -97,14 +184,19 @@ const IMAGE = String.raw`!\[([^\]]*)\]\(\s*<?([^)\s>]*)>?(?:\s+(?:"[^"]*"|'[^']*
 const LINK = String.raw`\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)`;
 const OPENS_IMAGE = new RegExp(`^${IMAGE}`);
 const OPENS_LINK = new RegExp(`^${LINK}`);
-/** Inline opening delimiters: emphasis `*` and `_`, a code-span backtick and strikethrough `~`. */
+/**
+ * Inline opening delimiters: emphasis `*` and `_`, strikethrough `~`, and a
+ * backtick. Every code span is held before block markup is stripped, so a
+ * backtick left in the text opens nothing; looking past it anyway errs
+ * toward keeping a marker.
+ */
 const INLINE_OPENERS: ReadonlySet<string> = new Set(["*", "_", "`", "~"]);
 
 /** The first character a reader sees after a block marker. */
 interface Visible {
-  /** The character, with a held placeholder resolved to the literal it holds. */
+  /** The character: a held escape resolves to the literal it holds, a held code span to the first non-whitespace character of its text. */
   readonly char: string;
-  /** True when the author typed a backslash to make this character literal content. */
+  /** True when the author typed a backslash to make this character literal content (never for code-span text, where a backslash is just a character). */
   readonly escaped: boolean;
 }
 
@@ -114,11 +206,13 @@ interface Visible {
  * not only `[ \t]`, because the final trim eats NBSP and the other Unicode
  * spaces too), the {@link INLINE_OPENERS}, and the `[` or `![` that opens a
  * link or image whose label starts the content (an image with an empty
- * label reduces to nothing, so it is skipped whole). A held placeholder
- * resolves to the escaped literal it holds (`\-`, `\+`, `\#`, `\*`), and a
- * backslash that escapes nothing (`\3`: CommonMark escapes only ASCII
- * punctuation, so it is kept as typed) is visible itself; both count as
- * escaped.
+ * label reduces to nothing, so it is skipped whole). A held code span is
+ * read by the first non-whitespace character of its text, as typed (a
+ * whitespace-only span is skipped whole), so `` - `30%` cost `` keeps its
+ * marker and `` + `dbt` models `` loses it. A held escape resolves to the
+ * literal it holds (`\-`, `\+`, `\#`, `\*`), and a backslash that escapes
+ * nothing (`\3`: CommonMark escapes only ASCII punctuation, so it is kept
+ * as typed) is visible itself; both count as escaped.
  */
 function firstVisibleChar(rest: string, held: Held): Visible | undefined {
   const placeholder = new RegExp(`^${held.sentinel}(\\d+)${held.sentinel}`);
@@ -139,7 +233,15 @@ function firstVisibleChar(rest: string, held: Held): Visible | undefined {
       continue;
     }
     const placed = placeholder.exec(tail);
-    if (placed !== null) return { char: held.literals[Number(placed[1])] ?? "", escaped: true };
+    if (placed !== null) {
+      const index = Number(placed[1]);
+      const literal = held.literals[index] ?? "";
+      if (!held.codeSpans.has(index)) return { char: literal, escaped: true };
+      const visible = /\S/u.exec(literal);
+      if (visible !== null) return { char: visible[0], escaped: false };
+      i += placed[0].length;
+      continue;
+    }
     return { char, escaped: char === "\\" };
   }
   return undefined;
@@ -196,24 +298,31 @@ function stripBlockMarkup(line: string, held: Held): string | null {
  */
 export function plainTextOf(text: string): string {
   const sentinel = sentinelFor(text);
-  const held: string[] = [];
+  const literals: string[] = [];
+  const codeSpans = new Set<number>();
+  const held: Held = { sentinel, literals, codeSpans };
   const hold = (literal: string): string => {
-    held.push(literal);
-    return `${sentinel}${held.length - 1}${sentinel}`;
+    literals.push(literal);
+    return `${sentinel}${literals.length - 1}${sentinel}`;
+  };
+  const holdCode = (code: string): string => {
+    codeSpans.add(literals.length);
+    return hold(code);
   };
 
-  // 1. Backslash escapes become literals that no later step may touch.
-  let out = text.replace(ESCAPABLE, (_m, ch: string) => hold(ch));
+  // 1. Code spans and backslash escapes, in one pass, become literals that no later step may
+  //    touch. A code span is held as typed before any escape is reduced, so a backslash inside
+  //    it stays (`\d+\.\d+`, `C:\*`); outside code spans each escape holds the character it escapes.
+  let out = holdCodeSpansAndEscapes(text, hold, holdCode);
 
   // 2. Block markup, per line; then the item becomes one line.
   out = out
     .split(LINE_BREAKS)
-    .map((line) => stripBlockMarkup(line, { sentinel, literals: held }))
+    .map((line) => stripBlockMarkup(line, held))
     .filter((line): line is string => line !== null)
     .join(" ");
 
-  // 3. Inline markup. Code spans first, and held, so markup inside them stays literal.
-  out = out.replace(/(`+)([^`]|[^`].*?[^`])\1(?!`)/g, (_m, _ticks: string, code: string) => hold(code.trim() === "" ? code : code.replace(/^ (.*) $/, "$1")));
+  // 3. Inline markup. Code spans are held already, so markup inside them stays literal.
   out = out.replace(new RegExp(IMAGE, "g"), "$1");
   out = out.replace(new RegExp(LINK, "g"), (_m, label: string, url: string) =>
     label.trim() === url ? hold(url) : `${label} (${hold(url)})`,
@@ -238,10 +347,10 @@ export function plainTextOf(text: string): string {
 
   // 4. Restore held literals, then collapse ASCII whitespace and trim the edges.
   const restore = new RegExp(`${sentinel}(\\d+)${sentinel}`, "g");
-  // Held code spans may themselves contain held escapes, so restore until stable.
+  // A held URL may itself contain held escapes and code spans, so restore until stable.
   for (let prev = ""; prev !== out; ) {
     prev = out;
-    out = out.replace(restore, (_m, index: string) => held[Number(index)] ?? "");
+    out = out.replace(restore, (_m, index: string) => literals[Number(index)] ?? "");
   }
   return out.replace(ASCII_SPACE_RUN, " ").replace(/^\s+|\s+$/gu, "");
 }
