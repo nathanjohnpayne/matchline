@@ -24,10 +24,13 @@
   },
   "include": [
     "tests/**/*.ts",
-    "tests/**/*.tsx"
+    "tests/**/*.tsx",
+    "tools/**/*.ts",
+    "tools/**/*.mts"
   ],
   "exclude": [
     "tests/fixtures/**/*",
+    "tools/**/fixtures/**/*",
     "node_modules"
   ]
 }
