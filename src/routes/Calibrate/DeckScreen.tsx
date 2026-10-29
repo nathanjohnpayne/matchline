@@ -33,7 +33,10 @@ export interface DeckScreenProps {
 /** A file input dressed as a button; resets so the same file can be picked twice. */
 export function FilePick({ label, className, onFiles, disabled }: { readonly label: string; readonly className: string; readonly onFiles: (files: File[]) => void; readonly disabled?: boolean }): ReactElement {
   return (
-    <label className={`inline-flex cursor-pointer ${disabled ? "pointer-events-none opacity-50" : ""} ${className}`}>
+    // The real control is the visually hidden input, so the ring follows focus inside the label.
+    <label
+      className={`inline-flex cursor-pointer focus-within:ring-2 focus-within:ring-zinc-900 focus-within:ring-offset-2 dark:focus-within:ring-zinc-100 dark:focus-within:ring-offset-zinc-950 ${disabled ? "pointer-events-none opacity-50" : ""} ${className}`}
+    >
       <input
         type="file"
         accept="application/json,.json"

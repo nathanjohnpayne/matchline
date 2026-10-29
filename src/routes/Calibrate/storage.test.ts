@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Deck } from "../../lib/labelDeck/deck.ts";
 import { decide, initSession } from "../../lib/labelDeck/session.ts";
@@ -48,5 +48,18 @@ describe("Calibrate session storage", () => {
     const throwing = { ...memoryStorage(), getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("full"); } } as Storage;
     expect(loadSession(deck, throwing)).toBeNull();
     expect(() => saveSession({ session_id: "s", state: initSession(deck, 1) }, throwing)).not.toThrow();
+  });
+
+  it("works without storage when merely reading localStorage throws (site data blocked)", () => {
+    const spy = vi.spyOn(globalThis, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    try {
+      expect(loadSession(deck)).toBeNull();
+      expect(() => saveSession({ session_id: "s", state: initSession(deck, 1) })).not.toThrow();
+      expect(() => clearSession("cell-a")).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

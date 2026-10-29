@@ -13,9 +13,16 @@ export type { StoredSession };
 
 const PREFIX = "matchline:calibrate:v1:";
 
-export function loadSession(deck: Deck, storage: Storage | undefined = globalThis.localStorage): StoredSession | null {
+/**
+ * The store to use, read inside each caller's `try`: with site data
+ * blocked, merely reading `globalThis.localStorage` throws a SecurityError,
+ * so it must not be a default-argument expression.
+ */
+const local = (storage?: Storage): Storage | undefined => storage ?? globalThis.localStorage;
+
+export function loadSession(deck: Deck, storage?: Storage): StoredSession | null {
   try {
-    const raw = storage?.getItem(PREFIX + deck.deck_id);
+    const raw = local(storage)?.getItem(PREFIX + deck.deck_id);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
@@ -26,17 +33,17 @@ export function loadSession(deck: Deck, storage: Storage | undefined = globalThi
   }
 }
 
-export function saveSession(stored: StoredSession, storage: Storage | undefined = globalThis.localStorage): void {
+export function saveSession(stored: StoredSession, storage?: Storage): void {
   try {
-    storage?.setItem(PREFIX + stored.state.deck_id, JSON.stringify(stored));
+    local(storage)?.setItem(PREFIX + stored.state.deck_id, JSON.stringify(stored));
   } catch {
     // Full or blocked storage: the session still works, it just won't resume.
   }
 }
 
-export function clearSession(deckId: string, storage: Storage | undefined = globalThis.localStorage): void {
+export function clearSession(deckId: string, storage?: Storage): void {
   try {
-    storage?.removeItem(PREFIX + deckId);
+    local(storage)?.removeItem(PREFIX + deckId);
   } catch {
     // As above.
   }
