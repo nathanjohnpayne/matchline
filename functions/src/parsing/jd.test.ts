@@ -9,6 +9,9 @@ import {
   setModelOverrides,
 } from "../llm/config.ts";
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import { zodToToolSchema } from "../llm/zodToolSchema.ts";
+import { clearPromptVersionOverrides, loadPromptText, setPromptVersionOverrides } from "../prompts/loader.ts";
+import { JdParsingResponseV1Schema } from "../prompts/parsing/jd.v1.schema.ts";
 
 import { JdParsingError } from "./errors.ts";
 import { parseJobRequirements } from "./jd.ts";
@@ -498,6 +501,84 @@ describe("parseJobRequirements — Claude 5.5 request shape (#495)", () => {
     expect((JdParsingFailures(err))).toEqual([
       expect.objectContaining({ attempt: 0, kind: "refusal", message: expect.stringContaining("cyber") }),
     ]);
+  });
+});
+
+describe("parseJobRequirements — prompt version selection (#656)", () => {
+  afterEach(() => clearPromptVersionOverrides());
+
+  type Body = Anthropic.Messages.MessageCreateParamsNonStreaming;
+  const bodies = (client: Anthropic): Body[] =>
+    vi.mocked(client.messages.create).mock.calls.map((c) => c[0] as unknown as Body);
+
+  function systemsOf(): { v1: string; v2: string } {
+    setPromptVersionOverrides({ "parsing/jd": "v1" });
+    const v1 = loadPromptText("parsing", "jd").system;
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const v2 = loadPromptText("parsing", "jd").system;
+    clearPromptVersionOverrides();
+    return { v1, v2 };
+  }
+
+  it("sends v1 with no override: production is unchanged", async () => {
+    const { v1, v2 } = systemsOf();
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("JD text", CTX, { client, record });
+
+    const [body] = bodies(client);
+    expect(String(body!.system).startsWith(v1)).toBe(true);
+    expect(String(body!.system).startsWith(v2)).toBe(false);
+    expect(body!.tools![0]).toMatchObject({ input_schema: zodToToolSchema(JdParsingResponseV1Schema) });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v1" }));
+  });
+
+  it("sends the v2 System under a parsing/jd=v2 override, with the same tool schema and few-shot", async () => {
+    const { v2 } = systemsOf();
+    const v1Client = mockClient([mockMessage(VALID_RESPONSE)]);
+    await parseJobRequirements("JD text", CTX, { client: v1Client, record: vi.fn<typeof RecordUsage>(async () => 0) });
+
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const reqs = await parseJobRequirements("JD text", CTX, { client, record, generateId: () => "id" });
+
+    expect(reqs).toHaveLength(2);
+    const [body] = bodies(client);
+    const [v1Body] = bodies(v1Client);
+    expect(String(body!.system).startsWith(v2)).toBe(true);
+    expect(body!.tools).toEqual(v1Body!.tools);
+    expect(body!.messages).toEqual(v1Body!.messages);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v2" }));
+  });
+
+  it("validates under v2 and retries a schema failure with the same reminder as v1", async () => {
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const outOfEnum = {
+      requirements: [{ ...VALID_RESPONSE.requirements[0], category: "education" }],
+    };
+    const client = mockClient([mockMessage(outOfEnum), mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    const reqs = await parseJobRequirements("JD text", CTX, { client, record, generateId: () => "id" });
+
+    expect(reqs).toHaveLength(2);
+    const [first, second] = bodies(client);
+    expect(String(first!.system)).not.toContain("failed schema validation");
+    expect(String(second!.system)).toContain("Your previous response failed schema validation.");
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v2", attempt: 1 }));
+  });
+
+  it("refuses an override to a version with no prompt file before any request is sent", async () => {
+    setPromptVersionOverrides({ "parsing/jd": "v9" });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    await expect(
+      parseJobRequirements("JD text", CTX, { client, record: vi.fn<typeof RecordUsage>(async () => 0) }),
+    ).rejects.toThrow(/Prompt file not found/);
+    expect(vi.mocked(client.messages.create)).not.toHaveBeenCalled();
   });
 });
 

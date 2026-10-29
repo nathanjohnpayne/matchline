@@ -34,13 +34,14 @@ import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
 import { logger } from "firebase-functions";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
-import {
-  JdParsingResponseV1Schema,
-  type JdParsingResponseV1,
-  type ParsedRequirementV1,
+import type {
+  JdParsingResponseV1,
+  ParsedRequirementV1,
 } from "../prompts/parsing/jd.v1.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import type { JobRequirementUnit } from "../types/capability.js";
+
+import { jdParsingResponseSchemaFor } from "./jdResponseSchema.js";
 
 import {
   JdParsingError,
@@ -135,7 +136,11 @@ export async function parseJobRequirements(
     );
   }
 
-  const toolSchema = zodToToolSchema(JdParsingResponseV1Schema);
+  // The schema of the prompt version actually loaded, so an eval override
+  // (`parsing/jd=v2`, #656) is constrained and validated by its own
+  // contract. Throws before any request for a version with no schema.
+  const responseSchema = jdParsingResponseSchemaFor(prompt.version);
+  const toolSchema = zodToToolSchema(responseSchema);
   // Model-specific request shape: tool choice, output budget, effort and
   // timeout (#495). Unchanged for the current pins; see llm/modelProfile.ts.
   const request = toolCallRequest({
@@ -275,7 +280,7 @@ export async function parseJobRequirements(
       continue;
     }
 
-    const parsed = JdParsingResponseV1Schema.safeParse(toolUse.input);
+    const parsed = responseSchema.safeParse(toolUse.input);
     if (!parsed.success) {
       failures.push({
         attempt,

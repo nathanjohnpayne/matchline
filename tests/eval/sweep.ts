@@ -179,10 +179,12 @@ export function assertPromptsExist(
  * STATICALLY wired to.
  *
  * `functions/src/extraction/resume.ts` imports
- * `ExtractionResponseV1Schema` and builds its tool schema from it;
- * `functions/src/parsing/jd.ts` does the same with
- * `JdParsingResponseV1Schema`. Neither consults the resolved prompt
- * version, even though the loader can return a version's own schema.
+ * `ExtractionResponseV1Schema` and builds its tool schema from it,
+ * without consulting the resolved prompt version. `parsing/jd` is wired
+ * to v1 for any version outside the scope's `dispatchedSchemaVersions`:
+ * `functions/src/parsing/jd.ts` picks the schema of the version it
+ * loaded from `parsing/jdResponseSchema.ts` (#656), so a registered
+ * version is validated against its own schema.
  */
 const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = SWEEP_SCOPES.corpus.wiredSchemaVersion;
 
@@ -200,6 +202,9 @@ const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = SWEEP_SCOPES.corp
  * failure the other pre-flights exist to prevent, and prompt tuning
  * (#177 workstream B) is what will first author such a v2.
  *
+ * A version the scope lists in `dispatchedSchemaVersions` is exempt:
+ * its stage validates it against its own schema (JD parsing since #656).
+ *
  * Compares file contents rather than importing: a byte-identical schema
  * is safe to sweep, an absent one means the version reuses the wired
  * schema, and anything else refuses before a token is spent.
@@ -215,6 +220,8 @@ export function assertPromptSchemasCompatible(
   const check = (key: string, version: string): void => {
     const wired = wiredVersions[key];
     if (wired === undefined || wired === version) return;
+    // The stage validates this version against its own schema (#656).
+    if (scope.dispatchedSchemaVersions?.[key]?.includes(version) === true) return;
     const [stage, name] = key.split("/") as [string, string];
     const overrideSchema = join(promptsRoot, stage, `${name}.${version}.schema.ts`);
     // No schema of its own — the version reuses the wired one.

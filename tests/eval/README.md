@@ -234,6 +234,45 @@ Versus the incumbent, per metric: the difference of means (mean over the cells b
 
 Power check, for the incumbent: s is the pooled within-cell SD (`sqrt(Σ(n_c−1)s_c² / Σ(n_c−1))`). The half-width at n = 6 samples per cell is `1.96·s/√(2n)`; the report also shows the C-cell form `1.96·s·√(2/(C·n))`, the half-width of an equal-cell-weight difference over C cells, which equals the first at C = 4 (today's labeled corpus). For share metrics it gives the n per cell needed for a ±2.5-point half-width from both forms.
 
+### JD parsing prompt v2 (`parsing/jd=v2`, #656)
+
+`functions/src/prompts/parsing/jd.v2.md` is an eval-only revision of the JD parsing prompt. Production keeps `jd.v1.md` (`PROMPT_CONFIG.parsing.jd` is `v1`, and `jd.v1.*` is unchanged). Labels and scorers are unchanged.
+
+**Why.** In round 2b of #495, `claude-haiku-5-5` at effort medium beat the incumbent on requirement-set accuracy (+6.7 points) at about a fifth of the parsing cost. It failed two checks: rule 1, because 7 of 23 first attempts failed schema validation (6 of those 7 also failed the second attempt, so 13 retry calls in all, and every flow recovered on the third), and the precision guard (−5.3 points), with more parsed Requirements and fewer must-haves per JD. All 13 failed attempts are `schema_error`. Tool choice is forced, nothing was truncated or refused, and the attempt sequence has no transport gap. The failures cluster on one JD: the Dolby XR cell failed 6 of 6 first attempts, NVIDIA 1 of 6, and Google and OpenAI none. Their zod paths and codes were not recorded, because a flow keeps `failures[].zodIssues` only when its stage throws (see "Derived per-call fields"). The recovery pattern is indirect evidence, though. One of 7 attempts recovered after the generic reminder, and all 6 recovered after the reminder that names field types and enum values. That points to an out-of-enum value or a wrong field type, not to unknown or missing keys.
+
+**What v2 changes.** Only the System text. The few-shot and the response schema are v1's: `jd.v2.schema.ts` re-exports the v1 shapes. The System gains:
+
+- an explicit statement that `category` is one of exactly seven strings, with a home for a degree (`credential`) and for a practical condition such as travel (`skill`);
+- a must-have definition line for items under a plain qualifications header;
+- the six `seniority_level` values, with an instruction to leave the field out rather than send `null` or `""`;
+- a field-type rule covering every key;
+- a granularity rule: one Unit per stated ask, never one per example or tool that the ask lists.
+
+**How it is selected.** Use a variant clause `prompt.parsing/jd=v2` or a command-wide `--prompt parsing/jd=v2`. `parseJobRequirements` builds its tool schema from the schema of the version it loaded, and validates against that same schema (`functions/src/parsing/jdResponseSchema.ts`). An unregistered version throws before any request. The corpus scope lists the dispatched versions (`dispatchedSchemaVersions`), so the schema pre-flight accepts v2 and still refuses an unregistered version whose schema differs.
+
+**What the records show.** Every v2 call records `promptVersion: "parsing/jd.v2"`. Each flow's `stages.requirement_parsing` records `promptVersion: "v2"` and a `promptFingerprint` of the form `v2:<hash>`. `invocation.json` records the requested and resolved prompt versions for each arm. The stage-cache key includes the fingerprint, so a v2 run never reads or overwrites a v1 entry, and v1 and v2 runs are never comparable by accident. `STAGE_IMPL_VERSION` does not move, because v1's request is byte-for-byte unchanged.
+
+**Re-run plan (not run; project it on #495 and get owner approval first).** Haiku 5.5 at effort medium on v2, over the four labelled public cells × 6 samples. As in 2b, that is two invocations of `--samples 3`. The ticket estimates the cost at about $4. The projection guard checks the run before it starts.
+
+```bash
+npm run eval -- --full --samples 3 --token-source api --record ~/.matchline/eval-records/<date>-jd-haiku55-med-v2-1 \
+  --variant 'jd-haiku55-med-v2:model.requirement_parsing=claude-haiku-5-5,effort.requirement_parsing=medium,prompt.parsing/jd=v2'
+# ...then the same command again with a -2 record directory.
+
+npm run eval:analyze -- --task jd \
+  --records <2b incumbent record dirs> ~/.matchline/eval-records/<date>-jd-haiku55-med-v2-1 ~/.matchline/eval-records/<date>-jd-haiku55-med-v2-2 \
+  --incumbent <2b incumbent label> --candidates jd-haiku55-med-v2
+```
+
+Report these together:
+
+- rule 1: first-attempt schema failures at most 5%, which is at most 1 of 24;
+- the precision guard (5 points);
+- requirement-set accuracy;
+- the parsed-requirement count and the must-have count.
+
+A prompt that makes Haiku 5.5 parse more coarsely can give back the +6.7. The incumbent records come from the 2b frozen baseline (`2b9debf`). The HEAD difference is a caveat to state in the report, not a reason to refuse the comparison. The guidance was written against the four public cells and may overfit them. Its wording is general, and the few-shot is unchanged. Until recovered attempts record their zod issue codes and paths, the re-run can report how many first attempts failed, but not which schema path or code each failure hit.
+
 ### Fixed-input matching runner (`eval:fixed-inputs`, #648)
 
 **Match-accuracy numbers from this runner are diagnostic until the labels and the owner corrections are reviewed (#636).** Use them to choose bounded fixes, not as measured quality.

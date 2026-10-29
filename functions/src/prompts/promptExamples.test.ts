@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CERT_RAW,
@@ -24,7 +24,8 @@ import { formatUnit } from "../validation/unitPromptText.ts";
 
 import { PROMPT_CONFIG } from "./config.ts";
 import { ResumeGenerationResponseV2Schema } from "./generation/resume.v2.schema.ts";
-import { parsePromptSections } from "./loader.ts";
+import { clearPromptVersionOverrides, loadPromptText, parsePromptSections, setPromptVersionOverrides } from "./loader.ts";
+import { ParsedRequirementV2Schema, JdParsingResponseV2Schema } from "./parsing/jd.v2.schema.ts";
 import { TraceabilityResponseV2Schema } from "./validation/traceability.v2.schema.ts";
 
 /**
@@ -247,6 +248,94 @@ describe("resume.v2 few-shot", () => {
   });
 });
 
+describe("jd.v2 prompt (#656)", () => {
+  const v1 = sections("parsing", "jd.v1.md");
+  const { system, userFewShot } = sections("parsing", "jd.v2.md");
+  const shape = ParsedRequirementV2Schema.shape;
+
+  afterEach(() => clearPromptVersionOverrides());
+
+  it("names every value of every enum field, read from the schema so the two cannot drift", () => {
+    const enums = {
+      category: shape.category.options,
+      priority: shape.priority.options,
+      extracted_from: shape.extracted_from.options,
+      seniority_level: shape.seniority_level.unwrap().options,
+    };
+    for (const [field, options] of Object.entries(enums)) {
+      expect(options.length, field).toBeGreaterThan(0);
+      for (const option of options) expect(system, `${field}: ${option}`).toContain(`\`"${option}"\``);
+    }
+  });
+
+  it("states that category takes only the seven strings, and where a degree and a practical condition go", () => {
+    expect(shape.category.options).toHaveLength(7);
+    expect(system).toMatch(/`category` is exactly one of these seven strings; no other value is accepted/);
+    expect(system).toContain('not `"education"`');
+    expect(system).toMatch(/A degree, certification, or license is `"credential"`/);
+    expect(system).toMatch(/willingness to travel[^.]*is `"skill"`/);
+  });
+
+  it("defines a must-have under a plain qualifications header and keeps the unclear-case default", () => {
+    expect(system).toMatch(/plain qualifications or requirements header[^.]*is a must-have unless its own wording softens it/);
+    expect(system).toContain("Default to `false` when genuinely unclear");
+  });
+
+  it("tells the model to leave seniority_level out rather than send null or an empty string", () => {
+    expect(system).toMatch(/leave the field out of that Unit entirely: never `null`, never `""`/);
+    expect(system).toMatch(/"Sr" and "Sr\." mean `"senior"`/);
+  });
+
+  it("spells out every field's type and lists exactly the schema's keys", () => {
+    const rule = system.slice(system.indexOf("8. **Field types.**"), system.indexOf("9. **One Unit per ask.**"));
+    expect(rule).toMatch(/never a string holding JSON/);
+    expect(rule).toMatch(/`\[\]` when there are none, never omitted, never a single string/);
+    expect(rule).toMatch(/the boolean `true` or `false`, not a string/);
+    const named = [...rule.matchAll(/^ {3}- (.+?) —/gm)].flatMap((m) => [...m[1]!.matchAll(/`([a-z_]+)`/g)].map((k) => k[1]!));
+    expect(named.sort()).toEqual(Object.keys(shape).sort());
+  });
+
+  it("sets the granularity: one Unit per ask, never one per listed example", () => {
+    expect(system).toMatch(/Emit one Unit per bullet or sentence that states an ask/);
+    expect(system).toMatch(/Never split a bullet into several Units because it lists several examples, tools, partners, or technologies/);
+    expect(system).toMatch(/It becomes its own `must_have: false` Unit when it names a different skill, tool, or domain/);
+    expect(system).toMatch(/Prose that only describes the role, the team, or the company is not an ask/);
+  });
+
+  it("numbers the hard rules 1 to 9 in order", () => {
+    const numbers = [...system.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it("keeps v1's few-shot unchanged and changes only the System text", () => {
+    expect(userFewShot).toBe(v1.userFewShot);
+    expect(system).not.toBe(v1.system);
+    // Every v1 line survives; v2 only adds to it.
+    for (const line of v1.system.split("\n").filter((l) => l.trim() !== "" && !l.startsWith("3. ") && !l.startsWith("6. "))) {
+      expect(system, line).toContain(line);
+    }
+  });
+
+  it("gives a few-shot answer that passes the v2 schema", () => {
+    const answers = fences(userFewShot, "json");
+    expect(answers).toHaveLength(1);
+    const parsed = JdParsingResponseV2Schema.safeParse(JSON.parse(answers[0]!));
+    expect(parsed.success).toBe(true);
+  });
+
+  it("keeps development history out of model-visible text", () => {
+    expect(`${system}\n${userFewShot}`).not.toMatch(DEV_HISTORY);
+  });
+
+  it("is what the loader serves under a parsing/jd=v2 override", () => {
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const loaded = loadPromptText("parsing", "jd");
+    expect(loaded.version).toBe("v2");
+    expect(loaded.system).toBe(system);
+    expect(loaded.userFewShot).toBe(userFewShot);
+  });
+});
+
 describe("active prompt versions (#485)", () => {
   it("serves traceability v2", () => {
     expect(PROMPT_CONFIG.validation.traceability).toBe("v2");
@@ -254,5 +343,10 @@ describe("active prompt versions (#485)", () => {
 
   it("serves resume generation v2", () => {
     expect(PROMPT_CONFIG.generation.resume).toBe("v2");
+  });
+
+  it("keeps JD parsing at v1 in production; v2 is eval-only (#656)", () => {
+    expect(PROMPT_CONFIG.parsing.jd).toBe("v1");
+    expect(loadPromptText("parsing", "jd").version).toBe("v1");
   });
 });

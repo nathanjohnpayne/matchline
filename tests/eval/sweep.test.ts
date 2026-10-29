@@ -215,6 +215,35 @@ describe("assertPromptSchemasCompatible", () => {
       assertPromptSchemasCompatible([], { "extraction/resume": "v2" }, root),
     ).toThrow(/schema the pipeline does not enforce/);
   });
+
+  describe("parsing/jd, whose stage picks the schema by version (#656)", () => {
+    const jdV2 = [{ label: "jd-v2", promptVersions: { "parsing/jd": "v2" } }];
+
+    it("allows v2 against the real prompts, though its schema file differs from v1's", () => {
+      expect(() => assertPromptSchemasCompatible(jdV2)).not.toThrow();
+      expect(() => assertPromptSchemasCompatible([], { "parsing/jd": "v2" })).not.toThrow();
+      expect(() => assertPromptsExist(jdV2)).not.toThrow();
+    });
+
+    it("still refuses a differing schema for a version the stage does not dispatch", () => {
+      mkdirSync(join(root, "parsing"), { recursive: true });
+      writeFileSync(join(root, "parsing", "jd.v1.schema.ts"), "export const A = 1;\n");
+      writeFileSync(join(root, "parsing", "jd.v2.schema.ts"), "export const A = 2;\n");
+      writeFileSync(join(root, "parsing", "jd.v3.schema.ts"), "export const A = 3;\n");
+      expect(() => assertPromptSchemasCompatible(jdV2, {}, root)).not.toThrow();
+      expect(() =>
+        assertPromptSchemasCompatible([{ label: "jd-v3", promptVersions: { "parsing/jd": "v3" } }], {}, root),
+      ).toThrow(/parsing\/jd=v3 ships jd\.v3\.schema\.ts/);
+    });
+
+    it("does not extend the exemption to extraction/resume", () => {
+      wired();
+      writeFileSync(join(root, "extraction", "resume.v2.schema.ts"), "export const A = 2;\n");
+      expect(() =>
+        assertPromptSchemasCompatible([{ label: "a", promptVersions: { "extraction/resume": "v2", "parsing/jd": "v2" } }], {}, root),
+      ).toThrow(/extraction\/resume=v2/);
+    });
+  });
 });
 
 describe("runVariant", () => {
@@ -609,6 +638,18 @@ describe("parseVariantFlag", () => {
   it("parses a prompt override", () => {
     const v = parseVariantFlag("v2:prompt.extraction/resume=v1", "api");
     expect(v.promptVersions).toEqual({ "extraction/resume": "v1" });
+  });
+
+  it("parses the #656 re-run arm: Haiku 5.5 at medium effort on the v2 JD prompt", () => {
+    const v = parseVariantFlag(
+      "jd-haiku55-med-v2:model.requirement_parsing=claude-haiku-5-5,effort.requirement_parsing=medium,prompt.parsing/jd=v2",
+      "api",
+    );
+    expect(v.label).toBe("jd-haiku55-med-v2");
+    expect(v.models?.requirement_parsing).toEqual({ provider: "anthropic", model: "claude-haiku-5-5" });
+    expect(v.efforts).toEqual({ requirement_parsing: "medium" });
+    expect(v.promptVersions).toEqual({ "parsing/jd": "v2" });
+    expect(() => assertVariantsCallable([v])).not.toThrow();
   });
 
   it("parses several clauses in one variant", () => {
