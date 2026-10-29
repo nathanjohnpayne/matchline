@@ -88,6 +88,13 @@ export interface UsageRecord extends TokenCounts {
   /** `output_config.effort` the request was sent with, when any. */
   readonly effort?: string;
 
+  /**
+   * Tolerant pre-parse the stage applied to the model's output before
+   * validating it, when it applied one: extraction's `"units-string"`
+   * (#650). Absent when the output was validated as returned.
+   */
+  readonly recovered?: string;
+
   /** Eval-harness run that made the call, when there is one. */
   readonly runId?: string;
 

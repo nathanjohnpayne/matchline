@@ -9,9 +9,10 @@ import {
   setModelOverrides,
 } from "../llm/config.ts";
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import { ExtractionResponseV1Schema } from "../prompts/extraction/resume.v1.schema.ts";
 
-import { ExtractionError } from "./errors.ts";
-import { extractFromResume } from "./resume.ts";
+import { ExtractionError, type ExtractionAttemptFailure } from "./errors.ts";
+import { extractFromResume, prepareToolInput } from "./resume.ts";
 
 /**
  * Build a minimal Anthropic Message-shaped response that carries a
@@ -448,6 +449,244 @@ describe("extractFromResume", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * Captured shape of the #495 failures (#650), with synthetic content:
+ * `units` arrives as a string holding the JSON-encoded array, multi-Unit,
+ * with the optional `date_range` and `metrics` populated.
+ */
+const CAPTURED_SHAPE_UNITS = [
+  {
+    raw_text: "Ran the payments platform team of six at Example Co.",
+    normalized_summary: "Led a six-person payments platform team.",
+    unit_type: "leadership",
+    skills: ["team leadership"],
+    tools: [],
+    domains: ["payments"],
+    seniority_signals: ["led"],
+    scope_signals: ["team of six"],
+    business_outcomes: [],
+    metrics: [{ claim: "team of six", value: 6, confidence: "high" }],
+    evidence_type: "verified",
+    confidence_score: 0.85,
+    date_range: { start: "2021-03-01", end: "2023-06-30" },
+  },
+  VALID_RESPONSE.units[0]!,
+];
+
+const UNITS_STRING_REMINDER_TEXT = "`units` must be a JSON array, not a string";
+
+function systemOf(client: Anthropic, call: number): string {
+  const body = vi.mocked(client.messages.create).mock.calls[call]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+  return String(body.system);
+}
+
+describe("prepareToolInput (#650)", () => {
+  it("decodes a string-encoded units array into a copy and marks the recovery", () => {
+    const input = { units: JSON.stringify(CAPTURED_SHAPE_UNITS) };
+    const prepared = prepareToolInput(input);
+    expect(prepared).toEqual({
+      input: { units: CAPTURED_SHAPE_UNITS },
+      unitsWasString: true,
+      recovered: "units-string",
+    });
+    // The model's object is not mutated.
+    expect(input.units).toBeTypeOf("string");
+  });
+
+  it("decodes an empty encoded array (boundary)", () => {
+    expect(prepareToolInput({ units: "[]" })).toEqual({ input: { units: [] }, unitsWasString: true, recovered: "units-string" });
+  });
+
+  it("keeps other keys, unknown ones included, for the strict schema to judge", () => {
+    const prepared = prepareToolInput({ units: "[]", extra: true });
+    expect(prepared.input).toEqual({ units: [], extra: true });
+    expect(ExtractionResponseV1Schema.safeParse(prepared.input).success).toBe(false);
+  });
+
+  it("returns an array-form input as the same object, with no recovery", () => {
+    const input = { units: CAPTURED_SHAPE_UNITS };
+    const prepared = prepareToolInput(input);
+    expect(prepared.input).toBe(input);
+    expect(prepared.unitsWasString).toBe(false);
+    expect(prepared).not.toHaveProperty("recovered");
+  });
+
+  it.each([
+    ["text that is not JSON", "Led migration at X."],
+    ["a truncated array", '[{"raw_text": "Led'],
+    ["an encoded object", JSON.stringify(VALID_RESPONSE)],
+    ["an encoded number", "42"],
+    ["an encoded null", "null"],
+    ["an encoded string", JSON.stringify(JSON.stringify(CAPTURED_SHAPE_UNITS))],
+  ])("leaves a units string holding %s unchanged and unrecovered", (_label, units) => {
+    const input = { units };
+    const prepared = prepareToolInput(input);
+    expect(prepared.input).toBe(input);
+    expect(prepared.unitsWasString).toBe(true);
+    expect(prepared).not.toHaveProperty("recovered");
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a string", "{\"units\": []}"],
+    ["an array", [VALID_RESPONSE]],
+    ["an object without units", {}],
+  ])("passes %s through untouched", (_label, input) => {
+    const prepared = prepareToolInput(input);
+    expect(prepared.input).toBe(input);
+    expect(prepared.unitsWasString).toBe(false);
+    expect(prepared).not.toHaveProperty("recovered");
+  });
+});
+
+describe("extractFromResume — units returned as a JSON string (#650)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function extractWith(toolInputs: readonly unknown[]) {
+    const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+    const client = mockClient(toolInputs.map((input) => mockMessage(input)));
+    let i = 0;
+    const result = await extractFromResume(
+      "Synthetic resume text",
+      { ownerUid: "user-alice" },
+      {
+        client,
+        record,
+        generateId: () => `id-${++i}`,
+        now: () => new Date("2026-10-29T00:00:00Z"),
+      },
+    ).catch((err: unknown) => err);
+    return { result, record, client };
+  }
+
+  it("accepts a string-encoded valid array on the first attempt, records the recovery, and returns the same Units as the array form", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+    const asArray = await extractWith([{ units: CAPTURED_SHAPE_UNITS }]);
+    expect(warn).not.toHaveBeenCalled();
+    const asString = await extractWith([{ units: JSON.stringify(CAPTURED_SHAPE_UNITS) }]);
+
+    expect(Array.isArray(asString.result)).toBe(true);
+    expect(asString.result).toHaveLength(2);
+    expect(asString.result).toEqual(asArray.result);
+    // First attempt: one model call, no retry.
+    expect(asString.client.messages.create).toHaveBeenCalledTimes(1);
+
+    // The usage record carries the recovery; the array form's does not.
+    expect(asString.record).toHaveBeenCalledTimes(1);
+    expect(asString.record).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "extraction", attempt: 0, recovered: "units-string" }),
+    );
+    expect(asArray.record.mock.calls[0]![0]).not.toHaveProperty("recovered");
+
+    // One warn line, fixed fields only: no résumé or Unit content.
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message, payload] = warn.mock.calls[0]! as [string, Record<string, unknown>];
+    expect(message).toContain("units");
+    expect(payload).toEqual({ model: "claude-sonnet-4-6", attempt: 0, recovered: "units-string" });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain("Synthetic resume text");
+    expect(logged).not.toContain("payments platform");
+
+    // The request is the same whichever shape the model then returned.
+    expect(vi.mocked(asString.client.messages.create).mock.calls[0]).toEqual(
+      vi.mocked(asArray.client.messages.create).mock.calls[0],
+    );
+  });
+
+  it.each([
+    ["text that is not JSON", "Led migration at X."],
+    ["an encoded object", JSON.stringify(VALID_RESPONSE)],
+    ["an encoded number", "42"],
+  ])("still fails a units string holding %s with the existing schema_error path and message", async (_label, units) => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(logger, "error").mockImplementation(() => {});
+    const input = { units };
+    const expected = ExtractionResponseV1Schema.safeParse(input);
+    expect(expected.success).toBe(false);
+
+    const { result, record } = await extractWith([input, input, input]);
+
+    expect(result).toBeInstanceOf(ExtractionError);
+    const failures = (result as ExtractionError).failures;
+    expect(failures).toHaveLength(3);
+    for (const [attempt, f] of failures.entries()) {
+      expect(f).toEqual({
+        attempt,
+        kind: "schema_error",
+        message: expected.error!.message,
+        zodIssues: expected.error!.issues,
+      } satisfies ExtractionAttemptFailure);
+    }
+    expect(failures[0]!.zodIssues).toEqual([
+      expect.objectContaining({ code: "invalid_type", expected: "array", path: ["units"] }),
+    ]);
+    // Nothing was recovered, so nothing says so.
+    expect(record).toHaveBeenCalledTimes(3);
+    for (const [usage] of record.mock.calls) expect(usage).not.toHaveProperty("recovered");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("validates a decoded array's contents and marks the schema_error as recovered", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const malformed = { units: JSON.stringify([{ wrong_shape: true }]) };
+
+    const { result, record } = await extractWith([malformed, { units: CAPTURED_SHAPE_UNITS }]);
+
+    expect(result).toHaveLength(2);
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(record.mock.calls[0]![0]).toMatchObject({ attempt: 0, recovered: "units-string" });
+    expect(record.mock.calls[1]![0]).not.toHaveProperty("recovered");
+  });
+
+  it("carries the recovery on the failure log when a decoded array still fails every attempt", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(logger, "error").mockImplementation(() => {});
+    const malformed = { units: JSON.stringify([{ wrong_shape: true }]) };
+
+    const { result } = await extractWith([malformed, malformed, malformed]);
+
+    expect(result).toBeInstanceOf(ExtractionError);
+    const failures = (result as ExtractionError).failures;
+    expect(failures.map((f) => [f.kind, f.recovered])).toEqual([
+      ["schema_error", "units-string"],
+      ["schema_error", "units-string"],
+      ["schema_error", "units-string"],
+    ]);
+    // The issues are about the decoded Unit, not about `units` being a string.
+    expect(failures[0]!.zodIssues).toContainEqual(expect.objectContaining({ path: ["units", 0] }));
+  });
+
+  it("names the shape in the retry reminder after a units string fails", async () => {
+    const { result, client } = await extractWith([{ units: "Led migration at X." }, VALID_RESPONSE]);
+
+    expect(result).toHaveLength(1);
+    expect(systemOf(client, 0)).not.toContain(UNITS_STRING_REMINDER_TEXT);
+    expect(systemOf(client, 1)).toContain(UNITS_STRING_REMINDER_TEXT);
+    // Appended to the generic reminder, not in place of it.
+    expect(systemOf(client, 1)).toContain("Your previous response failed schema validation.");
+  });
+
+  it("keeps naming the shape on the third attempt", async () => {
+    const { result, client } = await extractWith([{ units: "not json" }, { units: [{ wrong_shape: true }] }, VALID_RESPONSE]);
+
+    expect(result).toHaveLength(1);
+    expect(systemOf(client, 2)).toContain(UNITS_STRING_REMINDER_TEXT);
+    expect(systemOf(client, 2)).toContain("Your previous two attempts failed schema validation.");
+  });
+
+  it("does not add the units reminder after an unrelated schema failure", async () => {
+    const { result, client } = await extractWith([{ units: [{ wrong_shape: true }] }, VALID_RESPONSE]);
+
+    expect(result).toHaveLength(1);
+    expect(systemOf(client, 1)).toContain("Your previous response failed schema validation.");
+    expect(systemOf(client, 1)).not.toContain(UNITS_STRING_REMINDER_TEXT);
   });
 });
 

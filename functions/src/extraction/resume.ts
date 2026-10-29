@@ -16,6 +16,16 @@
  *   4. After 2 retries (3 total attempts), throw `ExtractionError`
  *      with the per-attempt failure log.
  *
+ * One recovery runs before validation and spends no attempt (#650):
+ * when the tool call's `units` is a string that `JSON.parse`s to an
+ * array (`claude-sonnet-4-6` sometimes double-encodes it on long
+ * résumés), that array is validated in its place. The attempt's usage
+ * record, and any schema_error the decoded array still fails with,
+ * carry `recovered: "units-string"`, and a warn line without résumé
+ * content is logged. A string that does not decode to an array fails
+ * exactly as before, and the next attempt's reminder says `units`
+ * must be a JSON array, not a string. See `prepareToolInput`.
+ *
  * `recordUsage` fires after every attempt, successful or not, so the
  * cost accounting in #47 doesn't undercount retries.
  */
@@ -48,6 +58,7 @@ import type { ExperienceUnit } from "../types/capability.js";
 import {
   ExtractionError,
   type ExtractionAttemptFailure,
+  type ExtractionRecovery,
 } from "./errors.js";
 
 export interface ExtractionContext {
@@ -111,6 +122,74 @@ const RETRY_REMINDERS: readonly string[] = [
   "\n\nYour previous two attempts failed schema validation. Be strict about field types, required fields, and enum values. If uncertain about a field, drop the Unit rather than invent a value.",
 ];
 
+/**
+ * Appended after the attempt's reminder once an earlier attempt
+ * returned `units` as a string and failed (#650). The generic
+ * reminders above did not change that shape in the #495 runs, so this
+ * one names it.
+ */
+const UNITS_STRING_REMINDER =
+  "\n\n`units` must be a JSON array, not a string. A previous response returned `units` as a string; return the array of Unit objects itself, not a string that encodes it.";
+
+/** A tool call's input as it goes to validation, after `prepareToolInput`. */
+export interface PreparedToolInput {
+  /** What to validate: the input as returned, or with `units` decoded. */
+  readonly input: unknown;
+  /** True when the input's `units` arrived as a string, decodable or not. */
+  readonly unitsWasString: boolean;
+  /** Set only when the string was decoded into the array validated here. */
+  readonly recovered?: ExtractionRecovery;
+}
+
+/**
+ * Tolerant pre-parse of the tool call's input (#650). Pure.
+ *
+ * `claude-sonnet-4-6` sometimes returns `units` as a string holding the
+ * JSON-encoded array instead of the array itself, and the stricter
+ * reminders do not change it: on the longest fixture résumé that
+ * failed all three attempts, about six minutes of model time per flow.
+ *
+ * When `units` is a string whose `JSON.parse` is an array, the result
+ * is a shallow copy of the input with that array as `units` and
+ * `recovered: "units-string"`. Anything else, including a string that
+ * is not JSON or decodes to a non-array, comes back as the same input
+ * object, so validation rejects it exactly as before. Only `units` is
+ * touched: other keys, unknown ones included, still go to the
+ * `.strict()` schema as the model sent them, and the decoded array's
+ * contents are validated like any other.
+ */
+export function prepareToolInput(input: unknown): PreparedToolInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { input, unitsWasString: false };
+  }
+  const units: unknown = (input as Record<string, unknown>)["units"];
+  if (typeof units !== "string") return { input, unitsWasString: false };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(units);
+  } catch {
+    return { input, unitsWasString: true };
+  }
+  if (!Array.isArray(decoded)) return { input, unitsWasString: true };
+  return {
+    input: { ...(input as Record<string, unknown>), units: decoded },
+    unitsWasString: true,
+    recovered: "units-string",
+  };
+}
+
+type ToolUseBlock = Extract<Anthropic.Messages.ContentBlock, { type: "tool_use" }>;
+
+/**
+ * The response's first tool_use block. Guarded so a malformed
+ * `content` cannot throw ahead of usage recording, which now waits on
+ * this lookup.
+ */
+function findToolUse(content: Anthropic.Messages.Message["content"]): ToolUseBlock | undefined {
+  if (!Array.isArray(content)) return undefined;
+  return content.find((b): b is ToolUseBlock => b.type === "tool_use");
+}
+
 export async function extractFromResume(
   text: string,
   ctx: ExtractionContext,
@@ -144,6 +223,10 @@ export async function extractFromResume(
   });
 
   const failures: ExtractionAttemptFailure[] = [];
+  // Set once an attempt returns `units` as a string, so every later
+  // attempt's reminder names the shape (#650). A later attempt runs
+  // only if that one failed.
+  let sawUnitsString = false;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // 1-based for display: "attempt 2 of 3" reads correctly, and a
@@ -161,7 +244,11 @@ export async function extractFromResume(
     }
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
-    const systemWithReminder = prompt.system + request.systemSuffix + (RETRY_REMINDERS[attempt] ?? "");
+    const systemWithReminder =
+      prompt.system +
+      request.systemSuffix +
+      (RETRY_REMINDERS[attempt] ?? "") +
+      (sawUnitsString ? UNITS_STRING_REMINDER : "");
     const userContent = `${prompt.userFewShot}\n\nResume to extract:\n\n${text}`;
 
     let response: Anthropic.Messages.Message;
@@ -213,6 +300,15 @@ export async function extractFromResume(
       continue;
     }
 
+    // The tool call and its tolerant pre-parse are read before usage is
+    // recorded, so the usage record can say the attempt was recovered
+    // (#650). A refusal or a truncation never reaches validation, so
+    // neither is read.
+    const reachesValidation =
+      response.stop_reason !== "refusal" && response.stop_reason !== "max_tokens";
+    const toolUse = reachesValidation ? findToolUse(response.content) : undefined;
+    const prepared = toolUse === undefined ? undefined : prepareToolInput(toolUse.input);
+
     // Cost telemetry must never block a successful LLM verdict.
     // safeRecordUsage centralizes the try/catch + log-warn shape
     // (CodeRabbit Nitpick on PR #118); see llm/cost.ts for the
@@ -228,6 +324,7 @@ export async function extractFromResume(
         attempt,
         maxTokens: request.max_tokens,
         ...(request.effort !== undefined && { effort: request.effort }),
+        ...(prepared?.recovered !== undefined && { recovered: prepared.recovered }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
       }),
@@ -269,10 +366,7 @@ export async function extractFromResume(
       continue;
     }
 
-    const toolUse = response.content.find(
-      (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
-    );
-    if (!toolUse) {
+    if (prepared === undefined) {
       failures.push({
         attempt,
         kind: "no_tool_use",
@@ -282,13 +376,25 @@ export async function extractFromResume(
       continue;
     }
 
-    const parsed = ExtractionResponseV1Schema.safeParse(toolUse.input);
+    if (prepared.unitsWasString) sawUnitsString = true;
+    if (prepared.recovered !== undefined) {
+      // Fixed fields only: no résumé text, no model output (the
+      // redaction rule in llm/retryDiagnostics.ts).
+      logger.warn("extraction.resume: tool input `units` arrived as a JSON string; validating the decoded array", {
+        model,
+        attempt,
+        recovered: prepared.recovered,
+      });
+    }
+
+    const parsed = ExtractionResponseV1Schema.safeParse(prepared.input);
     if (!parsed.success) {
       failures.push({
         attempt,
         kind: "schema_error",
         message: parsed.error.message,
         zodIssues: parsed.error.issues,
+        ...(prepared.recovered !== undefined && { recovered: prepared.recovered }),
       });
       continue;
     }
