@@ -23,14 +23,23 @@
  * and every saved item of the source flow must be listed.
  *
  * - `keep`: the item must equal the source flow's item; it is used as is.
- * - `fix` (Unit): `owner_corrected_raw_text` replaces `raw_text`, and
- *   in-place edits (for example `normalized_summary`, which the matcher
- *   embeds, and `skills`) are taken as written.
+ * - `fix` (Unit): `owner_corrected_raw_text`, when set, replaces
+ *   `raw_text`, and in-place edits (for example `normalized_summary`,
+ *   which the matcher embeds, and `skills`) are taken as written. A fix
+ *   that changes only `normalized_summary` or `skills` may leave
+ *   `owner_corrected_raw_text` null.
  * - `fix` (Requirement): `owner_corrected_text` replaces
  *   `normalized_requirement` and `owner_must_have` overrides `must_have`;
  *   other in-place edits are taken as written. A `fix` must change
  *   something.
  * - `drop`: left out.
+ *
+ * On a `keep` or `drop` item, an `owner_corrected_raw_text`,
+ * `owner_corrected_text` or `owner_must_have` equal to the saved
+ * `raw_text`, `normalized_requirement` or `must_have` is a confirmation
+ * (the calibration packet asks the owner to set `owner_must_have` on
+ * every Requirement) and is accepted; a value that differs is refused,
+ * since only `fix` changes an item.
  * - `add` (Units only): a Unit the extractor missed, with at least
  *   `raw_text`, `normalized_summary` and `skills`. It gets the id
  *   `added_<n>` and, for every field it does not set, the gold-Unit
@@ -276,8 +285,11 @@ export function applyUnitCorrections(
     listed.add(id);
     const before = bySource.get(id)!;
     const content = stripOwner(item);
-    if (verdict !== "fix" && item.owner_corrected_raw_text !== null && item.owner_corrected_raw_text !== undefined) {
-      throw new Error(`${at}: owner_corrected_raw_text is set on a "${verdict}" Unit; use "fix"`);
+    const correctedRaw = item.owner_corrected_raw_text;
+    const hasRaw = correctedRaw !== null && correctedRaw !== undefined;
+    if (hasRaw && !nonEmpty(correctedRaw)) throw new Error(`${at}: owner_corrected_raw_text must be a non-empty string`);
+    if (verdict !== "fix" && hasRaw && correctedRaw !== before.raw_text) {
+      throw new Error(`${at}: owner_corrected_raw_text differs from the saved raw_text on a "${verdict}" Unit; use "fix"`);
     }
     if (verdict === "drop") {
       dropped.push(id);
@@ -292,10 +304,7 @@ export function applyUnitCorrections(
       kept.push(id);
       return;
     }
-    if (!nonEmpty(item.owner_corrected_raw_text)) {
-      throw new Error(`${at}: a "fix" Unit needs owner_corrected_raw_text`);
-    }
-    const after: Record<string, unknown> = { ...content, raw_text: item.owner_corrected_raw_text };
+    const after: Record<string, unknown> = { ...content, ...(hasRaw && { raw_text: correctedRaw }) };
     if (!nonEmpty(after.normalized_summary) || !isStringArray(after.skills)) {
       throw new Error(`${at}: a fixed Unit needs a normalized_summary and a skills list`);
     }
@@ -338,12 +347,19 @@ export function applyRequirementCorrections(
     const mustHave = item.owner_must_have;
     const hasText = text !== null && text !== undefined;
     const hasMustHave = mustHave !== null && mustHave !== undefined;
-    if (verdict !== "fix" && (hasText || hasMustHave)) {
-      throw new Error(`${at}: owner_corrected_text/owner_must_have is set on a "${verdict}" Requirement; use "fix"`);
-    }
     if (hasText && !nonEmpty(text)) throw new Error(`${at}: owner_corrected_text must be a non-empty string`);
     if (hasMustHave && typeof mustHave !== "boolean") throw new Error(`${at}: owner_must_have must be true or false`);
     const before = bySource.get(id)!;
+    if (verdict !== "fix") {
+      // A value equal to the saved one confirms it; only `fix` changes an item.
+      const differs = [
+        ...(hasText && text !== before.normalized_requirement ? ["owner_corrected_text"] : []),
+        ...(hasMustHave && mustHave !== before.must_have ? ["owner_must_have"] : []),
+      ];
+      if (differs.length > 0) {
+        throw new Error(`${at}: ${differs.join("/")} differs from the saved value on a "${verdict}" Requirement; use "fix"`);
+      }
+    }
     const content = stripOwner(item);
     if (verdict === "drop") {
       dropped.push(id);

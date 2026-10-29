@@ -19,7 +19,11 @@
  * chunks, appending each chunk's vectors as soon as it returns so an
  * interrupted run keeps what it paid for. Before each chunk it refuses
  * when the spend so far plus that chunk's estimate would pass the bound.
- * Usage is priced with `priceUsage` and never written to Firestore.
+ * Usage is priced with `priceUsage` and never written to Firestore. When
+ * the served usage cannot be priced (no rate card for the model string),
+ * the request is charged at the larger of its served tokens at the
+ * embedding rate and the chunk's estimate, with a warning, so the spend
+ * the guard accumulates never drops below the estimate it checked.
  */
 
 import { createHash } from "node:crypto";
@@ -184,7 +188,15 @@ export class EmbeddingCache {
    */
   async fill(
     texts: readonly string[],
-    options: { readonly client: OpenAI; readonly maxUsd: number; readonly chunkSize?: number },
+    options: {
+      readonly client: OpenAI;
+      readonly maxUsd: number;
+      readonly chunkSize?: number;
+      /** Prices a served usage record; defaults to `priceUsage` (tests inject a failing one). */
+      readonly priceUsage?: (usage: UsageRecord) => number;
+      /** Receives pricing-fallback warnings; defaults to stderr. */
+      readonly warn?: (message: string) => void;
+    },
   ): Promise<FillResult> {
     if (this.model !== EMBEDDING_MODEL) {
       throw new Error(`embedMany embeds with ${EMBEDDING_MODEL}; this cache is keyed for ${this.model}`);
@@ -195,12 +207,22 @@ export class EmbeddingCache {
     let inputTokens = 0;
     let requests = 0;
     let embedded = 0;
+    const price = options.priceUsage ?? ((usage: UsageRecord): number => priceUsage(usage).costUsd);
+    const warn = options.warn ?? ((message: string): void => void process.stderr.write(`${message}\n`));
+    let chunkEstimate = 0;
     const record = async (usage: UsageRecord): Promise<number> => {
-      let cost = 0;
+      let cost: number;
       try {
-        cost = priceUsage(usage).costUsd;
-      } catch {
-        cost = 0;
+        cost = price(usage);
+      } catch (err) {
+        // Never count a billed request as free: the guard's running total
+        // must not fall below the estimate it checked for this chunk.
+        cost = Math.max(priceEmbeddingTokens(usage.inputTokens, this.model), chunkEstimate);
+        warn(
+          `warning: could not price embedding usage for ${usage.servedModel ?? usage.model} ` +
+            `(${err instanceof Error ? err.message : String(err)}); counting $${cost.toFixed(6)} ` +
+            `(the larger of ${usage.inputTokens} served tokens at the ${this.model} rate and the chunk estimate).`,
+        );
       }
       usd += cost;
       inputTokens += usage.inputTokens;
@@ -208,7 +230,7 @@ export class EmbeddingCache {
     };
     for (let start = 0; start < uncached.length; start += chunkSize) {
       const chunk = uncached.slice(start, start + chunkSize);
-      const chunkEstimate = priceEmbeddingTokens(
+      chunkEstimate = priceEmbeddingTokens(
         chunk.reduce((a, t) => a + estimateEmbeddingTokens(t), 0),
         this.model,
       );

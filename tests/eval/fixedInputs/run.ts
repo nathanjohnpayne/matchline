@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { openaiForCli, type OpenAIClient as OpenAI } from "../../../functions/src/llm/openai.ts";
 import type { ExperienceUnit, JobRequirementUnit } from "../../../functions/src/types/capability.ts";
 
+import { matchInputKey, replayedBothSides } from "../analysis/analyzeRecords.ts";
 import { flowIdentity, loadFlows } from "../analyze.ts";
 import { repoRoot } from "../fitBrief/corpus.ts";
 import type { FlowRecord } from "../flowRecord.ts";
@@ -70,8 +71,10 @@ import {
   type InputSet,
 } from "./inputs.ts";
 import {
+  FIELDS_MATCHER_IGNORES,
   formatFixedInputsMarkdown,
   formatPlan,
+  onlyIgnoredFieldsChanged,
   type CorrectionReport,
   type FixedInputsResult,
   type FlowResult,
@@ -180,6 +183,38 @@ function correctSide(
   return out;
 }
 
+export const REPEATED_REPLAY_REASON =
+  "replayed extraction and requirement parsing from the stage cache with the same Units and Requirements as a counted flow of the arm and cell (the eval:analyze rule)";
+
+/**
+ * The flows `eval:analyze` drops as repeated cache replays, by the same
+ * rule (`replayedBothSides` / `matchInputKey`): within one arm and cell,
+ * a flow that replayed both extraction and requirement parsing and whose
+ * (Units, Requirements) pair equals a live flow's or an earlier kept
+ * replay's. Matching would run on identical inputs, so scoring it again
+ * would weight that sample twice. `flows` must all hold both sides.
+ */
+export function repeatedReplays(flows: readonly FlowRecord[]): Set<FlowRecord> {
+  const group = (f: FlowRecord): string => `${f.variant}\u0000${f.cell}`;
+  const counted = new Map<string, Set<string>>();
+  const seen = (f: FlowRecord): Set<string> => {
+    const g = group(f);
+    const set = counted.get(g) ?? new Set<string>();
+    counted.set(g, set);
+    return set;
+  };
+  for (const f of flows) if (!replayedBothSides(f)) seen(f).add(matchInputKey(f));
+  const out = new Set<FlowRecord>();
+  for (const f of flows) {
+    if (!replayedBothSides(f)) continue;
+    const set = seen(f);
+    const key = matchInputKey(f);
+    if (set.has(key)) out.add(f);
+    else set.add(key);
+  }
+  return out;
+}
+
 function sideSet(arg: SideArg): InputSet {
   return { kind: arg.kind === "gold" ? "gold" : "record" };
 }
@@ -237,6 +272,15 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
   };
   const unitCorrections = correctSide("units", load(args.units), allFlows);
   const reqCorrections = correctSide("requirements", load(args.requirements), allFlows);
+  for (const c of [...unitCorrections.values(), ...reqCorrections.values()]) {
+    if (onlyIgnoredFieldsChanged(c.report)) {
+      stderr.push(
+        `warning: ${c.corrections.path}: every ${c.report.side} fix changes only fields the matcher does not read ` +
+          `(${[...FIELDS_MATCHER_IGNORES].join(", ")}) and nothing is dropped or added, so the corrected ${c.report.side} ` +
+          "cannot move match accuracy.",
+      );
+    }
+  }
 
   // Which flows run, and with which alternatives.
   const skipped = new Map<string, string[]>();
@@ -267,9 +311,15 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
       });
     }
   } else {
-    for (const flow of allFlows) {
-      if (flow.units === null || flow.requirements === null) {
-        skip("saved no Units or no Requirements (an upstream stage failed)", flow);
+    const complete = allFlows.filter((flow) => {
+      if (flow.units !== null && flow.requirements !== null) return true;
+      skip("saved no Units or no Requirements (an upstream stage failed)", flow);
+      return false;
+    });
+    const repeats = repeatedReplays(complete);
+    for (const flow of complete) {
+      if (repeats.has(flow)) {
+        skip(REPEATED_REPLAY_REASON, flow);
         continue;
       }
       planned.push({ flow, units: sideSet(args.units), requirements: sideSet(args.requirements) });
@@ -344,7 +394,7 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
         }
         return openaiForCli();
       });
-    fill = await cache.fill(texts, { client: factory(), maxUsd: args.maxUsd });
+    fill = await cache.fill(texts, { client: factory(), maxUsd: args.maxUsd, warn: (m) => stderr.push(m) });
     stderr.push(
       `Embedded ${fill.embedded} text(s) in ${fill.requests} request(s): ${fill.inputTokens} tokens, $${fill.usd.toFixed(6)}; cached at ${cache.path}`,
     );

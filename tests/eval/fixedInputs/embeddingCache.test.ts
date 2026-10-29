@@ -113,6 +113,31 @@ describe("EmbeddingCache", () => {
     expect(client.embeddings.create).toHaveBeenCalledTimes(1);
   });
 
+  it("never counts a request it cannot price as free: falls back to the estimate and warns", async () => {
+    const path = join(base, "e.jsonl");
+    const texts = ["x".repeat(4000), "y".repeat(4000), "z".repeat(4000)];
+    const oneChunk = priceEmbeddingTokens(estimateEmbeddingTokens(texts[0]!));
+    const warnings: string[] = [];
+    const unpriceable = (): number => {
+      throw new Error("no rate card for text-embedding-3-small-2099");
+    };
+    // Bound fits two chunks' estimates, not three: the fallback must carry the spend forward.
+    const err = await EmbeddingCache.load(path, { root })
+      .fill(texts, { client: mockOpenAi(), maxUsd: oneChunk * 2.5, chunkSize: 1, priceUsage: unpriceable, warn: (m) => warnings.push(m) })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EmbeddingRefusal);
+    expect(String(err)).toMatch(/2 of 3 texts were embedded/);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toMatch(/could not price embedding usage .*no rate card/);
+    const ok = await EmbeddingCache.load(join(base, "f.jsonl"), { root }).fill(texts.slice(0, 1), {
+      client: mockOpenAi(),
+      maxUsd: 1,
+      priceUsage: unpriceable,
+      warn: () => undefined,
+    });
+    expect(ok.usd).toBeGreaterThanOrEqual(oneChunk);
+  });
+
   it("plans distinct and uncached texts with a priced estimate", () => {
     const path = join(base, "e.jsonl");
     writeFileSync(path, cacheLinesFor([{ text: "cached", vector: [1] }]));

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseFixedInputArgs } from "./args.ts";
 import { sha256File } from "./corrections.ts";
 import { DIAGNOSTIC_BANNER, GOLD_DEFINITION } from "./report.ts";
-import { REPORT_FILE, RESULT_FILE, runFixedInputs, type FixedInputsDeps } from "./run.ts";
+import { REPEATED_REPLAY_REASON, repeatedReplays, REPORT_FILE, RESULT_FILE, runFixedInputs, type FixedInputsDeps } from "./run.ts";
 import { CELL, flowFor, gitRepo, JD, mockOpenAi, RESUME, savedItems, writeFlows } from "./testSupport.ts";
 
 let base: string;
@@ -153,6 +153,29 @@ describe("runFixedInputs", () => {
     expect(second.stdout).toMatch(/\| arm-a \| 2 \| 1 \| 1 \|/);
   });
 
+  it("skips repeated cache replays by the eval:analyze rule", async () => {
+    const replay = (f: ReturnType<typeof flowFor>, hits: Record<string, boolean>): ReturnType<typeof flowFor> => ({
+      ...f,
+      stepCacheHits: hits,
+    });
+    const both = { extraction: true, requirement_parsing: true };
+    const live = flowFor("arm-r", "inv-r", 0, savedItems(0));
+    const copyOfLive = replay(flowFor("arm-r", "inv-r", 1, savedItems(0)), both);
+    const newReplay = replay(flowFor("arm-r", "inv-r", 2, savedItems(3)), both);
+    const copyOfReplay = replay(flowFor("arm-r", "inv-r", 3, savedItems(3)), both);
+    const halfReplay = replay(flowFor("arm-r", "inv-r", 4, savedItems(0)), { extraction: true, requirement_parsing: false });
+    const otherArm = replay(flowFor("arm-s", "inv-s", 0, savedItems(0)), both);
+    const flows = [copyOfLive, live, newReplay, copyOfReplay, halfReplay, otherArm];
+    expect([...repeatedReplays(flows)]).toEqual([copyOfLive, copyOfReplay]);
+
+    const dir = writeFlows(join(base, "records-replays"), flows);
+    const outcome = await runFixedInputs(parseFixedInputArgs(["--records", dir, "--embeddings-cache", cachePath]), deps());
+    expect(outcome.code).toBe(0);
+    expect(outcome.result!.flows.map((f) => `${f.arm}#${f.sampleIndex}`)).toEqual(["arm-r#0", "arm-r#2", "arm-r#4", "arm-s#0"]);
+    expect(outcome.result!.skipped).toEqual([{ reason: REPEATED_REPLAY_REASON, flows: [`arm-r ${CELL} #1`, `arm-r ${CELL} #3`] }]);
+    expect(outcome.stdout).toContain(`Skipped 2 flow(s): ${REPEATED_REPLAY_REASON}`);
+  });
+
   it("reports recall@k when --k is given", async () => {
     const outcome = await runFixedInputs(parseFixedInputArgs(argv("--k", "500")), deps());
     expect(outcome.result!.metric).toBe("recall@500");
@@ -216,6 +239,41 @@ describe("runFixedInputs with owner corrections", () => {
     expect(outcome.stdout).toContain("## Corrected items");
     expect(outcome.stdout).toContain(`sha256 ${sha256File(file)}`);
     expect(result.flows[0]!.unitCount).toBe(savedItems(1).units.length);
+  });
+
+  it("tags fixes the matcher never reads and warns when a side changes only those", async () => {
+    const items = savedItems(1, { dropReqs: 2 });
+    const body = {
+      resumeId: RESUME,
+      jdId: JD,
+      units: items.units.map((u, i) => ({
+        ...u,
+        owner_verdict: i === 0 ? "fix" : "keep",
+        owner_corrected_raw_text: i === 0 ? "Owner-corrected raw text only." : null,
+      })),
+      requirements: items.requirements.map((q, i) => ({
+        ...q,
+        owner_verdict: i === 0 ? "fix" : "keep",
+        owner_corrected_text: null,
+        owner_must_have: i === 0 ? !q.must_have : q.must_have,
+      })),
+    };
+    const file = join(base, "ignored.json");
+    writeFileSync(file, JSON.stringify(body, null, 2));
+    const outcome = await runFixedInputs(
+      parseFixedInputArgs(argv("--units", file, "--requirements", file)),
+      deps({ manifestPath: manifest(file) }),
+    );
+    expect(outcome.code).toBe(0);
+    expect(outcome.stdout).toContain("unit-1-0 [raw_text (no effect on matching)]");
+    expect(outcome.stdout).toContain("req-1-0 [must_have (no effect on matching)]");
+    expect(outcome.stdout).toMatch(/Override req-1-0: must_have (true|false) \(no effect on matching\)/);
+    expect(outcome.stdout).toContain("the matcher sees the record side's inputs");
+    expect(outcome.stderr).toMatch(/warning: .*ignored\.json: every units fix changes only fields the matcher does not read/);
+    expect(outcome.stderr).toMatch(/warning: .*ignored\.json: every requirements fix changes only fields/);
+    // The corrected sides are the record inputs as far as the matcher can tell.
+    const c = outcome.result!.flows[0]!.conditions;
+    expect(c["corrected/corrected"]!.current!.accuracy).toBe(c["record/record"]!.current!.accuracy);
   });
 
   it("refuses an unlisted file with its hash, and two sides from different flows", async () => {

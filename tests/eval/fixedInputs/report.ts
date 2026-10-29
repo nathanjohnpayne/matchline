@@ -16,8 +16,36 @@ export const GOLD_DEFINITION =
   "(id, `normalized_summary` as summary and raw text, skills, tools, domains) with confidence 1 and no dates, " +
   "seniority or scope signals, outcomes or metrics. A gold Requirement is an `expected_requirements` entry " +
   "(id, text, category, must-have) and carries no structure: no keywords, tools, domains or seniority level, " +
-  "so every structural scoring axis is neutral on it. Gold sides map to label ids by identity; record and " +
-  "corrected sides map through `mapUnitIds`/`mapRequirementIds` at the 0.10 floor.";
+  "so every structural scoring axis is unsignalled on it (applicability false). Under the current scorer the " +
+  "unconstrained axes pay their fixed defaults: 0.5 for skills, tools and domains, 1.0 for seniority, and 1.0 " +
+  "for scope except 0.5 on a scope-category gold Requirement. The renormalized and cosine scorers ignore " +
+  "unsignalled axes. Gold sides map to label ids by identity; record and corrected sides map through " +
+  "`mapUnitIds`/`mapRequirementIds` at the 0.10 floor.";
+
+/**
+ * Item fields no part of `functions/src/matching` reads: the matcher
+ * embeds `normalized_summary` / `normalized_requirement` and scores the
+ * structured signals, never `raw_text`, `must_have` or `priority`. A
+ * correction that changes only these cannot move match accuracy.
+ */
+export const FIELDS_MATCHER_IGNORES: ReadonlySet<string> = new Set(["raw_text", "must_have", "priority"]);
+
+const NO_EFFECT = "no effect on matching";
+
+/** True when a correction changed something, but only fields the matcher never reads. */
+export function onlyIgnoredFieldsChanged(c: Pick<CorrectionReport, "provenance">): boolean {
+  const p = c.provenance;
+  return (
+    p.fixed.length > 0 &&
+    p.dropped.length === 0 &&
+    p.added.length === 0 &&
+    p.fixed.every((f) => f.fields.every((field) => FIELDS_MATCHER_IGNORES.has(field)))
+  );
+}
+
+function fieldLabel(field: string): string {
+  return FIELDS_MATCHER_IGNORES.has(field) ? `${field} (${NO_EFFECT})` : field;
+}
 
 export interface ScoredCell {
   readonly accuracy: number;
@@ -140,7 +168,7 @@ function formatProvenance(c: CorrectionReport): string {
     "",
     `- sha256 ${c.sha256}; source flow ${c.sourceFlow.variant} #${c.sourceFlow.sampleIndex} (invocation ${c.sourceFlow.invocationId}).`,
     `- Kept (${p.kept.length}): ${p.kept.join(", ") || "none"}.`,
-    `- Fixed (${p.fixed.length}): ${p.fixed.map((f) => `${f.id} [${f.fields.join(", ")}]`).join("; ") || "none"}.`,
+    `- Fixed (${p.fixed.length}): ${p.fixed.map((f) => `${f.id} [${f.fields.map(fieldLabel).join(", ")}]`).join("; ") || "none"}.`,
     `- Dropped (${p.dropped.length}): ${p.dropped.join(", ") || "none"}.`,
   ];
   if (c.side === "units") {
@@ -149,9 +177,14 @@ function formatProvenance(c: CorrectionReport): string {
   for (const o of c.overrides ?? []) {
     const parts = [
       ...(o.normalized_requirement !== undefined ? [`text "${o.normalized_requirement}"`] : []),
-      ...(o.must_have !== undefined ? [`must_have ${o.must_have}`] : []),
+      ...(o.must_have !== undefined ? [`must_have ${o.must_have} (${NO_EFFECT})`] : []),
     ];
     lines.push(`- Override ${o.id}: ${parts.join(", ")}.`);
+  }
+  if (onlyIgnoredFieldsChanged(c)) {
+    lines.push(
+      `- Every fix on this side changes only fields the matcher does not read (${[...FIELDS_MATCHER_IGNORES].join(", ")}), and nothing is dropped or added: the matcher sees the record side's inputs.`,
+    );
   }
   return lines.join("\n");
 }

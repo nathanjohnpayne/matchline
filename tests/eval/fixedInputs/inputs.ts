@@ -18,7 +18,14 @@
  *   `category` and `must_have` (priority `high` for a must-have, else
  *   `medium`). Labels carry no structure, so a gold Requirement has no
  *   keywords, tools, domains or seniority level: every structural axis
- *   of the scorer is unsignalled (neutral) on it.
+ *   of the scorer is unsignalled on it (`component_applicability`
+ *   false). Under the current scorer the unconstrained axes still pay
+ *   their fixed defaults, which are not uniform: 0.5 for skills, tools
+ *   and domains (`jaccard` with an empty Requirement side), 1.0 for
+ *   seniority, and 1.0 for scope except on a scope-category gold
+ *   Requirement, where `scopeAlignment` falls through to `jaccard` and
+ *   pays 0.5. The renormalized and cosine scorers ignore unsignalled
+ *   axes, so they are unaffected.
  *
  * Gold sides map to label ids by identity; record and corrected sides
  * map through `mapUnitIds` / `mapRequirementIds` at the default 0.10

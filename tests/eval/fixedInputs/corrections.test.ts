@@ -95,6 +95,29 @@ describe("applyUnitCorrections", () => {
     expect(provenance.added).toEqual([{ id: "added_1", normalized_summary: "A missed fact about launches" }]);
   });
 
+  it("accepts a fix that changes only normalized_summary or skills without restating raw_text", () => {
+    const s = scaffold(items);
+    s.units[0] = { ...s.units[0]!, owner_verdict: "fix", normalized_summary: "A sharper summary of the work" };
+    s.units[1] = { ...s.units[1]!, owner_verdict: "fix", skills: ["only skills changed"] };
+    const { items: out, provenance } = applyUnitCorrections(s.units, source, "c");
+    expect(out[0]).toMatchObject({ raw_text: source[0]!.raw_text, normalized_summary: "A sharper summary of the work" });
+    expect(provenance.fixed).toEqual([
+      { id: source[0]!.id, fields: ["normalized_summary"] },
+      { id: source[1]!.id, fields: ["skills"] },
+    ]);
+  });
+
+  it("treats an owner_corrected_raw_text equal to the saved raw_text on keep or drop as a confirmation", () => {
+    const s = scaffold(items);
+    s.units[0]!.owner_corrected_raw_text = source[0]!.raw_text;
+    s.units[1] = { ...s.units[1]!, owner_verdict: "drop", owner_corrected_raw_text: source[1]!.raw_text };
+    const { items: out, provenance } = applyUnitCorrections(s.units, source, "c");
+    expect(out[0]).toEqual(source[0]);
+    expect(provenance.kept[0]).toBe(source[0]!.id);
+    expect(provenance.dropped).toEqual([source[1]!.id]);
+    expect(provenance.fixed).toEqual([]);
+  });
+
   it("refuses null verdicts, silent edits, empty fixes, bad adds and omissions", () => {
     const base0 = scaffold(items);
     const nullVerdict = structuredClone(base0);
@@ -105,7 +128,10 @@ describe("applyUnitCorrections", () => {
     expect(() => applyUnitCorrections(silent.units, source, "c")).toThrow(/marked keep but differs .* normalized_summary; mark it fix/);
     const noRaw = structuredClone(base0);
     noRaw.units[0]!.owner_verdict = "fix";
-    expect(() => applyUnitCorrections(noRaw.units, source, "c")).toThrow(/needs owner_corrected_raw_text/);
+    expect(() => applyUnitCorrections(noRaw.units, source, "c")).toThrow(/marked fix but changes nothing/);
+    const emptyRaw = structuredClone(base0);
+    emptyRaw.units[0] = { ...emptyRaw.units[0]!, owner_verdict: "fix", owner_corrected_raw_text: " " };
+    expect(() => applyUnitCorrections(emptyRaw.units, source, "c")).toThrow(/owner_corrected_raw_text must be a non-empty string/);
     const same = structuredClone(base0);
     same.units[0] = { ...same.units[0]!, owner_verdict: "fix", owner_corrected_raw_text: source[0]!.raw_text };
     expect(() => applyUnitCorrections(same.units, source, "c")).toThrow(/changes nothing/);
@@ -117,7 +143,10 @@ describe("applyUnitCorrections", () => {
     expect(() => applyUnitCorrections(omitted.units, source, "c")).toThrow(/omits saved item/);
     const stray = structuredClone(base0);
     stray.units[0]!.owner_corrected_raw_text = "x";
-    expect(() => applyUnitCorrections(stray.units, source, "c")).toThrow(/set on a "keep" Unit/);
+    expect(() => applyUnitCorrections(stray.units, source, "c")).toThrow(/differs from the saved raw_text on a "keep" Unit; use "fix"/);
+    const strayDrop = structuredClone(base0);
+    strayDrop.units[0] = { ...strayDrop.units[0]!, owner_verdict: "drop", owner_corrected_raw_text: "x" };
+    expect(() => applyUnitCorrections(strayDrop.units, source, "c")).toThrow(/on a "drop" Unit/);
     const unknown = structuredClone(base0);
     unknown.units[0]!.owner_verdict = "maybe";
     expect(() => applyUnitCorrections(unknown.units, source, "c")).toThrow(/keep\|fix\|drop\|add/);
@@ -145,14 +174,35 @@ describe("applyRequirementCorrections", () => {
     expect(provenance.dropped).toEqual([source[2]!.id]);
   });
 
+  it("accepts a keep or drop whose owner_must_have / owner_corrected_text confirm the saved values", () => {
+    const s = scaffold(items);
+    // The packet asks the owner to set owner_must_have on every Requirement.
+    s.requirements = s.requirements.map((q, i) => ({ ...q, owner_must_have: source[i]!.must_have }));
+    s.requirements[0]!.owner_corrected_text = source[0]!.normalized_requirement;
+    s.requirements[2]!.owner_verdict = "drop";
+    const { items: out, provenance } = applyRequirementCorrections(s.requirements, source, "c");
+    expect(out).toEqual(source.filter((_, i) => i !== 2));
+    expect(provenance.kept).toEqual(source.filter((_, i) => i !== 2).map((q) => q.id));
+    expect(provenance.dropped).toEqual([source[2]!.id]);
+    expect(provenance.fixed).toEqual([]);
+  });
+
   it("refuses add, overrides on keep, and bad values", () => {
     const s = scaffold(items);
     const add = structuredClone(s);
     add.requirements.push({ owner_verdict: "add", normalized_requirement: "x" });
     expect(() => applyRequirementCorrections(add.requirements, source, "c")).toThrow(/Units only/);
     const keepOverride = structuredClone(s);
-    keepOverride.requirements[0]!.owner_must_have = true;
-    expect(() => applyRequirementCorrections(keepOverride.requirements, source, "c")).toThrow(/use "fix"/);
+    keepOverride.requirements[0]!.owner_must_have = !source[0]!.must_have;
+    expect(() => applyRequirementCorrections(keepOverride.requirements, source, "c")).toThrow(
+      /owner_must_have differs from the saved value on a "keep" Requirement; use "fix"/,
+    );
+    const keepText = structuredClone(s);
+    keepText.requirements[0]!.owner_corrected_text = "A different requirement";
+    expect(() => applyRequirementCorrections(keepText.requirements, source, "c")).toThrow(/owner_corrected_text differs/);
+    const dropOverride = structuredClone(s);
+    dropOverride.requirements[0] = { ...dropOverride.requirements[0]!, owner_verdict: "drop", owner_must_have: !source[0]!.must_have };
+    expect(() => applyRequirementCorrections(dropOverride.requirements, source, "c")).toThrow(/on a "drop" Requirement/);
     const badMust = structuredClone(s);
     badMust.requirements[0] = { ...badMust.requirements[0]!, owner_verdict: "fix", owner_must_have: "yes" };
     expect(() => applyRequirementCorrections(badMust.requirements, source, "c")).toThrow(/true or false/);
