@@ -417,6 +417,73 @@ describe("code spans export as typed", () => {
   });
 });
 
+// `**x**` is reduced only at non-word boundaries, mirroring the `__` rule: the opening `**` must not
+// follow, and the closing `**` must not precede, a letter, digit or `_`. Reducing every `**…**` pair
+// turned the exponent operators in `Processed 10**6 to 10**9 records` into `Processed 106 to 109
+// records` (external review, P2, zero fabrication).
+describe("strong emphasis only at non-word boundaries", () => {
+  it.each([
+    ["Processed 10**6 to 10**9 records", "Processed 10**6 to 10**9 records"],
+    ["2**10 = 1024", "2**10 = 1024"],
+    ["x**2 + y**2", "x**2 + y**2"],
+    ["a**b**c", "a**b**c"],
+    // A closing `**` followed by a word character is not a closer, so the bold reaches past the operator.
+    ["**Throughput 10**6 rps**", "Throughput 10**6 rps"],
+  ])("keeps a `**` inside a word or number as typed: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    ["**bold** text", "bold text"],
+    ["a **bold** b", "a bold b"],
+    ["(**bold**)", "(bold)"],
+    ["**bold**.", "bold."],
+    ["**bold**, then", "bold, then"],
+    ["***both***", "both"],
+    ["**Scale:** 10**6 to 10**9 records", "Scale: 10**6 to 10**9 records"],
+  ])("still reduces `**x**` at non-word boundaries: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // The marker guard still sees the sign through the `**`.
+    ["- **30%** cost", "- 30% cost"],
+    // `_` is a word character, so the `**` right after the dunder is not an opener and both are kept;
+    // after a space the same `**x**` is reduced and the dunder is still kept.
+    ["__init__**x**", "__init__**x**"],
+    ["__init__ **x**", "__init__ x"],
+    // A code span holds its `**` before emphasis is reduced.
+    ["Ran `x**2` and **bold**", "Ran x**2 and bold"],
+    ["`10**6 **rows**`", "10**6 **rows**"],
+  ])("keeps the marker guard, the dunder rule and code spans: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it("renders the exact expected text through the full render", () => {
+    const content: GeneratedAssetContent = {
+      summary: item("**Platform** lead; sized queues at 2**10 = 1024."),
+      bullets: [item("Processed 10**6 to 10**9 records"), item("Fit x**2 + y**2 with `a**b`"), item("- **30%** cost"), item("(**bold**), a**b**c")],
+      skills: [item("__init__**x**")],
+    };
+    expect(renderPlainText(content)).toBe(
+      [
+        "SUMMARY",
+        "Platform lead; sized queues at 2**10 = 1024.",
+        "",
+        "EXPERIENCE",
+        "- Processed 10**6 to 10**9 records",
+        "- Fit x**2 + y**2 with a**b",
+        "- - 30% cost",
+        "- (bold), a**b**c",
+        "",
+        "SKILLS",
+        "- __init__**x**",
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("Unicode preservation (#141 glyph-loss guard)", () => {
   const glyphs = [
     "—",

@@ -25,14 +25,18 @@
  *     after markup reduction is skipped, and a section with no lines
  *     emits no heading;
  *   - inline markdown markup (`**`, `*`, `__`, `_`, links, images,
- *     autolinks, escapes) is reduced to plain text, with one exception:
- *     `__…__` is reduced only when its inner text has whitespace or a
- *     non-word character, and around a single identifier-like token
- *     (letters, digits and `_`, as in `__init__` or `__slots__`) it is a
- *     dunder name and keeps its underscores, whatever follows it. A
- *     word-only `__x__` is kept on purpose, even where Markdown would bold
- *     it: keeping characters is the safe side of the zero-fabrication
- *     invariant;
+ *     autolinks, escapes) is reduced to plain text, with two exceptions.
+ *     `**…**` is reduced only at non-word boundaries (the opening `**` not
+ *     preceded and the closing `**` not followed by a letter, digit or
+ *     `_`), so a `**` inside a word or number is kept as typed and
+ *     exponent operators like `10**6 to 10**9` and `x**2` survive, as
+ *     `5*3*2` does under the single-`*` rule. And `__…__` is reduced
+ *     only when its inner text has whitespace or a non-word character,
+ *     and around a single identifier-like token (letters, digits and
+ *     `_`, as in `__init__` or `__slots__`) it is a dunder name and keeps
+ *     its underscores, whatever follows it. A word-only `__x__` is kept
+ *     on purpose, even where Markdown would bold it: keeping characters
+ *     is the safe side of the zero-fabrication invariant;
  *   - a code span's backticks are removed and its text is exported as
  *     typed, with backslashes, `*`, `_`, `~`, `#`, `>` and link syntax
  *     kept literal (a backslash inside a code span escapes nothing, as in
@@ -332,7 +336,11 @@ export function plainTextOf(text: string): string {
   out = out.replace(/https?:\/\/[^\s<>()[\]*]*[^\s<>()[\]*.,;:!?'"]/gi, (url) => hold(url));
   // Strikethrough `~~x~~` is kept as typed: plain text has no strikethrough,
   // and dropping the tildes would present a deleted figure as a live one.
-  out = out.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, "$1");
+  // `**x**` is strong emphasis only at a non-word boundary: the opening `**`
+  // not preceded and the closing `**` not followed by a letter, digit or `_`.
+  // Anywhere else `**` is kept as typed, so the exponent operators in
+  // `10**6 to 10**9`, `x**2 + y**2` and `a**b**c` keep their meaning.
+  out = out.replace(new RegExp(String.raw`(?<!${W})\*\*(?=\S)(.+?)(?<=\S)\*\*(?!${W})`, "gu"), "$1");
   // `__x__` is strong emphasis only when `x` has whitespace or a non-word
   // character. Around a single identifier-like token it is a dunder name
   // (`__init__`, `__slots__`, `__call__()`), whatever follows, and keeps its
