@@ -376,8 +376,8 @@ describe("Calibrate container with account decks", () => {
   /** A save the test settles by hand, like a write queued while offline. */
   function deferredSaves(account: ReturnType<typeof fakeAccount>) {
     const queue: { run: () => Promise<number>; resolve: (n: number) => void; reject: (e: unknown) => void }[] = [];
-    const save = (d: Deck, st: StoredSession, base: number) =>
-      new Promise<number>((resolve, reject) => queue.push({ run: () => account.services.saveAccountSession(d, st, base), resolve, reject }));
+    const save = (d: Deck, st: StoredSession, base: number, owner: string) =>
+      new Promise<number>((resolve, reject) => queue.push({ run: () => account.services.saveAccountSession(d, st, base, owner), resolve, reject }));
     const land = async () => {
       const next = queue.shift()!;
       await act(async () => {
@@ -528,10 +528,39 @@ describe("Calibrate container with account decks", () => {
     await screen.findByTestId("calibrate-card");
     key("ArrowRight");
     await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    key("ArrowLeft"); // Alice's next decision, pending behind the first write
     uid = "bob";
     await slow.land();
     expect(localStorage.getItem("matchline:calibrate:v1:account:bob:demo-cell")).toBeNull();
-    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:account:alice:demo-cell") ?? "{}").base_rev).toBe(0);
+    const alices = JSON.parse(localStorage.getItem("matchline:calibrate:v1:account:alice:demo-cell") ?? "{}");
+    expect(alices.base_rev).toBe(0);
+    expect(alices.state.counter).toBe(2);
+    // Alice's pending labels are never sent while Bob is signed in.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(slow.queue).toHaveLength(0);
+    expect(account.calls.saves).toEqual([0]);
+  });
+
+  it("keeps a newer mount's labels when an older mount's save lands after leaving and returning", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    const services = { ...account.services, saveAccountSession: slow.save };
+    const first = render(<Calibrate services={services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    first.unmount(); // leave Calibrate while the write is in flight
+    render(<Calibrate services={services} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Resume|Start/ }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowLeft"); // a new decision on the new mount, queued behind the old write
+    await slow.land();
+    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:account:uid-test:demo-cell") ?? "{}").state.counter).toBe(2);
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    await slow.land();
+    await saved();
+    expect(Object.keys(account.sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
   });
 
   it("names a removed deck instead of calling it a conflict", async () => {

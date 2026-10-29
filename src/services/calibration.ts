@@ -225,8 +225,12 @@ export async function deleteAccountDeck(deckId: string): Promise<void> {
  * content, or when the deck was removed; `inspectAccountSession` tells
  * which.
  */
-export async function saveAccountSession(deck: Deck, stored: StoredSession, baseRev: number, now: Date = new Date()): Promise<number> {
-  const data = buildSessionDoc(deck, stored, getOwnerUidOrThrow(), now, baseRev);
+export async function saveAccountSession(deck: Deck, stored: StoredSession, baseRev: number, ownerUid: string, now: Date = new Date()): Promise<number> {
+  // The session is written for the owner who made it, never for whoever is
+  // signed in when a queued save is sent: the document id and `owner_uid`
+  // are that owner's, so the rules refuse it under any other account.
+  if (ownerUid !== getOwnerUidOrThrow()) throw new Error("signed in as a different account than the one these labels were made in");
+  const data = buildSessionDoc(deck, stored, ownerUid, now, baseRev);
   const release = beginAppBusy("calibration.saveSession");
   try {
     // No timeout here: offline, the SDK keeps this write queued and commits it

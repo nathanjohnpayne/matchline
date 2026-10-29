@@ -16,7 +16,7 @@
  * between loading the account's copy and keeping this device's.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { parseDeck, type Deck } from "../../lib/labelDeck/deck.ts";
 import { buildExport, deckFingerprint, exportFilename, initSession, newSessionId, progress, randomSeed, type StoredSession } from "../../lib/labelDeck/session.ts";
@@ -45,7 +45,7 @@ export interface CalibrationServices {
   readonly listAccountDecks: () => Promise<AccountDeckList>;
   readonly uploadDeck: (deck: Deck) => Promise<void>;
   readonly deleteAccountDeck: (deckId: string) => Promise<void>;
-  readonly saveAccountSession: (deck: Deck, stored: StoredSession, baseRev: number) => Promise<number>;
+  readonly saveAccountSession: (deck: Deck, stored: StoredSession, baseRev: number, ownerUid: string) => Promise<number>;
   readonly inspectAccountSession: (deck: Deck) => Promise<AccountSessionState>;
   /** The signed-in owner, which scopes this browser's copies of account decks. */
   readonly ownerUid: () => string | undefined;
@@ -141,6 +141,42 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+interface PendingSave {
+  readonly deck: Deck;
+  readonly stored: StoredSession;
+  /** Who made it: a save can settle after a sign-out or an account switch. */
+  readonly ownerUid: string | undefined;
+}
+
+/**
+ * Save bookkeeping per deck: the account revision this device's next write
+ * replaces, the newest unsaved session, the decks with a write in flight,
+ * and those stopped by a refused write. One store per service set, so in
+ * the app it is shared by every mount of the route: a write still in flight
+ * when the reviewer leaves Calibrate and comes back belongs to the same
+ * queue as the new mount's saves, and its completion reaches the new mount.
+ */
+interface SaveStore {
+  readonly accountRev: Map<string, number>;
+  readonly pending: Map<string, PendingSave>;
+  readonly inflight: Set<string>;
+  readonly stopped: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+  notify: (deckId: string, state: SaveState) => void;
+  flush: () => void;
+}
+
+const saveStores = new WeakMap<CalibrationServices, SaveStore>();
+
+function saveStoreFor(services: CalibrationServices): SaveStore {
+  let store = saveStores.get(services);
+  if (!store) {
+    store = { accountRev: new Map(), pending: new Map(), inflight: new Set(), stopped: new Set(), timer: null, notify: () => {}, flush: () => {} };
+    saveStores.set(services, store);
+  }
+  return store;
+}
+
 export default function Calibrate({
   services = FIRESTORE_SERVICES,
   slowSaveMs = SLOW_SAVE_MS,
@@ -158,80 +194,84 @@ export default function Calibrate({
   const [saveStates, setSaveStates] = useState<ReadonlyMap<string, SaveState>>(new Map());
   const reducedMotion = usePrefersReducedMotion();
 
-  // Per deck: the account revision this device's next write replaces, the
-  // latest unsaved session, the decks with a write in flight, and those
-  // stopped by a refused write.
-  const accountRev = useRef(new Map<string, number>());
-  // Each pending save carries the owner who made it: a save can settle after
-  // a sign-out or an account switch, and its local copy must stay in that
-  // owner's scope.
-  const pending = useRef(new Map<string, { deck: Deck; stored: StoredSession; ownerUid: string | undefined }>());
-  const inflight = useRef(new Set<string>());
-  const stopped = useRef(new Set<string>());
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Save bookkeeping outlives this mount (see `saveStoreFor`): a save still
+  // in flight when the route is left must coordinate with the next mount.
+  const store = useMemo(() => saveStoreFor(services), [services]);
 
   const setSaveState = useCallback((deckId: string, state: SaveState) => {
     setSaveStates((prev) => new Map(prev).set(deckId, state));
   }, []);
+  // A completion lands on whichever mount is current.
+  useEffect(() => {
+    store.notify = setSaveState;
+    return () => {
+      if (store.notify === setSaveState) store.notify = () => {};
+    };
+  }, [store, setSaveState]);
 
-  const flushRef = useRef<() => void>(() => {});
-  const schedule = useCallback((ms: number) => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => flushRef.current(), ms);
-  }, []);
+  const schedule = useCallback(
+    (ms: number) => {
+      if (store.timer) clearTimeout(store.timer);
+      store.timer = setTimeout(() => store.flush(), ms);
+    },
+    [store],
+  );
 
   const flush = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    for (const [deckId, item] of [...pending.current]) {
+    if (store.timer) clearTimeout(store.timer);
+    store.timer = null;
+    for (const [deckId, item] of [...store.pending]) {
       // One write per deck at a time, so each names the revision it replaces.
-      if (inflight.current.has(deckId) || stopped.current.has(deckId)) continue;
-      pending.current.delete(deckId);
-      inflight.current.add(deckId);
-      const base = accountRev.current.get(deckId) ?? -1;
-      setSaveState(deckId, { kind: "saving" });
+      if (store.inflight.has(deckId) || store.stopped.has(deckId)) continue;
+      store.pending.delete(deckId);
+      // Never send one owner's labels while another is signed in: they stay
+      // in the browser copy, in their owner's scope.
+      if (!item.ownerUid || item.ownerUid !== services.ownerUid()) continue;
+      store.inflight.add(deckId);
+      const base = store.accountRev.get(deckId) ?? -1;
+      store.notify(deckId, { kind: "saving" });
       // Offline, a write stays queued until the connection returns; say so, but
       // never send a second write for this deck while this one is unsettled.
-      const slow = setTimeout(() => setSaveState(deckId, { kind: "error", message: "waiting for the connection" }), slowSaveMs);
-      services.saveAccountSession(item.deck, item.stored, base).then(
+      const slow = setTimeout(() => store.notify(deckId, { kind: "error", message: "waiting for the connection" }), slowSaveMs);
+      services.saveAccountSession(item.deck, item.stored, base, item.ownerUid).then(
         (rev) => {
           clearTimeout(slow);
-          inflight.current.delete(deckId);
-          accountRev.current.set(deckId, rev);
+          store.inflight.delete(deckId);
+          store.accountRev.set(deckId, rev);
           // This browser's newest copy builds on the new revision, including a
           // state still pending (it descends from the one just written), so a
           // reload before the next write lands resumes it rather than setting it aside.
-          const newest = pending.current.get(deckId)?.stored ?? item.stored;
+          const newest = store.pending.get(deckId)?.stored ?? item.stored;
           saveSession({ ...newest, base_rev: rev }, { ownerUid: item.ownerUid });
-          if (pending.current.has(deckId)) flushRef.current();
-          else setSaveState(deckId, { kind: "saved" });
+          if (store.pending.has(deckId)) store.flush();
+          else store.notify(deckId, { kind: "saved" });
         },
         async (err: unknown) => {
           clearTimeout(slow);
-          inflight.current.delete(deckId);
+          store.inflight.delete(deckId);
           // Final: refused by the rules, or not storable. Labelling on this deck
           // stops at once (no decision may slip in while the reason is checked).
-          stopped.current.add(deckId);
-          pending.current.delete(deckId);
-          setSaveState(deckId, { kind: "checking" });
+          store.stopped.add(deckId);
+          store.pending.delete(deckId);
+          store.notify(deckId, { kind: "checking" });
           if (!isPermissionDenied(err)) {
-            setSaveState(deckId, { kind: "refused", message: message(err) });
+            store.notify(deckId, { kind: "refused", message: message(err) });
             return;
           }
           try {
             const now = await services.inspectAccountSession(item.deck);
-            if (!now.deckExists) setSaveState(deckId, { kind: "removed" });
-            else if (!now.deckCurrent) setSaveState(deckId, { kind: "replaced" });
-            else if (now.rev !== base) setSaveState(deckId, { kind: "conflict", accountRev: now.rev });
-            else setSaveState(deckId, { kind: "refused", message: message(err) });
+            if (!now.deckExists) store.notify(deckId, { kind: "removed" });
+            else if (!now.deckCurrent) store.notify(deckId, { kind: "replaced" });
+            else if (now.rev !== base) store.notify(deckId, { kind: "conflict", accountRev: now.rev });
+            else store.notify(deckId, { kind: "refused", message: message(err) });
           } catch (inspectErr) {
-            setSaveState(deckId, { kind: "refused", message: message(inspectErr) });
+            store.notify(deckId, { kind: "refused", message: message(inspectErr) });
           }
         },
       );
     }
-  }, [services, setSaveState, slowSaveMs]);
-  flushRef.current = flush;
+  }, [services, store, slowSaveMs]);
+  store.flush = flush;
 
   // Do not leave a decision unsaved when the tab is hidden or closed.
   useEffect(() => {
@@ -286,17 +326,17 @@ export default function Calibrate({
         // A write still in flight for this deck (from before going back) keeps
         // its own bookkeeping: it sets the revision when it lands, and its
         // pending successor is the newest state, so neither is touched here.
-        const writing = inflight.current.has(id);
-        const local = pending.current.get(id)?.stored ?? loadSession(d.deck, { ownerUid: services.ownerUid() });
-        const base = writing ? (accountRev.current.get(id) ?? d.accountRev) : d.accountRev;
+        const writing = store.inflight.has(id);
+        const local = store.pending.get(id)?.stored ?? loadSession(d.deck, { ownerUid: services.ownerUid() });
+        const base = writing ? (store.accountRev.get(id) ?? d.accountRev) : d.accountRev;
         if (!writing && setsAsideLocal(d.session, d.accountRev, local)) setAside.push(id);
-        if (!writing) accountRev.current.set(id, d.accountRev);
-        stopped.current.delete(id);
+        if (!writing) store.accountRev.set(id, d.accountRev);
+        store.stopped.delete(id);
         const session = writing && local ? local : pickSession(d.deck, d.session, base, local);
         if (session === local && local && (!d.session || local.state.rev > d.session.state.rev)) {
           // This browser is ahead of the account (labels saved here, not there
           // yet): send them now rather than waiting for the next decision.
-          pending.current.set(id, { deck: d.deck, stored: { session_id: local.session_id, state: local.state }, ownerUid: services.ownerUid() });
+          store.pending.set(id, { deck: d.deck, stored: { session_id: local.session_id, state: local.state }, ownerUid: services.ownerUid() });
         } else if (session !== local && d.session) {
           // The account copy won: it becomes this browser's copy too, so a
           // replaced set is reported once, not on every reopen.
@@ -305,7 +345,7 @@ export default function Calibrate({
         return { deck: d.deck, session, source: "account" as const };
       });
     start(opened);
-    if (pending.current.size) schedule(SAVE_DELAY_MS);
+    if (store.pending.size) schedule(SAVE_DELAY_MS);
     if (setAside.length) {
       setLoadError(
         `Opened the account copy of ${setAside.join(", ")}: it was saved after this browser's last labels, which never reached your account and have been replaced by it.`,
@@ -379,12 +419,12 @@ export default function Calibrate({
     if (!run) return;
     const deckId = run.deck.deck_id;
     // A refused deck is locked until the owner loads the latest or keeps this copy.
-    if (run.source === "account" && stopped.current.has(deckId)) return;
-    if (run.source === "account") saveSession({ ...next, base_rev: accountRev.current.get(deckId) ?? -1 }, { ownerUid: services.ownerUid() });
+    if (run.source === "account" && store.stopped.has(deckId)) return;
+    if (run.source === "account") saveSession({ ...next, base_rev: store.accountRev.get(deckId) ?? -1 }, { ownerUid: services.ownerUid() });
     else saveSession(next);
     setRuns((prev) => prev.map((r, i) => (i === index ? { ...r, session: next } : r)));
     if (run.source === "account") {
-      pending.current.set(deckId, { deck: run.deck, stored: next, ownerUid: services.ownerUid() });
+      store.pending.set(deckId, { deck: run.deck, stored: next, ownerUid: services.ownerUid() });
       setSaveState(deckId, { kind: "saving" });
       schedule(SAVE_DELAY_MS);
     }
@@ -396,9 +436,9 @@ export default function Calibrate({
     const state = run && saveStates.get(run.deck.deck_id);
     if (!run || state?.kind !== "conflict") return;
     const deckId = run.deck.deck_id;
-    accountRev.current.set(deckId, state.accountRev);
-    stopped.current.delete(deckId);
-    pending.current.set(deckId, { deck: run.deck, stored: run.session, ownerUid: services.ownerUid() });
+    store.accountRev.set(deckId, state.accountRev);
+    store.stopped.delete(deckId);
+    store.pending.set(deckId, { deck: run.deck, stored: run.session, ownerUid: services.ownerUid() });
     flush();
   };
 
