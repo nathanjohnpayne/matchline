@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Deck } from "../lib/labelDeck/deck.ts";
 import { decide, deckFingerprint, initSession } from "../lib/labelDeck/session.ts";
 
-import { MAX_DECK_JSON, buildDeckDoc, buildSessionDoc, docIdFor, parseSessionDoc } from "./calibration.ts";
+import { MAX_DECK_JSON, buildDeckDoc, buildSessionDoc, docIdFor, parseSessionDoc, withTimeout } from "./calibration.ts";
 
 const deck: Deck = {
   format: "matchline-label-deck/1",
@@ -23,15 +23,24 @@ describe("calibration storage shapes", () => {
     expect(d.fingerprint.length).toBeLessThanOrEqual(64);
   });
 
-  it("refuses a deck over the stored size limit with its name", () => {
+  it("refuses a deck over the stored size limit with its name, counting UTF-8 bytes", () => {
     const huge = { ...deck, sources: { ...deck.sources, resume: { title: "R", text: "x".repeat(MAX_DECK_JSON) } } };
     expect(() => buildDeckDoc(huge, "uid-1", NOW)).toThrow(/demo-cell is too large/);
+    // Under the character cap, over the byte cap: three bytes per "—".
+    const wide = { ...deck, sources: { ...deck.sources, resume: { title: "R", text: "—".repeat(400_000) } } };
+    expect(() => buildDeckDoc(wide, "uid-1", NOW)).toThrow(/bytes/);
+  });
+
+  it("times out a write that never settles", async () => {
+    await expect(withTimeout(new Promise(() => {}), 10, "Saving your labels")).rejects.toThrow(/Saving your labels did not finish/);
+    await expect(withTimeout(Promise.resolve(3), 10, "x")).resolves.toBe(3);
   });
 
   it("round-trips a session, and drops one saved for different deck content", () => {
     const stored = { session_id: "s-1", state: decide(initSession(deck, 7), "true", 900) };
     const doc = buildSessionDoc(deck, stored, "uid-1", NOW);
-    expect(Object.keys(doc).sort()).toEqual(["deck_id", "fingerprint", "id", "owner_uid", "session_id", "state_json", "updated_at"]);
+    expect(Object.keys(doc).sort()).toEqual(["deck_id", "fingerprint", "id", "owner_uid", "rev", "session_id", "state_json", "updated_at"]);
+    expect(doc.rev).toBe(1);
     expect(parseSessionDoc(doc, deck)).toEqual(stored);
     const changed = { ...deck, sources: { ...deck.sources, jd: { title: "J", text: "edited" } } };
     expect(parseSessionDoc(doc, changed)).toBeNull();

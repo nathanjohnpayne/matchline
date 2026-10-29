@@ -119,6 +119,17 @@ describe("decision reducer", () => {
     expect(Core.setNote(s, "nope", "x")).toBe(s);
   });
 
+  it("raises the revision on every saved change, undo included", () => {
+    let s = ordered();
+    expect(s.rev).toBe(0);
+    s = Core.decide(s, "unsure", 1); // re-queue
+    s = Core.decide(s, "false", 1);
+    s = Core.setNote(s, s.history.at(-1)!.id, "n");
+    s = Core.undo(s);
+    expect(s.rev).toBe(4);
+    expect(Core.addTime(s, 50).rev).toBe(4);
+  });
+
   it("undo drops the note with the decision", () => {
     let s = Core.setNote(Core.decide(ordered(), "false", 1), "ext:u_a:A/fact-correct", "n");
     s = Core.decide(Core.undo(s), "false", 1);

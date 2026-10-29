@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Card, Deck, LabelsFile } from "../../lib/labelDeck/deck.ts";
 import { initSession, type StoredSession } from "../../lib/labelDeck/session.ts";
+import { FirebaseError } from "firebase/app";
+
 import type { AccountDeck } from "../../services/calibration.ts";
 
 import CalibrateView, { type CalibrateViewProps, type DeckRun } from "./CalibrateView.tsx";
@@ -48,7 +50,7 @@ const NOOP_PROPS: Omit<CalibrateViewProps, "runs" | "onSession" | "onDownload"> 
   account: { status: "ready", decks: [] },
   busy: null,
   loadError: null,
-  saveError: null,
+  saveState: { kind: "idle" },
   reducedMotion: true,
   onOpenAccount: () => {},
   onUploadFiles: () => {},
@@ -306,7 +308,7 @@ describe("Calibrate container with account decks", () => {
     let stored = [...initial];
     const calls = { uploads: [] as string[], saves: [] as string[], removes: [] as string[] };
     const services: CalibrationServices = {
-      listAccountDecks: async () => stored,
+      listAccountDecks: async () => ({ decks: stored, unreadable: [] }),
       uploadDeck: async (d) => {
         calls.uploads.push(d.deck_id);
         stored = [...stored.filter((s) => s.deck.deck_id !== d.deck_id), { deck: d, uploadedAt: "now", session: null }];
@@ -333,7 +335,8 @@ describe("Calibrate container with account decks", () => {
     fireEvent.click(screen.getByRole("button", { name: "Label all" }));
     await screen.findByTestId("calibrate-card");
     key("ArrowRight");
-    await waitFor(() => expect(calls.saves).toEqual(["demo-cell"]));
+    await waitFor(() => expect(calls.saves).toEqual(["demo-cell"]), { timeout: 3000 });
+    await screen.findByText(/· saved/, undefined, { timeout: 3000 });
   });
 
   it("shows a failed save inline and keeps going", async () => {
@@ -341,8 +344,44 @@ describe("Calibrate container with account decks", () => {
     render(<Calibrate services={{ ...services, saveAccountSession: async () => Promise.reject(new Error("offline")) }} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start" }));
     key("ArrowRight");
-    expect((await screen.findByRole("alert")).textContent).toContain("offline");
+    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("offline");
     expect(screen.getByText(/1 of 3 labelled/)).toBeTruthy();
+  });
+
+  it("stops saving and offers the latest when another device saved since this one opened the deck", async () => {
+    const { services } = fakeServices([{ deck, uploadedAt: "now", session: null }]);
+    const denied = Object.assign(new FirebaseError("permission-denied", "Missing or insufficient permissions."), {});
+    let attempts = 0;
+    render(
+      <Calibrate
+        services={{
+          ...services,
+          saveAccountSession: async () => {
+            attempts += 1;
+            throw denied;
+          },
+        }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    key("ArrowRight");
+    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("saved from another device");
+    key("ArrowRight");
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(attempts).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Load the latest" }));
+    await screen.findByRole("region", { name: "Your decks" });
+  });
+
+  it("refuses to replace a deck whose labels belong to different content, and shows unreadable decks", async () => {
+    const labelled = { session_id: "s", state: { ...initSession(deck, 1), rev: 1, decisions: { [deck.cards[0].item_id]: { label: "true" as const, note: "", ms: 1, order: 1 } } } };
+    const { services, calls } = fakeServices([{ deck, uploadedAt: "now", session: labelled }]);
+    render(<Calibrate services={{ ...services, listAccountDecks: async () => ({ decks: [{ deck, uploadedAt: "now", session: labelled }], unreadable: ["old-cell"] }) }} />);
+    expect((await screen.findAllByRole("alert"))[0].textContent).toContain("old-cell");
+    const edited = { ...deck, sources: { ...deck.sources, jd: { title: "JD demo", text: "edited" } } };
+    fireEvent.change(screen.getByLabelText("Upload deck files…"), { target: { files: [file("a.json", edited)] } });
+    expect((await screen.findByText(/has 1 labels for different deck content/)).textContent).toContain("Download its labels");
+    expect(calls.uploads).toEqual([]);
   });
 
   it("removes a deck only after confirming", async () => {
@@ -358,9 +397,13 @@ describe("Calibrate container with account decks", () => {
   it("names a deck picked twice, and resumes the session with more history", async () => {
     await expect(readDeckFiles([file("a.json", deck), file("b.json", deck)])).rejects.toThrow(/picked twice/);
     const base = { session_id: "x", state: initSession(deck, 1) };
-    const longer = { session_id: "y", state: { ...base.state, history: [{ kind: "decide" as const, id: "a", ms: 1 }] } };
-    expect(pickSession(deck, base, longer).session_id).toBe("y");
-    expect(pickSession(deck, longer, null).session_id).toBe("y");
+    // An undo shortens the history but still raises the revision: revision decides.
+    const newer = { session_id: "y", state: { ...base.state, rev: 4, history: [] } };
+    const older = { session_id: "z", state: { ...base.state, rev: 3, history: [{ kind: "decide" as const, id: "a", ms: 1 }] } };
+    expect(pickSession(deck, older, newer).session_id).toBe("y");
+    expect(pickSession(deck, newer, older).session_id).toBe("y");
+    expect(pickSession(deck, base, { ...base, session_id: "local" }).session_id).toBe("x");
+    expect(pickSession(deck, newer, null).session_id).toBe("y");
     expect(pickSession(deck, null, null).state.deck_id).toBe("demo-cell");
   });
 });

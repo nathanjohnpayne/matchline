@@ -120,6 +120,7 @@ const calibrationSession = () => ({
   deck_id: "demo-cell",
   fingerprint: "0badcafe:120",
   session_id: "s-1",
+  rev: 1,
   state_json: '{"queue":[]}',
   updated_at: "2026-10-29T00:00:00.000Z",
 });
@@ -130,13 +131,6 @@ const COLLECTIONS: readonly CollectionSpec[] = [
     seed: calibrationDeck(),
     create: calibrationDeck(),
     update: { deck_json: '{"format":"matchline-label-deck/1","v":2}', uploaded_at: "2026-10-30T00:00:00.000Z" },
-    clientDelete: true,
-  },
-  {
-    name: "calibrationSessions",
-    seed: calibrationSession(),
-    create: calibrationSession(),
-    update: { state_json: '{"queue":["a"]}', updated_at: "2026-10-30T00:00:00.000Z" },
     clientDelete: true,
   },
   OWNER_CRUD("people"),
@@ -898,6 +892,44 @@ describe("rules: calibration field limits", () => {
     await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, id: "d-1" }));
   });
 
+  // calibrationSessions is not in the COLLECTIONS matrix (a session needs its
+  // deck to exist), so its owner-scoping cases are here.
+  it("scopes sessions to their owner: read, list, cross-owner, stranger, unauthenticated, delete", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertSucceeds(getDoc(sessionRef(OWNER_UID)));
+    await assertSucceeds(getDocs(query(collectionRef(db(OWNER_UID), "calibrationSessions"), where("owner_uid", "==", OWNER_UID))));
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), "calibrationSessions")));
+    await assertFails(getDoc(sessionRef(OTHER_UID)));
+    await assertFails(getDoc(doc(db(null), "calibrationSessions", "d-1")));
+    await assertFails(updateDoc(sessionRef(OTHER_UID), { rev: 9 }));
+    await assertFails(updateDoc(sessionRef(OWNER_UID), { rev: 9, owner_uid: OTHER_UID }));
+    await assertFails(deleteDoc(sessionRef(OTHER_UID)));
+    await assertSucceeds(deleteDoc(sessionRef(OWNER_UID)));
+    await assertFails(setDoc(doc(db(STRANGER_UID), "calibrationSessions", "d-1"), { ...session, owner_uid: STRANGER_UID }));
+    await assertFails(setDoc(doc(db(null), "calibrationSessions", "d-1"), session));
+  });
+
+  it("DENIES a session for a deck that is not stored (an orphan)", async () => {
+    await assertFails(setDoc(sessionRef(OWNER_UID), session));
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+  });
+
+  it("accepts only a newer revision of a session, unless the deck content changed", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", { ...session, rev: 50 });
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 41 }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 50 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 51 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, fingerprint: "feedbeef:99" }));
+  });
+
+  it("DENIES a deck id with characters outside the allowed set", async () => {
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a/b" }));
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a b" }));
+  });
+
   it("DENIES extra keys, missing keys, wrong types and an id that is not the doc id", async () => {
     for (const bad of [
       { ...deck, extra: true },
@@ -911,7 +943,10 @@ describe("rules: calibration field limits", () => {
       const payload = Object.fromEntries(Object.entries(bad).filter(([, v]) => v !== undefined));
       await assertFails(setDoc(deckRef(OWNER_UID), payload));
     }
+    await seedDoc("calibrationDecks", "d-1", deck);
     for (const bad of [
+      { ...session, rev: -1 },
+      { ...session, rev: "2" },
       { ...session, notes: "x" },
       { ...session, state_json: { queue: [] } },
       { ...session, session_id: 7 },
@@ -923,6 +958,7 @@ describe("rules: calibration field limits", () => {
 
   it("DENIES a deck or session over its size cap", async () => {
     await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_json: "x".repeat(900_001) }));
+    await seedDoc("calibrationDecks", "d-1", deck);
     await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, state_json: "x".repeat(200_001) }));
   });
 

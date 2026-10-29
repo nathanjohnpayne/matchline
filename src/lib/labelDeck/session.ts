@@ -30,6 +30,13 @@ export interface SessionState {
   elapsed: Record<string, number>;
   requeued: Record<string, boolean>;
   counter: number;
+  /**
+   * Revision: +1 on every change that is saved (decision, re-queue, undo,
+   * note). It only grows, so two copies of one session (this browser, the
+   * account) compare by it, and the rules refuse an account write that
+   * would replace a newer revision with an older one.
+   */
+  rev: number;
 }
 
 /** A session plus the id its labels file carries. */
@@ -101,6 +108,7 @@ export function initSession(deck: Deck, seed: number): SessionState {
     elapsed: {},
     requeued: {},
     counter: 0,
+    rev: 0,
   };
 }
 
@@ -125,6 +133,7 @@ export function decide(state: SessionState, label: Label, ms: number): SessionSt
       requeued: { ...state.requeued, [id]: true },
       elapsed: { ...state.elapsed, [id]: (state.elapsed[id] ?? 0) + spent },
       history: [...state.history, { kind: "requeue", id, ms: spent }],
+      rev: state.rev + 1,
     };
   }
   const order = state.counter + 1;
@@ -134,6 +143,7 @@ export function decide(state: SessionState, label: Label, ms: number): SessionSt
     counter: order,
     decisions: { ...state.decisions, [id]: { label, note: "", ms: (state.elapsed[id] ?? 0) + spent, order } },
     history: [...state.history, { kind: "decide", id, ms: spent }],
+    rev: state.rev + 1,
   };
 }
 
@@ -142,7 +152,7 @@ export function setNote(state: SessionState, id: string, note: string): SessionS
   const d = state.decisions[id];
   if (!d || (d.label !== "false" && d.label !== "mixed")) return state;
   const text = note.replace(/\s+/g, " ").trim().slice(0, 300);
-  return { ...state, decisions: { ...state.decisions, [id]: { ...d, note: text } } };
+  return { ...state, decisions: { ...state.decisions, [id]: { ...d, note: text } }, rev: state.rev + 1 };
 }
 
 /**
@@ -167,7 +177,7 @@ export function undo(state: SessionState): SessionState {
     queue.splice(queue.lastIndexOf(last.id), 1);
     const requeued = { ...state.requeued };
     delete requeued[last.id];
-    return { ...state, history, undos, requeued, queue: [last.id, ...queue] };
+    return { ...state, history, undos, requeued, queue: [last.id, ...queue], rev: state.rev + 1 };
   }
   const decisions = { ...state.decisions };
   const undone = decisions[last.id];
@@ -178,6 +188,7 @@ export function undo(state: SessionState): SessionState {
     undos,
     decisions,
     counter: state.counter - 1,
+    rev: state.rev + 1,
     queue: [last.id, ...state.queue],
     elapsed: { ...state.elapsed, [last.id]: undone ? undone.ms : (state.elapsed[last.id] ?? 0) },
   };
@@ -237,7 +248,7 @@ export function sessionMatchesDeck(state: unknown, deck: Deck): state is Session
   if (state.fingerprint !== deckFingerprint(deck)) return false;
   if (!Array.isArray(state.queue) || !Array.isArray(state.history)) return false;
   if (!["decisions", "requeued", "undos", "elapsed"].every((f) => isRecord(state[f]))) return false;
-  if (typeof state.seed !== "number" || typeof state.counter !== "number") return false;
+  if (typeof state.seed !== "number" || typeof state.counter !== "number" || typeof state.rev !== "number") return false;
   const types = state.types;
   return deck.cards.length === Object.keys(types).length && deck.cards.every((c) => types[c.item_id] === c.type);
 }

@@ -17,7 +17,7 @@ export const SECONDARY_BUTTON = `rounded-md border border-zinc-300 px-3 py-1.5 t
 export type AccountState =
   | { readonly status: "loading" }
   | { readonly status: "error"; readonly error: string }
-  | { readonly status: "ready"; readonly decks: readonly AccountDeck[] };
+  | { readonly status: "ready"; readonly decks: readonly AccountDeck[]; readonly unreadable?: readonly string[] };
 
 export interface DeckScreenProps {
   readonly account: AccountState;
@@ -127,6 +127,11 @@ export default function DeckScreen({ account, busy, loadError, onOpenAccount, on
         )}
         {account.status === "ready" && decks.length === 0 && (
           <p className="px-4 py-3 text-sm text-zinc-500 dark:text-zinc-400">No decks yet. Upload the deck files to start.</p>
+        )}
+        {account.status === "ready" && account.unreadable && account.unreadable.length > 0 && (
+          <p role="alert" className="border-b border-zinc-200 px-4 py-3 text-sm text-amber-600 dark:border-zinc-800 dark:text-amber-500">
+            Stored but unreadable by this version: {account.unreadable.join(", ")}. Upload them again.
+          </p>
         )}
         {decks.length > 0 && (
           <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">

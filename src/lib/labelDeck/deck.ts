@@ -10,6 +10,9 @@
 
 export const DECK_FORMAT = "matchline-label-deck/1";
 
+/** What a deck id may contain; `firestore.rules` checks the same pattern. */
+export const DECK_ID = /^[A-Za-z0-9._-]{1,200}$/;
+
 export const CARD_TYPES = [
   "fact-correct",
   "verbatim",
@@ -86,7 +89,8 @@ const isLines = (v: unknown): boolean => Array.isArray(v) && v.every((n) => Numb
  */
 export function parseDeck(value: unknown): Deck {
   if (!isRecord(value) || value.format !== DECK_FORMAT) throw new Error(`not a label deck (expected format "${DECK_FORMAT}")`);
-  if (typeof value.deck_id !== "string" || !value.deck_id) throw new Error("deck has no deck_id");
+  // Letters, digits, ".", "_" and "-" only: the id is part of a Firestore document id.
+  if (typeof value.deck_id !== "string" || !DECK_ID.test(value.deck_id)) throw new Error("deck has no valid deck_id");
   const sources = value.sources;
   if (!isRecord(sources) || !isRecord(sources.resume) || !isRecord(sources.jd) || typeof sources.resume.text !== "string" || typeof sources.jd.text !== "string") {
     throw new Error("deck has no résumé / JD source text");

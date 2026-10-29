@@ -11,7 +11,7 @@
  * persists it and handles decks, files and downloads.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement, type Ref } from "react";
 
 import { allowsMixed, type Card, type Deck, type Label } from "../../lib/labelDeck/deck.ts";
 import { addTime, current, decide, progress, setNote, undo, type StoredSession } from "../../lib/labelDeck/session.ts";
@@ -22,6 +22,13 @@ import { QUESTIONS } from "./questions.ts";
 import SwipeCard, { CARD_SURFACE, CardFace, FieldList, STAMPS } from "./SwipeCard.tsx";
 
 export type DeckSource = "account" | "file";
+
+/** The state of saving to the account (decks opened from a file only save in the browser). */
+export type SaveState =
+  | { readonly kind: "idle" | "saving" | "saved" }
+  | { readonly kind: "error"; readonly message: string }
+  /** The account holds a newer revision of this session, saved from another device. */
+  | { readonly kind: "conflict" };
 
 export interface DeckRun {
   readonly deck: Deck;
@@ -35,8 +42,7 @@ export interface CalibrateViewProps extends DeckScreenProps {
   readonly active: number;
   /** Changes every time decks are (re)opened, so a re-opened card starts a fresh clock. */
   readonly openCount: number;
-  /** The last save to the account failed; progress is still kept in this browser. */
-  readonly saveError: string | null;
+  readonly saveState: SaveState;
   readonly reducedMotion: boolean;
   readonly onSession: (index: number, next: StoredSession) => void;
   readonly onOpenCell: (index: number) => void;
@@ -141,7 +147,7 @@ function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card 
 }
 
 export default function CalibrateView(props: CalibrateViewProps): ReactElement {
-  const { runs, active, openCount, saveError, reducedMotion, onSession, onOpenCell, onDownload, onBackToDecks } = props;
+  const { runs, active, openCount, saveState, reducedMotion, onSession, onOpenCell, onDownload, onBackToDecks } = props;
   const now = props.now ?? (() => performance.now());
   const run = runs[active];
 
@@ -157,6 +163,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   const pausedAt = useRef<number | null>(null);
   const ghostKey = useRef(0);
   const cardRef = useRef<HTMLElement | null>(null);
+  const cellEndRef = useRef<HTMLHeadingElement | null>(null);
   const focusCard = useRef(false);
   const nowRef = useRef(now);
   nowRef.current = now;
@@ -178,7 +185,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
     setRefusal(false);
     if (focusCard.current) {
       focusCard.current = false;
-      cardRef.current?.focus({ preventScroll: true });
+      (cardRef.current ?? cellEndRef.current)?.focus({ preventScroll: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the showing, not on every session change
   }, [showing]);
@@ -360,10 +367,18 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           </button>
         </div>
       </div>
-      {saveError && (
+      {saveState.kind === "error" && (
         <p role="alert" className="mt-2 text-sm text-amber-600 dark:text-amber-500">
-          Not saved to your account ({saveError}). Progress is kept in this browser; it saves again with your next card.
+          Not saved to your account ({saveState.message}). Progress is kept in this browser; it saves again with your next card.
         </p>
+      )}
+      {saveState.kind === "conflict" && (
+        <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-sm text-amber-600 dark:text-amber-500">
+          <span>This deck was saved from another device since you opened it here, so this device stopped saving to your account.</span>
+          <button type="button" onClick={onBackToDecks} className={SECONDARY_BUTTON}>
+            Load the latest
+          </button>
+        </div>
       )}
 
       <div className="mt-3">
@@ -371,7 +386,8 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           <div className="h-full bg-zinc-900 motion-safe:transition-[width] motion-safe:duration-200 dark:bg-zinc-100" style={{ width: `${percent}%` }} />
         </div>
         <p className="mt-1 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
-          Cell {active + 1} of {runs.length} · {p.done} of {p.total} labelled{run.source === "file" ? " · this device only" : ""}
+          Cell {active + 1} of {runs.length} · {p.done} of {p.total} labelled
+          {run.source === "file" ? " · this device only" : saveState.kind === "saving" ? " · saving…" : saveState.kind === "saved" ? " · saved" : ""}
         </p>
       </div>
 
@@ -433,7 +449,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           {expanded && <SourcePanel deck={run.deck} card={card} />}
         </>
       ) : (
-        <CellEnd run={run} index={active} total={runs.length} onDownload={onDownload} onUndo={doUndo} onNext={() => onOpenCell(active + 1)} noteBar={noteBar} />
+        <CellEnd headingRef={cellEndRef} run={run} index={active} total={runs.length} onDownload={onDownload} onUndo={doUndo} onNext={() => onOpenCell(active + 1)} noteBar={noteBar} />
       )}
 
       <p className="sr-only" aria-live="polite">
@@ -452,6 +468,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
 }
 
 function CellEnd({
+  headingRef,
   run,
   index,
   total,
@@ -460,6 +477,7 @@ function CellEnd({
   onNext,
   noteBar,
 }: {
+  readonly headingRef: Ref<HTMLHeadingElement>;
   readonly run: DeckRun;
   readonly index: number;
   readonly total: number;
@@ -477,7 +495,7 @@ function CellEnd({
   const undoCount = Object.values(undos).reduce((a, b) => a + b, 0);
   return (
     <section aria-label="Cell done" className="mt-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <h2 className="text-base font-semibold">
+      <h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold focus:outline-none">
         Cell {index + 1} of {total} done
       </h2>
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">

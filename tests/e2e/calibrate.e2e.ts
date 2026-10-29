@@ -100,7 +100,7 @@ test("a deck can be labelled end to end on a phone-sized screen", async ({ page 
   // reload resumes where the account says.
   await drag(page, 180, 0);
   await expect(labelled(page)).toHaveText(new RegExp(`1 of ${total}`));
-  await page.waitForTimeout(500); // let the session write land
+  await expect(labelled(page)).toContainText("· saved"); // the account write has landed
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await expect(page.getByText(`1 of ${total} labelled · ${total} cards`)).toBeVisible();
