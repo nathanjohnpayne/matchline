@@ -18,11 +18,20 @@ const RENDERERS: Readonly<Partial<Record<ExportFormat, AssetRenderer>>> = {
   txt: textRenderer,
 };
 
-/** Thrown when a requested format has no registered renderer. */
+/** How much of a caller's format string the error message echoes. */
+const SHOWN_FORMAT_MAX = 32;
+
+/**
+ * Thrown when a requested format has no registered renderer. The message
+ * reaches the caller as the `invalid-argument` text, so it echoes at most
+ * {@link SHOWN_FORMAT_MAX} characters of a string format, JSON-escaped
+ * (quotes, backslashes and control characters cannot shape the message),
+ * and only the type of anything else.
+ */
 export class UnsupportedExportFormat extends Error {
   readonly format: unknown;
   constructor(format: unknown) {
-    const shown = typeof format === "string" ? `"${format}"` : String(format);
+    const shown = typeof format === "string" ? JSON.stringify(format.slice(0, SHOWN_FORMAT_MAX)) : typeof format;
     super(`Unsupported export format ${shown}. Supported: ${registeredExportFormats().join(", ")}.`);
     this.name = "UnsupportedExportFormat";
     this.format = format;

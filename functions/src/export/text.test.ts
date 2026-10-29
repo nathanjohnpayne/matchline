@@ -119,9 +119,12 @@ describe("line endings and whitespace", () => {
 
 describe("markdown reduction", () => {
   const cases: Array<[string, string]> = [
-    // A trailing `__word__` reads as a dunder identifier (`__slots__`), so it keeps its underscores.
+    // `__word__` around one identifier-like token reads as a dunder name (`__slots__`) wherever it
+    // appears, so it keeps its underscores; `__` is reduced only around text with a space or non-word character.
     ["**bold** and __strong__", "bold and __strong__"],
-    ["__strong__ and **bold**", "strong and bold"],
+    ["__strong__ and **bold**", "__strong__ and bold"],
+    ["__strong text__ and **bold**", "strong text and bold"],
+    ["__go-to-market__ lead", "go-to-market lead"],
     ["*italic* and _emphasis_", "italic and emphasis"],
     // Plain text has no strikethrough, so the tildes are kept rather than presenting struck text as live.
     ["~~struck~~ text", "~~struck~~ text"],
@@ -177,7 +180,13 @@ describe("markdown reduction", () => {
     ["__init__.py", "__init__.py"],
     ["__slots__", "__slots__"],
     ["Python (__call__(), __slots__)", "Python (__call__(), __slots__)"],
-    ["__Python__, Go", "Python, Go"],
+    // A single identifier-like token keeps its underscores whatever follows it.
+    ["__Python__, Go", "__Python__, Go"],
+    ["Implemented __init__ hooks", "Implemented __init__ hooks"],
+    ["via __init__ work", "via __init__ work"],
+    ["__slots__ and __dict__ tuning", "__slots__ and __dict__ tuning"],
+    ["__2024__ launch", "__2024__ launch"],
+    ["__Platform team__, 2024", "Platform team, 2024"],
     ["- Led the team", "Led the team"],
     ["+ Grew revenue", "Grew revenue"],
     ["## Platform work", "Platform work"],
@@ -298,6 +307,39 @@ describe("optional and empty sections", () => {
     const empty: GeneratedAssetContent = { summary: item(""), bullets: [], skills: [], education: [] };
     expect(renderPlainText(empty)).toBe("");
     expect((await textRenderer.render(empty)).bytes).toHaveLength(0);
+  });
+});
+
+describe("private-use sentinel", () => {
+  const PUA_START = 0xe000;
+  const PUA_END = 0xf8ff;
+  const puaRange = (skip?: number): string => {
+    const chars: string[] = [];
+    for (let code = PUA_START; code <= PUA_END; code++) if (code !== skip) chars.push(String.fromCharCode(code));
+    return chars.join("");
+  };
+
+  it("covers 6,400 characters", () => {
+    expect(puaRange()).toHaveLength(6400);
+  });
+
+  it("refuses an item that uses every Private Use Area character, since no placeholder is free", async () => {
+    const every = `Shipped ${puaRange()} **done**`;
+    expect(() => plainTextOf(every)).toThrow(InvalidExportContent);
+    await expect(textRenderer.render(withBullets([every]))).rejects.toBeInstanceOf(InvalidExportContent);
+  });
+
+  it("renders an item missing one private-use character, keeping all the others unchanged (boundary)", async () => {
+    const missing = 0xf123;
+    const pua = puaRange(missing);
+    // The free character becomes the placeholder that holds code spans and escapes.
+    expect(plainTextOf(`Shipped ${pua} **done** with \`dbt\` and \\*stars\\*`)).toBe(
+      `Shipped ${pua} done with dbt and *stars*`,
+    );
+    const { bytes } = await textRenderer.render(withBullets([`**Led** ${pua}`]));
+    const out = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    expect(out).toBe(`SUMMARY\nSummary.\n\nEXPERIENCE\n- Led ${pua}\n`);
+    expect(out).not.toContain(String.fromCharCode(missing));
   });
 });
 

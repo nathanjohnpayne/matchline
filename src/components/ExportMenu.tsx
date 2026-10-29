@@ -24,8 +24,8 @@
  * - Keyboard (rule 5): Enter, Space or ArrowDown on the trigger opens the
  *   menu on the first item, ArrowUp opens it on the last; ArrowUp/Down
  *   (wrapping), Home and End move; Enter or Space chooses; Escape closes
- *   and returns focus to the trigger; Tab closes and moves on. A click
- *   outside closes too.
+ *   and returns focus to the trigger; Tab closes and moves on from the
+ *   trigger. A click outside closes too.
  *
  * Hand-built menu: the repo has no `Popover` primitive yet (UI guidance
  * rule 9), so this follows the WAI-ARIA menu-button pattern directly.
@@ -250,7 +250,11 @@ export default function ExportMenu({
         close(true);
         break;
       case "Tab":
-        // Let focus move on naturally; just close behind it.
+        // Hand focus to the trigger now, without preventDefault: the
+        // browser's Tab then moves on from the trigger (Shift+Tab back
+        // from it). Left on the item, focus would fall to <body> when the
+        // menu unmounts.
+        triggerRef.current?.focus();
         setOpen(false);
         break;
       case "Enter":

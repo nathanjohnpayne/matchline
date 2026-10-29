@@ -25,14 +25,20 @@
  *     after markup reduction is skipped, and a section with no lines
  *     emits no heading;
  *   - inline markdown markup (`**`, `*`, `__`, `_`, code spans, links,
- *     images, autolinks, escapes) is reduced to plain text; at a line start
- *     only a `#` heading marker, a `-`/`*`/`+` bullet marker (neither when a
- *     number or sign follows) and a thematic break are removed, and
- *     blockquote `>`, ordered-list `1.` and strikethrough `~~` are kept as
- *     typed, so no character that can carry a claim is dropped; Unicode passes
- *     through untouched: em dashes, arrows, curly quotes, accents, CJK
- *     and emoji are kept as typed, with no normalization (the #141
- *     glyph-loss failure must not recur here);
+ *     images, autolinks, escapes) is reduced to plain text, with one
+ *     exception: `__…__` is reduced only when its inner text has
+ *     whitespace or a non-word character, and around a single
+ *     identifier-like token (letters, digits and `_`, as in `__init__` or
+ *     `__slots__`) it is a dunder name and keeps its underscores,
+ *     whatever follows it;
+ *   - at a line start only a `#` heading marker, a `-`/`*`/`+` bullet
+ *     marker (neither when a number or sign follows) and a thematic break
+ *     are removed, and blockquote `>`, ordered-list `1.` and
+ *     strikethrough `~~` are kept as typed, so no character that can
+ *     carry a claim is dropped;
+ *   - Unicode passes through untouched: em dashes, arrows, curly quotes,
+ *     accents, CJK and emoji are kept as typed, with no normalization
+ *     (the #141 glyph-loss failure must not recur here);
  *   - no name or contact header: the content carries none, and nothing
  *     is invented.
  *
@@ -54,6 +60,8 @@ const ESCAPABLE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
 
 /** Letter, digit or underscore: the "word" side of an emphasis boundary. */
 const W = String.raw`[\p{L}\p{N}_]`;
+/** One identifier-like token: what a `__x__` dunder name wraps. */
+const IDENTIFIER_TOKEN = /^[\p{L}\p{N}_]+$/u;
 
 /**
  * A sentinel from the Private Use Area that does not occur in `text`, so a
@@ -129,11 +137,12 @@ export function plainTextOf(text: string): string {
   // Strikethrough `~~x~~` is kept as typed: plain text has no strikethrough,
   // and dropping the tildes would present a deleted figure as a live one.
   out = out.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, "$1");
-  // `__x__` is strong emphasis, except a dunder identifier such as
-  // `__init__.py`, `__slots__` or `__call__()` (followed by `.`, `(`, `)` or the
-  // end of the item), which keeps its underscores.
-  out = out.replace(new RegExp(String.raw`(?<!${W})__(?=\S)(.+?)(?<=\S)__(?!${W})`, "gu"), (match: string, inner: string, offset: number, whole: string) =>
-    /^[\p{L}\p{N}_]+$/u.test(inner) && /^(?:[.()]|$)/u.test(whole.slice(offset + match.length)) ? match : inner,
+  // `__x__` is strong emphasis only when `x` has whitespace or a non-word
+  // character. Around a single identifier-like token it is a dunder name
+  // (`__init__`, `__slots__`, `__call__()`), whatever follows, and keeps its
+  // underscores: dropping them could misstate a claim, keeping them cannot.
+  out = out.replace(new RegExp(String.raw`(?<!${W})__(?=\S)(.+?)(?<=\S)__(?!${W})`, "gu"), (match: string, inner: string) =>
+    IDENTIFIER_TOKEN.test(inner) ? match : inner,
   );
   // Single-delimiter emphasis only at a non-word boundary, so `5*3*2`,
   // `2 * 3`, `snake_case_name` and `a_b` keep their characters.

@@ -36,8 +36,10 @@
  * Exactly one Storage object, `applications/{applicationId}/
  * {assetId}.{ext}`, overwritten on re-export. No Firestore write. The
  * object is private (`storage.rules` deny all client access; no ACL,
- * no download token), readable only through the returned URL. See
- * `../export/storage.ts` for the signed-URL and emulator branches.
+ * no download token), readable only through the returned URL, and the
+ * bucket's lifecycle rule deletes it a day after it is written. See
+ * `../export/storage.ts` for the signed-URL and emulator branches and
+ * retention.
  *
  * Auth-required; the owner allowlist runs first. A missing or
  * not-owned Application or asset is the same `permission-denied`, so
@@ -49,6 +51,7 @@ import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/
 import { contentDisposition, exportFilename } from "../export/filename.js";
 import { rendererFor, UnsupportedExportFormat } from "../export/registry.js";
 import {
+  assertExportEnvironment,
   defaultExportBucket,
   downloadUrl,
   exportObjectPath,
@@ -237,7 +240,11 @@ export async function exportAssetHandler(
   const disposition = contentDisposition(filename);
   const path = exportObjectPath(applicationId, assetId, rendered.extension);
 
+  const env = deps.env ?? process.env;
   try {
+    // A Storage emulator host inside a deployed runtime is refused before
+    // the bucket is touched, so a refused export leaves no object behind.
+    assertExportEnvironment(env);
     const bucket = (deps.bucket ?? defaultExportBucket)();
     const file = bucket.file(path);
     await writeExport(file, rendered, disposition);
@@ -248,7 +255,7 @@ export async function exportAssetHandler(
       disposition,
       contentType: rendered.contentType,
       nowMs: (deps.now ?? Date.now)(),
-      env: deps.env ?? process.env,
+      env,
     });
     return {
       url: link.url,
@@ -259,8 +266,9 @@ export async function exportAssetHandler(
     };
   } catch (err) {
     // Storage write or signing failed (bucket not provisioned, missing
-    // signBlob permission). Log the cause for the operator; the client
-    // gets a retryable message without infrastructure detail.
+    // signBlob permission), or the environment was refused. Log the cause
+    // for the operator; the client gets a retryable message without
+    // infrastructure detail.
     console.error("exportAsset: storage write or URL signing failed", { applicationId, assetId, path, err });
     throw new HttpsError("internal", "The export file couldn't be prepared. Try again in a moment.");
   }

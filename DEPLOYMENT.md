@@ -901,6 +901,17 @@ gcloud firestore indexes composite list --project=<proj>
     --role=roles/iam.serviceAccountTokenCreator --project=<proj>
   ```
 
+- **Expire old exports.** The callable never deletes an export, so a bucket lifecycle rule does: `storage.lifecycle.json` (next to `storage.rules`) deletes every object under `applications/` once it is a day old (Storage runs lifecycle actions asynchronously, so deletion can lag by up to another day). The signed URL expires after 5 minutes, long before that, and a re-export writes a new object, which restarts the day. Apply it once per project, and again whenever the file changes, since `firebase deploy` does not manage lifecycle rules:
+
+  ```bash
+  gcloud storage buckets update gs://<default-bucket> \
+    --lifecycle-file=storage.lifecycle.json --project=<proj>
+  gcloud storage buckets describe gs://<default-bucket> \
+    --format="default(lifecycle_config)"   # verify
+  ```
+
+  The update replaces the bucket's whole lifecycle configuration, so add any other rule the bucket needs to the file rather than alongside it.
+
 A missing grant surfaces as the callable's generic `internal` "The export file couldn't be prepared" message, with the cause in the function log (`exportAsset: storage write or URL signing failed`). No bucket CORS configuration is needed: the browser navigates to the signed URL rather than fetching it. Under the Storage emulator the callable returns the emulator's object URL instead of signing.
 
 ### Triage order when a callable fails

@@ -31,7 +31,16 @@
  * deployed runtime: a stray emulator host in a deployed function's env
  * (say, a `functions/.env.<project>` entry) must never turn the download
  * into an unsigned URL, so that combination throws instead (the callable
- * maps it to `internal`).
+ * maps it to `internal`). The callable checks it with
+ * {@link assertExportEnvironment} before it writes, so a refused export
+ * leaves no object behind; {@link downloadUrl} repeats the check.
+ *
+ * ## Retention
+ *
+ * Nothing in this module deletes an export. The bucket's lifecycle rule
+ * (`storage.lifecycle.json`, applied per `DEPLOYMENT.md`) deletes every
+ * object under `applications/` one day after it was written; the signed
+ * URL has long expired by then.
  */
 
 import { getStorage } from "firebase-admin/storage";
@@ -135,6 +144,17 @@ export function isDeployedRuntime(env: Readonly<Record<string, string | undefine
   return [env.K_SERVICE, env.K_REVISION, env.FUNCTION_TARGET].some((v) => (v?.trim() ?? "") !== "");
 }
 
+/**
+ * Throws {@link StorageEmulatorInDeployedRuntime} when a Storage emulator
+ * host is set inside a deployed runtime. The callable runs it before it
+ * touches the bucket, so a refused export writes nothing.
+ */
+export function assertExportEnvironment(env: Readonly<Record<string, string | undefined>>): void {
+  if (storageEmulatorHost(env) !== null && isDeployedRuntime(env)) {
+    throw new StorageEmulatorInDeployedRuntime();
+  }
+}
+
 export interface DownloadUrlInput {
   readonly file: ExportFileLike;
   readonly bucketName: string;
@@ -156,9 +176,9 @@ export interface DownloadUrl {
 export async function downloadUrl(input: DownloadUrlInput): Promise<DownloadUrl> {
   const expires = input.nowMs + EXPORT_URL_TTL_MS;
   const expiresAt = new Date(expires).toISOString();
+  assertExportEnvironment(input.env);
   const emulatorHost = storageEmulatorHost(input.env);
   if (emulatorHost !== null) {
-    if (isDeployedRuntime(input.env)) throw new StorageEmulatorInDeployedRuntime();
     const objectPath = input.path.split("/").map(encodeURIComponent).join("/");
     return {
       url: `http://${emulatorHost}/${encodeURIComponent(input.bucketName)}/${objectPath}`,

@@ -34,6 +34,35 @@ describe("rendererFor", () => {
       expect((err as Error).message).toBe('Unsupported export format "rtf". Supported: txt.');
     }
   });
+
+  it("echoes at most 32 characters of a 10,000-character format", () => {
+    const format = "x".repeat(10_000);
+    let thrown: unknown;
+    try {
+      rendererFor(format);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(UnsupportedExportFormat);
+    const message = (thrown as Error).message;
+    expect(message).toBe(`Unsupported export format "${"x".repeat(32)}". Supported: txt.`);
+    expect(message.length).toBeLessThan(100);
+  });
+
+  it("JSON-escapes the echoed format, so quotes and control characters cannot shape the message", () => {
+    expect(new UnsupportedExportFormat('a"b\\c\nd').message).toBe(
+      'Unsupported export format "a\\"b\\\\c\\nd". Supported: txt.',
+    );
+  });
+
+  it.each([
+    [undefined, "undefined"],
+    [null, "object"],
+    [42, "number"],
+    [{ toString: () => "x".repeat(10_000) }, "object"],
+  ])("names only the type of a non-string format (%j)", (format, type) => {
+    expect(new UnsupportedExportFormat(format).message).toBe(`Unsupported export format ${type}. Supported: txt.`);
+  });
 });
 
 describe("registeredExportFormats", () => {

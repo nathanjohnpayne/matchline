@@ -271,6 +271,14 @@ describe("exportAssetHandler", () => {
         expectNothingWritten(h);
       },
     );
+
+    it("echoes a bounded slice of a very long format in the invalid-argument message", async () => {
+      const h = harness();
+      const err = await callExpectingError({ ...VALID, format: "x".repeat(10_000) }, h);
+      expect(err.code).toBe("invalid-argument");
+      expect(err.message.length).toBeLessThan(100);
+      expect(h.loadApplication).not.toHaveBeenCalled();
+    });
   });
 
   describe("server-side export gate", () => {
@@ -444,12 +452,14 @@ describe("exportAssetHandler", () => {
       expect(h.save).toHaveBeenCalledTimes(1);
     });
 
-    it("refuses with internal, and returns no URL, when an emulator host leaks into a deployed runtime", async () => {
+    it("refuses with internal, before writing anything, when an emulator host leaks into a deployed runtime", async () => {
       const h = harness({ env: { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199", K_SERVICE: "exportasset" } });
       const err = await callExpectingError(VALID, h);
       expect(err.code).toBe("internal");
       expect(err.message).not.toMatch(/127\.0\.0\.1|http:/);
-      expect(h.getSignedUrl).not.toHaveBeenCalled();
+      // Refused before the bucket is touched: no object, no save, no URL.
+      expectNothingWritten(h);
+      expect(h.filePaths).toEqual([]);
       expect(console.error).toHaveBeenCalled();
     });
 

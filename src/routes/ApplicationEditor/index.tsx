@@ -54,12 +54,13 @@ import {
   invokeValidateAsset,
   subscribeValidationAttestation,
 } from "../../services/validation.ts";
-import { exportAndDownload, type ExportFormat } from "../../services/export.ts";
+import type { ExportFormat } from "../../services/export.ts";
 import {
   assetContentVersion,
   type ValidationAttestation,
 } from "../../../functions/src/validation/attestation.ts";
 import { attestationSubscription } from "./attestationSubscription.ts";
+import { exportCurrentAsset } from "./exportCurrentAsset.ts";
 import type { AttestationLookup } from "./exportGate.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
@@ -801,14 +802,12 @@ function ApplicationEditorInner({
   // attestation for the asset's current content, renders the file and
   // returns a short-lived URL; `exportAndDownload` holds a busy lease
   // across the call and starts the download. A rejection (including the
-  // server's failed-precondition when the gate is closed server-side)
-  // propagates to the Export menu, which shows it inline.
+  // server's failed-precondition when the gate is closed server-side, and
+  // the "can't be exported right now" refusal when the editor has no ids
+  // yet) propagates to the Export menu, which shows it inline.
   const assetId = asset?.id;
   const onExport = useCallback(
-    async (format: ExportFormat): Promise<void> => {
-      if (applicationId === undefined || assetId === undefined) return;
-      await exportAndDownload(applicationId, assetId, format);
-    },
+    (format: ExportFormat): Promise<void> => exportCurrentAsset(applicationId, assetId, format),
     [applicationId, assetId],
   );
 

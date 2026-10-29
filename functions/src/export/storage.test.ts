@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assertExportEnvironment,
   downloadUrl,
   EXPORT_URL_TTL_MS,
   exportObjectPath,
@@ -177,5 +178,27 @@ describe("isDeployedRuntime", () => {
   it("is true when a Cloud Run / Functions marker is set without the emulator flag", () => {
     expect(isDeployedRuntime({ K_SERVICE: "exportasset" })).toBe(true);
     expect(isDeployedRuntime({ FUNCTION_TARGET: "exportAsset", FUNCTIONS_EMULATOR: "false" })).toBe(true);
+  });
+});
+
+describe("assertExportEnvironment", () => {
+  it.each([
+    ["a plain process", {}],
+    ["the Storage emulator outside a deployed runtime", { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199" }],
+    [
+      "the Storage emulator under the Functions emulator, Cloud Run markers and all",
+      { STORAGE_EMULATOR_HOST: "http://127.0.0.1:9199", FUNCTIONS_EMULATOR: "true", K_SERVICE: "exportasset" },
+    ],
+    ["a deployed runtime with no emulator host", { K_SERVICE: "exportasset", FIREBASE_STORAGE_EMULATOR_HOST: "  " }],
+  ])("allows %s", (_label, env) => {
+    expect(() => assertExportEnvironment(env)).not.toThrow();
+  });
+
+  it.each([
+    ["FIREBASE_STORAGE_EMULATOR_HOST and K_SERVICE", { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199", K_SERVICE: "x" }],
+    ["STORAGE_EMULATOR_HOST and K_REVISION", { STORAGE_EMULATOR_HOST: "127.0.0.1:9199", K_REVISION: "x-00001" }],
+    ["an emulator host and FUNCTION_TARGET", { FIREBASE_STORAGE_EMULATOR_HOST: "localhost:9199", FUNCTION_TARGET: "exportAsset" }],
+  ])("throws StorageEmulatorInDeployedRuntime for %s", (_label, env) => {
+    expect(() => assertExportEnvironment(env)).toThrow(StorageEmulatorInDeployedRuntime);
   });
 });

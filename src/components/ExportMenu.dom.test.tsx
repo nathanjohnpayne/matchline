@@ -317,6 +317,31 @@ describe("ExportMenu: keyboard", () => {
     expect(screen.queryByTestId("export-menu")).toBeNull();
   });
 
+  it("Tab hands focus to the trigger inside the keydown handler, without preventing the browser's Tab", () => {
+    renderMenu();
+    fireEvent.keyDown(trigger(), { key: "ArrowDown" });
+    const item = screen.getByTestId("export-format-txt");
+    expect(document.activeElement).toBe(item);
+    // A document listener runs after React's root listener, i.e. at the
+    // end of the menu's keydown handler and before the browser's default
+    // Tab action would move focus on.
+    let focusedAtEndOfHandler: Element | null = null;
+    const record = (): void => {
+      focusedAtEndOfHandler = document.activeElement;
+    };
+    document.addEventListener("keydown", record);
+    let notPrevented: boolean;
+    try {
+      notPrevented = fireEvent.keyDown(item, { key: "Tab" });
+    } finally {
+      document.removeEventListener("keydown", record);
+    }
+    expect(notPrevented).toBe(true);
+    expect(focusedAtEndOfHandler).toBe(trigger());
+    expect(document.activeElement).toBe(trigger());
+    expect(screen.queryByTestId("export-menu")).toBeNull();
+  });
+
   it("arrows wrap, Home and End jump, ArrowUp on the trigger opens on the last item", () => {
     const onExport = vi.fn();
     renderMenu({ onExport, formats: MANY });
