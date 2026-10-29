@@ -122,11 +122,11 @@ function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card 
     <section aria-label="Full source" className="mt-4 space-y-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="grid gap-4 sm:hidden">
         <div>
-          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Claim</h3>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Claim</h3>
           <FieldList fields={card.claim} />
         </div>
         <div>
-          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Evidence</h3>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Evidence</h3>
           <FieldList fields={card.evidence} />
         </div>
       </div>

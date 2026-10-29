@@ -340,6 +340,7 @@ describe("Calibrate container with account decks", () => {
         calls.saves.push(base + 1);
         return base + 1;
       },
+      ownerUid: () => "uid-test",
       inspectAccountSession: async (d) => ({
         deckExists: decks.has(d.deck_id),
         deckCurrent: decks.has(d.deck_id) && deckFingerprint(decks.get(d.deck_id) as Deck) === deckFingerprint(d),
@@ -444,7 +445,7 @@ describe("Calibrate container with account decks", () => {
     await slow.land();
     await saved();
     expect(Object.keys(account.sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
-    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:demo-cell") ?? "{}").state.counter).toBe(2);
+    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:account:uid-test:demo-cell") ?? "{}").state.counter).toBe(2);
   });
 
   it("pauses on a save the account can never accept, with the reason", async () => {
@@ -525,14 +526,14 @@ describe("Calibrate container with account decks", () => {
 
   it("removes a deck only after confirming, with this browser's copy", async () => {
     const account = fakeAccount([deck]);
-    localStorage.setItem("matchline:calibrate:v1:demo-cell", "{}");
+    localStorage.setItem("matchline:calibrate:v1:account:uid-test:demo-cell", "{}");
     render(<Calibrate services={account.services} />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove demo-cell" }));
     expect(account.calls.removes).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await screen.findByText(/No decks yet/);
     expect(account.calls.removes).toEqual(["demo-cell"]);
-    expect(localStorage.getItem("matchline:calibrate:v1:demo-cell")).toBeNull();
+    expect(localStorage.getItem("matchline:calibrate:v1:account:uid-test:demo-cell")).toBeNull();
   });
 
   it("names a deck picked twice, and resumes this browser's copy only when it builds on the account's revision", async () => {

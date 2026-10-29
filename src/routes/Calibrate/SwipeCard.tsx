@@ -70,11 +70,11 @@ export function CardFace({ card, secondLook }: { readonly card: Card; readonly s
       <h2 className="mt-1 text-base leading-snug font-semibold text-zinc-900 dark:text-zinc-100">{question}</h2>
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <section aria-label="Claim">
-          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Claim</h3>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Claim</h3>
           <FieldList fields={card.claim} />
         </section>
         <section aria-label="Evidence" className="border-t border-zinc-200 pt-3 sm:border-t-0 sm:border-l sm:pt-0 sm:pl-4 dark:border-zinc-800">
-          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Evidence</h3>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Evidence</h3>
           <FieldList fields={card.evidence} />
         </section>
       </div>
@@ -180,7 +180,7 @@ const SwipeCard = forwardRef<HTMLElement, SwipeCardProps>(function SwipeCard(
           <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white dark:from-zinc-900" />
         )}
       </div>
-      <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+      <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
         {clipped ? "Tap the card for the full text and source." : "Tap the card, or press Space, for the full source."}
       </p>
     </article>

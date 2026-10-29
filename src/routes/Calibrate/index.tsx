@@ -30,6 +30,7 @@ import {
   type AccountDeckList,
   type AccountSessionState,
 } from "../../services/calibration.ts";
+import { currentOwnerUid } from "../../services/auth.ts";
 
 import CalibrateView, { type DeckRun, type SaveState } from "./CalibrateView.tsx";
 import type { AccountState } from "./DeckScreen.tsx";
@@ -46,9 +47,18 @@ export interface CalibrationServices {
   readonly deleteAccountDeck: (deckId: string) => Promise<void>;
   readonly saveAccountSession: (deck: Deck, stored: StoredSession, baseRev: number) => Promise<number>;
   readonly inspectAccountSession: (deck: Deck) => Promise<AccountSessionState>;
+  /** The signed-in owner, which scopes this browser's copies of account decks. */
+  readonly ownerUid: () => string | undefined;
 }
 
-const FIRESTORE_SERVICES: CalibrationServices = { listAccountDecks, uploadDeck, deleteAccountDeck, saveAccountSession, inspectAccountSession };
+const FIRESTORE_SERVICES: CalibrationServices = {
+  listAccountDecks,
+  uploadDeck,
+  deleteAccountDeck,
+  saveAccountSession,
+  inspectAccountSession,
+  ownerUid: currentOwnerUid,
+};
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -85,17 +95,17 @@ export function setsAsideLocal(account: StoredSession | null, accountRev: number
 }
 
 /** Account decks as listed, with each one's best known session (this browser may be ahead). */
-const withLocal = (list: AccountDeckList): AccountDeckList => ({
+const withLocal = (list: AccountDeckList, ownerUid: string | undefined): AccountDeckList => ({
   ...list,
   decks: list.decks.map((d) => {
-    const local = loadSession(d.deck);
+    const local = loadSession(d.deck, { ownerUid });
     return local || d.session ? { ...d, session: pickSession(d.deck, d.session, d.accountRev, local) } : d;
   }),
 });
 
 /** Open picked files for this device only, resuming any session saved in this browser. */
 export async function openDecks(files: readonly File[], storage?: Storage): Promise<DeckRun[]> {
-  return (await readDeckFiles(files)).map((deck) => ({ deck, session: pickSession(deck, null, -1, loadSession(deck, storage)), source: "file" as const }));
+  return (await readDeckFiles(files)).map((deck) => ({ deck, session: pickSession(deck, null, -1, loadSession(deck, { storage })), source: "file" as const }));
 }
 
 /** Save the labels file through a Blob download (the Files app on a phone). */
@@ -182,7 +192,7 @@ export default function Calibrate({
           // state still pending (it descends from the one just written), so a
           // reload before the next write lands resumes it rather than setting it aside.
           const newest = pending.current.get(deckId)?.stored ?? item.stored;
-          saveSession({ ...newest, base_rev: rev });
+          saveSession({ ...newest, base_rev: rev }, { ownerUid: services.ownerUid() });
           if (pending.current.has(deckId)) flushRef.current();
           else setSaveState(deckId, { kind: "saved" });
         },
@@ -229,7 +239,7 @@ export default function Calibrate({
   const refresh = useCallback(async (): Promise<AccountDeckList | null> => {
     try {
       const list = await services.listAccountDecks();
-      const merged = withLocal(list);
+      const merged = withLocal(list, services.ownerUid());
       setAccount({ status: "ready", decks: merged.decks, unreadable: merged.unreadable });
       return list;
     } catch (err) {
@@ -267,7 +277,7 @@ export default function Calibrate({
         // its own bookkeeping: it sets the revision when it lands, and its
         // pending successor is the newest state, so neither is touched here.
         const writing = inflight.current.has(id);
-        const local = pending.current.get(id)?.stored ?? loadSession(d.deck);
+        const local = pending.current.get(id)?.stored ?? loadSession(d.deck, { ownerUid: services.ownerUid() });
         const base = writing ? (accountRev.current.get(id) ?? d.accountRev) : d.accountRev;
         if (!writing && setsAsideLocal(d.session, d.accountRev, local)) setAside.push(id);
         if (!writing) accountRev.current.set(id, d.accountRev);
@@ -280,7 +290,7 @@ export default function Calibrate({
         } else if (session !== local && d.session) {
           // The account copy won: it becomes this browser's copy too, so a
           // replaced set is reported once, not on every reopen.
-          saveSession({ ...session, base_rev: d.accountRev });
+          saveSession({ ...session, base_rev: d.accountRev }, { ownerUid: services.ownerUid() });
         }
         return { deck: d.deck, session, source: "account" as const };
       });
@@ -345,7 +355,7 @@ export default function Calibrate({
     try {
       await services.deleteAccountDeck(deckId);
       // "Remove deck and its labels" includes this browser's copy.
-      clearSession(deckId);
+      clearSession(deckId, { ownerUid: services.ownerUid() });
       await refresh();
     } catch (err) {
       setLoadError(`Remove failed: ${message(err)}`);
@@ -360,7 +370,8 @@ export default function Calibrate({
     const deckId = run.deck.deck_id;
     // A refused deck is locked until the owner loads the latest or keeps this copy.
     if (run.source === "account" && stopped.current.has(deckId)) return;
-    saveSession(run.source === "account" ? { ...next, base_rev: accountRev.current.get(deckId) ?? -1 } : next);
+    if (run.source === "account") saveSession({ ...next, base_rev: accountRev.current.get(deckId) ?? -1 }, { ownerUid: services.ownerUid() });
+    else saveSession(next);
     setRuns((prev) => prev.map((r, i) => (i === index ? { ...r, session: next } : r)));
     if (run.source === "account") {
       pending.current.set(deckId, { deck: run.deck, stored: next });

@@ -31,23 +31,23 @@ describe("Calibrate session storage", () => {
   it("round-trips a session and never stores card text", () => {
     const storage = memoryStorage();
     const stored = { session_id: "s1", state: decide(initSession(deck, 5), "true", 10) };
-    saveSession(stored, storage);
-    expect(loadSession(deck, storage)).toEqual(stored);
-    expect(storage.getItem("matchline:calibrate:v1:cell-a")).not.toContain("a private line");
-    clearSession("cell-a", storage);
-    expect(loadSession(deck, storage)).toBeNull();
+    saveSession(stored, { storage });
+    expect(loadSession(deck, { storage })).toEqual(stored);
+    expect(storage.getItem("matchline:calibrate:v1:device:cell-a")).not.toContain("a private line");
+    clearSession("cell-a", { storage });
+    expect(loadSession(deck, { storage })).toBeNull();
   });
 
   it("ignores a session for a changed deck, corrupt JSON, or a throwing store", () => {
     const storage = memoryStorage();
-    saveSession({ session_id: "s1", state: initSession(deck, 5) }, storage);
+    saveSession({ session_id: "s1", state: initSession(deck, 5) }, { storage });
     const changed = { ...deck, sources: { ...deck.sources, jd: { title: "J", text: "edited" } } };
-    expect(loadSession(changed, storage)).toBeNull();
-    storage.setItem("matchline:calibrate:v1:cell-a", "{not json");
-    expect(loadSession(deck, storage)).toBeNull();
+    expect(loadSession(changed, { storage })).toBeNull();
+    storage.setItem("matchline:calibrate:v1:device:cell-a", "{not json");
+    expect(loadSession(deck, { storage })).toBeNull();
     const throwing = { ...memoryStorage(), getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("full"); } } as Storage;
-    expect(loadSession(deck, throwing)).toBeNull();
-    expect(() => saveSession({ session_id: "s", state: initSession(deck, 1) }, throwing)).not.toThrow();
+    expect(loadSession(deck, { storage: throwing })).toBeNull();
+    expect(() => saveSession({ session_id: "s", state: initSession(deck, 1) }, { storage: throwing })).not.toThrow();
   });
 
   it("works without storage when merely reading localStorage throws (site data blocked)", () => {
@@ -67,5 +67,16 @@ describe("Calibrate session storage", () => {
       if (original) Object.defineProperty(globalThis, "localStorage", original);
       else delete (globalThis as { localStorage?: Storage }).localStorage;
     }
+  });
+
+  it("keeps account decks' copies apart per signed-in account, and apart from file decks", () => {
+    const storage = memoryStorage();
+    const stored = { session_id: "s1", state: decide(initSession(deck, 5), "false", 10) };
+    saveSession(stored, { ownerUid: "alice", storage });
+    expect(loadSession(deck, { ownerUid: "alice", storage })).toEqual(stored);
+    expect(loadSession(deck, { ownerUid: "bob", storage })).toBeNull();
+    expect(loadSession(deck, { storage })).toBeNull();
+    clearSession("cell-a", { ownerUid: "alice", storage });
+    expect(loadSession(deck, { ownerUid: "alice", storage })).toBeNull();
   });
 });

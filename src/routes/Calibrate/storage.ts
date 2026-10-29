@@ -20,9 +20,22 @@ const PREFIX = "matchline:calibrate:v1:";
  */
 const local = (storage?: Storage): Storage | undefined => storage ?? globalThis.localStorage;
 
-export function loadSession(deck: Deck, storage?: Storage): StoredSession | null {
+/**
+ * Where a copy lives: an account deck's copy is scoped to the signed-in
+ * account (another account on this browser must not pick it up), a deck
+ * opened from a file to this device.
+ */
+export interface StorageScope {
+  /** The signed-in owner's uid for an account deck; omitted for a file deck. */
+  readonly ownerUid?: string;
+  readonly storage?: Storage;
+}
+
+const keyFor = (deckId: string, ownerUid?: string) => `${PREFIX}${ownerUid ? `account:${ownerUid}` : "device"}:${deckId}`;
+
+export function loadSession(deck: Deck, { ownerUid, storage }: StorageScope = {}): StoredSession | null {
   try {
-    const raw = local(storage)?.getItem(PREFIX + deck.deck_id);
+    const raw = local(storage)?.getItem(keyFor(deck.deck_id, ownerUid));
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
@@ -34,17 +47,17 @@ export function loadSession(deck: Deck, storage?: Storage): StoredSession | null
   }
 }
 
-export function saveSession(stored: StoredSession, storage?: Storage): void {
+export function saveSession(stored: StoredSession, { ownerUid, storage }: StorageScope = {}): void {
   try {
-    local(storage)?.setItem(PREFIX + stored.state.deck_id, JSON.stringify(stored));
+    local(storage)?.setItem(keyFor(stored.state.deck_id, ownerUid), JSON.stringify(stored));
   } catch {
     // Full or blocked storage: the session still works, it just won't resume.
   }
 }
 
-export function clearSession(deckId: string, storage?: Storage): void {
+export function clearSession(deckId: string, { ownerUid, storage }: StorageScope = {}): void {
   try {
-    local(storage)?.removeItem(PREFIX + deckId);
+    local(storage)?.removeItem(keyFor(deckId, ownerUid));
   } catch {
     // As above.
   }
