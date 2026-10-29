@@ -22,7 +22,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { effortFor, EMBEDDING_MODEL, modelFor, type Stage } from "../../functions/src/llm/config.ts";
@@ -30,7 +30,7 @@ import { profileFor } from "../../functions/src/llm/modelProfile.ts";
 import type { PromptName, PromptStage } from "../../functions/src/prompts/config.ts";
 import { resolvePromptVersion } from "../../functions/src/prompts/loader.ts";
 
-import { assertOutsideRepo, repoRoot } from "./fitBrief/corpus.ts";
+import { assertOutsideRepo, eventualRealpath, repoRoot } from "./fitBrief/corpus.ts";
 import {
   buildFlowRecord,
   cellId,
@@ -79,11 +79,13 @@ export function parseRecordDir(argv: readonly string[]): string | undefined {
 
 /**
  * Refuse a directory that resolves inside the repository (symlinks
- * resolved): inside `root`, inside the main checkout (the parent of the
- * shared git directory), or inside any worktree `git worktree list`
- * reports. A worktree of the same repository can commit records just as
- * well as the checkout the code runs from. When git cannot answer, the
- * path is refused: an unknown checkout layout is not proof of "outside".
+ * resolved, a dangling one to the path a write through it would create;
+ * `eventualRealpath`): inside `root`, inside the main checkout (the
+ * parent of the shared git directory), or inside any worktree `git
+ * worktree list` reports. A worktree of the same repository can commit
+ * records just as well as the checkout the code runs from. When git
+ * cannot answer, the path is refused: an unknown checkout layout is not
+ * proof of "outside".
  */
 export function assertRecordDirOutsideRepo(dir: string, label: string, root: string = repoRoot()): void {
   try {
@@ -93,9 +95,9 @@ export function assertRecordDirOutsideRepo(dir: string, label: string, root: str
     if (!message.includes("resolves inside this repository")) throw err;
     throw new Error(insideRepoMessage(label, dir, null));
   }
-  const target = comparablePath(realpathOrAncestor(dir));
+  const target = comparablePath(eventualRealpath(dir));
   for (const checkout of repositoryCheckouts(root, label, dir)) {
-    if (isWithin(relative(comparablePath(realpathOrAncestor(checkout)), target))) {
+    if (isWithin(relative(comparablePath(eventualRealpath(checkout)), target))) {
       throw new Error(insideRepoMessage(label, dir, checkout));
     }
   }
@@ -147,17 +149,14 @@ function comparablePath(path: string): string {
   return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-/** Real path of `path`, or of its deepest existing ancestor with the rest appended. */
-function realpathOrAncestor(path: string): string {
-  let current = resolve(path);
-  const tail: string[] = [];
-  while (!existsSync(current)) {
-    const parent = dirname(current);
-    if (parent === current) break;
-    tail.unshift(current.slice(parent.length + 1));
-    current = parent;
+/** Something is at `path`, a dangling symlink included (`existsSync` follows links, so it misses one). */
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
   }
-  return join(realpathSync.native(current), ...tail);
 }
 
 /** HEAD and whether the tree is dirty; nulls when git is unavailable. */
@@ -293,7 +292,8 @@ export class FlowRecorder {
     assertRecordDirOutsideRepo(dir, "--record", root);
     const abs = resolve(dir);
     for (const file of [FLOWS_FILE, INVOCATION_FILE]) {
-      if (existsSync(join(abs, file))) {
+      // A dangling symlink counts: appending through it would create its target.
+      if (entryExists(join(abs, file))) {
         throw new Error(
           `--record ${dir} already holds ${file}. Use a fresh directory per run so ` +
             `one directory never mixes two invocations.`,

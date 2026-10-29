@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import type { UsageRecord } from "../../functions/src/llm/cost.ts";
 import { profileFor } from "../../functions/src/llm/modelProfile.ts";
 
 import { repoRoot } from "./fitBrief/corpus.ts";
+import { symlinksSupported } from "./fixedInputs/testSupport.ts";
 import { parseFlowsJsonl } from "./flowRecord.ts";
 import {
   assertRecordDirOutsideRepo,
@@ -160,6 +161,73 @@ describe("FlowRecorder.prepare", () => {
     expect(() => FlowRecorder.prepare(dir, INVOCATION, { head: { sha: null, dirty: null } })).toThrow(
       /already holds flows\.jsonl/,
     );
+  });
+});
+
+// A dangling symlink is followed to the path a write through it would
+// create, so a link outside the repository cannot smuggle a record into it
+// (#657). Skipped where the platform cannot make symlinks.
+describe.runIf(symlinksSupported())("dangling symlinks in --record and --out paths (#657)", () => {
+  const head = { sha: null, dirty: null };
+
+  it("refuses a dangling symlink outside the repository whose target is inside it, before any write", () => {
+    const root = gitRepo(join(base, "repo"));
+    const link = join(base, "records-link");
+    symlinkSync(join(root, "records", "run-1"), link);
+    expect(() => FlowRecorder.prepare(link, INVOCATION, { root, head })).toThrow(/--record .* resolves inside this repository/);
+    expect(() => assertRecordDirOutsideRepo(link, "--out", root)).toThrow(/--out .* resolves inside this repository/);
+    // A path below the link resolves through it as well.
+    expect(() => assertRecordDirOutsideRepo(join(link, "sub"), "--out", root)).toThrow(/resolves inside this repository/);
+    expect(existsSync(join(root, "records"))).toBe(false);
+  });
+
+  it("follows a relative target and a chain of dangling links", () => {
+    const root = gitRepo(join(base, "repo"));
+    // first -> hop -> repo/out, both relative to the links' directory.
+    symlinkSync(join("repo", "out"), join(base, "hop"));
+    symlinkSync("hop", join(base, "first"));
+    expect(() => assertRecordDirOutsideRepo(join(base, "first"), "--record", root)).toThrow(/resolves inside this repository/);
+  });
+
+  it("refuses a dangling symlink into another worktree of the same repository", () => {
+    const main = gitRepo(join(base, "main"));
+    writeFileSync(join(main, "README"), "x\n");
+    git(main, "add", "README");
+    git(main, "-c", "user.name=Recorder Test", "-c", "user.email=recorder-test@example.invalid", "commit", "-q", "-m", "init");
+    const wt = join(base, "wt");
+    git(main, "worktree", "add", "-q", wt);
+    const link = join(base, "into-wt");
+    symlinkSync(join(wt, "records", "run-1"), link);
+    expect(() => assertRecordDirOutsideRepo(link, "--record", main)).toThrow(
+      /--record .* resolves inside this repository \(the checkout or worktree at .*wt\)/,
+    );
+  });
+
+  it("refuses a directory whose flows.jsonl is a dangling symlink into the repository", () => {
+    const root = gitRepo(join(base, "repo"));
+    const dir = join(base, "out");
+    mkdirSync(dir);
+    symlinkSync(join(root, "flows.jsonl"), join(dir, "flows.jsonl"));
+    expect(() => FlowRecorder.prepare(dir, INVOCATION, { root, head })).toThrow(/already holds flows\.jsonl/);
+    expect(existsSync(join(root, "flows.jsonl"))).toBe(false);
+  });
+
+  it("accepts a dangling symlink whose target is outside the repository", () => {
+    const root = gitRepo(join(base, "repo"));
+    const link = join(base, "records-link");
+    symlinkSync(join(base, "elsewhere", "run-1"), link);
+    expect(() => FlowRecorder.prepare(link, INVOCATION, { root, head })).not.toThrow();
+    expect(() => assertRecordDirOutsideRepo(link, "--out", root)).not.toThrow();
+  });
+
+  it("refuses a symlink loop with a clear message", () => {
+    const root = gitRepo(join(base, "repo"));
+    symlinkSync(join(base, "loop-b"), join(base, "loop-a"));
+    symlinkSync(join(base, "loop-a"), join(base, "loop-b"));
+    expect(() => FlowRecorder.prepare(join(base, "loop-a"), INVOCATION, { root, head })).toThrow(
+      /--record .*loop-a: cannot confirm it is outside this repository \(symlink loop: more than 40 symbolic links/,
+    );
+    expect(() => assertRecordDirOutsideRepo(join(base, "loop-a", "run-1"), "--out", root)).toThrow(/--out .*symlink loop/);
   });
 });
 

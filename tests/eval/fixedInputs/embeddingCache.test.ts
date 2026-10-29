@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,7 @@ import {
   priceEmbeddingTokens,
   textHash,
 } from "./embeddingCache.ts";
-import { gitRepo, mockOpenAi, textVector } from "./testSupport.ts";
+import { gitRepo, mockOpenAi, symlinksSupported, textVector } from "./testSupport.ts";
 
 let base: string;
 let root: string;
@@ -209,5 +209,42 @@ describe("EmbeddingCache", () => {
     expect(existsSync(join(base, "elsewhere"))).toBe(false);
     appendFileSync(join(base, "empty.jsonl"), "\n\n");
     expect(EmbeddingCache.load(join(base, "empty.jsonl"), { root }).size).toBe(0);
+  });
+});
+
+// The cache shares the recorder's path check, which follows a dangling
+// symlink to the file an append through it would create (#657). Skipped
+// where the platform cannot make symlinks.
+describe.runIf(symlinksSupported())("EmbeddingCache.load through a symlink (#657)", () => {
+  it("refuses a dangling symlink outside the repository whose target is a new file inside it, before any write", () => {
+    const target = join(root, "embeddings.jsonl");
+    const link = join(base, "e.jsonl");
+    symlinkSync(target, link);
+    expect(() => EmbeddingCache.load(link, { root })).toThrow(/--embeddings-cache .* resolves inside this repository/);
+    // A cache file below a dangling directory link is refused too.
+    symlinkSync(join(root, "cache-dir"), join(base, "dir-link"));
+    expect(() => EmbeddingCache.load(join(base, "dir-link", "e.jsonl"), { root })).toThrow(/resolves inside this repository/);
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(join(root, "cache-dir"))).toBe(false);
+  });
+
+  it("accepts a dangling symlink whose target is outside the repository, and appends through it", async () => {
+    mkdirSync(join(base, "store"));
+    const target = join(base, "store", "e.jsonl");
+    const link = join(base, "e.jsonl");
+    symlinkSync(target, link);
+    const cache = EmbeddingCache.load(link, { root });
+    expect(cache.size).toBe(0);
+    await cache.fill(["alpha text"], { client: mockOpenAi(), maxUsd: 1 });
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(EmbeddingCache.load(target, { root }).get("alpha text")).toEqual(textVector("alpha text"));
+  });
+
+  it("refuses a symlink loop with a clear message", () => {
+    symlinkSync(join(base, "loop-b"), join(base, "loop-a"));
+    symlinkSync(join(base, "loop-a"), join(base, "loop-b"));
+    expect(() => EmbeddingCache.load(join(base, "loop-a"), { root })).toThrow(
+      /--embeddings-cache .*loop-a: cannot confirm it is outside this repository \(symlink loop: more than 40 symbolic links/,
+    );
   });
 });

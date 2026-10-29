@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { assertOutsideRepo, loadCorpus, MANIFEST_FILENAME, repoRoot } from "./corpus.ts";
+import { symlinksSupported } from "../fixedInputs/testSupport.ts";
+
+import { assertOutsideRepo, eventualRealpath, loadCorpus, MANIFEST_FILENAME, MAX_SYMLINKS, repoRoot } from "./corpus.ts";
 
 // Synthetic corpus only. Nothing here comes from a real job search.
 let dir: string;
@@ -128,6 +130,60 @@ describe("assertOutsideRepo", () => {
   it("refuses an output directory inside the repo, even one that does not exist yet", () => {
     expect(() => assertOutsideRepo(join(repoRoot(), "tests", "eval", ".private-out"), "--out")).toThrow(
       /--out resolves inside this repository/,
+    );
+  });
+});
+
+// Skipped where the platform cannot make symlinks.
+describe.runIf(symlinksSupported())("eventualRealpath (#657)", () => {
+  it("is the real path of an existing path, with a missing tail appended as named", () => {
+    const real = realpathSync.native(dir);
+    expect(eventualRealpath(join(dir, "a", "jd.md"))).toBe(join(real, "a", "jd.md"));
+    expect(eventualRealpath(join(dir, "new", "run-1"))).toBe(join(real, "new", "run-1"));
+    expect(eventualRealpath(dir)).toBe(real);
+  });
+
+  it("follows a dangling symlink to the file a write through it would create, relative to the link's directory", () => {
+    const real = realpathSync.native(dir);
+    symlinkSync(join("..", "elsewhere", "out.jsonl"), join(dir, "a", "link"));
+    expect(eventualRealpath(join(dir, "a", "link"))).toBe(join(real, "elsewhere", "out.jsonl"));
+    expect(eventualRealpath(join(dir, "a", "link", "sub"))).toBe(join(real, "elsewhere", "out.jsonl", "sub"));
+  });
+
+  it("resolves `..` in a link target after a symlinked directory physically, not lexically", () => {
+    const real = realpathSync.native(dir);
+    mkdirSync(join(dir, "deep", "inner"), { recursive: true });
+    symlinkSync(join("deep", "inner"), join(dir, "shortcut"));
+    // shortcut/.. is deep (the parent of the link's target), not dir. The
+    // targets are joined by hand: path.join would collapse the `..`.
+    symlinkSync(["shortcut", "..", "x.jsonl"].join(sep), join(dir, "link"));
+    expect(eventualRealpath(join(dir, "link"))).toBe(join(real, "deep", "x.jsonl"));
+    // A `..` below a missing directory steps back out of it.
+    symlinkSync(["missing", "..", "a", "new.md"].join(sep), join(dir, "back-out"));
+    expect(eventualRealpath(join(dir, "back-out"))).toBe(join(real, "a", "new.md"));
+  });
+
+  it("refuses a symlink loop, a self-loop included", () => {
+    symlinkSync(join(dir, "loop-b"), join(dir, "loop-a"));
+    symlinkSync(join(dir, "loop-a"), join(dir, "loop-b"));
+    symlinkSync("self", join(dir, "self"));
+    expect(() => eventualRealpath(join(dir, "loop-a"))).toThrow(
+      new RegExp(`symlink loop: more than ${MAX_SYMLINKS} symbolic links followed resolving`),
+    );
+    expect(() => eventualRealpath(join(dir, "self", "out"))).toThrow(/symlink loop/);
+  });
+
+  it("assertOutsideRepo refuses a dangling symlink into the repository and accepts one that points outside it", () => {
+    const inside = join(repoRoot(), "tests", "eval", ".dangling-should-not-exist", "units.json");
+    symlinkSync(inside, join(dir, "into-repo"));
+    expect(() => assertOutsideRepo(join(dir, "into-repo"), "--units-from")).toThrow(/--units-from resolves inside this repository/);
+    expect(() => assertOutsideRepo(join(dir, "into-repo"), "--out")).toThrow(/--out resolves inside this repository/);
+    expect(existsSync(join(repoRoot(), "tests", "eval", ".dangling-should-not-exist"))).toBe(false);
+    symlinkSync(join(dir, "elsewhere", "out"), join(dir, "outside"));
+    expect(() => assertOutsideRepo(join(dir, "outside"), "--out")).not.toThrow();
+    symlinkSync("loop", join(dir, "loop"));
+    expect(() => assertOutsideRepo(join(dir, "loop"), "--out")).toThrow(
+      /--out .*loop: cannot confirm it is outside this repository \(symlink loop/,
     );
   });
 });

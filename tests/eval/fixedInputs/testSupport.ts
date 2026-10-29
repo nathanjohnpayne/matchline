@@ -1,5 +1,6 @@
 /**
- * Shared helpers for the `eval:fixed-inputs` tests. No network: the
+ * Shared helpers for the `eval:fixed-inputs` tests (the symlink probe
+ * also serves the other eval path-check tests). No network: the
  * OpenAI mock returns a vector that is a deterministic function of the
  * text alone (a hashed bag of words), so the same text always gets the
  * same vector whatever batch it arrives in, and texts sharing words are
@@ -8,7 +9,8 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { vi } from "vitest";
 
@@ -31,6 +33,19 @@ export function gitRepo(dir: string): string {
   for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
   execFileSync("git", ["-C", dir, "init", "-q", "-b", "main"], { env, stdio: ["ignore", "pipe", "pipe"] });
   return dir;
+}
+
+/** Whether this platform lets a test create a symlink (Windows without developer mode does not). */
+export function symlinksSupported(): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "matchline-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "missing"), join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** A unit-length hashed bag-of-words vector: a function of the text only. */

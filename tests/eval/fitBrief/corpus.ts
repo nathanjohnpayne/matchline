@@ -27,8 +27,8 @@
  * Paths are relative to the corpus directory and may not leave it.
  */
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, type Stats } from "node:fs";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -103,29 +103,91 @@ export function repoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 }
 
+/** Symbolic links one path may pass through before it is refused as a loop (Linux's MAXSYMLINKS). */
+export const MAX_SYMLINKS = 40;
+
 /**
- * Resolve symlinks for `path`, or for its nearest existing ancestor when
- * it does not exist yet (an output directory about to be created).
+ * The real path `path` reaches, or would reach once created. The path is
+ * walked one component at a time, as the kernel does: symlinks are
+ * followed, including a dangling one, whose target (read with readlink,
+ * relative to the link's own directory) is the file a write through it
+ * would create. So a link outside the repository to a file not yet made
+ * inside it resolves inside (#657). The rest of the path after its first
+ * missing component is appended as named, as a recursive mkdir would
+ * create it. Throws on a symlink loop (more than MAX_SYMLINKS links).
  */
-function realpathOrAncestor(path: string): string {
-  let current = resolve(path);
-  const tail: string[] = [];
-  while (!existsSync(current)) {
-    const parent = dirname(current);
-    if (parent === current) break;
-    tail.unshift(current.slice(parent.length + 1));
-    current = parent;
+export function eventualRealpath(path: string): string {
+  const start = resolve(path);
+  let dir = parse(start).root;
+  let pending = components(start.slice(dir.length));
+  let links = 0;
+  while (pending.length > 0) {
+    const name = pending.shift()!;
+    if (name === "..") {
+      // Every component of `dir` is a real directory, so its lexical parent is its real parent.
+      dir = dirname(dir);
+      continue;
+    }
+    const next = join(dir, name);
+    const stat = lstatOrMissing(next);
+    if (stat === undefined) {
+      if (!pending.includes("..")) return join(realpathSync.native(dir), name, ...pending);
+      // A `..` below a missing directory steps back out of a directory a
+      // write would create first; drop the pair and keep walking.
+      pending = components(join(name, ...pending));
+      continue;
+    }
+    if (!stat.isSymbolicLink()) {
+      dir = next;
+      continue;
+    }
+    links += 1;
+    if (links > MAX_SYMLINKS) {
+      throw new Error(`symlink loop: more than ${MAX_SYMLINKS} symbolic links followed resolving ${path} (at ${next})`);
+    }
+    // A relative target resolves against the link's directory, `dir`; an absolute one restarts at its root.
+    const target = readlinkSync(next);
+    const targetRoot = isAbsolute(target) ? parse(target).root : "";
+    if (targetRoot !== "") dir = targetRoot;
+    pending = [...components(target.slice(targetRoot.length)), ...pending];
   }
   // `.native` returns the on-disk letter case where the platform has one.
-  return join(realpathSync.native(current), ...tail);
+  return realpathSync.native(dir);
+}
+
+/** The non-empty, non-`.` components of a relative path. */
+function components(rel: string): string[] {
+  return rel.split(sep === "/" ? "/" : /[\\/]/u).filter((c) => c !== "" && c !== ".");
+}
+
+/** `lstat`, or undefined when nothing is there (a missing entry, or a parent that is not a directory). */
+function lstatOrMissing(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw err;
+  }
 }
 
 /**
  * Throw when `path` resolves inside the repository. Symlinks are
- * resolved first, so a link from outside into the repo is refused too.
+ * resolved first (`eventualRealpath`), so a link from outside into the
+ * repo is refused too, dangling or not. A path that cannot be resolved
+ * (a symlink loop) is refused.
  */
 export function assertOutsideRepo(path: string, label: string, root: string = repoRoot()): void {
-  const target = realpathOrAncestor(path);
+  let target: string;
+  try {
+    target = eventualRealpath(path);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `${label} ${path}: cannot confirm it is outside this repository (${reason}). ` +
+        `Refusing rather than risk writing into the repository.`,
+    );
+  }
   const rootReal = realpathSync.native(root);
   if (isWithin(relative(comparable(rootReal), comparable(target)))) {
     throw new Error(
@@ -141,7 +203,7 @@ function readInside(dir: string, rel: string, label: string): string {
   // them as-is: case-folding here could accept a sibling directory on a
   // case-sensitive volume (CodeRabbit on #581). The folded comparison is
   // kept only in assertOutsideRepo, for output paths that may not exist.
-  const relToDir = relative(realpathSync.native(dir), realpathOrAncestor(full));
+  const relToDir = relative(realpathSync.native(dir), eventualRealpath(full));
   if (!isWithin(relToDir)) {
     throw new Error(`${label} (${rel}) points outside the corpus directory.`);
   }
