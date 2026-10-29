@@ -63,6 +63,22 @@ describe("manifest", () => {
     expect(loaded).toMatchObject({ sha256: hash, name: "test set v1", cell: CELL });
   });
 
+  it("reads the file once: the bytes it hashes are the bytes it parses", () => {
+    const path = write("c.json", scaffold(savedItems(0)));
+    const listed = readFileSync(path);
+    // A file replaced after hashing must not run with the replacement's content.
+    const replaced = Buffer.from(JSON.stringify({ ...scaffold(savedItems(0)), notes: "replaced after hashing" }));
+    const reads: string[] = [];
+    const readFile = (p: string): Buffer => {
+      reads.push(p);
+      return reads.length === 1 ? listed : replaced;
+    };
+    const loaded = loadCorrections(path, manifestFor(path), { readFile });
+    expect(reads).toEqual([path]);
+    expect(loaded.sha256).toBe(sha256File(path));
+    expect(loaded.file.notes).toBe("");
+  });
+
   it("refuses a listed hash recorded for another cell, and a duplicate listing", () => {
     const path = write("c.json", scaffold(savedItems(0)));
     expect(() => loadCorrections(path, manifestFor(path, "other__cell"))).toThrow(/lists .* for cell other__cell/);
@@ -161,6 +177,54 @@ describe("applyUnitCorrections", () => {
     expect(add({ date_range: { start: "2020", until: "2021" } })).toThrow(/date_range must be/);
     expect(add({ seniority_signals: "senior" })).toThrow(/seniority_signals must be a list of strings/);
     expect(add({ confidence_score: 0 })).not.toThrow();
+  });
+
+  it("validates every field an added Unit sets and refuses unknown keys by name", () => {
+    const add = (extra: Record<string, unknown>) => {
+      const s = scaffold(items);
+      s.units.push({ owner_verdict: "add", raw_text: "x", normalized_summary: "y", skills: [], ...extra });
+      return () => applyUnitCorrections(s.units, source, "c");
+    };
+    expect(add({ tools: "kubernetes" })).toThrow(/units\[\d+\]: an added Unit's tools must be a list of strings \(got "kubernetes"\)/);
+    expect(add({ tools: ["kubernetes", 3] })).toThrow(/tools must be a list of strings/);
+    expect(add({ domains: [null] })).toThrow(/domains must be a list of strings/);
+    expect(add({ scope_signals: { org: true } })).toThrow(/scope_signals must be a list of strings/);
+    expect(add({ business_outcomes: "faster" })).toThrow(/business_outcomes must be a list of strings/);
+    expect(add({ metrics: "40% faster" })).toThrow(/metrics must be a list of \{claim, value\?, unit\?/);
+    expect(add({ metrics: [{ claim: "40% faster" }] })).toThrow(/metrics must be/); // no confidence
+    expect(add({ metrics: [{ claim: "x", confidence: "sure" }] })).toThrow(/metrics must be/);
+    expect(add({ metrics: [{ claim: "x", value: "40", confidence: "high" }] })).toThrow(/metrics must be/);
+    expect(add({ metrics: [{ claim: "x", direction: "sideways", confidence: "high" }] })).toThrow(/metrics must be/);
+    expect(add({ metrics: [{ claim: "x", confidence: "high", source: "pdf" }] })).toThrow(/metrics must be/);
+    expect(add({ seniority: ["senior"] })).toThrow(
+      /an added Unit may not set "seniority"; it may set only raw_text, normalized_summary, skills, tools, domains/,
+    );
+    expect(add({ id: "unit-9", owner_uid: "someone" })).toThrow(/may not set "id", "owner_uid"/);
+
+    const s = scaffold(items);
+    const metric = { claim: "cut serving cost 30%", value: 30, unit: "%", direction: "down", confidence: "high" };
+    s.units.push({
+      owner_verdict: "add",
+      owner_notes: "from the PDF version",
+      raw_text: "Cut serving cost 30% by moving to spot capacity.",
+      normalized_summary: "Cut serving cost by moving inference to spot capacity",
+      skills: ["cost optimization"],
+      tools: ["Kubernetes"],
+      domains: ["cloud"],
+      scope_signals: ["org-wide"],
+      business_outcomes: ["lower serving cost"],
+      metrics: [metric],
+    });
+    const added = applyUnitCorrections(s.units, source, "c").items.at(-1)!;
+    expect(added).toMatchObject({
+      id: "added_1",
+      tools: ["Kubernetes"],
+      domains: ["cloud"],
+      scope_signals: ["org-wide"],
+      business_outcomes: ["lower serving cost"],
+      metrics: [metric],
+    });
+    expect(added).not.toHaveProperty("owner_notes");
   });
 
   it("accepts a fix that changes only normalized_summary or skills without restating raw_text", () => {

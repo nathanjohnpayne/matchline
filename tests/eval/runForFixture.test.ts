@@ -40,7 +40,15 @@ import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
 import { cacheKey } from "./cache.ts";
-import { describeError, promptFingerprint, runForFixture, withEffort } from "./runForFixture.ts";
+import { loadResumeText } from "./loadFixtures.ts";
+import {
+  describeError,
+  EXTRACTION_ONLY_JD_ID,
+  promptFingerprint,
+  runExtractionForFixture,
+  runForFixture,
+  withEffort,
+} from "./runForFixture.ts";
 
 // -- Mock factories ---------------------------------------------------------
 
@@ -802,6 +810,76 @@ describe("runForFixture", () => {
       // Two embedding entries: one for the Unit texts, one for the
       // Requirement texts.
       expect(entriesIn("embedding")).toHaveLength(2);
+    });
+
+    /**
+     * #648: `--extraction-only` and the full flow run one shared
+     * extraction stage, so they must write and read the same entry.
+     * The key is pinned to its composition (stage, provider, model,
+     * prompt fingerprint, résumé text, discriminators), so a refactor
+     * that changes any part of it, for either path, fails here.
+     */
+    it("the extraction-only path and the full flow share one byte-identical extraction key", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const model = modelFor("extraction");
+      const entriesIn = (dir: string): string[] => readdirSync(join(dir, "extraction"));
+      for (const cacheDiscriminators of [undefined, { tokenSource: "claude-cli" }]) {
+        const dir = mkdtempSync(join(cacheDir, "keys-"));
+        const key = cacheKey({
+          stage: "extraction",
+          provider: model.provider,
+          model: model.model,
+          promptVersion: promptFingerprint("extraction", "resume"),
+          input: loadResumeText("nathan-2026"),
+          ...(cacheDiscriminators !== undefined && { discriminators: cacheDiscriminators }),
+        });
+        const discriminated = cacheDiscriminators !== undefined ? { cacheDiscriminators } : {};
+
+        // Full flow first: the extraction-only path replays its entry.
+        const full = await runForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" },
+          {
+            anthropicClient: makeMockAnthropic([extraction, parsing]),
+            openaiClient: makeMockOpenAi(),
+            cache: new StageCache({ dir }),
+            ...discriminated,
+          },
+        );
+        expect(full.ok).toBe(true);
+        expect(entriesIn(dir)).toEqual([`${key}.json`]);
+        const replayAnthropic = makeMockAnthropic([extraction]);
+        const only = await runExtractionForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: EXTRACTION_ONLY_JD_ID },
+          { anthropicClient: replayAnthropic, openaiClient: makeMockOpenAi(), cache: new StageCache({ dir }), ...discriminated },
+        );
+        expect(only).toMatchObject({
+          ok: true,
+          cacheHits: 1,
+          cacheMisses: 0,
+          extractionAccuracy: full.extractionAccuracy,
+          extractedUnitCount: full.extractedUnitCount,
+        });
+        expect(replayAnthropic.messages.create).not.toHaveBeenCalled();
+        expect(entriesIn(dir)).toEqual([`${key}.json`]);
+
+        // And the other way round: an extraction-only entry serves the full flow.
+        const other = mkdtempSync(join(cacheDir, "keys-"));
+        const cold = await runExtractionForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: EXTRACTION_ONLY_JD_ID },
+          { anthropicClient: makeMockAnthropic([extraction]), openaiClient: makeMockOpenAi(), cache: new StageCache({ dir: other }), ...discriminated },
+        );
+        expect(cold).toMatchObject({ ok: true, cacheHits: 0, cacheMisses: 1 });
+        expect(entriesIn(other)).toEqual([`${key}.json`]);
+        const fullAnthropic = makeMockAnthropic([parsing]);
+        const warmFull = await runForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" },
+          { anthropicClient: fullAnthropic, openaiClient: makeMockOpenAi(), cache: new StageCache({ dir: other }), ...discriminated },
+        );
+        expect(warmFull.ok).toBe(true);
+        expect(warmFull.cacheHits).toBe(1); // extraction only; the rest is cold
+        expect(fullAnthropic.messages.create).toHaveBeenCalledTimes(1); // parsing only
+        expect(warmFull.extractionAccuracy).toBe(cold.extractionAccuracy);
+      }
     });
   });
 });

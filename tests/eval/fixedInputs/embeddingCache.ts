@@ -18,12 +18,20 @@
  * `fill` embeds the uncached texts with the production `embedMany`, in
  * chunks, appending each chunk's vectors as soon as it returns so an
  * interrupted run keeps what it paid for. Before each chunk it refuses
- * when the spend so far plus that chunk's estimate would pass the bound.
+ * when the spend so far plus that chunk's bound would pass `maxUsd`.
+ *
+ * The guard prices tokens at the UTF-8 byte length of each text
+ * (`embeddingTokenBound`), a strict upper bound for a byte-level BPE:
+ * every token covers at least one byte. The chars/4 × 1.35 estimate
+ * (`estimateEmbeddingTokens`) is closer to the bill for English prose
+ * but is not a bound for CJK, emoji or digit runs, so it is displayed
+ * only.
+ *
  * Usage is priced with `priceUsage` and never written to Firestore. When
  * the served usage cannot be priced (no rate card for the model string),
  * the request is charged at the larger of its served tokens at the
- * embedding rate and the chunk's estimate, with a warning, so the spend
- * the guard accumulates never drops below the estimate it checked.
+ * embedding rate and the chunk's bound, with a warning, so the spend the
+ * guard accumulates never drops below the bound it checked.
  */
 
 import { createHash } from "node:crypto";
@@ -52,9 +60,24 @@ export function textHash(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** Conservative token estimate for one embedding input (chars/4 × 1.35). */
+/**
+ * Displayed token estimate for one embedding input (chars/4 × 1.35). NOT
+ * an upper bound: a CJK character, an emoji or a run of digits can take
+ * a token or more per character. The spend guard uses
+ * `embeddingTokenBound`.
+ */
 export function estimateEmbeddingTokens(text: string): number {
   return Math.ceil(INPUT_ESTIMATE_FACTOR * estimateTokens(text));
+}
+
+/**
+ * Upper bound on the tokens one embedding input can bill: its UTF-8 byte
+ * length. `text-embedding-3-small` tokenizes with a byte-level BPE
+ * (cl100k_base), in which every token covers at least one byte, so no
+ * text can bill more tokens than it has bytes.
+ */
+export function embeddingTokenBound(text: string): number {
+  return Buffer.byteLength(text, "utf8");
 }
 
 export function priceEmbeddingTokens(tokens: number, model: string = EMBEDDING_MODEL): number {
@@ -76,9 +99,12 @@ export interface EmbeddingPlan {
   readonly cachedTexts: number;
   /** Distinct texts not in the cache, in first-seen order. */
   readonly uncached: readonly string[];
-  /** Estimated input tokens for the uncached texts. */
+  /** Estimated input tokens for the uncached texts (chars/4 × 1.35; displayed, not a bound). */
   readonly estimatedTokens: number;
   readonly estimatedUsd: number;
+  /** Upper bound on their input tokens (UTF-8 bytes): what the spend guard checks. */
+  readonly boundTokens: number;
+  readonly boundUsd: number;
 }
 
 export interface FillResult {
@@ -166,11 +192,12 @@ export class EmbeddingCache {
     return this.vectors.has(this.key(text));
   }
 
-  /** What embedding `texts` would cost: distinct, cached, uncached, estimated tokens and USD. */
+  /** What embedding `texts` would cost: distinct, cached, uncached, estimated and bounded tokens and USD. */
   plan(texts: readonly string[]): EmbeddingPlan {
     const unique = [...new Set(texts)];
     const uncached = unique.filter((t) => !this.has(t));
     const estimatedTokens = uncached.reduce((a, t) => a + estimateEmbeddingTokens(t), 0);
+    const boundTokens = uncached.reduce((a, t) => a + embeddingTokenBound(t), 0);
     return {
       model: this.model,
       uniqueTexts: unique.length,
@@ -178,13 +205,15 @@ export class EmbeddingCache {
       uncached,
       estimatedTokens,
       estimatedUsd: priceEmbeddingTokens(estimatedTokens, this.model),
+      boundTokens,
+      boundUsd: priceEmbeddingTokens(boundTokens, this.model),
     };
   }
 
   /**
    * Embed every uncached text in `texts` with `embedMany` and append the
-   * vectors. Refuses (EmbeddingRefusal) before a chunk whose estimate
-   * would take the run's spend past `maxUsd`.
+   * vectors. Refuses (EmbeddingRefusal) before a chunk whose byte-length
+   * bound would take the run's spend past `maxUsd`.
    */
   async fill(
     texts: readonly string[],
@@ -209,19 +238,19 @@ export class EmbeddingCache {
     let embedded = 0;
     const price = options.priceUsage ?? ((usage: UsageRecord): number => priceUsage(usage).costUsd);
     const warn = options.warn ?? ((message: string): void => void process.stderr.write(`${message}\n`));
-    let chunkEstimate = 0;
+    let chunkBound = 0;
     const record = async (usage: UsageRecord): Promise<number> => {
       let cost: number;
       try {
         cost = price(usage);
       } catch (err) {
         // Never count a billed request as free: the guard's running total
-        // must not fall below the estimate it checked for this chunk.
-        cost = Math.max(priceEmbeddingTokens(usage.inputTokens, this.model), chunkEstimate);
+        // must not fall below the bound it checked for this chunk.
+        cost = Math.max(priceEmbeddingTokens(usage.inputTokens, this.model), chunkBound);
         warn(
           `warning: could not price embedding usage for ${usage.servedModel ?? usage.model} ` +
             `(${err instanceof Error ? err.message : String(err)}); counting $${cost.toFixed(6)} ` +
-            `(the larger of ${usage.inputTokens} served tokens at the ${this.model} rate and the chunk estimate).`,
+            `(the larger of ${usage.inputTokens} served tokens at the ${this.model} rate and the chunk's byte-length bound).`,
         );
       }
       usd += cost;
@@ -230,14 +259,14 @@ export class EmbeddingCache {
     };
     for (let start = 0; start < uncached.length; start += chunkSize) {
       const chunk = uncached.slice(start, start + chunkSize);
-      chunkEstimate = priceEmbeddingTokens(
-        chunk.reduce((a, t) => a + estimateEmbeddingTokens(t), 0),
+      chunkBound = priceEmbeddingTokens(
+        chunk.reduce((a, t) => a + embeddingTokenBound(t), 0),
         this.model,
       );
-      if (usd + chunkEstimate > options.maxUsd) {
+      if (usd + chunkBound > options.maxUsd) {
         throw new EmbeddingRefusal(
-          `Refusing the next embedding request: $${usd.toFixed(6)} spent so far plus an estimated ` +
-            `$${chunkEstimate.toFixed(6)} would pass --max-usd $${options.maxUsd}. ` +
+          `Refusing the next embedding request: $${usd.toFixed(6)} spent so far plus at most ` +
+            `$${chunkBound.toFixed(6)} (UTF-8 bytes as tokens) would pass --max-usd $${options.maxUsd}. ` +
             `${embedded} of ${uncached.length} texts were embedded and cached.`,
         );
       }

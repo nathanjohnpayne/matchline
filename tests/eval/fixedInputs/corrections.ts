@@ -16,6 +16,11 @@
  * committed. The manifest ships empty: each corrected set is added in a
  * reviewed commit.
  *
+ * The manifest is read from disk, so an entry not yet committed is
+ * accepted (the owner may be iterating). `manifestPin` records the
+ * worktree HEAD and whether the manifest differs from it; the runner
+ * marks the run "manifest not committed" and warns when it does.
+ *
  * ## Verdicts
  *
  * Units: `keep`, `fix`, `drop`, `add`. Requirements: `keep`, `fix`,
@@ -43,9 +48,13 @@
  * - `add` (Units only): a Unit the extractor missed, with at least
  *   `raw_text`, `normalized_summary` and `skills`. It gets the id
  *   `added_<n>`. The owner may also set `confidence_score` (a number in
- *   [0, 1]), `date_range` (`{start, end?}`) and `seniority_signals`.
- *   Every other field it does not set takes the gold-Unit constants (no
- *   scope signals, no outcomes or metrics, evidence `verified`).
+ *   [0, 1]), `date_range` (`{start, end?}`), `tools`, `domains`,
+ *   `seniority_signals`, `scope_signals` and `business_outcomes` (lists
+ *   of strings) and `metrics` (the Unit `Metric` shape). Any other
+ *   field, including `id` and `owner_uid`, is refused by name; owner
+ *   review fields are allowed and stripped. Every field it does not set
+ *   takes the gold-Unit constants (no scope signals, no outcomes or
+ *   metrics, evidence `verified`).
  *
  *   Added-Unit defaults are NOT ranking-neutral beside extracted Units.
  *   The gold constants are neutral only when every Unit carries them
@@ -74,6 +83,7 @@
  * non-added id in the file; zero or several matches are refused.
  */
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -81,10 +91,11 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-import type { DateRange, ExperienceUnit, JobRequirementUnit } from "../../../functions/src/types/capability.ts";
+import type { DateRange, ExperienceUnit, JobRequirementUnit, Metric } from "../../../functions/src/types/capability.ts";
 
 import type { FlowRecord } from "../flowRecord.ts";
 
+import { median } from "./evaluate.ts";
 import { GOLD_OWNER_UID } from "./inputs.ts";
 
 export const CORRECTIONS_MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), "corrections-manifest.json");
@@ -121,8 +132,64 @@ export function loadManifest(path: string = CORRECTIONS_MANIFEST_PATH): Correcti
   return parsed.data;
 }
 
+export function sha256Bytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 export function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  return sha256Bytes(readFileSync(path));
+}
+
+/**
+ * Runs `git <args>` in `cwd`. `status` is the exit code, null when git
+ * could not be started.
+ */
+export type GitRunner = (args: readonly string[], cwd: string) => { readonly status: number | null; readonly stdout: string };
+
+/** Hermetic git: no inherited GIT_DIR (a hook environment cannot point it elsewhere). */
+export const runGit: GitRunner = (args, cwd) => {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
+  const r = spawnSync("git", ["-C", cwd, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return { status: r.error !== undefined ? null : r.status, stdout: r.stdout ?? "" };
+};
+
+export const MANIFEST_NOT_COMMITTED = "manifest not committed";
+
+/** Where the manifest pin came from: the worktree HEAD and whether the manifest is committed at it. */
+export interface ManifestPin {
+  readonly path: string;
+  /** `git rev-parse HEAD` in the manifest's worktree; null when git could not tell. */
+  readonly head: string | null;
+  /** `git diff --quiet HEAD -- <manifest>` exited 1; null when git could not tell. */
+  readonly differsFromHead: boolean | null;
+  readonly status: "committed at HEAD" | typeof MANIFEST_NOT_COMMITTED | "commit status unknown";
+}
+
+/** `git rev-parse HEAD` in `cwd`, or null. */
+export function worktreeHead(cwd: string, git: GitRunner = runGit): string | null {
+  const r = git(["rev-parse", "HEAD"], cwd);
+  const sha = r.stdout.trim();
+  return r.status === 0 && /^[0-9a-f]{40,64}$/u.test(sha) ? sha : null;
+}
+
+/**
+ * Whether the manifest the run read is the one committed at HEAD. The
+ * manifest is read from disk, so a local, uncommitted entry is accepted;
+ * this records that it was, without refusing (the owner may be
+ * iterating before the reviewed commit).
+ */
+export function manifestPin(path: string, git: GitRunner = runGit): ManifestPin {
+  const cwd = dirname(path);
+  const head = worktreeHead(cwd, git);
+  const diff = head === null ? null : git(["diff", "--quiet", "HEAD", "--", path], cwd).status;
+  const differsFromHead = diff === 0 ? false : diff === 1 ? true : null;
+  return {
+    path,
+    head,
+    differsFromHead,
+    status: differsFromHead === false ? "committed at HEAD" : differsFromHead === true ? MANIFEST_NOT_COMMITTED : "commit status unknown",
+  };
 }
 
 const ItemSchema = z.record(z.string(), z.unknown());
@@ -146,9 +213,19 @@ export interface LoadedCorrections {
   readonly file: CorrectionsFile;
 }
 
-/** Hash, check against the manifest, and parse. Refuses an unlisted hash, printing it. */
-export function loadCorrections(path: string, manifest: CorrectionsManifest): LoadedCorrections {
-  const sha256 = sha256File(path);
+/**
+ * Hash, check against the manifest, and parse. Refuses an unlisted hash,
+ * printing it. The file is read once: the bytes hashed are the bytes
+ * parsed, so a file replaced between two reads cannot pass the manifest
+ * with one content and run with another.
+ */
+export function loadCorrections(
+  path: string,
+  manifest: CorrectionsManifest,
+  options: { readonly readFile?: (path: string) => Buffer } = {},
+): LoadedCorrections {
+  const bytes = (options.readFile ?? readFileSync)(path);
+  const sha256 = sha256Bytes(bytes);
   const entry = manifest.entries.find((e) => e.sha256 === sha256);
   if (entry === undefined) {
     throw new Error(
@@ -159,7 +236,7 @@ export function loadCorrections(path: string, manifest: CorrectionsManifest): Lo
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf8"));
+    raw = JSON.parse(bytes.toString("utf8"));
   } catch (err) {
     throw new Error(`${path}: not valid JSON (${err instanceof Error ? err.message : String(err)})`);
   }
@@ -229,13 +306,6 @@ function changedFields(before: Record<string, unknown>, after: Record<string, un
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
 
-function median(values: readonly number[]): number | undefined {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
-}
-
 function isDateRange(v: unknown): v is DateRange {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
@@ -243,17 +313,64 @@ function isDateRange(v: unknown): v is DateRange {
   return keysOk && nonEmpty(r.start) && (r.end === undefined || nonEmpty(r.end));
 }
 
-/** Check the fields an owner may set on an added Unit beyond the required three. */
+const METRIC_KEYS: ReadonlySet<string> = new Set(["claim", "value", "unit", "direction", "confidence"]);
+
+/** The `Metric` shape of `functions/src/types/capability.ts`, with no other keys. */
+function isMetric(v: unknown): v is Metric {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  const m = v as Record<string, unknown>;
+  return (
+    Object.keys(m).every((k) => METRIC_KEYS.has(k)) &&
+    nonEmpty(m.claim) &&
+    (m.value === undefined || (typeof m.value === "number" && Number.isFinite(m.value))) &&
+    (m.unit === undefined || typeof m.unit === "string") &&
+    (m.direction === undefined || m.direction === "up" || m.direction === "down") &&
+    (m.confidence === "high" || m.confidence === "medium" || m.confidence === "low")
+  );
+}
+
+/** Unit fields an `add` item may carry, besides owner-review fields (which are stripped). */
+const ADDED_UNIT_LIST_FIELDS = ["skills", "tools", "domains", "seniority_signals", "scope_signals", "business_outcomes"] as const;
+const ADDED_UNIT_FIELDS: readonly string[] = [
+  "raw_text",
+  "normalized_summary",
+  ...ADDED_UNIT_LIST_FIELDS,
+  "metrics",
+  "confidence_score",
+  "date_range",
+];
+
+/**
+ * Check every field on an added Unit: no key outside `ADDED_UNIT_FIELDS`
+ * (owner-review fields aside), the string lists as lists of strings,
+ * `metrics` in the Unit `Metric` shape, and the optional confidence and
+ * date range. Nothing reaches the matcher unchecked.
+ */
 function checkAddedFields(item: Record<string, unknown>, at: string): void {
+  const allowed = new Set(ADDED_UNIT_FIELDS);
+  const unknown = Object.keys(item).filter((k) => !isReviewField(k) && !allowed.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${at}: an added Unit may not set ${unknown.map((k) => JSON.stringify(k)).join(", ")}; ` +
+        `it may set only ${ADDED_UNIT_FIELDS.join(", ")} (and owner_* review fields)`,
+    );
+  }
+  for (const field of ADDED_UNIT_LIST_FIELDS) {
+    if (item[field] !== undefined && !isStringArray(item[field])) {
+      throw new Error(`${at}: an added Unit's ${field} must be a list of strings (got ${JSON.stringify(item[field])})`);
+    }
+  }
+  if (item.metrics !== undefined && !(Array.isArray(item.metrics) && item.metrics.every(isMetric))) {
+    throw new Error(
+      `${at}: an added Unit's metrics must be a list of {claim, value?, unit?, direction?: up|down, confidence: high|medium|low}`,
+    );
+  }
   const c = item.confidence_score;
   if (c !== undefined && (typeof c !== "number" || !Number.isFinite(c) || c < 0 || c > 1)) {
     throw new Error(`${at}: an added Unit's confidence_score must be a number in [0, 1] (got ${JSON.stringify(c)})`);
   }
   if (item.date_range !== undefined && !isDateRange(item.date_range)) {
     throw new Error(`${at}: an added Unit's date_range must be {start, end?} with non-empty date strings`);
-  }
-  if (item.seniority_signals !== undefined && !isStringArray(item.seniority_signals)) {
-    throw new Error(`${at}: an added Unit's seniority_signals must be a list of strings`);
   }
 }
 

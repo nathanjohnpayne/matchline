@@ -28,8 +28,9 @@ import {
 } from "./extractionOnly.ts";
 import { parseFlowsJsonl, type FlowRecord } from "./flowRecord.ts";
 import { loadExpectedUnits, loadResumeText } from "./loadFixtures.ts";
+import { DEFAULT_CAPS, HARD_THRESHOLD_FRACTION } from "./projection.ts";
 import { FlowRecorder, type InvocationInput } from "./recorder.ts";
-import { estimatePlannedSpend } from "./run.ts";
+import { estimatePlannedSpend, extractionOnlyEstimate } from "./run.ts";
 import { runExtractionForFixture, type RunForFixtureResult } from "./runForFixture.ts";
 import { parseVariants } from "./sweep.ts";
 
@@ -298,6 +299,46 @@ describe("runExtractionOnly", () => {
       run: async (input): Promise<RunForFixtureResult> => fakeResult(input.resumeFixtureId, true),
     });
     expect(cli.code).toBe(0);
+  });
+
+  it("projection guard boundary: 45 api flows run, 46 are refused against the $25 cap", async () => {
+    // One labelled résumé, so the flow count is the sample count.
+    const one = join(base, "fixtures");
+    for (const d of ["resumes", "expected-units"]) mkdirSync(join(one, d), { recursive: true });
+    writeFileSync(join(one, "resumes", "nathan-2026.txt"), loadResumeText("nathan-2026"));
+    writeFileSync(join(one, "expected-units", "nathan-2026.json"), readFileSync(join(FIXTURES, "expected-units", "nathan-2026.json")));
+    expect(DEFAULT_CAPS.anthropicUsd).toBe(25);
+
+    // The estimate the CLI passes (run.ts), driven at the boundary.
+    const estimate = extractionOnlyEstimate("api");
+    expect(estimate(45).anthropicUsd).toBeCloseTo(23.625, 9);
+    expect(estimate(46).anthropicUsd).toBeCloseTo(24.15, 9);
+    expect(estimate(46).openaiUsd).toBe(0);
+    const run = vi.fn(async (input: { resumeFixtureId: string }): Promise<RunForFixtureResult> => fakeResult(input.resumeFixtureId, true));
+    const deps = { anthropicClient: mockAnthropic(["nathan-2026"]), anthropicIsMetered: true, run };
+
+    const allowed = await runExtractionOnly(options({ fixturesDir: one, samples: 45, estimate }), deps);
+    expect(allowed.code).toBe(0);
+    expect(run).toHaveBeenCalledTimes(45);
+    const a = allowed.capChecks.find((c) => c.provider === "anthropic")!;
+    expect(a).toMatchObject({ cap: 25, exceedsCap: false });
+    expect(a.projectedUsd).toBeLessThanOrEqual(25 * HARD_THRESHOLD_FRACTION);
+
+    const refused = await runExtractionOnly(options({ fixturesDir: one, samples: 46, estimate }), deps);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/1 résumé\(s\) x 46 sample\(s\) x 1 arm\(s\) = 46 flows, and the projection exceeds a monthly cap/);
+    expect(run).toHaveBeenCalledTimes(45); // nothing ran for the refused run
+    const r = refused.capChecks.find((c) => c.provider === "anthropic")!;
+    expect(r).toMatchObject({ cap: 25, exceedsCap: true });
+    expect(r.projectedUsd).toBeGreaterThan(25 * HARD_THRESHOLD_FRACTION);
+
+    // claude-cli plans no Anthropic spend, so the same 46 flows run.
+    const cli = await runExtractionOnly(
+      options({ fixturesDir: one, samples: 46, tokenSource: "claude-cli", estimate: extractionOnlyEstimate("claude-cli") }),
+      { ...deps, anthropicIsMetered: false },
+    );
+    expect(cli.code).toBe(0);
+    expect(run).toHaveBeenCalledTimes(45 + 46);
   });
 
   it("exits 1 when every flow failed", async () => {

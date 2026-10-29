@@ -4,7 +4,7 @@
 
 import type { EmbeddingPlan, FillResult } from "./embeddingCache.ts";
 import { median, sumDecompositions, type Decomposition } from "./evaluate.ts";
-import type { SideProvenance } from "./corrections.ts";
+import { MANIFEST_NOT_COMMITTED, type ManifestPin, type SideProvenance } from "./corrections.ts";
 import type { ScorerName } from "./scorers.ts";
 
 export const DIAGNOSTIC_BANNER =
@@ -75,13 +75,36 @@ export interface CorrectionReport {
   readonly cell: string;
   readonly sourceFlow: { readonly invocationId: string; readonly variant: string; readonly sampleIndex: number };
   readonly provenance: SideProvenance;
+  /** Whether the manifest entry that accepted this set is committed at the worktree HEAD. */
+  readonly manifestStatus: ManifestPin["status"];
   /** Requirement-text and must-have overrides, by id. */
   readonly overrides?: readonly { readonly id: string; readonly normalized_requirement?: string; readonly must_have?: boolean }[];
+}
+
+/**
+ * A flow whose `record/record` rerun under the current scorer does not
+ * give back what it recorded: a different match accuracy or match count.
+ */
+export interface ReproductionMismatch {
+  readonly arm: string;
+  readonly invocationId: string;
+  readonly cell: string;
+  readonly sampleIndex: number;
+  readonly recordedAccuracy: number;
+  readonly rerunAccuracy: number | null;
+  /** rerun − recorded; null when there is no rerun value. */
+  readonly difference: number | null;
+  readonly recordedMatchCount: number | null;
+  readonly rerunMatchCount: number | null;
 }
 
 export interface FixedInputsResult {
   readonly generatedAt: string;
   readonly argv: readonly string[];
+  /** `git rev-parse HEAD` of the worktree the runner (and its manifest) came from; null when git could not tell. */
+  readonly head: string | null;
+  /** Corrections runs only: the manifest pin and whether it is committed at HEAD. */
+  readonly manifest: ManifestPin | null;
   readonly metric: string;
   readonly k: number | null;
   readonly scorers: readonly ScorerName[];
@@ -92,6 +115,66 @@ export interface FixedInputsResult {
   readonly skipped: readonly { readonly reason: string; readonly flows: readonly string[] }[];
   readonly corrections: readonly CorrectionReport[];
   readonly flows: readonly FlowResult[];
+  /**
+   * Flows whose `record/record` current-scorer rerun differs from the
+   * record, or null when the run does not check (`--k`, or no
+   * `record/record` × `current`). A mismatch is reported, never fatal.
+   */
+  readonly reproductionMismatches: readonly ReproductionMismatch[] | null;
+}
+
+const ACCURACY_EPSILON = 1e-9;
+
+/** Whether a run can compare `record/record` under the current scorer with what each flow recorded. */
+export function checksReproduction(r: Pick<FixedInputsResult, "conditions" | "scorers" | "k">): boolean {
+  return r.conditions.includes("record/record") && r.scorers.includes("current") && r.k === null;
+}
+
+function reproducesAccuracy(f: FlowResult): boolean {
+  const rerun = f.conditions["record/record"]?.current?.accuracy;
+  return rerun !== undefined && f.recordMatchAccuracy !== null && Math.abs(rerun - f.recordMatchAccuracy) < ACCURACY_EPSILON;
+}
+
+function reproducesMatchCount(f: FlowResult): boolean {
+  return f.conditions["record/record"]?.current?.matchCount === f.recordMatchCount;
+}
+
+/**
+ * The flows with a recorded accuracy whose `record/record` rerun under
+ * the current scorer differs in accuracy or match count (the two
+ * columns of "Reproduces the record"), in flow order; null when the run
+ * does not check.
+ */
+export function reproductionMismatches(
+  r: Pick<FixedInputsResult, "conditions" | "scorers" | "k" | "flows">,
+): ReproductionMismatch[] | null {
+  if (!checksReproduction(r)) return null;
+  return r.flows
+    .filter((f) => f.recordMatchAccuracy !== null && !(reproducesAccuracy(f) && reproducesMatchCount(f)))
+    .map((f) => {
+      const rerun = f.conditions["record/record"]?.current;
+      const recordedAccuracy = f.recordMatchAccuracy!;
+      return {
+        arm: f.arm,
+        invocationId: f.invocationId,
+        cell: f.cell,
+        sampleIndex: f.sampleIndex,
+        recordedAccuracy,
+        rerunAccuracy: rerun?.accuracy ?? null,
+        difference: rerun === undefined ? null : rerun.accuracy - recordedAccuracy,
+        recordedMatchCount: f.recordMatchCount,
+        rerunMatchCount: rerun?.matchCount ?? null,
+      };
+    });
+}
+
+const signedPct = (v: number | null): string => (v === null ? "–" : `${v > 0 ? "+" : ""}${(100 * v).toFixed(1)}`);
+
+/** One mismatch for a warning line: `<arm> <cell> #<i> (recorded 22.6, rerun 20.8, -1.8)`. */
+export function describeMismatch(m: ReproductionMismatch): string {
+  const counts =
+    m.rerunMatchCount === m.recordedMatchCount ? "" : `, match count ${m.recordedMatchCount ?? "–"} vs ${m.rerunMatchCount ?? "–"}`;
+  return `${m.arm} ${m.cell} #${m.sampleIndex} (recorded ${pct(m.recordedAccuracy)}, rerun ${pct(m.rerunAccuracy)}, ${signedPct(m.difference)}${counts})`;
 }
 
 const pct = (v: number | null | undefined): string => (v === null || v === undefined ? "–" : (100 * v).toFixed(1));
@@ -136,6 +219,19 @@ function table(header: readonly string[], rows: readonly (readonly string[])[]):
   ].join("\n");
 }
 
+function manifestLine(m: ManifestPin): string {
+  if (m.status === MANIFEST_NOT_COMMITTED) {
+    return (
+      `- Corrections manifest ${m.path}: **${MANIFEST_NOT_COMMITTED}**. It differs from HEAD, so the corrected sets ` +
+      "below are accepted by a manifest entry that HEAD does not hold; this run cannot be reproduced from HEAD."
+    );
+  }
+  if (m.status === "commit status unknown") {
+    return `- Corrections manifest ${m.path}: commit status unknown (git could not compare it with HEAD).`;
+  }
+  return `- Corrections manifest ${m.path}: committed at HEAD.`;
+}
+
 export function formatPlan(plan: FixedInputsResult["plan"], extra: {
   readonly flows: number;
   readonly conditions: readonly string[];
@@ -144,6 +240,8 @@ export function formatPlan(plan: FixedInputsResult["plan"], extra: {
   readonly maxUsd: number;
   readonly corrections: readonly CorrectionReport[];
   readonly skipped: FixedInputsResult["skipped"];
+  readonly head: string | null;
+  readonly manifest: ManifestPin | null;
 }): string {
   const lines = [
     "## Plan",
@@ -151,12 +249,16 @@ export function formatPlan(plan: FixedInputsResult["plan"], extra: {
     `- Flows: ${extra.flows}; conditions: ${extra.conditions.join(", ")}; scorers: ${extra.scorers.join(", ")}.`,
     `- Matcher runs: ${extra.flows * extra.conditions.length * extra.scorers.length} (production \`runMatchingPipeline\`, in memory).`,
     `- Embedding model ${plan.model}: ${plan.uniqueTexts} distinct texts, ${plan.cachedTexts} cached, ${plan.uncachedTexts} uncached.`,
-    `- Estimated embedding spend for the uncached texts: ~${plan.estimatedTokens} tokens, $${plan.estimatedUsd.toFixed(6)} (bound --max-usd $${extra.maxUsd}).`,
+    `- Estimated embedding spend for the uncached texts: ~${plan.estimatedTokens} tokens, $${plan.estimatedUsd.toFixed(6)}; ` +
+      `the guard checks the UTF-8 byte-length bound, ${plan.boundTokens} tokens, $${plan.boundUsd.toFixed(6)}, against --max-usd $${extra.maxUsd}.`,
     `- Embedding cache: ${extra.cachePath}`,
+    `- Worktree HEAD: ${extra.head ?? "unknown (git rev-parse HEAD failed)"}.`,
   ];
+  if (extra.manifest !== null) lines.push(manifestLine(extra.manifest));
   for (const s of extra.skipped) lines.push(`- Skipped ${s.flows.length} flow(s): ${s.reason}.`);
   for (const c of extra.corrections) {
-    lines.push(`- Corrected ${c.side} for ${c.cell}: "${c.name}" sha256 ${c.sha256} (${c.path}).`);
+    const mark = c.manifestStatus === "committed at HEAD" ? "" : `; ${c.manifestStatus}`;
+    lines.push(`- Corrected ${c.side} for ${c.cell}: "${c.name}" sha256 ${c.sha256} (${c.path})${mark}.`);
   }
   return lines.join("\n");
 }
@@ -167,6 +269,7 @@ function formatProvenance(c: CorrectionReport): string {
     `### ${c.side} of ${c.cell}: "${c.name}"`,
     "",
     `- sha256 ${c.sha256}; source flow ${c.sourceFlow.variant} #${c.sourceFlow.sampleIndex} (invocation ${c.sourceFlow.invocationId}).`,
+    `- Manifest: ${c.manifestStatus}.`,
     `- Kept (${p.kept.length}): ${p.kept.join(", ") || "none"}.`,
     `- Fixed (${p.fixed.length}): ${p.fixed.map((f) => `${f.id} [${f.fields.map(fieldLabel).join(", ")}]`).join("; ") || "none"}.`,
     `- Dropped (${p.dropped.length}): ${p.dropped.join(", ") || "none"}.`,
@@ -218,6 +321,8 @@ export function formatFixedInputsMarkdown(result: FixedInputsResult, maxUsd: num
       maxUsd,
       corrections: result.corrections,
       skipped: result.skipped,
+      head: result.head,
+      manifest: result.manifest,
     }),
   ];
   if (result.fill !== null && result.fill.requests > 0) {
@@ -298,24 +403,43 @@ export function formatFixedInputsMarkdown(result: FixedInputsResult, maxUsd: num
     table(["arm", "condition", "scorer", "expected", "found", "A", "A∧B", "B", "C", "C rank median", "FP", "FP unmapped side"], decompRows),
   );
 
-  if (result.conditions.includes("record/record") && result.scorers.includes("current") && result.k === null) {
+  if (result.reproductionMismatches !== null) {
     out.push(
       "",
       "## Reproduces the record",
       "",
-      "`record/record` with the current scorer against the match accuracy and match count each flow recorded. A mismatch can come from embedding jitter (the API returns slightly different vectors for the same text in different batches, which can flip a pair at the window boundary) or from a recency `asOf` difference: this runner pins `asOf` to the flow's `finishedAt`.",
+      "`record/record` with the current scorer against the match accuracy and match count each flow recorded. A mismatch can come from embedding jitter (the API returns slightly different vectors for the same text in different batches, which can flip a pair at the window boundary) or from a recency `asOf` difference: this runner pins `asOf` to the flow's `finishedAt`. A mismatch is reported here and on stderr; it does not change the exit code.",
       "",
     );
     const rows: string[][] = [];
     for (const arm of armList) {
       const flows = result.flows.filter((f) => f.arm === arm && f.recordMatchAccuracy !== null);
-      const exact = flows.filter(
-        (f) => Math.abs((f.conditions["record/record"]?.current?.accuracy ?? Number.NaN) - f.recordMatchAccuracy!) < 1e-9,
-      ).length;
-      const counts = flows.filter((f) => f.conditions["record/record"]?.current?.matchCount === f.recordMatchCount).length;
+      const exact = flows.filter(reproducesAccuracy).length;
+      const counts = flows.filter(reproducesMatchCount).length;
       rows.push([arm, String(flows.length), String(exact), String(counts)]);
     }
     out.push(table(["arm", "flows with a recorded accuracy", "accuracy equal", "match count equal"], rows));
+    const mismatches = result.reproductionMismatches;
+    if (mismatches.length === 0) {
+      out.push("", "Every flow with a recorded accuracy reproduces its accuracy and match count.");
+    } else {
+      out.push("", `### Mismatched flows (${mismatches.length})`, "");
+      out.push(
+        table(
+          ["arm", "cell", "sample", "recorded accuracy", "rerun accuracy", "difference", "recorded match count", "rerun match count"],
+          mismatches.map((m) => [
+            m.arm,
+            m.cell,
+            String(m.sampleIndex),
+            pct(m.recordedAccuracy),
+            pct(m.rerunAccuracy),
+            signedPct(m.difference),
+            m.recordedMatchCount === null ? "–" : String(m.recordedMatchCount),
+            m.rerunMatchCount === null ? "–" : String(m.rerunMatchCount),
+          ]),
+        ),
+      );
+    }
   }
 
   if (result.corrections.length > 0) {

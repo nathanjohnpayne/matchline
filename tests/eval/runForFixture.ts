@@ -503,46 +503,39 @@ async function runStage<T>(
   }
 }
 
-async function runForFixtureInner(
-  input: RunForFixtureInput,
+/**
+ * The real-spend recorder for the Anthropic-served stages. Codex P2: they
+ * must not add to `costAccum` when `anthropicClient` is a subscription
+ * CLI adapter, because real spend there is $0. `modeledUsage` still gets
+ * every usage record (via `runStage`'s own tracking), so
+ * `modeledCostUsd` is unaffected and still ranks the CLI source
+ * correctly against `api`.
+ */
+function anthropicCostRecorder(
   deps: RunForFixtureDeps,
-  start: number,
   recordCost: (usage: UsageRecord) => Promise<number>,
-  getCostAccum: () => number,
-  tally: StageTally,
-): Promise<RunForFixtureResult> {
-  const { cache, cacheDiscriminators, anthropicIsMetered = true } = deps;
-  // Codex P2: the Anthropic-served stages (extraction, parsing) must
-  // not add to `costAccum` when `anthropicClient` is a subscription
-  // CLI adapter — real spend there is $0. `modeledUsage` still gets
-  // every usage record regardless (via `runStage`'s own tracking), so
-  // `modeledCostUsd` is unaffected and still ranks the CLI source
-  // correctly against `api`.
-  const recordAnthropicCost = anthropicIsMetered
-    ? recordCost
-    : async (): Promise<number> => 0;
-  const extractionModel = modelFor("extraction");
-  const parsingModel = modelFor("requirement_parsing");
-  // 1. Load fixtures.
-  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
-  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
-  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
-    input.resumeFixtureId,
-    deps.fixturePaths,
-  );
-  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
-    input.resumeFixtureId,
-    input.jdFixtureId,
-    deps.fixturePaths,
-  );
+): (usage: UsageRecord) => Promise<number> {
+  return (deps.anthropicIsMetered ?? true) ? recordCost : async (): Promise<number> => 0;
+}
 
-  // 2. Extract Units (Anthropic). Keyed on the resume text — the
-  //    only input that can change the output — so the 10×10 corpus
-  //    runs 10 extractions instead of 100 (#389).
-  const extractedUnits = await runStage(
+/**
+ * The extraction stage, shared by the full flow and the extraction-only
+ * path (#648) so both use one cache key, one set of discriminators and
+ * one metering rule, and therefore share cache entries. Keyed on the
+ * résumé text, the only input that can change the output, so the 10×10
+ * corpus runs 10 extractions instead of 100 (#389).
+ */
+function runExtractionStage(
+  resumeText: string,
+  deps: RunForFixtureDeps,
+  recordAnthropicCost: (usage: UsageRecord) => Promise<number>,
+  tally: StageTally,
+): Promise<ExperienceUnit[]> {
+  const extractionModel = modelFor("extraction");
+  return runStage(
     tally,
-    cache,
-    withEffort(cacheDiscriminators, "extraction"),
+    deps.cache,
+    withEffort(deps.cacheDiscriminators, "extraction"),
     {
       stage: "extraction",
       provider: extractionModel.provider,
@@ -558,6 +551,54 @@ async function runForFixtureInner(
         { client: deps.anthropicClient, record },
       ),
   );
+}
+
+/**
+ * Extraction accuracy: `unitSetAccuracy` over `normalizedSummary` +
+ * `skills`, converting the label and Unit shapes.
+ */
+function extractionAccuracyFor(
+  expected: ExpectedUnitFile,
+  units: readonly Pick<ExperienceUnit, "normalized_summary" | "skills">[],
+): number {
+  return unitSetAccuracy(
+    expected.expected_units.map((e) => ({
+      normalizedSummary: e.normalized_summary,
+      skills: e.skills,
+    })),
+    units.map((u) => ({
+      normalizedSummary: u.normalized_summary,
+      skills: u.skills,
+    })),
+  );
+}
+
+async function runForFixtureInner(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  start: number,
+  recordCost: (usage: UsageRecord) => Promise<number>,
+  getCostAccum: () => number,
+  tally: StageTally,
+): Promise<RunForFixtureResult> {
+  const { cache, cacheDiscriminators } = deps;
+  const recordAnthropicCost = anthropicCostRecorder(deps, recordCost);
+  const parsingModel = modelFor("requirement_parsing");
+  // 1. Load fixtures.
+  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
+  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
+  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
+    input.resumeFixtureId,
+    deps.fixturePaths,
+  );
+  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
+    input.resumeFixtureId,
+    input.jdFixtureId,
+    deps.fixturePaths,
+  );
+
+  // 2. Extract Units (Anthropic), keyed on the resume text.
+  const extractedUnits = await runExtractionStage(resumeText, deps, recordAnthropicCost, tally);
 
   // 3. Embed Units (OpenAI). Attach embedding to each Unit
   //    in-place so the matching pipeline's filter for
@@ -670,18 +711,8 @@ async function runForFixtureInner(
   );
 
   traceEnterStep(tally.trace, "scoring"); // --record hook
-  // 7. Score extraction. unitSetAccuracy uses
-  //    `normalizedSummary` + `skills`; convert our shapes.
-  const extractionAccuracy = unitSetAccuracy(
-    expectedUnitsFile.expected_units.map((e) => ({
-      normalizedSummary: e.normalized_summary,
-      skills: e.skills,
-    })),
-    embeddedUnits.map((u) => ({
-      normalizedSummary: u.normalized_summary,
-      skills: u.skills,
-    })),
-  );
+  // 7. Score extraction.
+  const extractionAccuracy = extractionAccuracyFor(expectedUnitsFile, embeddedUnits);
 
   // 8. Score matches. Build mnemonic-ID maps; convert
   //    actual matches to composite strings; topKOverlap.
@@ -725,49 +756,20 @@ async function runExtractionInner(
   getCostAccum: () => number,
   tally: StageTally,
 ): Promise<RunForFixtureResult> {
-  const { cache, cacheDiscriminators, anthropicIsMetered = true } = deps;
-  // Same metering rule as the full flow: a subscription CLI client adds
-  // nothing to real spend, but its usage still feeds modeled cost.
-  const recordAnthropicCost = anthropicIsMetered
-    ? recordCost
-    : async (): Promise<number> => 0;
-  const extractionModel = modelFor("extraction");
   const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
   const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
     input.resumeFixtureId,
     deps.fixturePaths,
   );
-  // The same stage key as the full flow, so the two share cache entries.
-  const extractedUnits = await runStage(
+  // The full flow's extraction stage: same key, so the two share cache entries.
+  const extractedUnits = await runExtractionStage(
+    resumeText,
+    deps,
+    anthropicCostRecorder(deps, recordCost),
     tally,
-    cache,
-    withEffort(cacheDiscriminators, "extraction"),
-    {
-      stage: "extraction",
-      provider: extractionModel.provider,
-      model: extractionModel.model,
-      promptVersion: promptFingerprint("extraction", "resume"),
-      input: resumeText,
-    },
-    recordAnthropicCost,
-    (record) =>
-      extractFromResume(
-        resumeText,
-        { ownerUid: EVAL_OWNER_UID },
-        { client: deps.anthropicClient, record },
-      ),
   );
   traceEnterStep(tally.trace, "scoring"); // --record hook
-  const extractionAccuracy = unitSetAccuracy(
-    expectedUnitsFile.expected_units.map((e) => ({
-      normalizedSummary: e.normalized_summary,
-      skills: e.skills,
-    })),
-    extractedUnits.map((u) => ({
-      normalizedSummary: u.normalized_summary,
-      skills: u.skills,
-    })),
-  );
+  const extractionAccuracy = extractionAccuracyFor(expectedUnitsFile, extractedUnits);
   return {
     resumeFixtureId: input.resumeFixtureId,
     jdFixtureId: input.jdFixtureId,

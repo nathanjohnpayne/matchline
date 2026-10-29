@@ -48,7 +48,7 @@ import {
 } from "../../functions/src/prompts/loader.js";
 
 import { resolveCacheMode, StageCache, type StageCacheMode } from "./cache.js";
-import { EXTRACTION_ONLY_MODE, runExtractionOnly } from "./extractionOnly.js";
+import { EXTRACTION_ONLY_MODE, runExtractionOnly, type PlannedSpend } from "./extractionOnly.js";
 import {
   claudeCliClient,
   CLI_ADAPTER_VERSION,
@@ -299,6 +299,17 @@ export function estimateSpendForSource(
     openaiUsd: flowCount * PER_FLOW_EMBEDDINGS_ONLY_USD,
     firebaseUsd: 0,
   };
+}
+
+/**
+ * The planned spend `--extraction-only` checks before any flow (#648):
+ * the full flow's per-flow estimate for the token source, with the
+ * OpenAI share dropped because extraction embeds nothing. With `api`
+ * that is $0.525 of Anthropic spend per flow, so 45 flows ($23.625) pass
+ * the $25 cap's $23.75 hard threshold and 46 ($24.15) are refused.
+ */
+export function extractionOnlyEstimate(tokenSource: TokenSourceKind): (flowCount: number) => PlannedSpend {
+  return (flowCount) => ({ ...estimateSpendForSource("full", flowCount, tokenSource), openaiUsd: 0 });
 }
 
 export function parseSamples(argv: readonly string[]): number {
@@ -999,7 +1010,7 @@ async function runExtractionOnlyCli(ctx: {
         promptOverrides,
         tokenSource,
         // Extraction embeds nothing, so only the Anthropic share is planned.
-        estimate: (flows) => ({ ...estimateSpendForSource("full", flows, tokenSource), openaiUsd: 0 }),
+        estimate: extractionOnlyEstimate(tokenSource),
         ...(recorder !== undefined && { recorder }),
         cache,
         ...(cacheDiscriminatorsFor(tokenSource) !== undefined && { cacheDiscriminators: cacheDiscriminatorsFor(tokenSource)! }),

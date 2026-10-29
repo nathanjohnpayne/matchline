@@ -7,6 +7,7 @@ import type { OpenAIClient as OpenAI } from "../../../functions/src/llm/openai.t
 
 import {
   cacheLinesFor,
+  embeddingTokenBound,
   EmbeddingCache,
   EmbeddingRefusal,
   estimateEmbeddingTokens,
@@ -103,25 +104,26 @@ describe("EmbeddingCache", () => {
   it("refuses the next chunk when it would pass the bound", async () => {
     const path = join(base, "e.jsonl");
     const texts = ["x".repeat(4000), "y".repeat(4000)];
-    const oneChunk = priceEmbeddingTokens(estimateEmbeddingTokens(texts[0]!));
+    const oneChunk = priceEmbeddingTokens(embeddingTokenBound(texts[0]!));
     const client = mockOpenAi();
+    // The first request bills a quarter of its bound; the second chunk's full bound no longer fits.
     const err = await EmbeddingCache.load(path, { root })
-      .fill(texts, { client, maxUsd: oneChunk * 1.5, chunkSize: 1 })
+      .fill(texts, { client, maxUsd: oneChunk * 1.1, chunkSize: 1 })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EmbeddingRefusal);
     expect(String(err)).toMatch(/1 of 2 texts were embedded/);
     expect(client.embeddings.create).toHaveBeenCalledTimes(1);
   });
 
-  it("never counts a request it cannot price as free: falls back to the estimate and warns", async () => {
+  it("never counts a request it cannot price as free: falls back to the bound and warns", async () => {
     const path = join(base, "e.jsonl");
     const texts = ["x".repeat(4000), "y".repeat(4000), "z".repeat(4000)];
-    const oneChunk = priceEmbeddingTokens(estimateEmbeddingTokens(texts[0]!));
+    const oneChunk = priceEmbeddingTokens(embeddingTokenBound(texts[0]!));
     const warnings: string[] = [];
     const unpriceable = (): number => {
       throw new Error("no rate card for text-embedding-3-small-2099");
     };
-    // Bound fits two chunks' estimates, not three: the fallback must carry the spend forward.
+    // --max-usd fits two chunks' bounds, not three: the fallback must carry the spend forward.
     const err = await EmbeddingCache.load(path, { root })
       .fill(texts, { client: mockOpenAi(), maxUsd: oneChunk * 2.5, chunkSize: 1, priceUsage: unpriceable, warn: (m) => warnings.push(m) })
       .catch((e: unknown) => e);
@@ -145,6 +147,36 @@ describe("EmbeddingCache", () => {
     expect(plan).toMatchObject({ uniqueTexts: 2, cachedTexts: 1, uncached: ["fresh words"] });
     expect(plan.estimatedTokens).toBe(estimateEmbeddingTokens("fresh words"));
     expect(plan.estimatedUsd).toBeCloseTo((plan.estimatedTokens / 1e6) * 0.02, 12);
+    expect(plan.boundTokens).toBe("fresh words".length);
+    expect(plan.boundUsd).toBeCloseTo((plan.boundTokens / 1e6) * 0.02, 12);
+  });
+
+  it("guards on the UTF-8 byte length, which bounds CJK text the chars/4 estimate undercounts", async () => {
+    // 14 CJK characters, 42 UTF-8 bytes. cl100k_base spends roughly a token per
+    // character on such text, more than twice the chars/4 × 1.35 estimate of 6.
+    const cjk = "日本語の埋め込みテキストです";
+    expect(cjk.length).toBe(14);
+    expect(embeddingTokenBound(cjk)).toBe(42);
+    expect(estimateEmbeddingTokens(cjk)).toBe(6);
+    expect(embeddingTokenBound(cjk)).toBeGreaterThan(cjk.length); // above even one token per character
+    expect(embeddingTokenBound("😀")).toBe(4);
+    const path = join(base, "e.jsonl");
+    const cache = EmbeddingCache.load(path, { root });
+    const plan = cache.plan([cjk]);
+    expect(plan).toMatchObject({ estimatedTokens: 6, boundTokens: 42 });
+    // A --max-usd the estimate fits but the bound does not: refused before any request.
+    const maxUsd = (priceEmbeddingTokens(6) + priceEmbeddingTokens(42)) / 2;
+    expect(plan.estimatedUsd).toBeLessThan(maxUsd);
+    expect(plan.boundUsd).toBeGreaterThan(maxUsd);
+    const client = mockOpenAi();
+    const err = await cache.fill([cjk], { client, maxUsd }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EmbeddingRefusal);
+    expect(String(err)).toMatch(/UTF-8 bytes as tokens/);
+    expect(client.embeddings.create).not.toHaveBeenCalled();
+    expect(existsSync(path)).toBe(false);
+    // At the bound itself it embeds.
+    const ok = await cache.fill([cjk], { client, maxUsd: plan.boundUsd });
+    expect(ok.embedded).toBe(1);
   });
 
   it("refuses a path inside the repository and accepts one outside it", () => {

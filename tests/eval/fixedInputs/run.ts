@@ -19,19 +19,26 @@
  * decomposition of missed pairs.
  *
  * No LLM call. The only paid call is the embedding of texts the cache
- * does not hold: it is priced before any request and refused above
- * `--max-usd`; `--dry-run` prints the plan and estimate without
- * constructing a client. A fully cached run needs no key.
+ * does not hold: it is priced before any request at its UTF-8 byte-length
+ * bound and refused above `--max-usd`; `--dry-run` prints the plan and
+ * estimate without constructing a client. A fully cached run needs no key.
+ *
+ * Provenance: the result records the worktree HEAD and, for a
+ * corrections run, whether the manifest that accepted the corrected sets
+ * is committed at HEAD. An uncommitted manifest is accepted (the owner
+ * may be iterating) but marked "manifest not committed" and warned about.
  *
  * Match-accuracy numbers from this runner are diagnostic until the labels
  * and owner corrections are reviewed (#636).
  *
- * Exit codes: 0 ok (or dry run); 1 refused (budget, missing key, or an
- * unlisted corrections file); 2 usage error or crash.
+ * Exit codes: 0 ok (or dry run), including a run whose `record/record`
+ * rerun does not reproduce some recorded flows (listed in the report and
+ * warned about on stderr); 1 refused (budget, missing key, or an unlisted
+ * corrections file); 2 usage error or crash.
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { openaiForCli, type OpenAIClient as OpenAI } from "../../../functions/src/llm/openai.ts";
@@ -54,10 +61,17 @@ import { parseFixedInputArgs, type FixedInputArgs, type SideArg } from "./args.t
 import {
   applyRequirementCorrections,
   applyUnitCorrections,
+  CORRECTIONS_MANIFEST_PATH,
   loadCorrections,
   loadManifest,
+  MANIFEST_NOT_COMMITTED,
+  manifestPin,
   resolveSourceFlow,
+  runGit,
+  worktreeHead,
+  type GitRunner,
   type LoadedCorrections,
+  type ManifestPin,
   type Side,
 } from "./corrections.ts";
 import { defaultEmbeddingCachePath, EmbeddingCache, EmbeddingRefusal, type FillResult } from "./embeddingCache.ts";
@@ -71,10 +85,12 @@ import {
   type InputSet,
 } from "./inputs.ts";
 import {
+  describeMismatch,
   FIELDS_MATCHER_IGNORES,
   formatFixedInputsMarkdown,
   formatPlan,
   onlyIgnoredFieldsChanged,
+  reproductionMismatches,
   type CorrectionReport,
   type FixedInputsResult,
   type FlowResult,
@@ -91,6 +107,8 @@ export interface FixedInputsDeps {
   readonly fixturesDir?: string;
   /** Corrections manifest (tests only; the CLI always uses the in-repo one). */
   readonly manifestPath?: string;
+  /** Runs git for the HEAD and manifest provenance (tests inject a fake). */
+  readonly git?: GitRunner;
   /** Builds the OpenAI client; called only when texts are uncached and the run is live. */
   readonly openaiClient?: () => OpenAI;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -134,6 +152,7 @@ function correctSide(
   side: Side,
   loaded: readonly LoadedCorrections[],
   flows: readonly FlowRecord[],
+  manifestStatus: ManifestPin["status"],
 ): Map<string, CorrectedSide> {
   const out = new Map<string, CorrectedSide>();
   for (const c of loaded) {
@@ -147,7 +166,16 @@ function correctSide(
         corrections: c,
         flow,
         set: { kind: "corrected", units: applied.items },
-        report: { side, path: c.path, name: c.name, sha256: c.sha256, cell: c.cell, sourceFlow, provenance: applied.provenance },
+        report: {
+          side,
+          path: c.path,
+          name: c.name,
+          sha256: c.sha256,
+          cell: c.cell,
+          sourceFlow,
+          provenance: applied.provenance,
+          manifestStatus,
+        },
       });
     } else {
       const source = recordRequirements(flow);
@@ -175,6 +203,7 @@ function correctSide(
           cell: c.cell,
           sourceFlow,
           provenance: applied.provenance,
+          manifestStatus,
           overrides,
         },
       });
@@ -259,9 +288,26 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
 
   const allFlows = loadFlows(args.records);
 
-  // Owner-corrected sides: accepted only by manifest hash.
-  const manifest =
-    args.units.kind === "corrections" || args.requirements.kind === "corrections" ? loadManifest(deps.manifestPath) : undefined;
+  // Owner-corrected sides: accepted only by manifest hash. The manifest is
+  // read from disk, so record whether it is the one committed at HEAD.
+  const manifestPath = deps.manifestPath ?? CORRECTIONS_MANIFEST_PATH;
+  const git = deps.git ?? runGit;
+  const usesCorrections = args.units.kind === "corrections" || args.requirements.kind === "corrections";
+  const manifest = usesCorrections ? loadManifest(manifestPath) : undefined;
+  const pin = usesCorrections ? manifestPin(manifestPath, git) : null;
+  const head = pin !== null ? pin.head : worktreeHead(dirname(manifestPath), git);
+  if (pin?.status === MANIFEST_NOT_COMMITTED) {
+    stderr.push(
+      `warning: ${pin.path} differs from HEAD ${pin.head} (${MANIFEST_NOT_COMMITTED}): the corrected sets are accepted by a ` +
+        "manifest entry HEAD does not hold, so this run cannot be reproduced from HEAD. Commit the entry in a reviewed commit " +
+        "before reading the result as a corrected-input measurement.",
+    );
+  } else if (pin?.status === "commit status unknown") {
+    stderr.push(
+      `warning: could not tell whether ${pin.path} is committed at HEAD (git rev-parse HEAD or git diff gave no answer); ` +
+        'the provenance is marked "commit status unknown".',
+    );
+  }
   const load = (arg: SideArg): LoadedCorrections[] => {
     if (arg.kind !== "corrections") return [];
     try {
@@ -270,8 +316,9 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
       throw new Refusal(err instanceof Error ? err.message : String(err));
     }
   };
-  const unitCorrections = correctSide("units", load(args.units), allFlows);
-  const reqCorrections = correctSide("requirements", load(args.requirements), allFlows);
+  const manifestStatus = pin?.status ?? "committed at HEAD";
+  const unitCorrections = correctSide("units", load(args.units), allFlows, manifestStatus);
+  const reqCorrections = correctSide("requirements", load(args.requirements), allFlows, manifestStatus);
   for (const c of [...unitCorrections.values(), ...reqCorrections.values()]) {
     if (onlyIgnoredFieldsChanged(c.report)) {
       stderr.push(
@@ -352,6 +399,8 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
     uncachedTexts: plan.uncached.length,
     estimatedTokens: plan.estimatedTokens,
     estimatedUsd: plan.estimatedUsd,
+    boundTokens: plan.boundTokens,
+    boundUsd: plan.boundUsd,
   };
   const corrections = [...unitCorrections.values(), ...reqCorrections.values()].map((c) => c.report);
   const skippedList = [...skipped].map(([reason, flows]) => ({ reason, flows }));
@@ -363,23 +412,32 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
     maxUsd: args.maxUsd,
     corrections,
     skipped: skippedList,
+    head,
+    manifest: pin,
   });
 
   if (args.dryRun) {
     const verdict =
       plan.uncached.length === 0
         ? "Every text is cached: a live run makes no request and needs no key."
-        : plan.estimatedUsd > args.maxUsd
-          ? `A live run would refuse: the estimate exceeds --max-usd $${args.maxUsd}.`
+        : plan.boundUsd > args.maxUsd
+          ? `A live run would refuse: the byte-length bound exceeds --max-usd $${args.maxUsd}.`
           : `A live run would embed ${plan.uncached.length} text(s) and needs OPENAI_API_KEY.`;
-    return { code: 0, stdout: `# Fixed-input matching runner (#648): dry run\n\n${planText}\n\n${verdict}\n`, stderr: "" };
+    return {
+      code: 0,
+      stdout: `# Fixed-input matching runner (#648): dry run\n\n${planText}\n\n${verdict}\n`,
+      stderr: stderr.join("\n"),
+    };
   }
 
   let fill: FillResult | null = null;
   if (plan.uncached.length > 0) {
-    if (plan.estimatedUsd > args.maxUsd) {
+    // The guard checks the UTF-8 byte-length bound, not the chars/4 estimate:
+    // only the bound holds for CJK, emoji and digit runs.
+    if (plan.boundUsd > args.maxUsd) {
       throw new Refusal(
-        `${plan.uncached.length} uncached text(s) are estimated at $${plan.estimatedUsd.toFixed(6)}, above --max-usd $${args.maxUsd}. ` +
+        `${plan.uncached.length} uncached text(s) are bounded at $${plan.boundUsd.toFixed(6)} (${plan.boundTokens} UTF-8 bytes as tokens; ` +
+          `estimate $${plan.estimatedUsd.toFixed(6)}), above --max-usd $${args.maxUsd}. ` +
           "No request was sent. Raise --max-usd or narrow --records.",
       );
     }
@@ -433,11 +491,22 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
     });
   }
 
+  const k = args.k ?? null;
+  const mismatches = reproductionMismatches({ conditions: conditionNames, scorers: args.scorers, k, flows });
+  if (mismatches !== null && mismatches.length > 0) {
+    const checked = flows.filter((f) => f.recordMatchAccuracy !== null).length;
+    stderr.push(
+      `warning: record/record under the current scorer does not reproduce ${mismatches.length} of ${checked} recorded flow(s): ` +
+        `${mismatches.map(describeMismatch).join("; ")}. The run still exits 0; see "Reproduces the record" in the report.`,
+    );
+  }
   const result: FixedInputsResult = {
     generatedAt: (deps.now?.() ?? new Date()).toISOString(),
     argv: [...(deps.argv ?? [])],
+    head,
+    manifest: pin,
     metric: args.k === undefined ? "match accuracy (labelled pairs in the label's top k, the eval's topKOverlap)" : `recall@${args.k}`,
-    k: args.k ?? null,
+    k,
     scorers: args.scorers,
     conditions: conditionNames,
     cachePath: cache.path,
@@ -446,6 +515,7 @@ async function runInner(args: FixedInputArgs, deps: FixedInputsDeps, stderr: str
     skipped: skippedList,
     corrections,
     flows,
+    reproductionMismatches: mismatches,
   };
   const markdown = formatFixedInputsMarkdown(result, args.maxUsd);
   let written: FixedInputsOutcome["written"];
