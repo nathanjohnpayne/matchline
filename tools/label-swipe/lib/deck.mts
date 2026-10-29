@@ -9,47 +9,13 @@
  * card text too, so catch cards look like any other card.
  */
 
+import { DECK_FORMAT, type Card, type CardType, type Deck, type Field } from "../../../src/lib/labelDeck/deck.ts";
+import { hashString, prng } from "../../../src/lib/labelDeck/session.ts";
+
 import type { Sheet } from "./sheet.mts";
 
-export const CARD_TYPES = [
-  "fact-correct",
-  "verbatim",
-  "keep-unmatched-unit",
-  "requirement-equivalent",
-  "must-have-right",
-  "keep-unmatched-requirement",
-  "match-pair-agree",
-] as const;
-export type CardType = (typeof CARD_TYPES)[number];
-
-/** Card types that accept `mixed` (the sheet's `partial`). */
-export const MIXED_TYPES: readonly CardType[] = ["fact-correct", "requirement-equivalent"];
-
-export interface Field {
-  label: string;
-  text: string;
-}
-
-export interface Card {
-  item_id: string;
-  type: CardType;
-  catch: boolean;
-  /** Known answer of a catch card; never rendered. */
-  expected?: "true" | "false";
-  claim: Field[];
-  evidence: Field[];
-  source: "resume" | "jd" | "both";
-  /** Source line indexes to highlight in the expanded view. */
-  highlight: { resume: number[]; jd: number[] };
-}
-
-export interface Deck {
-  format: "matchline-label-deck/1";
-  deck_id: string;
-  cell_order: number;
-  sources: { resume: { title: string; text: string }; jd: { title: string; text: string } };
-  cards: Card[];
-}
+// The deck format lives with the Calibrate route that reads it.
+export { CARD_TYPES, MIXED_TYPES, type Card, type CardType, type Deck, type Field } from "../../../src/lib/labelDeck/deck.ts";
 
 const tokens = (s: string) =>
   new Set(
@@ -217,24 +183,6 @@ export function buildCards(sheet: Sheet): Card[] {
   return cards;
 }
 
-/** Small deterministic PRNG (mulberry32) for catch-card selection. */
-export function prng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-export function hashString(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i += 1) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
 /** Change the first number in `line` so the claim becomes false. */
 export function falsifyNumber(line: string): string | null {
   const m = /\d[\d,.]*/.exec(line);
@@ -343,7 +291,7 @@ export function buildDeck(sheet: Sheet, cellIndex: number, catchSources?: { resu
   const resume = catchSources?.resume || sheet.resumeText;
   const jd = catchSources?.jd || sheet.jdText;
   return {
-    format: "matchline-label-deck/1",
+    format: DECK_FORMAT,
     deck_id: sheet.cell,
     cell_order: cellIndex,
     sources: {

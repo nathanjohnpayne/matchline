@@ -1,13 +1,14 @@
 # Label Swipe: swipe labeler for the #636 calibration review
 
-A local-only page that turns the owner columns of a calibration packet (#636, corrections scaffolds #648) into one swipe card per judgment, plus two scripts that connect it to the packet: `build-deck.mts` turns the review sheets into decks, and `import-labels.mts` writes the downloaded labels back into the sheets. The swipe mechanics (100 px threshold, 10 px before a press becomes a drag, card stack and buttons) are adapted from swipewatch. Its analytics, coins and modes are not carried over.
+Two scripts that connect a calibration packet (#636, corrections scaffolds #648) to the web app's **Calibrate** route (`/calibrate`), which turns the packet's owner columns into one swipe card per judgment. `build-deck.mts` turns the review sheets into decks, and `import-labels.mts` writes the labels downloaded from Calibrate back into the sheets. The swipe mechanics (100 px threshold, 10 px before a press becomes a drag, card stack and buttons) are adapted from swipewatch. Its analytics, coins and modes are not carried over.
 
-The page is vanilla HTML/CSS/JS with no build step. It makes no network calls: the Content-Security-Policy in `index.html` sets `connect-src 'none'` and loads nothing from other origins.
+Calibrate works on a phone as well as a desktop. Decks are uploaded once into your own Matchline account (the `calibrationDecks` and `calibrationSessions` collections, owner-only under `firestore.rules`) and then open on any device you sign in on, with the labelling progress following you. A deck can also be opened from a file without uploading, for one device only. The deck format and the session logic (shuffle, decisions, undo, export) live in `src/lib/labelDeck/`, which both the route and these scripts import.
 
 ## Privacy rules
 
 - **Decks are private.** They contain résumé and JD text, extracted Units and owner labels. They live under `~/.matchline/eval-analysis/calibration-2a/decks/` and never in a repository. Both scripts refuse to write inside any git work tree.
-- The page reads decks through a file picker. Card content stays in the tab's memory. `localStorage` keeps only item ids, labels, notes, timings, the seed, the session id and a hash of the deck's content (key `label-swipe:v1:<deck_id>`), so a closed tab can resume where it stopped. A rebuilt deck whose text changed under the same item ids does not match that hash and starts a fresh session. Clear site data to forget a session.
+- **Uploading puts the decks in your Firebase project.** Uploaded decks and their sessions are stored in Firestore under your account, readable and writable only by an allowlisted owner whose uid matches the document. **Remove** on a deck deletes it and its session. If a deck should never leave the device, use **Open a file without uploading** instead: the deck stays in the tab's memory.
+- On every device, `localStorage` also keeps only item ids, labels, notes, timings, the seed, the session id and a hash of the deck's content (key `matchline:calibrate:v1:account:<uid>:<deck_id>` for an account deck, scoped to the signed-in account, or `matchline:calibrate:v1:device:<deck_id>` for a deck opened from a file), so a closed tab can resume where it stopped. For an uploaded deck the session is also saved to your account shortly after every decision (the header shows "saving…" / "saved"). A phone that went offline keeps its labels in the browser, shows the save as waiting for the connection, and completes it when the connection returns. Keep one device labelling a deck at a time: each save names the account revision it builds on, so if another device saved the same deck in between, the save is refused and labelling on this device pauses with two choices, **Load the latest** (the account's copy) or **Keep this device's copy** (overwrites the account's). Opening a deck whose account copy moved on since this browser's last save opens the account's copy and says so. Re-uploading a deck whose content changed is refused while it has labels; download them, remove the deck, then upload. A rebuilt deck whose text changed under the same item ids does not match that hash and starts a fresh session. Clear site data to forget a session.
 - Downloaded `labels-*.json` files hold item ids (which include label ids such as `u_…` and `r_…`), labels and your notes. Treat them as private too, and keep them out of the repo.
 - Neither script opens `KEY.json`, and the cards show no scores, no `≥0.5?` flags, no `endpoints mapped` column, no model names and no extracted-Unit refs (A3, R2, …). Arms appear only in item ids, as "A"/"B", exactly as in the packet.
 - The only committed fixture, `fixtures/packet/`, is synthetic: every name and number in it is invented.
@@ -22,21 +23,17 @@ npx tsx tools/label-swipe/build-deck.mts
 
 This reads `~/.matchline/eval-analysis/calibration-2a/<cell>.md` (every `*.md` except `README.md` and `SUMMARY.md`) and writes `decks/<cell>.json` next to them, mode 0600. Options: `--packet <dir>`, `--out <dir>` (must be outside any git work tree, checked after following symlinks) and `--fixtures <dir>` (public fixture root for catch cards, default `tests/fixtures`). It is read-only over the sheets and does not read `corrections/`. A sheet whose rows would give two cards the same id, a row with no expected label to inherit, or an unexpected must-have value stops the build with the line number.
 
-To try the page without private data, build the synthetic deck into a scratch folder:
+To try Calibrate without private data, build the synthetic deck into a scratch folder:
 
 ```bash
 npx tsx tools/label-swipe/build-deck.mts --packet tools/label-swipe/fixtures/packet --out /tmp/label-swipe-demo
 ```
 
-### 2. Open the page
+### 2. Upload, then open Calibrate anywhere
 
-Open `tools/label-swipe/index.html` directly from the file system, or serve the folder:
+On the Mac, sign in to Matchline, open **Calibrate** in the top navigation (`/calibrate`), click **Upload deck files…** and select the four decks in `~/.matchline/eval-analysis/calibration-2a/decks/`. Re-uploading a rebuilt deck replaces it; its old session no longer matches the new content and is not reused.
 
-```bash
-npx serve tools/label-swipe
-```
-
-Click **Choose deck files…** and select one or all four decks. Cells run in the packet README's order: the nathan cell first, then the others alphabetically (`cell_order` in each deck). Each cell ends on its own screen with counts, median time per card and undo count, a **Download labels** button and **Next cell**.
+On the phone, sign in, open **Calibrate**, and tap **Label all** (or **Start** / **Resume** on one deck). Cells run in the packet README's order: the nathan cell first, then the others alphabetically (`cell_order` in each deck). Each cell ends on its own screen with counts, median time per card and undo count, a **Download labels** button and **Next cell**.
 
 ### 3. Label
 
@@ -52,12 +49,12 @@ Click **Choose deck files…** and select one or all four decks. Cells run in th
 
 - **Can't tell** moves the card to the end of the cell, and it comes back with its full source already open. A second **Can't tell** on the same card is recorded as `unsure`.
 - **Mixed** is only accepted on `fact-correct` and `requirement-equivalent` cards, the two sheet columns that take `partial`. On the other cards the button is disabled, and a down swipe snaps back.
-- The page is built for a desktop with a keyboard. On a touch screen the card itself does not scroll (a touch drag on it is a swipe), so read a long card's full source in its expanded panel, which does scroll.
+- On a touch screen, a drag on the card is a swipe, so the card itself does not scroll. The full source opens below the buttons, and the page scrolls to it there.
 - Each card shows the question, the claim on the left and the evidence on the right. The evidence is the closest one or two lines of the source text, found by word overlap, or the expected requirement for `requirement-equivalent`. When no line is close, the card says so. Open the full source before answering N in that case.
 
 ### 4. Download
 
-**Download labels** (in the header at any time, or on the end screen) saves `labels-<deck_id>-<UTC timestamp>.json`:
+For an uploaded deck, download on the Mac: open Calibrate there, open the deck (**Review** once it is done), and use **Download labels**; the session is already in your account. **Download labels** (in the header at any time, or on the end screen) saves `labels-<deck_id>-<UTC timestamp>.json`:
 
 ```json
 {
@@ -71,13 +68,15 @@ Click **Choose deck files…** and select one or all four decks. Cells run in th
 }
 ```
 
-`ms` is the time on the card, summed over every time it was shown (including before a **Can't tell** or an undo), and paused while the tab is hidden or the note field is open. `order` is the decision sequence. `undos` counts undos of that item. `seed` reproduces the card order: `LabelCore.shuffle(ids, seed)` over the deck's item ids in file order.
+`ms` is the time on the card, summed over every time it was shown (including before a **Can't tell** or an undo), and paused while the tab is hidden or the note field is open. `order` is the decision sequence. `undos` counts undos of that item. `seed` reproduces the card order: `shuffle(ids, seed)` from `src/lib/labelDeck/session.ts` over the deck's item ids in file order.
 
 ### 5. Import
 
 ```bash
 npx tsx tools/label-swipe/import-labels.mts ~/Downloads/labels-<cell>-<timestamp>.json
 ```
+
+For a deck opened from a file on a phone, the labels file has to reach the Mac first (AirDrop, or iCloud Drive). It is private, like the deck.
 
 This writes Y / N / partial into the owner columns of `<packet>/<deck_id>.md` and the notes into each row's `note` column. When a row has two cards with notes, the note reads `fact: …; verbatim: …`. Catch cards are skipped. Every arm A Unit and requirement labelled False, Mixed or Can't tell, with its note, also goes into the `notes` field of `corrections/<deck_id>.json`, as one block:
 
@@ -119,8 +118,7 @@ Each deck mixes in up to four attention-check cards with known answers, built on
 
 ## Files
 
-- `index.html`, `styles.css`, `app.js`: the page (classic scripts, so it also works from `file://`).
-- `core.js` (+ `core.d.ts`): shuffle, decision reducer (label, unsure re-queue, undo, notes) and export, published as `globalThis.LabelCore`.
+- `src/routes/Calibrate/` (in the app): the swipe UI. `src/lib/labelDeck/`: the deck format and session reducer it shares with these scripts. `src/services/calibration.ts`: account storage for decks and sessions.
 - `build-deck.mts`, `import-labels.mts`: the two CLIs. `lib/sheet.mts` parses sheets, `lib/deck.mts` builds cards and catch cards, `lib/importer.mts` writes labels back, and `lib/cli.mts` holds the outside-the-repo guard.
 - `*.test.ts`: vitest suites, run by `npm test` and typechecked through `tsconfig.tests.json`.
 - `fixtures/packet/`: the synthetic sheet and scaffold the tests use.

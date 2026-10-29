@@ -7,6 +7,7 @@ import { getAuthClient } from "./firebase.ts";
 import { useCurrentUser } from "./lib/auth.tsx";
 import { clearAllFormDrafts } from "./lib/formDraft.ts";
 import ApplicationEditor from "./routes/ApplicationEditor/index.tsx";
+import Calibrate from "./routes/Calibrate/index.tsx";
 import Onboarding from "./routes/Onboarding.tsx";
 import Pipeline from "./routes/Pipeline/index.tsx";
 import RoleDetail from "./routes/RoleDetail/index.tsx";
@@ -20,6 +21,7 @@ const navItems = [
   { to: "/roles/new", label: "+ New Role" },
   { to: "/applications/example", label: "Application Editor" },
   { to: "/pipeline", label: "Pipeline" },
+  { to: "/calibrate", label: "Calibrate" },
 ] as const;
 
 export default function App() {
@@ -51,9 +53,11 @@ export default function App() {
   return (
     <div className="flex h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
       <header className="border-b border-zinc-200 bg-white px-6 py-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center justify-between">
-          <Wordmark className="text-lg" />
-          <nav className="flex items-center gap-4 text-sm">
+        <div className="flex items-center justify-between gap-4">
+          <Wordmark className="shrink-0 text-lg" />
+          {/* Scrolls sideways on a phone rather than overflowing the
+              header; both edges fade so a cut-off link reads as "more". */}
+          <nav className="-mr-2 flex min-w-0 items-center gap-4 overflow-x-auto px-4 text-sm whitespace-nowrap [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)] [scrollbar-width:none] sm:px-0 sm:pr-2 sm:[mask-image:none]">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -105,6 +109,7 @@ export default function App() {
             element={<ApplicationEditor />}
           />
           <Route path="/pipeline" element={<Pipeline />} />
+          <Route path="/calibrate" element={<Calibrate />} />
           <Route path="*" element={<Navigate to="/units" replace />} />
         </Routes>
       </main>

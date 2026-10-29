@@ -267,6 +267,12 @@ emits the `FitBrief` fields, citing verbatim evidence quotes rather
 than line ids. It is eval-only: no callable, route, or persisted
 document uses it.
 
+### Evaluation objects
+
+- `CalibrationDeck { id, deck_id, cell_order, card_count, fingerprint, deck_json, uploaded_at }` (#636): one calibration cell uploaded from Calibrate, stored as the deck's JSON text so its cards are not indexed one by one. The id is `<owner_uid>__<deck_id>`; a re-upload replaces the deck. Decks hold résumé and JD text and are owner-only like every other collection.
+- `CalibrationSession { id, deck_id, fingerprint, session_id, rev, base_rev, state_json, updated_at }`: the labelling progress for a deck (order, decisions, notes, timings, undos), same id as its deck, saved shortly after each decision so it resumes on another device. Writes are compare-and-swap: `rev` counts writes to the document and `base_rev` names the revision a write replaces (-1 for the first), and the rules accept a write only when `base_rev` is the stored `rev` and `rev` is the next one. `fingerprint` must equal the stored deck's, and a session can only exist for a stored deck. A device that fell behind another one is therefore refused rather than merged; the route pauses labelling on that deck and offers to load the account's copy or keep this device's. On open, this browser's copy is used only when it builds on the account's current revision (it holds changes not saved yet); otherwise the account's copy wins and the owner is told.
+- `firestore.rules` fixes both key sets, limits `deck_id` to letters, digits, `.`, `_` and `-`, caps `deck_json` at 900,000 characters (and the client at 1,000,000 UTF-8 bytes) and `state_json` at 200,000, and keeps `deck_id` fixed on update. `deck_json` and `state_json` are exempt from automatic indexing (`firestore.indexes.json`): they are never queried, and the deck text stays out of the index. Re-uploading a deck whose content changed is refused while a session exists for it; the rules enforce this against the account, so an out-of-date deck list on another device cannot strand labels.
+
 ### Invariants
 
 - `ExperienceUnit.user_approved == true` is required for the Unit to
@@ -583,8 +589,9 @@ Reliability:
 
 ## V1 surfaces
 
-The shipped product has six screens behind sign-in. Nothing ships
-that isn't serving the core loop or the pipeline around it.
+The shipped product has seven screens behind sign-in. Nothing ships
+that isn't serving the core loop, the pipeline around it, or the
+evaluation of either (Calibrate).
 
 1. **Onboarding** — paste resume text (reachable any time from the nav; **Target:** as Evidence → Import), with streamed
    progress; lands in Unit Review. The four-source import picker is
@@ -616,6 +623,7 @@ that isn't serving the core loop or the pipeline around it.
    reloads until saved or cancelled. Saving creates the Role, even
    with only a title (#431), and opens its Role Detail. **Target**
    (PRD decision 7): Company and Source fields, persisted on the Role.
+7. **Calibrate** (`/calibrate`) — an evaluation tool, not part of the core loop: swipe through a calibration deck (#636) one judgment at a time (right True, left False, down Mixed where the review sheet takes `partial`, up Can't tell, which re-queues the card with its full source open), with undo, one-line notes, per-card timing and a per-cell summary, then download a labels file that `tools/label-swipe/import-labels.mts` writes back into the review sheet. Decks are uploaded once from deck files into the owner's account (`CalibrationDeck`), listed with their progress, opened one at a time or all together, and removed with a confirmation; each decision saves the session to the account (`CalibrationSession`) and to the browser (ids, labels, notes, timings, seed, session id, revision and content hash; never card text), and a session resumes as described under `CalibrationSession`. The header shows whether the account save has landed; a save not yet confirmed (offline) stays queued, is reported inline and lands when the connection returns, never sent twice; a refused one (another device saved, the deck was removed or replaced) pauses labelling with the reason. A deck can also be opened from a file without uploading, for this device only. The route calls no Cloud Function. It is the one screen laid out for phones, and the top navigation scrolls sideways at phone width.
 
 **Target:** the navigation, dossier, Evidence (canonical resume and
 claim rules), Package, Process, Correspondence, and Scan surfaces in
@@ -623,8 +631,8 @@ the PRD's "Target interface," and responsive layouts down to phone
 widths for the agreed workflows (PRD decision 8). Today the Pipeline
 board and the Application Editor stack below 768 px, the Pipeline's
 task sidebar moves beside the board only at 1024 px and up, and New
-Role's short fields drop from two columns to one below 640 px. The top
-navigation and the other screens have no breakpoint-specific layout.
+Role's short fields drop from two columns to one below 640 px. Calibrate is laid out for phones, and the top navigation scrolls
+sideways at phone width; the other screens have no breakpoint-specific layout.
 
 ## Technical principles
 

@@ -1,5 +1,5 @@
 /**
- * Write a labels file (from the swipe page) back into a review sheet's owner
+ * Write a labels file (downloaded from the Calibrate route) back into a review sheet's owner
  * columns and into the corrections scaffold's `notes`.
  *
  * Idempotent: re-importing the same labels changes nothing. A target cell
@@ -7,28 +7,12 @@
  * (writing nothing) unless `force` is set.
  */
 
+import { LABELS, type Label, type LabelItem, type LabelsFile } from "../../../src/lib/labelDeck/deck.ts";
+
 import { OWNER_COLUMNS, column, joinRow, keyedRows } from "./sheet.mts";
 
-export type Label = "true" | "false" | "mixed" | "unsure";
-export const LABEL_VALUES: readonly string[] = ["true", "false", "mixed", "unsure"];
-
-export interface LabelItem {
-  item_id: string;
-  type: string;
-  label: Label;
-  note: string;
-  ms: number;
-  order: number;
-  undos: number;
-  catch: boolean;
-}
-
-export interface LabelsFile {
-  deck_id: string;
-  seed: number;
-  session_id: string;
-  items: LabelItem[];
-}
+export type { Label, LabelItem, LabelsFile } from "../../../src/lib/labelDeck/deck.ts";
+export const LABEL_VALUES: readonly string[] = LABELS;
 
 export interface Scaffold {
   notes: string;

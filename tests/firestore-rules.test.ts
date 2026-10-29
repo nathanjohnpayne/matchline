@@ -103,7 +103,37 @@ const OWNER_CRUD = (name: string): CollectionSpec => ({
   clientDelete: true,
 });
 
+/**
+ * A valid calibrationDecks payload as stored: buildDeckDoc's shape
+ * (src/services/calibration.ts) after the client converter drops `id`.
+ */
+const calibrationDeck = () => ({
+  deck_id: "demo-cell",
+  cell_order: 0,
+  card_count: 3,
+  fingerprint: "0badcafe:120",
+  deck_json: '{"format":"matchline-label-deck/1"}',
+  uploaded_at: "2026-10-29T00:00:00.000Z",
+});
+/** A valid calibrationSessions payload as stored (buildSessionDoc, minus `id`). */
+const calibrationSession = () => ({
+  deck_id: "demo-cell",
+  fingerprint: "0badcafe:120",
+  session_id: "s-1",
+  rev: 0,
+  base_rev: -1,
+  state_json: '{"queue":[]}',
+  updated_at: "2026-10-29T00:00:00.000Z",
+});
+
 const COLLECTIONS: readonly CollectionSpec[] = [
+  {
+    name: "calibrationDecks",
+    seed: calibrationDeck(),
+    create: calibrationDeck(),
+    update: { deck_json: '{"format":"matchline-label-deck/1","v":2}', uploaded_at: "2026-10-30T00:00:00.000Z" },
+    clientDelete: true,
+  },
   OWNER_CRUD("people"),
   OWNER_CRUD("companies"),
   OWNER_CRUD("roles"),
@@ -848,6 +878,147 @@ describe("rules: applications field limits", () => {
 });
 
 // -- unitMatches contradictory-shape guard (cursor #133 r4) --------------
+
+// -- calibrationDecks / calibrationSessions (#636) -------------------------
+
+describe("rules: calibration field limits", () => {
+  const deckRef = (uid: string) => doc(db(uid), "calibrationDecks", "d-1");
+  const sessionRef = (uid: string) => doc(db(uid), "calibrationSessions", "d-1");
+  const deck = { owner_uid: OWNER_UID, ...calibrationDeck() };
+  const session = { owner_uid: OWNER_UID, ...calibrationSession() };
+
+  it("ALLOWS the stored shapes, with or without an id equal to the doc id", async () => {
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), deck));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, id: "d-1" }));
+  });
+
+  // calibrationSessions is not in the COLLECTIONS matrix (a session needs its
+  // deck to exist), so its owner-scoping cases are here.
+  it("scopes sessions to their owner: read, list, cross-owner, stranger, unauthenticated, delete", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertSucceeds(getDoc(sessionRef(OWNER_UID)));
+    await assertSucceeds(getDocs(query(collectionRef(db(OWNER_UID), "calibrationSessions"), where("owner_uid", "==", OWNER_UID))));
+    await assertFails(getDocs(collectionRef(db(OWNER_UID), "calibrationSessions")));
+    await assertFails(getDoc(sessionRef(OTHER_UID)));
+    await assertFails(getDoc(doc(db(null), "calibrationSessions", "d-1")));
+    await assertFails(updateDoc(sessionRef(OTHER_UID), { rev: 1, base_rev: 0 }));
+    await assertFails(updateDoc(sessionRef(OWNER_UID), { rev: 1, base_rev: 0, owner_uid: OTHER_UID }));
+    await assertFails(deleteDoc(sessionRef(OTHER_UID)));
+    await assertSucceeds(deleteDoc(sessionRef(OWNER_UID)));
+    await assertFails(setDoc(doc(db(STRANGER_UID), "calibrationSessions", "d-1"), { ...session, owner_uid: STRANGER_UID }));
+    await assertFails(setDoc(doc(db(null), "calibrationSessions", "d-1"), session));
+  });
+
+  it("DENIES a session for a deck that is not stored (an orphan)", async () => {
+    await assertFails(setDoc(sessionRef(OWNER_UID), session));
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+  });
+
+  it("accepts a session write only as a compare-and-swap on the stored revision", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    // First write: base -1, rev 0.
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 3, base_rev: 2 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    // Next: must name rev 0 as its base and be rev 1.
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    // A device still based on rev 0 is refused, however far it counted.
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 48, base_rev: 47 }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 3, base_rev: 1 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 2, base_rev: 1 }));
+  });
+
+  it("DENIES a session whose deck content is not the stored deck's", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, fingerprint: "feedbeef:99" }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    // A device still open on an older version of a re-uploaded deck.
+    await seedDoc("calibrationDecks", "d-1", { ...deck, fingerprint: "feedbeef:99" });
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0, fingerprint: "feedbeef:99" }));
+  });
+
+  it("DENIES new content for a deck that has a session, until the deck and session are removed", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" })); // no session yet
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" }));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, uploaded_at: "2026-10-31T00:00:00.000Z" })); // same content
+    await assertSucceeds(deleteDoc(sessionRef(OWNER_UID)));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" }));
+  });
+
+  it("removes a deck and its session in one batch, and refuses a batch naming a missing session", async () => {
+    // deleteAccountDeck batches both deletes, and leaves the session out
+    // when there is none: a delete of a missing doc fails the whole batch.
+    await seedDoc("calibrationDecks", "d-1", deck);
+    const ownerDb = db(OWNER_UID);
+    const lonely = writeBatch(ownerDb);
+    lonely.delete(doc(ownerDb, "calibrationSessions", "d-1"));
+    lonely.delete(doc(ownerDb, "calibrationDecks", "d-1"));
+    await assertFails(lonely.commit());
+    await seedDoc("calibrationSessions", "d-1", session);
+    const both = writeBatch(ownerDb);
+    both.delete(doc(ownerDb, "calibrationSessions", "d-1"));
+    both.delete(doc(ownerDb, "calibrationDecks", "d-1"));
+    await assertSucceeds(both.commit());
+  });
+
+  it("DENIES a deck id with characters outside the allowed set", async () => {
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a/b" }));
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a b" }));
+  });
+
+  it("DENIES extra keys, missing keys, wrong types and an id that is not the doc id", async () => {
+    for (const bad of [
+      { ...deck, extra: true },
+      { ...deck, deck_json: undefined },
+      { ...deck, card_count: "3" },
+      { ...deck, cell_order: 1.5 },
+      { ...deck, card_count: 0 },
+      { ...deck, deck_id: "" },
+      { ...deck, id: "other" },
+    ]) {
+      const payload = Object.fromEntries(Object.entries(bad).filter(([, v]) => v !== undefined));
+      await assertFails(setDoc(deckRef(OWNER_UID), payload));
+    }
+    await seedDoc("calibrationDecks", "d-1", deck);
+    for (const bad of [
+      { ...session, rev: "0" },
+      Object.fromEntries(Object.entries(session).filter(([k]) => k !== "base_rev")),
+      { ...session, notes: "x" },
+      { ...session, state_json: { queue: [] } },
+      { ...session, session_id: 7 },
+      { ...session, id: "other" },
+    ]) {
+      await assertFails(setDoc(sessionRef(OWNER_UID), bad));
+    }
+  });
+
+  it("DENIES a deck or session over its size cap", async () => {
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_json: "x".repeat(900_001) }));
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, state_json: "x".repeat(200_001) }));
+  });
+
+  it("DENIES moving a deck or session to another deck_id", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertFails(updateDoc(deckRef(OWNER_UID), { deck_id: "other-cell" }));
+    await assertFails(updateDoc(sessionRef(OWNER_UID), { deck_id: "other-cell" }));
+  });
+
+  it("DENIES a signed-in stranger and another owner", async () => {
+    await assertFails(setDoc(deckRef(STRANGER_UID), { ...deck, owner_uid: STRANGER_UID }));
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertFails(getDoc(deckRef(OTHER_UID)));
+    await assertFails(deleteDoc(deckRef(OTHER_UID)));
+  });
+});
 
 // -- tasks (#34) -----------------------------------------------------------
 
