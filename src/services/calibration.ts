@@ -220,7 +220,9 @@ export async function saveAccountSession(deck: Deck, stored: StoredSession, base
   try {
     // No timeout here: offline, the SDK keeps this write queued and commits it
     // later, so giving up on it and sending another would race the two (and
-    // the compare-and-swap would refuse ours). The caller shows the wait.
+    // the compare-and-swap would refuse ours). The caller shows the wait. The
+    // busy lease is held for that whole time on purpose: reloading for an
+    // update while a save is queued would drop it.
     await setDoc(typedDoc<SessionDoc>(SESSIONS, data.id), data);
     return data.rev;
   } finally {

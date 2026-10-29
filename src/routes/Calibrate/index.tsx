@@ -275,7 +275,9 @@ export default function Calibrate({
       });
     start(opened);
     if (setAside.length) {
-      setLoadError(`Opened the account copy of ${setAside.join(", ")}: another device saved after this browser's last labels, which were set aside.`);
+      setLoadError(
+        `Opened the account copy of ${setAside.join(", ")}: it was saved after this browser's last labels, which never reached your account and have been replaced by it.`,
+      );
     }
   };
 
