@@ -263,7 +263,7 @@ npm run eval -- --full --samples 3 --token-source api --record ~/.matchline/eval
 # ...then the same command again with a -2 record directory.
 
 npm run eval:analyze -- --task jd \
-  --records <2b incumbent record dirs> ~/.matchline/eval-records/<date>-jd-haiku55-med-v2-1 ~/.matchline/eval-records/<date>-jd-haiku55-med-v2-2 \
+  --records <2b incumbent record dirs> ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-1 ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-2 \
   --incumbent <2b incumbent label> --candidates jd-haiku55-med-v1,jd-haiku55-med-v2
 
 # Failure classification: one line per (prompt version, attempt, kind, Zod code, path),
