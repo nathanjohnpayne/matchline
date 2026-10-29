@@ -89,9 +89,16 @@ export function pickSession(deck: Deck, account: StoredSession | null, accountRe
   return account ?? { session_id: newSessionId(), state: initSession(deck, randomSeed()) };
 }
 
-/** True when the account copy wins over browser labels that never reached the account. */
+/**
+ * True when opening the account copy loses something this browser holds: a
+ * decision or note in the local copy that the account copy does not have
+ * the same way. Compared by content, since two devices that started from
+ * the same revision can have made the same number of changes.
+ */
 export function setsAsideLocal(account: StoredSession | null, accountRev: number, local: StoredSession | null): boolean {
-  return Boolean(account && local && local.base_rev !== accountRev && local.state.rev > account.state.rev);
+  if (!account || !local || local.base_rev === accountRev) return false;
+  const theirs = account.state.decisions;
+  return Object.entries(local.state.decisions).some(([id, d]) => theirs[id]?.label !== d.label || theirs[id]?.note !== d.note);
 }
 
 /** Account decks as listed, with each one's best known session (this browser may be ahead). */

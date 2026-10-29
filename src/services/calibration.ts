@@ -177,40 +177,42 @@ export async function listAccountDecks(): Promise<AccountDeckList> {
 }
 
 /** Store (or replace) a deck in the owner's account. */
+/**
+ * Hold a busy lease until `write` settles. A timeout only stops waiting:
+ * the SDK keeps the write queued, so the update prompt must stay
+ * suppressed until it lands (a reload would drop it).
+ */
+export function leaseUntilSettled<T>(label: string, write: Promise<T>): Promise<T> {
+  const release = beginAppBusy(label);
+  write.then(release, release);
+  return write;
+}
+
 export async function uploadDeck(deck: Deck, now: Date = new Date()): Promise<void> {
   const data = buildDeckDoc(deck, getOwnerUidOrThrow(), now);
-  const release = beginAppBusy("calibration.uploadDeck");
-  try {
-    await withTimeout(setDoc(typedDoc<DeckDoc>(DECKS, data.id), data), WRITE_TIMEOUT_MS, `Uploading ${deck.deck_id}`);
-  } finally {
-    release();
-  }
+  const write = leaseUntilSettled("calibration.uploadDeck", setDoc(typedDoc<DeckDoc>(DECKS, data.id), data));
+  await withTimeout(write, WRITE_TIMEOUT_MS, `Uploading ${deck.deck_id}`);
 }
 
 /** Remove a deck and its session from the owner's account. */
 export async function deleteAccountDeck(deckId: string): Promise<void> {
   const id = docIdFor(getOwnerUidOrThrow(), deckId);
-  const release = beginAppBusy("calibration.deleteDeck");
+  // One batch, so an interrupted removal (offline, timed out) can never
+  // delete the labels and leave the deck, or the reverse. The rules deny
+  // deleting a missing document, so a never-labelled deck's absent session
+  // is left out of the batch; reading a missing one is denied too, which
+  // here just means "none".
+  const sessionRef = typedDoc<SessionDoc>(SESSIONS, id);
+  let hasSession = false;
   try {
-    // One batch, so an interrupted removal (offline, timed out) can never
-    // delete the labels and leave the deck, or the reverse. The rules deny
-    // deleting a missing document, so a never-labelled deck's absent session
-    // is left out of the batch; reading a missing one is denied too, which
-    // here just means "none".
-    const sessionRef = typedDoc<SessionDoc>(SESSIONS, id);
-    let hasSession = false;
-    try {
-      hasSession = (await getDoc(sessionRef)).exists();
-    } catch (err) {
-      if (!isPermissionDenied(err)) throw err;
-    }
-    const batch = writeBatch(getDb());
-    if (hasSession) batch.delete(sessionRef);
-    batch.delete(typedDoc<DeckDoc>(DECKS, id));
-    await withTimeout(batch.commit(), WRITE_TIMEOUT_MS, `Removing ${deckId}`);
-  } finally {
-    release();
+    hasSession = (await getDoc(sessionRef)).exists();
+  } catch (err) {
+    if (!isPermissionDenied(err)) throw err;
   }
+  const batch = writeBatch(getDb());
+  if (hasSession) batch.delete(sessionRef);
+  batch.delete(typedDoc<DeckDoc>(DECKS, id));
+  await withTimeout(leaseUntilSettled("calibration.deleteDeck", batch.commit()), WRITE_TIMEOUT_MS, `Removing ${deckId}`);
 }
 
 /**

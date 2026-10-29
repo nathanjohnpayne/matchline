@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { Deck } from "../lib/labelDeck/deck.ts";
 import { decide, deckFingerprint, initSession } from "../lib/labelDeck/session.ts";
 
-import { MAX_DECK_JSON, buildDeckDoc, buildSessionDoc, docIdFor, parseSessionDoc, withTimeout } from "./calibration.ts";
+import { isAppBusy } from "../lib/appBusy.ts";
+
+import { MAX_DECK_JSON, buildDeckDoc, buildSessionDoc, docIdFor, leaseUntilSettled, parseSessionDoc, withTimeout } from "./calibration.ts";
 
 const deck: Deck = {
   format: "matchline-label-deck/1",
@@ -29,6 +31,16 @@ describe("calibration storage shapes", () => {
     // Under the character cap, over the byte cap: three bytes per "—".
     const wide = { ...deck, sources: { ...deck.sources, resume: { title: "R", text: "—".repeat(400_000) } } };
     expect(() => buildDeckDoc(wide, "uid-1", NOW)).toThrow(/bytes/);
+  });
+
+  it("keeps the busy lease until a timed-out write actually settles", async () => {
+    let settle: () => void = () => {};
+    const write = leaseUntilSettled("test", new Promise<void>((resolve) => (settle = resolve)));
+    await expect(withTimeout(write, 10, "Uploading")).rejects.toThrow(/did not finish/);
+    expect(isAppBusy()).toBe(true);
+    settle();
+    await write;
+    expect(isAppBusy()).toBe(false);
   });
 
   it("times out a write that never settles", async () => {

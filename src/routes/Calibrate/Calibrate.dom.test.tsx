@@ -507,7 +507,11 @@ describe("Calibrate container with account decks", () => {
     account.sessions.set("demo-cell", { rev: 1, stored: accountCopy, fingerprint: deckFingerprint(deck) });
     localStorage.setItem(
       "matchline:calibrate:v1:account:uid-test:demo-cell",
-      JSON.stringify({ ...accountCopy, base_rev: 0, state: { ...accountCopy.state, rev: 5 } }),
+      JSON.stringify({
+        ...accountCopy,
+        base_rev: 0,
+        state: { ...accountCopy.state, rev: 5, decisions: { [deck.cards[0].item_id]: { label: "false", note: "wrong year", ms: 1, order: 1 } } },
+      }),
     );
     render(<Calibrate services={account.services} />);
     fireEvent.click(await screen.findByRole("button", { name: /Start|Resume/ }));
@@ -574,7 +578,12 @@ describe("Calibrate container with account decks", () => {
     const ahead = { ...base, session_id: "local", base_rev: 5, state: { ...base.state, rev: 4 } };
     expect(pickSession(deck, accountCopy, 5, ahead).session_id).toBe("local");
     expect(pickSession(deck, accountCopy, 6, ahead).session_id).toBe("x");
-    expect(setsAsideLocal(accountCopy, 6, ahead)).toBe(true);
+    // Set-aside is about lost labels, not counters: equal revisions, different decisions.
+    const mine = { ...base, base_rev: 5, state: { ...base.state, rev: 3, decisions: { a: { label: "true" as const, note: "", ms: 1, order: 1 } } } };
+    const theirs = { ...base, state: { ...base.state, rev: 3, decisions: { a: { label: "false" as const, note: "", ms: 1, order: 1 } } } };
+    expect(setsAsideLocal(theirs, 6, mine)).toBe(true);
+    expect(setsAsideLocal({ ...theirs, state: { ...theirs.state, decisions: mine.state.decisions } }, 6, mine)).toBe(false);
+    expect(setsAsideLocal(theirs, 5, mine)).toBe(false);
     expect(pickSession(deck, null, -1, ahead).session_id).toBe("local");
     expect(pickSession(deck, null, -1, null).state.deck_id).toBe("demo-cell");
   });
