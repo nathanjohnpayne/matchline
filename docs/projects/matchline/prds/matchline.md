@@ -814,8 +814,8 @@ The **target** replacement is the five-tab dossier described under [Target inter
 
 The surface where generated output becomes something the user sends. **Transitional** (decision 5): its editing, validation and export move into the Package tab, and any expanded editor becomes another view of the same package.
 
-- **Shipped:** two panes, with the generated résumé on the left and the approved Units that ground it on the right; inline annotations on traced claims, with hover highlighting the source Unit; validation flags on untraceable and vague claims; inline editing with autosave and undo, plus adding, removing and reordering bullets; re-running validation; and an Export menu gated on validation and the server's attestation, which downloads a plain-text résumé after the server re-checks the gate (#517, #521, #523).
-- **Target, not built:** PDF and DOCX export (#525, #527, under #33), and the Export menu moving to the Package (#628).
+- **Shipped:** two panes, with the generated résumé on the left and the approved Units that ground it on the right; inline annotations on traced claims, with hover highlighting the source Unit; validation flags on untraceable and vague claims; inline editing with autosave and undo, plus adding, removing and reordering bullets; re-running validation; and an Export button gated on validation and the server's attestation.
+- **Target, not built:** export itself. The button is gated, but its action is a stub; export to PDF, DOCX and plain text is #33, and it lands on the Package.
 - **Target:** claim-rule hits as a blocking flag kind.
 
 #### 5. Pipeline
