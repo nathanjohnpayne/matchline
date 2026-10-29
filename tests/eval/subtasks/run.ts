@@ -369,6 +369,7 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
   const store = new ReplayStore({ mode: args.cacheMode, ...(deps.replayDir !== undefined && { dir: deps.replayDir }) });
   const runAbort = new AbortController();
   const ledger = new BudgetLedger({ maxUsd: metered ? args.maxUsd : null, abort: runAbort });
+  const replayWriteErrors: RunCtx["replayWriteErrors"] = [];
 
   const schemas = await schemaHashes(args.suite);
   const record = (variantRecords: VariantRecord[], dryRun: boolean, calls: RunCtx["calls"], invocations: RunCtx["invocations"]): RunRecord => ({
@@ -383,6 +384,8 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     tokenFidelity: metered ? "metered" : "estimated",
     cacheMode: args.cacheMode,
     samples: args.samples,
+    replayWriteErrors: replayWriteErrors.length,
+    replayComplete: replayWriteErrors.length === 0,
     fixedRunDate: FIXED_RUN_DATE,
     labels: { status: labelStatus(primaryFiles), fixtureSetHash: fixtures.fixtureSetHash, files, primary },
     schemas,
@@ -464,6 +467,8 @@ export async function main(argv: readonly string[], deps: SubtaskDeps): Promise<
     calls: [],
     invocations: [],
     settingsMismatches: [],
+    replayWriteErrors,
+    warn: deps.stderr,
   };
 
   const variantRecords: VariantRecord[] = [];

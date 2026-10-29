@@ -14,6 +14,7 @@ import { clearPromptVersionOverrides } from "../../../functions/src/prompts/load
 
 import { SWEEP_SCOPES } from "../sweepScope.ts";
 
+import { worstCaseUsd } from "./budget.ts";
 import { FIXED_RUN_DATE, loadGenerationSnapshots, loadValidationCases } from "./fixtures.ts";
 import { generationMetrics, schemaValidity } from "./metrics.ts";
 import { snapshotDefaults, withVariantOverrides } from "./overrides.ts";
@@ -268,6 +269,37 @@ describe("runGenerationSuite", () => {
     const gen = schemaValidity(ctx.invocations.filter((i) => i.stage === "generation"), ctx.calls.filter((c) => c.stage === "generation"));
     expect(gen.invocations).toBe(0);
     expect(gen.firstAttemptPass.den).toBe(0);
+  });
+
+  it("counts a retry the ledger refuses after an invalid first answer as a budget stop, not a hard failure", async () => {
+    const answer = () => resumeAnswer(["u_invented"]);
+    // Probe the first generation request's worst case on an unbounded run.
+    const probe = scriptedClient(answer);
+    await runGenerationSuite(sparse, "baseline", 0, makeCtx({ rawClient: probe.client, suite: "generation" }), snapshotDefaults());
+    const first = worstCaseUsd(probe.create.mock.calls[0]![0] as Parameters<typeof worstCaseUsd>[0]);
+
+    // Exactly the first request's worst case: it is sent, its answer is invalid, and the
+    // retry (spent + its own worst case) crosses the bound, so the ledger refuses it.
+    const raw = scriptedClient(answer);
+    const ctx = makeCtx({ rawClient: raw.client, suite: "generation", maxUsd: first });
+    const flows = await runGenerationSuite(sparse, "baseline", 0, ctx, snapshotDefaults());
+    expect(raw.create).toHaveBeenCalledTimes(1);
+    expect(ctx.runAbort.signal.aborted).toBe(true);
+    // The pipeline goes on to its last attempt, which the aborted run also refuses before sending.
+    const [sent, ...refused] = ctx.calls.map((c) => c.outcome);
+    expect(sent).toBe("invented_id");
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused.every((o) => o === "budget_reached")).toBe(true);
+    expect(flows[0]).toMatchObject({ skipped: "budget_reached", generated: false });
+    const gen = ctx.invocations.filter((i) => i.stage === "generation");
+    expect(gen).toHaveLength(1);
+    expect(gen[0]).toMatchObject({ ok: false, attempts: 1, failureKinds: ["budget_reached"] });
+    const s = schemaValidity(gen, ctx.calls.filter((c) => c.stage === "generation"));
+    expect(s.budgetStopped).toBe(1);
+    expect(s.invocations).toBe(0);
+    expect(s.hardFail).toEqual({ num: 0, den: 0, value: null });
+    expect(s.firstAttemptPass.den).toBe(0);
+    expect(s.errorRate).toBeNull();
   });
 
   it("takes flow spans from the injected clock", async () => {

@@ -113,5 +113,6 @@ export function makeCtx(opts: {
     calls: [],
     invocations: [],
     settingsMismatches: [],
+    replayWriteErrors: [],
   };
 }

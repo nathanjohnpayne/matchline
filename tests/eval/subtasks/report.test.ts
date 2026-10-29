@@ -35,6 +35,7 @@ function baseRecord(p: Partial<RunRecord> = {}): RunRecord {
   return {
     schema_version: 1, runId: "eval-20261028T190112Z-3fa9c1", suite: "validation", startedAt: "s", finishedAt: "f", dryRun: false,
     git: { sha: "05272fc0000", dirty: false }, tokenSource: "api", tokenFidelity: "metered", cacheMode: "fresh", samples: 1,
+    replayWriteErrors: 0, replayComplete: true,
     fixedRunDate: "2026-01-15T00:00:00.000Z",
     labels: {
       status: "draft",
@@ -65,6 +66,13 @@ describe("formatSubtaskReport", () => {
     expect(text).toContain("v1:0123456789abcdef");
     expect(text).toContain("5e3d");
     expect(text).toContain("Onboarding extraction is not part of this suite");
+  });
+
+  it("marks the replay incomplete when a replay write failed, and not otherwise", () => {
+    expect(text).not.toContain("REPLAY INCOMPLETE");
+    const failed = formatSubtaskReport(record({ replayWriteErrors: 1, replayComplete: false }));
+    expect(failed).toContain("REPLAY INCOMPLETE — 1 replay write error:");
+    expect(failed).toContain("a later --replay misses them");
   });
 
   it("shows the settings as sent on the wire", () => {

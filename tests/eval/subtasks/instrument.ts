@@ -129,6 +129,14 @@ export interface RunCtx {
   readonly invocations: InvocationRecord[];
   /** Variants whose usage records disagreed with the wire (settings cross-check). */
   readonly settingsMismatches: { variant: string; detail: string }[];
+  /**
+   * Responses that arrived (and were charged) but could not be written to
+   * the replay store: the run's own results stand, its replay does not
+   * hold them, so a later `--replay` would miss those requests.
+   */
+  readonly replayWriteErrors: { stage: Stage; requestKey: string; error: string }[];
+  /** Operator-facing warnings (stderr in the CLI). */
+  readonly warn?: (line: string) => void;
 }
 
 export interface InvocationMeta {
@@ -408,12 +416,26 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     if (replayedFrom === null) {
       // An unpriceable response (cost null) settles at its worst case.
       ctx.ledger.settle(reservation!, cost);
-      ctx.store.put(meta.stage, key, {
-        message,
-        producedByRunId: ctx.runId,
-        producedAt: new Date().toISOString(),
-        latencyMs: ended - started,
-      });
+      // Best effort: the response is real and billed, so a full disk or an
+      // unwritable replay directory must not turn it into a transport
+      // failure the module would retry. Count it; the replay is incomplete.
+      try {
+        ctx.store.put(meta.stage, key, {
+          message,
+          producedByRunId: ctx.runId,
+          producedAt: new Date().toISOString(),
+          latencyMs: ended - started,
+        });
+      } catch (err) {
+        const error = describeError(err);
+        ctx.replayWriteErrors.push({ stage: meta.stage, requestKey: key, error });
+        if (ctx.replayWriteErrors.length === 1) {
+          ctx.warn?.(
+            `eval:subtasks: replay write failed (${error}); the response was kept, but this run's replay is incomplete ` +
+              "(further write failures are counted in the report, not printed)",
+          );
+        }
+      }
     }
     push({
       servedModel: typeof message.model === "string" && message.model.length > 0 ? message.model : null,
@@ -441,6 +463,13 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
     finish(ok: boolean, err?: unknown, opts?: { readonly poolSignal?: AbortSignal }): InvocationRecord {
       const failures = (err as { failures?: { kind?: unknown }[] } | undefined)?.failures;
       const pool = opts?.poolSignal;
+      // The budget stop takes precedence over everything the module reports:
+      // once the ledger refused one of this invocation's requests (or the run
+      // abort fired while it ran), its failure is the stop, even when the
+      // module wrapped the refusal in its own failure list (the generation
+      // pipeline's `GenerationError.failures`, after an invalid first answer).
+      const budgetStopped =
+        !ok && (runSignal.aborted || err instanceof BudgetReachedError || myCalls.some((c) => c.outcome === "budget_reached"));
       // Cancelled by the pool after another call failed: the error is an
       // abort, the pool's skip, or the pool's reason (the OTHER call's
       // error, rethrown by `throwIfAborted`), or this invocation's own
@@ -465,12 +494,12 @@ export function startInvocation(ctx: RunCtx, meta: InvocationMeta): Invocation {
         attempts: myCalls.filter((c) => c.outcome !== "budget_reached").length,
         failureKinds: ok
           ? []
-          : cancelled
-            ? ["cancelled"]
-            : Array.isArray(failures)
-              ? failures.map((f) => (typeof f.kind === "string" ? f.kind : "unknown"))
-              : err instanceof BudgetReachedError || runSignal.aborted
-                ? ["budget_reached"]
+          : budgetStopped
+            ? ["budget_reached"]
+            : cancelled
+              ? ["cancelled"]
+              : Array.isArray(failures)
+                ? failures.map((f) => (typeof f.kind === "string" ? f.kind : "unknown"))
                 : ["thrown"],
         startedAtMs: startedAtMs,
         endedAtMs: ctx.clock(),

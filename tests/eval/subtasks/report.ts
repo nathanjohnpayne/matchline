@@ -89,6 +89,14 @@ export interface RunRecord {
   readonly cacheMode: ReplayMode;
   readonly samples: number;
   /**
+   * Responses that arrived and were charged but could not be written to
+   * the local replay store (full disk, unwritable directory). The run's
+   * own results include them; its replay does not.
+   */
+  readonly replayWriteErrors: number;
+  /** False when any response is missing from the replay store: a later `--replay` would miss it. */
+  readonly replayComplete: boolean;
+  /**
    * The run date every prompt showed (`Today:`; `FIXED_RUN_DATE` in
    * fixtures.ts), never the wall clock. Runs with different dates sent
    * different inputs and are not comparable.
@@ -292,6 +300,12 @@ export function formatHeader(r: RunRecord): string[] {
   const cache =
     r.cacheMode === "fresh" ? "fresh (never reads earlier runs)" : r.cacheMode === "replay" ? "replay (reuses stored outputs; opt-in)" : "bypass (no local replay)";
   lines.push(`runId ${r.runId}   ${git}   token source: ${r.tokenSource} (${r.tokenFidelity})   cache: ${cache}`);
+  if (r.replayWriteErrors > 0 || !r.replayComplete) {
+    lines.push(
+      `REPLAY INCOMPLETE — ${r.replayWriteErrors} replay write error${r.replayWriteErrors === 1 ? "" : "s"}: ` +
+        "the responses were kept and scored here, but are not in the replay store; a later --replay misses them",
+    );
+  }
   lines.push(...banner(r));
   lines.push(r.suite === "validation" ? ONBOARDING_NOTE : `${GENERATION_SCOPE_NOTE} ${ONBOARDING_NOTE}`);
   lines.push(`fixtureSetHash ${r.labels.fixtureSetHash}   (comparable only with runs that share this hash)`);

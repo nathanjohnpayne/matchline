@@ -180,6 +180,34 @@ describe("instrumentClient", () => {
     );
   });
 
+  it("keeps a billed response when the replay write fails (ENOSPC): no retry, full instrumentation, counted", async () => {
+    const enospc: MiniFs = {
+      ...memFs(),
+      writeFileSync: () => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+      },
+    };
+    const raw = scriptedClient(defaultValidationAnswer);
+    const warnings: string[] = [];
+    const ctx = { ...makeCtx({ rawClient: raw.client, maxUsd: 100, store: new ReplayStore({ mode: "fresh", fs: enospc, dir: "/r" }) }), warn: (l: string) => void warnings.push(l) };
+    const inv = startInvocation(ctx, META);
+    const claims = await extractClaims(BULLET, { ...CTX, signal: inv.signal }, { client: inv.client, record: inv.record });
+    expect(claims.length).toBeGreaterThan(0);
+    expect(inv.finish(true)).toMatchObject({ ok: true, attempts: 1, failureKinds: [] });
+    expect(raw.create).toHaveBeenCalledTimes(1);
+    expect(ctx.calls).toHaveLength(1);
+    expect(ctx.calls[0]).toMatchObject({ outcome: "tool_use", replayed: false });
+    expect(ctx.calls[0]!.usage).not.toBeNull();
+    expect(inv.usage).toHaveLength(1);
+    expect(ctx.ledger.reservedUsd).toBe(0);
+    expect(ctx.ledger.spentUsd).toBeCloseTo(ctx.calls[0]!.modeledUsd!, 10);
+    expect(ctx.replayWriteErrors).toHaveLength(1);
+    expect(ctx.replayWriteErrors[0]).toMatchObject({ stage: "claim_extraction", requestKey: ctx.calls[0]!.requestKey });
+    expect(ctx.replayWriteErrors[0]!.error).toMatch(/ENOSPC/);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/replay write failed.*ENOSPC.*replay is incomplete/);
+  });
+
   it("collects usage records stamped with the run id and never calls production recordUsage", async () => {
     const spy = vi.spyOn(cost, "recordUsage");
     const raw = scriptedClient(defaultValidationAnswer);
