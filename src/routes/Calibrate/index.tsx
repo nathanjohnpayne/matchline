@@ -79,13 +79,18 @@ export async function readDeckFiles(files: readonly File[]): Promise<Deck[]> {
 }
 
 /**
- * The session to resume. This browser's copy wins when there is no account
- * copy, or when it builds on the account's current revision and has not
- * fallen behind it (it is the account copy plus changes not yet saved).
- * Otherwise another device has saved since, and the account copy wins.
+ * The session to resume. This browser's copy wins when it builds on the
+ * account's current revision and has not fallen behind it (it is the
+ * account copy plus changes not yet saved). Otherwise another device has
+ * saved since, or the session was removed, and the account copy (or a new
+ * session) wins.
  */
 export function pickSession(deck: Deck, account: StoredSession | null, accountRev: number, local: StoredSession | null): StoredSession {
-  if (local && (!account || (local.base_rev === accountRev && local.state.rev >= account.state.rev))) return local;
+  // A copy must build on the account's current revision (-1: no session yet,
+  // which is also what a copy never saved to an account, such as a file
+  // deck's, builds on). A copy built on a session that has since been
+  // removed is stale, and must not bring removed labels back.
+  if (local && (local.base_rev ?? -1) === accountRev && (!account || local.state.rev >= account.state.rev)) return local;
   return account ?? { session_id: newSessionId(), state: initSession(deck, randomSeed()) };
 }
 
@@ -166,13 +171,25 @@ interface SaveStore {
   flush: () => void;
 }
 
-const saveStores = new WeakMap<CalibrationServices, SaveStore>();
+/** Stores per service set and, within it, per signed-in owner. */
+const saveStores = new WeakMap<CalibrationServices, Map<string, SaveStore>>();
 
-function saveStoreFor(services: CalibrationServices): SaveStore {
-  let store = saveStores.get(services);
+/**
+ * The save store for `services` and the owner signed in now. Scoped by
+ * owner as well as deck: after an account switch, the next owner must not
+ * see, adopt or send the previous owner's pending labels.
+ */
+function saveStoreFor(services: CalibrationServices, ownerUid: string | undefined): SaveStore {
+  let byOwner = saveStores.get(services);
+  if (!byOwner) {
+    byOwner = new Map();
+    saveStores.set(services, byOwner);
+  }
+  const key = ownerUid ?? "";
+  let store = byOwner.get(key);
   if (!store) {
     store = { accountRev: new Map(), pending: new Map(), inflight: new Set(), stopped: new Set(), timer: null, notify: () => {}, flush: () => {} };
-    saveStores.set(services, store);
+    byOwner.set(key, store);
   }
   return store;
 }
@@ -196,7 +213,10 @@ export default function Calibrate({
 
   // Save bookkeeping outlives this mount (see `saveStoreFor`): a save still
   // in flight when the route is left must coordinate with the next mount.
-  const store = useMemo(() => saveStoreFor(services), [services]);
+  // An account switch goes through sign-out, which unmounts this route, so
+  // the owner read at mount is the owner for this mount's lifetime.
+  const [ownerAtMount] = useState(() => services.ownerUid());
+  const store = useMemo(() => saveStoreFor(services, ownerAtMount), [services, ownerAtMount]);
 
   const setSaveState = useCallback((deckId: string, state: SaveState) => {
     setSaveStates((prev) => new Map(prev).set(deckId, state));
@@ -384,9 +404,13 @@ export default function Calibrate({
           await services.uploadDeck(deck);
         } catch (err) {
           // The rules refuse new content for a deck that has labels, checked
-          // against the account itself (this list may be out of date).
+          // against the account itself (this list may be out of date). They
+          // refuse other things too, so say "has labels" only when that is why.
           if (isPermissionDenied(err)) {
-            throw new Error(`${deck.deck_id} has labels in your account for its current content. Download them, remove the deck, then upload the new version.`, { cause: err });
+            const now = await services.inspectAccountSession(deck).catch(() => null);
+            if (now?.deckExists && !now.deckCurrent && now.rev >= 0) {
+              throw new Error(`${deck.deck_id} has labels in your account for its current content. Download them, remove the deck, then upload the new version.`, { cause: err });
+            }
           }
           throw err;
         }

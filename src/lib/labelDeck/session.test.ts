@@ -199,5 +199,6 @@ describe("parseDeck", () => {
     expect(() => parseDeck({ ...deck, cards: [deck.cards[0], deck.cards[0]] })).toThrow(/repeats item_id/);
     expect(() => parseDeck({ ...deck, cards: [{ ...deck.cards[0], type: "score" }] })).toThrow(/unknown type/);
     expect(() => parseDeck({ ...deck, sources: { resume: { text: "x" } } })).toThrow(/source text/);
+    expect(() => parseDeck({ ...deck, cell_order: 1.5 })).toThrow(/non-integer cell_order/);
   });
 });

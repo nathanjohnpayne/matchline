@@ -95,6 +95,8 @@ export function parseDeck(value: unknown): Deck {
   if (!isRecord(sources) || !isRecord(sources.resume) || !isRecord(sources.jd) || typeof sources.resume.text !== "string" || typeof sources.jd.text !== "string") {
     throw new Error("deck has no résumé / JD source text");
   }
+  // An integer, as the account's rules require of a stored deck.
+  if (value.cell_order !== undefined && !Number.isInteger(value.cell_order)) throw new Error("deck has a non-integer cell_order");
   if (!Array.isArray(value.cards) || value.cards.length === 0) throw new Error("deck has no cards");
   const seen = new Set<string>();
   value.cards.forEach((card, i) => {

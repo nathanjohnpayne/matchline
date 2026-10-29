@@ -541,6 +541,25 @@ describe("Calibrate container with account decks", () => {
     expect(account.calls.saves).toEqual([0]);
   });
 
+  it("shows the next account its own copy, never the previous account's pending labels", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    let uid = "alice";
+    const services = { ...account.services, ownerUid: () => uid, saveAccountSession: slow.save };
+    const alice = render(<Calibrate services={services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    key("ArrowLeft"); // pending behind the in-flight write
+    alice.unmount(); // sign out
+    uid = "bob";
+    render(<Calibrate services={services} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Start|Resume/ }));
+    await screen.findByTestId("calibrate-card");
+    expect(screen.getByText(/0 of 3 labelled/)).toBeTruthy();
+  });
+
   it("keeps a newer mount's labels when an older mount's save lands after leaving and returning", async () => {
     const account = fakeAccount([deck]);
     const slow = deferredSaves(account);
@@ -588,6 +607,17 @@ describe("Calibrate container with account decks", () => {
     expect(account.calls.uploads).toEqual([]);
   });
 
+  it("names an upload refusal for what it is, not as stored labels", async () => {
+    const account = fakeAccount();
+    const refused = new FirebaseError("permission-denied", "Missing or insufficient permissions.");
+    render(<Calibrate services={{ ...account.services, uploadDeck: () => Promise.reject(refused) }} />);
+    await screen.findByText(/No decks yet/);
+    fireEvent.change(screen.getByLabelText("Upload deck files…"), { target: { files: [file("a.json", deck)] } });
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Missing or insufficient permissions");
+    expect(alert.textContent).not.toContain("has labels");
+  });
+
   it("removes a deck only after confirming, with this browser's copy", async () => {
     const account = fakeAccount([deck]);
     localStorage.setItem("matchline:calibrate:v1:account:uid-test:demo-cell", "{}");
@@ -613,7 +643,11 @@ describe("Calibrate container with account decks", () => {
     expect(setsAsideLocal(theirs, 6, mine)).toBe(true);
     expect(setsAsideLocal({ ...theirs, state: { ...theirs.state, decisions: mine.state.decisions } }, 6, mine)).toBe(false);
     expect(setsAsideLocal(theirs, 5, mine)).toBe(false);
-    expect(pickSession(deck, null, -1, ahead).session_id).toBe("local");
+    // With no account session: resume a copy that never reached an account,
+    // but not one built on a session that has since been removed.
+    expect(pickSession(deck, null, -1, { ...ahead, base_rev: -1 }).session_id).toBe("local");
+    expect(pickSession(deck, null, -1, { ...ahead, base_rev: undefined }).session_id).toBe("local");
+    expect(pickSession(deck, null, -1, ahead).session_id).not.toBe("local");
     expect(pickSession(deck, null, -1, null).state.deck_id).toBe("demo-cell");
   });
 });
