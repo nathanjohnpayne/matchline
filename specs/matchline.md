@@ -583,8 +583,9 @@ Reliability:
 
 ## V1 surfaces
 
-The shipped product has six screens behind sign-in. Nothing ships
-that isn't serving the core loop or the pipeline around it.
+The shipped product has seven screens behind sign-in. Nothing ships
+that isn't serving the core loop, the pipeline around it, or the
+evaluation of either (Calibrate).
 
 1. **Onboarding** — paste resume text (reachable any time from the nav; **Target:** as Evidence → Import), with streamed
    progress; lands in Unit Review. The four-source import picker is
@@ -616,6 +617,7 @@ that isn't serving the core loop or the pipeline around it.
    reloads until saved or cancelled. Saving creates the Role, even
    with only a title (#431), and opens its Role Detail. **Target**
    (PRD decision 7): Company and Source fields, persisted on the Role.
+7. **Calibrate** (`/calibrate`) — an evaluation tool, not part of the core loop: swipe through a calibration deck (#636) one judgment at a time (right True, left False, down Mixed where the review sheet takes `partial`, up Can't tell, which re-queues the card with its full source open), with undo, one-line notes, per-card timing and a per-cell summary, then download a labels file that `tools/label-swipe/import-labels.mts` writes back into the review sheet. Decks are opened from a file and kept in memory; the route reads and writes no Firestore data and calls no Cloud Function, and only item ids, labels, notes and timings persist, in the browser. It is the one screen laid out for phones, and the top navigation scrolls sideways at phone width.
 
 **Target:** the navigation, dossier, Evidence (canonical resume and
 claim rules), Package, Process, Correspondence, and Scan surfaces in
@@ -623,8 +625,8 @@ the PRD's "Target interface," and responsive layouts down to phone
 widths for the agreed workflows (PRD decision 8). Today the Pipeline
 board and the Application Editor stack below 768 px, the Pipeline's
 task sidebar moves beside the board only at 1024 px and up, and New
-Role's short fields drop from two columns to one below 640 px. The top
-navigation and the other screens have no breakpoint-specific layout.
+Role's short fields drop from two columns to one below 640 px. Calibrate is laid out for phones, and the top navigation scrolls
+sideways at phone width; the other screens have no breakpoint-specific layout.
 
 ## Technical principles
 
