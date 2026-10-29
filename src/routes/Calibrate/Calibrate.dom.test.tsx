@@ -420,7 +420,31 @@ describe("Calibrate container with account decks", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
     await screen.findByTestId("calibrate-card");
     expect(screen.getByText(/2 of 3 labelled/)).toBeTruthy();
-    expect(screen.queryByText(/set aside/)).toBeNull();
+    expect(screen.queryByText(/replaced by it/)).toBeNull();
+    // The resumed labels are sent to the account without waiting for a new decision.
+    await saved();
+    expect(Object.keys(account.sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
+  });
+
+  it("keeps labels made during an in-flight save when going back and reopening the deck", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    render(<Calibrate services={{ ...account.services, saveAccountSession: slow.save }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    key("ArrowLeft"); // pending behind the in-flight write
+    fireEvent.click(screen.getByRole("button", { name: "Decks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Resume|Start/ }));
+    await screen.findByTestId("calibrate-card");
+    expect(screen.getByText(/2 of 3 labelled/)).toBeTruthy();
+    await slow.land();
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    await slow.land();
+    await saved();
+    expect(Object.keys(account.sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:demo-cell") ?? "{}").state.counter).toBe(2);
   });
 
   it("pauses on a save the account can never accept, with the reason", async () => {

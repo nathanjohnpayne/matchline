@@ -262,18 +262,30 @@ export default function Calibrate({
     const opened = list.decks
       .filter((d) => wanted.has(d.deck.deck_id))
       .map((d) => {
-        const local = loadSession(d.deck);
-        if (setsAsideLocal(d.session, d.accountRev, local)) setAside.push(d.deck.deck_id);
-        accountRev.current.set(d.deck.deck_id, d.accountRev);
-        stopped.current.delete(d.deck.deck_id);
-        pending.current.delete(d.deck.deck_id);
-        const session = pickSession(d.deck, d.session, d.accountRev, local);
-        // When the account copy wins, it becomes this browser's copy too, so a
-        // set-aside is reported once, not on every reopen.
-        if (session !== local && d.session) saveSession({ ...session, base_rev: d.accountRev });
+        const id = d.deck.deck_id;
+        // A write still in flight for this deck (from before going back) keeps
+        // its own bookkeeping: it sets the revision when it lands, and its
+        // pending successor is the newest state, so neither is touched here.
+        const writing = inflight.current.has(id);
+        const local = pending.current.get(id)?.stored ?? loadSession(d.deck);
+        const base = writing ? (accountRev.current.get(id) ?? d.accountRev) : d.accountRev;
+        if (!writing && setsAsideLocal(d.session, d.accountRev, local)) setAside.push(id);
+        if (!writing) accountRev.current.set(id, d.accountRev);
+        stopped.current.delete(id);
+        const session = writing && local ? local : pickSession(d.deck, d.session, base, local);
+        if (session === local && local && (!d.session || local.state.rev > d.session.state.rev)) {
+          // This browser is ahead of the account (labels saved here, not there
+          // yet): send them now rather than waiting for the next decision.
+          pending.current.set(id, { deck: d.deck, stored: { session_id: local.session_id, state: local.state } });
+        } else if (session !== local && d.session) {
+          // The account copy won: it becomes this browser's copy too, so a
+          // replaced set is reported once, not on every reopen.
+          saveSession({ ...session, base_rev: d.accountRev });
+        }
         return { deck: d.deck, session, source: "account" as const };
       });
     start(opened);
+    if (pending.current.size) schedule(SAVE_DELAY_MS);
     if (setAside.length) {
       setLoadError(
         `Opened the account copy of ${setAside.join(", ")}: it was saved after this browser's last labels, which never reached your account and have been replaced by it.`,
@@ -308,7 +320,16 @@ export default function Calibrate({
       }
       for (const [i, deck] of decks.entries()) {
         setBusy(`Uploading ${i + 1} of ${decks.length}: ${deck.deck_id}`);
-        await services.uploadDeck(deck);
+        try {
+          await services.uploadDeck(deck);
+        } catch (err) {
+          // The rules refuse new content for a deck that has labels, checked
+          // against the account itself (this list may be out of date).
+          if (isPermissionDenied(err)) {
+            throw new Error(`${deck.deck_id} has labels in your account for its current content. Download them, remove the deck, then upload the new version.`, { cause: err });
+          }
+          throw err;
+        }
       }
       await refresh();
     } catch (err) {

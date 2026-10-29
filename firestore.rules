@@ -259,8 +259,13 @@ service cloud.firestore {
       }
       allow read, delete: if isOwner();
       allow create: if isCreatingAsOwner() && validDeck();
+      // New content may replace a deck only while it has no session: labels
+      // belong to the content they were made on, and would be stranded.
+      // Checked here, against the account, not against a client's cached list.
       allow update: if canUpdateAsOwner() && validDeck()
-        && request.resource.data.deck_id == resource.data.deck_id;
+        && request.resource.data.deck_id == resource.data.deck_id
+        && (request.resource.data.fingerprint == resource.data.fingerprint
+          || !exists(/databases/$(database)/documents/calibrationSessions/$(docId)));
     }
 
     match /calibrationSessions/{docId} {

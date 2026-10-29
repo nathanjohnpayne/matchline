@@ -941,6 +941,17 @@ describe("rules: calibration field limits", () => {
     await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0, fingerprint: "feedbeef:99" }));
   });
 
+  it("DENIES new content for a deck that has a session, until the deck and session are removed", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" })); // no session yet
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" }));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, uploaded_at: "2026-10-31T00:00:00.000Z" })); // same content
+    await assertSucceeds(deleteDoc(sessionRef(OWNER_UID)));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" }));
+  });
+
   it("DENIES a deck id with characters outside the allowed set", async () => {
     await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a/b" }));
     await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a b" }));

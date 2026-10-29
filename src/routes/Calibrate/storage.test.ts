@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { Deck } from "../../lib/labelDeck/deck.ts";
 import { decide, initSession } from "../../lib/labelDeck/session.ts";
@@ -51,15 +51,21 @@ describe("Calibrate session storage", () => {
   });
 
   it("works without storage when merely reading localStorage throws (site data blocked)", () => {
-    const spy = vi.spyOn(globalThis, "localStorage", "get").mockImplementation(() => {
-      throw new DOMException("blocked", "SecurityError");
+    // Install a throwing getter directly: Node 20 has no localStorage to spy on.
+    const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("blocked", "SecurityError");
+      },
     });
     try {
       expect(loadSession(deck)).toBeNull();
       expect(() => saveSession({ session_id: "s", state: initSession(deck, 1) })).not.toThrow();
       expect(() => clearSession("cell-a")).not.toThrow();
     } finally {
-      spy.mockRestore();
+      if (original) Object.defineProperty(globalThis, "localStorage", original);
+      else delete (globalThis as { localStorage?: Storage }).localStorage;
     }
   });
 });
