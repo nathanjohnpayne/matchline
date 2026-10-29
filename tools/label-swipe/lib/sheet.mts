@@ -209,9 +209,15 @@ export function rowKey(row: TableRow, context: { labelId: string }): string | nu
  */
 export function keyedRows(text: string): { row: TableRow; key: string | null }[] {
   let labelId = "";
+  let section: Section | null = null;
+  const firstLine = new Map<string, number>();
   return readTables(text).map((row) => {
     const c = row.cells;
     const h = row.headers;
+    if (row.section !== section) {
+      section = row.section;
+      labelId = "";
+    }
     if (row.section === "extraction") {
       const label = /^\*\*(.+?)\*\*:/.exec(c[column(h, "expected Unit")]);
       if (label) labelId = label[1];
@@ -222,7 +228,17 @@ export function keyedRows(text: string): { row: TableRow; key: string | null }[]
       if (label) labelId = label[1];
       if (!/^R\d+:/.test(c[column(h, "parsed `normalized_requirement`")])) return { row, key: null };
     }
-    return { row, key: rowKey(row, { labelId }) };
+    if ((row.section === "extraction" || row.section === "requirements") && !labelId) {
+      throw new Error(`sheet line ${row.line + 1}: row has no expected label and none above it to inherit`);
+    }
+    const key = rowKey(row, { labelId });
+    if (key !== null) {
+      // A repeated key would make two cards share an item id and the importer write one label into two rows.
+      const earlier = firstLine.get(key);
+      if (earlier !== undefined) throw new Error(`sheet lines ${earlier + 1} and ${row.line + 1} share the row key ${key}`);
+      firstLine.set(key, row.line);
+    }
+    return { row, key };
   });
 }
 

@@ -20,7 +20,7 @@ The page is vanilla HTML/CSS/JS with no build step. It makes no network calls: t
 npx tsx tools/label-swipe/build-deck.mts
 ```
 
-This reads `~/.matchline/eval-analysis/calibration-2a/<cell>.md` (every `*.md` except `README.md` and `SUMMARY.md`) and writes `decks/<cell>.json` next to them, mode 0600. Options: `--packet <dir>`, `--out <dir>` (must be outside any git work tree) and `--fixtures <dir>` (public fixture root for catch cards, default `tests/fixtures`). It is read-only over the sheets and does not read `corrections/`.
+This reads `~/.matchline/eval-analysis/calibration-2a/<cell>.md` (every `*.md` except `README.md` and `SUMMARY.md`) and writes `decks/<cell>.json` next to them, mode 0600. Options: `--packet <dir>`, `--out <dir>` (must be outside any git work tree, checked after following symlinks) and `--fixtures <dir>` (public fixture root for catch cards, default `tests/fixtures`). It is read-only over the sheets and does not read `corrections/`. A sheet whose rows would give two cards the same id, a row with no expected label to inherit, or an unexpected must-have value stops the build with the line number.
 
 To try the page without private data, build the synthetic deck into a scratch folder:
 
@@ -52,6 +52,7 @@ Click **Choose deck files…** and select one or all four decks. Cells run in th
 
 - **Can't tell** moves the card to the end of the cell, and it comes back with its full source already open. A second **Can't tell** on the same card is recorded as `unsure`.
 - **Mixed** is only accepted on `fact-correct` and `requirement-equivalent` cards, the two sheet columns that take `partial`. On the other cards the button is disabled, and a down swipe snaps back.
+- The page is built for a desktop with a keyboard. On a touch screen the card itself does not scroll (a touch drag on it is a swipe), so read a long card's full source in its expanded panel, which does scroll.
 - Each card shows the question, the claim on the left and the evidence on the right. The evidence is the closest one or two lines of the source text, found by word overlap, or the expected requirement for `requirement-equivalent`. When no line is close, the card says so. Open the full source before answering N in that case.
 
 ### 4. Download
@@ -82,12 +83,12 @@ This writes Y / N / partial into the owner columns of `<packet>/<deck_id>.md` an
 
 ```text
 [label-swipe deck=<cell> session=<session_id>]
-A2 fact-correct: N — invented metric
-R1 requirement-equivalent: partial — drops a qualifier
+A2 (aaaa0002) fact-correct: N — invented metric
+R1 (cccc0001) requirement-equivalent: partial — drops a qualifier
 [/label-swipe]
 ```
 
-Any text already in `notes` is kept. The importer does not set `owner_verdict` or the corrected fields; those remain for the #648 correction pass. Re-importing the same file changes nothing. A cell (or label-swipe block) that already holds a different value stops the import with a list of the conflicting row keys and nothing written; add `--force` to overwrite. `--dry-run` checks without writing, and `--packet <dir>` points at another packet. When every owner column is filled, the packet README's KEY.json comparison runs unchanged.
+Each line names the packet ref and the first eight characters of the scaffold item's `id` (A<n> is `units[n-1]`, R<n> is `requirements[n-1]`). Any text already in `notes` is kept. The importer does not set `owner_verdict` or the corrected fields; those remain for the #648 correction pass. Re-importing the same file changes nothing, and so does importing a later, fuller download from the same session: its block replaces that session's earlier one, and a row note that grew from one card's note to both is not a conflict. A cell (or label-swipe block) that already holds a different value stops the import with a list of the conflicting row keys and nothing written; add `--force` to overwrite. A Can't tell over a cell an earlier import filled is a conflict too; `--force` clears that cell. Labels that match no sheet row (a regenerated sheet, the wrong `--packet`) stop the import with nothing written; `--allow-unknown` imports the rest. `--dry-run` checks without writing, and `--packet <dir>` points at another packet. When every owner column is filled, the packet README's KEY.json comparison runs unchanged.
 
 ## How the sheets map to cards
 

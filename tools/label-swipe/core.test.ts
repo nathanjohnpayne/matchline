@@ -86,7 +86,8 @@ describe("decision reducer", () => {
     s = Core.undo(s);
     expect(s.queue).toEqual(deck.cards.map((c) => c.item_id));
     expect(s.requeued).toEqual({});
-    expect(s.elapsed["ext:u_a:A/fact-correct"]).toBe(0);
+    // The time spent before the undone Can't tell still counts.
+    expect(Core.decide(s, "true", 100).decisions["ext:u_a:A/fact-correct"].ms).toBe(500);
   });
 
   it("undo is unlimited and a no-op on an empty history", () => {

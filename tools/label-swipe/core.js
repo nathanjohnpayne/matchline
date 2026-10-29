@@ -130,8 +130,8 @@
         history,
         undos,
         requeued,
+        // Like an undone decision, the time already spent keeps counting.
         queue: [last.id, ...queue],
-        elapsed: { ...state.elapsed, [last.id]: Math.max(0, (state.elapsed[last.id] || 0) - last.ms) },
       };
     }
     const decisions = { ...state.decisions };

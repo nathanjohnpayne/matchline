@@ -1,8 +1,9 @@
 /** Shared CLI plumbing for build-deck and import-labels. */
 
-import { existsSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const DEFAULT_PACKET = join(homedir(), ".matchline", "eval-analysis", "calibration-2a");
 
@@ -11,7 +12,15 @@ export const NOT_SHEETS = new Set(["README.md", "SUMMARY.md"]);
 
 /** The nearest enclosing git work tree of `path`, or null. */
 export function gitRoot(path: string): string | null {
+  // Follow symlinks: resolve the deepest existing ancestor to its real path,
+  // so a link that points into a repository is caught.
   let dir = resolve(path);
+  let rest = "";
+  while (!existsSync(dir) && dirname(dir) !== dir) {
+    rest = join(basename(dir), rest);
+    dir = dirname(dir);
+  }
+  dir = resolve(realpathSync(dir), rest);
   for (;;) {
     if (existsSync(join(dir, ".git"))) return dir;
     const parent = dirname(dir);
@@ -47,9 +56,9 @@ export function parseArgs(argv: string[], booleans: string[] = []): { flags: Map
     if (inline !== undefined) flags.set(name, inline);
     else if (booleans.includes(name)) flags.set(name, true);
     else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("--")) flags.set(name, argv[++i]);
-    else flags.set(name, true);
+    else throw new Error(`--${name} needs a value`);
   }
   return { flags, positional };
 }
 
-export const isMain = (metaUrl: string) => process.argv[1] !== undefined && resolve(process.argv[1]) === new URL(metaUrl).pathname;
+export const isMain = (metaUrl: string) => process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(metaUrl);

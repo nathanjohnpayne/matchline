@@ -107,7 +107,8 @@
     return (pausedAt ?? performance.now()) - shownAt;
   }
 
-  document.addEventListener("visibilitychange", () => (document.hidden ? pauseTimer() : resumeTimer()));
+  // The note form keeps the timer paused on its own; returning to the tab must not resume it.
+  document.addEventListener("visibilitychange", () => (document.hidden ? pauseTimer() : els.noteForm.hidden && resumeTimer()));
 
   // ---------- loading ----------
 
@@ -424,7 +425,13 @@
   els.endNext.addEventListener("click", () => openDeck(deckIndex + 1));
   els.undo.addEventListener("click", undo);
   els.expand.addEventListener("click", () => setExpanded(!expanded));
-  document.querySelectorAll(".action-btn").forEach((btn) => btn.addEventListener("click", () => decide(btn.dataset.label)));
+  // Blur after a click: a focused button would turn a later Enter into a second decision.
+  document.querySelectorAll(".action-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      btn.blur();
+      decide(btn.dataset.label);
+    }),
+  );
 
   // ---------- keyboard ----------
 

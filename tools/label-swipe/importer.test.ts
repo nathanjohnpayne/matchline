@@ -1,12 +1,12 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { importIntoPacket } from "./import-labels.mts";
-import { assertOutsideRepo } from "./lib/cli.mts";
+import { UnknownItemsError, importIntoPacket } from "./import-labels.mts";
+import { assertOutsideRepo, parseArgs } from "./lib/cli.mts";
 import { ImportConflictError, importLabels, type LabelItem, type LabelsFile } from "./lib/importer.mts";
 import { column, keyedRows } from "./lib/sheet.mts";
 
@@ -74,10 +74,10 @@ describe("importLabels", () => {
     const notes = importLabels(sheet, scaffold, LABELS).scaffold?.notes ?? "";
     expect(notes.split("\n")).toEqual([
       "[label-swipe deck=riley-demo-2026__acme-widgets-pm-2026 session=session-a]",
-      "A1 fact-correct: partial — wrong year",
+      "A1 (aaaa0001) fact-correct: partial — wrong year",
       "A2 fact-correct: N — invented metric",
       "A2 verbatim: N — paraphrased",
-      "R1 requirement-equivalent: partial — drops consumer hardware",
+      "R1 (cccc0001) requirement-equivalent: partial — drops consumer hardware",
       "[/label-swipe]",
     ]);
   });
@@ -100,6 +100,31 @@ describe("importLabels", () => {
     expect(() => importLabels(once.sheet, once.scaffold, changed)).toThrow(ImportConflictError);
     const forced = importLabels(once.sheet, once.scaffold, changed, { force: true });
     expect(cell(forced.sheet, "ext:u_gizmo_launch:A", "verbatim?")).toBe("N");
+  });
+
+  it("accepts a later, fuller download from the same session without --force", () => {
+    const partial: LabelsFile = { ...LABELS, items: LABELS.items.filter((i) => i.item_id !== "ext:u_sprocket_api:A/verbatim") };
+    const first = importLabels(sheet, scaffold, partial);
+    expect(cell(first.sheet, "ext:u_sprocket_api:A", "note")).toBe("invented metric");
+    const full = importLabels(first.sheet, first.scaffold, LABELS);
+    expect(cell(full.sheet, "ext:u_sprocket_api:A", "note")).toBe("fact: invented metric; verbatim: paraphrased");
+    expect(full.scaffold?.notes).toBe(importLabels(sheet, scaffold, LABELS).scaffold?.notes);
+    // A different session's block is still a conflict.
+    expect(() => importLabels(first.sheet, first.scaffold, { ...LABELS, session_id: "session-b" })).toThrow(ImportConflictError);
+  });
+
+  it("treats Can't tell over an earlier answer as a conflict, and clears it with --force", () => {
+    const once = importLabels(sheet, scaffold, LABELS);
+    const unsure: LabelsFile = { ...LABELS, items: [item("ext:u_gizmo_launch:A/verbatim", "unsure")] };
+    expect(() => importLabels(once.sheet, null, unsure)).toThrow(/ext:u_gizmo_launch:A verbatim/);
+    const forced = importLabels(once.sheet, null, unsure, { force: true });
+    expect(cell(forced.sheet, "ext:u_gizmo_launch:A", "verbatim?")).toBe("");
+  });
+
+  it("keeps CRLF line endings on rewritten rows", () => {
+    const crlf = sheet.replace(/\n/g, "\r\n");
+    const out = importLabels(crlf, null, LABELS).sheet;
+    expect(out.split("\n").slice(0, -1).every((l) => l.endsWith("\r"))).toBe(true);
   });
 
   it("keeps hand-written scaffold notes", () => {
@@ -133,8 +158,24 @@ describe("import-labels CLI core", () => {
     expect(() => importIntoPacket(labelsPath, packet)).not.toThrow();
   });
 
-  it("refuses to write private output inside a git work tree", () => {
+  it("refuses to write private output inside a git work tree, also through a symlink", () => {
     expect(() => assertOutsideRepo(join(HERE, "decks"))).toThrow(/git work tree/);
     expect(() => assertOutsideRepo(packet)).not.toThrow();
+    symlinkSync(HERE, join(packet, "link-into-repo"));
+    expect(() => assertOutsideRepo(join(packet, "link-into-repo", "new", "decks"))).toThrow(/git work tree/);
+  });
+
+  it("refuses labels that match no row unless allowed, writing nothing", () => {
+    const labelsPath = join(packet, "labels.json");
+    writeFileSync(labelsPath, JSON.stringify({ ...LABELS, items: [...LABELS.items, item("ext:u_gone:A/verbatim", "true")] }));
+    const before = readFileSync(join(packet, `${CELL}.md`), "utf8");
+    expect(() => importIntoPacket(labelsPath, packet)).toThrow(UnknownItemsError);
+    expect(readFileSync(join(packet, `${CELL}.md`), "utf8")).toBe(before);
+    expect(importIntoPacket(labelsPath, packet, { allowUnknown: true }).unknown).toEqual(["ext:u_gone:A"]);
+  });
+
+  it("rejects a value flag with no value", () => {
+    expect(() => parseArgs(["--out"])).toThrow(/--out needs a value/);
+    expect(parseArgs(["a.json", "--force"], ["force"])).toEqual({ flags: new Map([["force", true]]), positional: ["a.json"] });
   });
 });

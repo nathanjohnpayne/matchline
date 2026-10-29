@@ -71,6 +71,27 @@ function noteText(item: LabelItem): string {
   return clean(item.note ?? "");
 }
 
+type Note = { item: LabelItem; text: string };
+
+/** One row's note: the bare note, or `fact: …; verbatim: …` when two cards have one. */
+function formatNotes(notes: Note[]): string {
+  return notes.length === 1 ? notes[0].text : notes.map((n) => `${TYPE_COLUMN[n.item.type].short}: ${n.text}`).join("; ");
+}
+
+/** Proper non-empty subsets (a row has at most two cards, so this stays tiny). */
+function subsets<T>(xs: T[]): T[][] {
+  const out: T[][] = [];
+  for (let mask = 1; mask < (1 << xs.length) - 1; mask += 1) out.push(xs.filter((_, i) => mask & (1 << i)));
+  return out;
+}
+
+/** ` (<id prefix>)` of the scaffold item a ref names: A<n> is units[n-1], R<n> requirements[n-1]. */
+function scaffoldId(scaffold: Scaffold | null, ref: string): string {
+  const list = scaffold?.[ref.startsWith("A") ? "units" : "requirements"];
+  const entry = Array.isArray(list) ? (list[Number(ref.slice(1)) - 1] as { id?: unknown } | undefined) : undefined;
+  return typeof entry?.id === "string" ? ` (${entry.id.slice(0, 8)})` : "";
+}
+
 /** The packet's item ref (A3, B12, R2) a row is about, if any. */
 function rowRef(section: string, cells: string[], headers: string[]): string | null {
   const cell =
@@ -111,28 +132,35 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
     if (!items) continue;
     seen.add(key);
     const cells = [...row.cells];
-    const set = (prefix: string, value: string, what: string) => {
+    // `accept` lists other values that already mean this import's value,
+    // such as the note an earlier, partial download of this session wrote.
+    const set = (prefix: string, value: string, what: string, accept: string[] = []) => {
       const index = column(row.headers, prefix);
       const current = cells[index] ?? "";
       if (current === value) {
         unchanged += 1;
         return;
       }
-      if (current !== "" && !options.force) conflicts.push(`${key} ${what}`);
+      if (current !== "" && !accept.includes(current) && !options.force) conflicts.push(`${key} ${what}`);
       cells[index] = value;
       written += 1;
     };
 
-    const notes = items.map((item) => ({ item, text: noteText(item) })).filter((n) => n.text);
     for (const item of items) {
       const value = sheetValue(item.label);
+      const index = column(row.headers, TYPE_COLUMN[item.type].column);
       if (value) set(TYPE_COLUMN[item.type].column, value, item.type);
+      else if (cells[index] !== "") {
+        // Can't tell over an earlier answer: the two disagree.
+        if (!options.force) conflicts.push(`${key} ${item.type}`);
+        cells[index] = "";
+        written += 1;
+      }
     }
-    if (notes.length) {
-      const joined = notes.length === 1 ? notes[0].text : notes.map((n) => `${TYPE_COLUMN[n.item.type].short}: ${n.text}`).join("; ");
-      set("note", joined, "note");
-    }
-    lines[row.line] = joinRow(cells);
+    const notes = items.map((item) => ({ item, text: noteText(item) })).filter((n) => n.text);
+    if (notes.length) set("note", formatNotes(notes), "note", subsets(notes).map(formatNotes));
+    // Keep the line ending of a CRLF sheet.
+    lines[row.line] = joinRow(cells) + (lines[row.line].endsWith("\r") ? "\r" : "");
 
     // Arm A Units and the (arm A) requirements are what the scaffold holds.
     const ref = rowRef(row.section, row.cells, row.headers);
@@ -140,7 +168,7 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
       for (const item of items) {
         if (item.label === "true") continue;
         const note = noteText(item);
-        scaffoldLines.push(`${ref} ${item.type}: ${sheetValue(item.label) || "can't tell"}${note && item.label !== "unsure" ? ` — ${note}` : ""}`);
+        scaffoldLines.push(`${ref}${scaffoldId(scaffold, ref)} ${item.type}: ${sheetValue(item.label) || "can't tell"}${note && item.label !== "unsure" ? ` — ${note}` : ""}`);
       }
     }
   }
@@ -153,7 +181,10 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
     let notes = scaffold.notes ?? "";
     if (existing) {
       if (existing[0] !== block) {
-        if (!options.force) conflicts.push("corrections notes");
+        // A block from this same session is this import's own earlier,
+        // partial write; replacing it is not a conflict.
+        const sameSession = existing[0].startsWith(`[label-swipe deck=${labels.deck_id} session=${labels.session_id}]`);
+        if (!sameSession && !options.force) conflicts.push("corrections notes");
         notes = (notes.slice(0, existing.index) + block + notes.slice(existing.index + existing[0].length)).trim();
       }
     } else if (block) {

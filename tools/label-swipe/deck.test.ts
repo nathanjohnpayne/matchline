@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { buildDecks } from "./build-deck.mts";
-import { buildCatchCards, cellOrder, closestLines, falsifyNumber, sectionHeading } from "./lib/deck.mts";
+import { buildCatchCards, buildDeck, cellOrder, closestLines, falsifyNumber, sectionHeading, summarize } from "./lib/deck.mts";
 import { joinRow, keyedRows, parseSheet, splitRow } from "./lib/sheet.mts";
 
 const PACKET = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "packet");
@@ -49,6 +49,20 @@ describe("sheet parser", () => {
 
   it("fails loudly when an owner column is missing", () => {
     expect(() => keyedRows(SHEET.replace("| arm |", "| side |"))).toThrow(/arm/);
+  });
+
+  it("refuses duplicate row keys and rows with no label to inherit", () => {
+    const lines = SHEET.split("\n");
+    const row = lines.findIndex((l) => l.startsWith("| **u_gizmo_launch**"));
+    const duplicated = [...lines.slice(0, row + 1), lines[row], ...lines.slice(row + 1)].join("\n");
+    expect(() => keyedRows(duplicated)).toThrow(/share the row key ext:u_gizmo_launch:A/);
+    const req = lines.findIndex((l) => l.startsWith("| **r_5yr_pm**"));
+    const orphan = [...lines.slice(0, req), lines[req].replace("**r_5yr_pm** (must): ", ""), ...lines.slice(req + 1)].join("\n");
+    expect(() => keyedRows(orphan)).toThrow(/no expected label/);
+  });
+
+  it("refuses an unexpected must-have value", () => {
+    expect(() => buildDeck(parseSheet(SHEET.replace("| must | 1.000 |", "| maybe | 1.000 |"), CELL), 0)).toThrow(/must-have value "maybe"/);
   });
 });
 
@@ -117,5 +131,11 @@ describe("deck helpers", () => {
     expect(buildCatchCards("x", resume, jd)).toEqual(buildCatchCards("x", resume, jd));
     const falsified = buildCatchCards("x", resume, jd).find((c) => c.expected === "false" && c.type === "fact-correct");
     expect(falsified?.claim[0].text).not.toBe(falsified?.evidence[0].text);
+    // A catch card's summary is never a copy of its raw_text (a real card's never is).
+    for (const c of buildCatchCards("x", resume, jd).filter((c) => c.type === "fact-correct")) {
+      expect(c.claim[1].text).not.toBe(c.claim[0].text);
+    }
+    expect(summarize("Built the API, adopted by 9 internal teams across three units.")).toBe("Built API, adopted by 9 internal teams across three units");
+    expect(summarize("Led the launch of a new product line for retail, on time.")).toBe("Led the launch of a new product line for retail");
   });
 });

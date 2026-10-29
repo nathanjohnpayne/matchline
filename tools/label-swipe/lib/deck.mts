@@ -100,6 +100,12 @@ function linesOf(source: string, indexes: number[], label: string): Field[] {
   return indexes.map((i) => ({ label, text: lines[i].replace(/^\s*[-*•]\s*/, "").trim() }));
 }
 
+function mustHaveText(value: string, line: number): string {
+  if (value === "must") return "must-have";
+  if (value === "nice") return "nice-to-have";
+  throw new Error(`sheet line ${line + 1}: unexpected parsed must-have value "${value}"`);
+}
+
 const none = { resume: [] as number[], jd: [] as number[] };
 
 export function buildCards(sheet: Sheet): Card[] {
@@ -168,7 +174,7 @@ export function buildCards(sheet: Sheet): Card[] {
       catch: false,
       claim: [
         { label: "Parsed requirement", text: row.parsedNormalized },
-        { label: "Parsed as", text: row.parsedMust === "must" ? "must-have" : "nice-to-have" },
+        { label: "Parsed as", text: mustHaveText(row.parsedMust, row.line) },
       ],
       evidence: [...(heading ? [{ label: "JD section", text: heading }] : []), ...linesOf(jd, lines, "JD line")],
       source: "jd",
@@ -240,6 +246,18 @@ export function falsifyNumber(line: string): string | null {
   return line.slice(0, m.index) + changed + line.slice(m.index + digits.length);
 }
 
+/**
+ * A summary-like rewrite of a catch line, so a catch card's summary is not
+ * a copy of its raw_text (real cards never have that). It keeps the facts:
+ * the line up to its last clause boundary when that leaves 30+ characters,
+ * otherwise the line without articles; never a trailing period.
+ */
+export function summarize(line: string): string {
+  const cut = Math.max(line.lastIndexOf(", "), line.lastIndexOf(" — "), line.lastIndexOf("; "));
+  const text = cut >= 30 ? line.slice(0, cut) : line.replace(/\b(the|a|an) /gi, "");
+  return text.replace(/[.\s]+$/, "");
+}
+
 const contentLines = (text: string) =>
   text
     .split("\n")
@@ -269,7 +287,7 @@ export function buildCatchCards(deckId: string, resume: string, jd: string): Car
       "true",
       [
         { label: "Extracted raw_text", text: truth.text },
-        { label: "Extracted normalized_summary", text: truth.text },
+        { label: "Extracted normalized_summary", text: summarize(truth.text) },
       ],
       [{ label: "Résumé line", text: truth.text }],
       "resume",
@@ -284,7 +302,7 @@ export function buildCatchCards(deckId: string, resume: string, jd: string): Car
       "false",
       [
         { label: "Extracted raw_text", text: wrong },
-        { label: "Extracted normalized_summary", text: wrong },
+        { label: "Extracted normalized_summary", text: summarize(wrong) },
       ],
       [{ label: "Résumé line", text: numbered.text }],
       "resume",
@@ -331,7 +349,7 @@ export function buildDeck(sheet: Sheet, cellIndex: number, catchSources?: { resu
     },
     // Catch-card highlights point into the fixture text; re-anchor them on
     // the sheet's copy, which is what the expanded view shows.
-    cards: [
+    cards: assertUniqueIds([
       ...buildCards(sheet),
       ...buildCatchCards(sheet.cell, resume, jd).map((card) => ({
         ...card,
@@ -340,6 +358,15 @@ export function buildDeck(sheet: Sheet, cellIndex: number, catchSources?: { resu
           jd: card.source === "jd" ? closestLines(sheet.jdText, card.claim[0].text, 1) : [],
         },
       })),
-    ],
+    ]),
   };
+}
+
+function assertUniqueIds(cards: Card[]): Card[] {
+  const seen = new Set<string>();
+  for (const card of cards) {
+    if (seen.has(card.item_id)) throw new Error(`duplicate card id ${card.item_id}`);
+    seen.add(card.item_id);
+  }
+  return cards;
 }
