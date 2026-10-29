@@ -122,7 +122,10 @@ export function splitRow(line: string): string[] {
 
 /** Inverse of `splitRow` for the sheet's `| a | b |` style (empty cell = two spaces). */
 export function joinRow(cells: string[]): string {
-  return `| ${cells.map((c) => c.replace(/\|/g, "\\|")).join(" | ")} |`;
+  // Only "|" is escaped: splitRow unescapes "\|" and keeps every other
+  // backslash literally, so escaping backslashes too would break the round
+  // trip (tested over every fixture row).
+  return `| ${cells.map((c) => c.split("|").join("\\|")).join(" | ")} |`;
 }
 
 /** Index of the first header starting with `prefix`; throws if absent. */
