@@ -10,6 +10,7 @@
 import { OWNER_COLUMNS, column, joinRow, keyedRows } from "./sheet.mts";
 
 export type Label = "true" | "false" | "mixed" | "unsure";
+export const LABEL_VALUES: readonly string[] = ["true", "false", "mixed", "unsure"];
 
 export interface LabelItem {
   item_id: string;
@@ -163,7 +164,7 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
       const value = sheetValue(item.label);
       const index = column(row.headers, TYPE_COLUMN[item.type].column);
       if (value) set(TYPE_COLUMN[item.type].column, value, item.type);
-      else if (cells[index] !== "") {
+      else if ((cells[index] ?? "") !== "") {
         // Can't tell over an earlier answer: the two disagree.
         if (!options.force) conflicts.push(`${key} ${item.type}`);
         cells[index] = "";

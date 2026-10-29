@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { DEFAULT_PACKET, isMain, parseArgs, writePrivate } from "./lib/cli.mts";
-import { ImportConflictError, importLabels, type ImportResult, type LabelsFile, type Scaffold } from "./lib/importer.mts";
+import { ImportConflictError, LABEL_VALUES, importLabels, type ImportResult, type LabelsFile, type Scaffold } from "./lib/importer.mts";
 
 export class UnknownItemsError extends Error {
   constructor(public readonly items: string[]) {
@@ -28,6 +28,9 @@ export function importIntoPacket(labelsPath: string, packet: string, options: { 
   if (!labels.deck_id || !/^[\w.-]+$/.test(labels.deck_id) || !Array.isArray(labels.items)) {
     throw new Error(`${labelsPath} is not a label-swipe labels file`);
   }
+  for (const item of labels.items) {
+    if (!LABEL_VALUES.includes(item.label)) throw new Error(`${item.item_id}: unknown label "${String(item.label)}"`);
+  }
   const sheetPath = join(packet, `${labels.deck_id}.md`);
   const scaffoldPath = join(packet, "corrections", `${labels.deck_id}.json`);
   const scaffoldRaw = existsSync(scaffoldPath) ? readFileSync(scaffoldPath, "utf8") : null;
@@ -38,7 +41,7 @@ export function importIntoPacket(labelsPath: string, packet: string, options: { 
   if (!options.dryRun) {
     // Scaffold first, sheet last: the sheet is what makes a re-run a no-op,
     // so a failure between the two writes is repaired by running again.
-    if (result.scaffold && scaffoldRaw !== null) {
+    if (result.scaffoldChanged && result.scaffold && scaffoldRaw !== null) {
       // Keep the scaffold's own layout: 2-space indent, trailing newline only if it had one.
       writePrivate(scaffoldPath, JSON.stringify(result.scaffold, null, 2) + (scaffoldRaw.endsWith("\n") ? "\n" : ""));
     }

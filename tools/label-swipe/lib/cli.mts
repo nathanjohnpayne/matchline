@@ -52,7 +52,10 @@ export function parseArgs(argv: string[], booleans: string[] = []): { flags: Map
       positional.push(arg);
       continue;
     }
-    const [name, inline] = arg.slice(2).split("=", 2);
+    // Split at the first "=" only: a value may itself contain "=".
+    const eq = arg.indexOf("=");
+    const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
+    const inline = eq === -1 ? undefined : arg.slice(eq + 1);
     if (booleans.includes(name)) flags.set(name, true);
     else if (inline !== undefined) {
       if (inline === "") throw new Error(`--${name} needs a value`);

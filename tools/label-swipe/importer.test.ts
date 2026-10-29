@@ -146,6 +146,13 @@ describe("importLabels", () => {
     expect(cell(one.sheet, "ext:u_sprocket_api:A", "note")).toBe("fact: invented metric; verbatim: paraphrased");
   });
 
+  it("treats an omitted trailing owner cell as empty for Can't tell", () => {
+    const row = sheet.split("\n").find((l) => l.startsWith("| A3 (aaaa0003)")) as string;
+    const short = sheet.replace(row, row.replace(/ \| {2}\| {2}\|$/, " |"));
+    expect(short).not.toBe(sheet);
+    expect(() => importLabels(short, null, { ...LABELS, items: [item("unit:A3/keep-unmatched-unit", "unsure")] })).not.toThrow();
+  });
+
   it("keeps CRLF line endings on rewritten rows", () => {
     const crlf = sheet.replace(/\n/g, "\r\n");
     const out = importLabels(crlf, null, LABELS).sheet;
@@ -190,6 +197,18 @@ describe("import-labels CLI core", () => {
     expect(() => assertOutsideRepo(join(packet, "link-into-repo", "new", "decks"))).toThrow(/git work tree/);
   });
 
+  it("rejects an unknown label value and leaves an unchanged scaffold untouched", () => {
+    const labelsPath = join(packet, "labels.json");
+    writeFileSync(labelsPath, JSON.stringify({ ...LABELS, items: [{ ...LABELS.items[0], label: "True" }] }));
+    expect(() => importIntoPacket(labelsPath, packet)).toThrow(/unknown label "True"/);
+    const scaffoldPath = join(packet, "corrections", `${CELL}.json`);
+    const handFormatted = '{"resumeId": "riley-demo-2026", "units": [], "requirements": [], "notes": ""}';
+    writeFileSync(scaffoldPath, handFormatted);
+    writeFileSync(labelsPath, JSON.stringify({ ...LABELS, items: [item("unit:A3/keep-unmatched-unit", "true")] }));
+    expect(importIntoPacket(labelsPath, packet).scaffoldChanged).toBe(false);
+    expect(readFileSync(scaffoldPath, "utf8")).toBe(handFormatted);
+  });
+
   it("refuses labels that match no row unless allowed, writing nothing", () => {
     const labelsPath = join(packet, "labels.json");
     writeFileSync(labelsPath, JSON.stringify({ ...LABELS, items: [...LABELS.items, item("ext:u_gone:A/verbatim", "true")] }));
@@ -202,6 +221,7 @@ describe("import-labels CLI core", () => {
   it("rejects a value flag with no value", () => {
     expect(() => parseArgs(["--out"])).toThrow(/--out needs a value/);
     expect(() => parseArgs(["--packet="])).toThrow(/--packet needs a value/);
+    expect(parseArgs(["--out=/a=b"]).flags.get("out")).toBe("/a=b");
     expect(parseArgs(["a.json", "--force"], ["force"])).toEqual({ flags: new Map([["force", true]]), positional: ["a.json"] });
   });
 });
