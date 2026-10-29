@@ -57,6 +57,7 @@ export interface LabelCoreApi {
   current(state: LabelState): string | null;
   decide(state: LabelState, label: Label, ms: number): LabelState;
   setNote(state: LabelState, id: string, note: string): LabelState;
+  addTime(state: LabelState, ms: number): LabelState;
   undo(state: LabelState): LabelState;
   progress(state: LabelState): { done: number; total: number };
   buildExport(deck: DeckLike, state: LabelState, sessionId: string): LabelsExport;

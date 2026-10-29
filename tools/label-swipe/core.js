@@ -125,6 +125,15 @@
     return { ...state, decisions: { ...state.decisions, [id]: { ...d, note: text } } };
   }
 
+  // Bank time spent on the current card without deciding it (before an undo
+  // moves another card in front of it), so its exported ms stays cumulative.
+  function addTime(state, ms) {
+    const id = current(state);
+    const spent = Math.max(0, Math.round(ms || 0));
+    if (id === null || spent === 0) return state;
+    return { ...state, elapsed: { ...state.elapsed, [id]: (state.elapsed[id] || 0) + spent } };
+  }
+
   // Undo the last decide/requeue: the card returns to the front of the queue.
   function undo(state) {
     const last = state.history[state.history.length - 1];
@@ -228,6 +237,7 @@
     current,
     decide,
     setNote,
+    addTime,
     undo,
     progress,
     buildExport,

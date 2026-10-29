@@ -341,7 +341,9 @@
     if (animating || !session || session.state.history.length === 0) return;
     closeNoteForm();
     hideNoteBar();
-    session = { ...session, state: Core.undo(session.state) };
+    // The card on screen keeps the time already spent on it (none on the end screen).
+    const banked = els.cardScreen.hidden ? session.state : Core.addTime(session.state, elapsed());
+    session = { ...session, state: Core.undo(banked) };
     save();
     toast("Undone");
     render();

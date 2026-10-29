@@ -81,6 +81,15 @@ describe("decision reducer", () => {
     expect(s.decisions["ext:u_a:A/fact-correct"]).toEqual({ label: "true", note: "", ms: 1000, order: 1 });
   });
 
+  it("undo keeps the time already spent on the card that was on screen", () => {
+    let s = Core.decide(ordered(), "true", 100);
+    s = Core.undo(Core.addTime(s, 700)); // 700 ms on the verbatim card, then undo
+    s = Core.decide(s, "true", 50);
+    s = Core.decide(s, "false", 200);
+    expect(s.decisions["ext:u_a:A/verbatim"].ms).toBe(900);
+    expect(Core.addTime(s, 0)).toBe(s);
+  });
+
   it("undo reverses a re-queue", () => {
     let s = Core.decide(ordered(), "unsure", 400);
     s = Core.undo(s);
