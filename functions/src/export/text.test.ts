@@ -119,18 +119,22 @@ describe("line endings and whitespace", () => {
 
 describe("markdown reduction", () => {
   const cases: Array<[string, string]> = [
-    ["**bold** and __strong__", "bold and strong"],
+    // A trailing `__word__` reads as a dunder identifier (`__slots__`), so it keeps its underscores.
+    ["**bold** and __strong__", "bold and __strong__"],
+    ["__strong__ and **bold**", "strong and bold"],
     ["*italic* and _emphasis_", "italic and emphasis"],
-    ["~~struck~~ text", "struck text"],
+    // Plain text has no strikethrough, so the tildes are kept rather than presenting struck text as live.
+    ["~~struck~~ text", "~~struck~~ text"],
     ["uses `inline code`", "uses inline code"],
     ["uses ``code with ` tick``", "uses code with ` tick"],
     ["`**not bold** inside code`", "**not bold** inside code"],
     ["## Heading text", "Heading text"],
-    ["> quoted line", "quoted line"],
-    ["> > nested quote", "nested quote"],
+    // Blockquote and ordered-list markers are kept: `>40%` and `2019.` are claims, not markup.
+    ["> quoted line", "> quoted line"],
+    ["> > nested quote", "> > nested quote"],
     ["- leading list marker", "leading list marker"],
     ["* star list marker", "star list marker"],
-    ["1. numbered marker", "numbered marker"],
+    ["1. numbered marker", "1. numbered marker"],
     ["see [the case study](https://example.com/case)", "see the case study (https://example.com/case)"],
     ['see [docs](https://example.com/d "Title")', "see docs (https://example.com/d)"],
     ["[https://example.com](https://example.com)", "https://example.com"],
@@ -148,6 +152,43 @@ describe("markdown reduction", () => {
 
   it.each(cases)("%j → %j", (input, expected) => {
     expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    [">40% faster onboarding", ">40% faster onboarding"],
+    [">10M users", ">10M users"],
+    ["> 10M daily users served", "> 10M daily users served"],
+    ["2019. B.A. History", "2019. B.A. History"],
+    ["2019. Promoted to Director", "2019. Promoted to Director"],
+    ["2024. Joined X", "2024. Joined X"],
+    ["1999) Founded", "1999) Founded"],
+    ["1984) era", "1984) era"],
+    ["1) Led", "1) Led"],
+    ["+ 12% NRR", "+ 12% NRR"],
+    ["+ 40% net revenue retention", "+ 40% net revenue retention"],
+    ["- 30% cost", "- 30% cost"],
+    ["- $2M saved", "- $2M saved"],
+    ["* 5x throughput", "* 5x throughput"],
+    ["# 1 ranked team", "# 1 ranked team"],
+    ["# 1 ranked app", "# 1 ranked app"],
+    ["ok\n2020. continued", "ok 2020. continued"],
+    ["Led team of 12\n> 5 regions", "Led team of 12 > 5 regions"],
+    ["Cut churn ~~12%~~ **18%**", "Cut churn ~~12%~~ 18%"],
+    ["__init__.py", "__init__.py"],
+    ["__slots__", "__slots__"],
+    ["Python (__call__(), __slots__)", "Python (__call__(), __slots__)"],
+    ["__Python__, Go", "Python, Go"],
+    ["- Led the team", "Led the team"],
+    ["+ Grew revenue", "Grew revenue"],
+    ["## Platform work", "Platform work"],
+  ])("keeps a leading token that can carry a claim: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it("a bullet item that starts with a sign keeps it after the list prefix", () => {
+    const out = renderPlainText(withBullets(["+ 40% net revenue retention", ">10M users"]));
+    expect(out).toContain("\n- + 40% net revenue retention\n");
+    expect(out).toContain("\n- >10M users\n");
   });
 
   it("does not strip characters that are not markup", () => {

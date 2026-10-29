@@ -24,7 +24,12 @@
  *     (never re-sorted or de-duplicated); an item whose text is empty
  *     after markup reduction is skipped, and a section with no lines
  *     emits no heading;
- *   - markdown markup is reduced to plain text, while Unicode passes
+ *   - inline markdown markup (`**`, `*`, `__`, `_`, code spans, links,
+ *     images, autolinks, escapes) is reduced to plain text; at a line start
+ *     only a `#` heading marker, a `-`/`*`/`+` bullet marker (neither when a
+ *     number or sign follows) and a thematic break are removed, and
+ *     blockquote `>`, ordered-list `1.` and strikethrough `~~` are kept as
+ *     typed, so no character that can carry a claim is dropped; Unicode passes
  *     through untouched: em dashes, arrows, curly quotes, accents, CJK
  *     and emoji are kept as typed, with no normalization (the #141
  *     glyph-loss failure must not recur here);
@@ -63,15 +68,31 @@ function sentinelFor(text: string): string {
   throw new InvalidExportContent("Export content item contains too many private-use characters to render.");
 }
 
-/** Strip block-level markup that markdown only recognizes at a line start. */
+/**
+ * A leading token that is content, not a list or heading marker: a number,
+ * a currency sign, a percent sign or another sign. `- 30% cost`,
+ * `+ 12% NRR` and `# 1 ranked` keep their first character.
+ */
+const CONTENT_START = String.raw`[\p{N}\p{Sc}%+\-\u2212.]`;
+const HEADING_MARKER = new RegExp(String.raw`^#{1,6}[ \t]+(?!${CONTENT_START})`, "u");
+const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+(?!${CONTENT_START})`, "u");
+
+/**
+ * Strip the block-level markup that cannot be content, at a line start.
+ *
+ * Zero fabrication: the Application Editor shows an item's text verbatim,
+ * and the validator checked those characters, so only markers that carry
+ * no meaning are removed: a thematic-break line, a `#` heading marker and a
+ * `-`/`*`/`+` bullet marker, and the last two only when the next character
+ * is not a number or sign. Blockquote `>` and ordered-list `1.`/`1)`
+ * markers are kept as typed, because `>40% faster`, `2019. B.A.` and
+ * `1999) Founded` are claims, not markup.
+ */
 function stripBlockMarkup(line: string): string | null {
   const trimmed = line.replace(/^[ \t]+/, "");
   // A thematic break line (---, ***, ___, optionally spaced) carries no text.
   if (/^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(trimmed)) return null;
-  return trimmed
-    .replace(/^(?:>[ \t]?)+/, "")
-    .replace(/^#{1,6}[ \t]+/, "")
-    .replace(/^(?:[-*+]|\d{1,9}[.)])[ \t]+/, "");
+  return trimmed.replace(HEADING_MARKER, "").replace(BULLET_MARKER, "");
 }
 
 /**
@@ -105,9 +126,15 @@ export function plainTextOf(text: string): string {
   // URLs are held too, so emphasis stripping never eats a `_x_` or `*x*` inside one.
   out = out.replace(/<((?:https?:\/\/|mailto:)[^>\s]+)>/gi, (_m, url: string) => hold(url));
   out = out.replace(/https?:\/\/[^\s<>()[\]*]*[^\s<>()[\]*.,;:!?'"]/gi, (url) => hold(url));
-  out = out.replace(/~~(?=\S)(.+?)(?<=\S)~~/g, "$1");
+  // Strikethrough `~~x~~` is kept as typed: plain text has no strikethrough,
+  // and dropping the tildes would present a deleted figure as a live one.
   out = out.replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, "$1");
-  out = out.replace(new RegExp(String.raw`(?<!${W})__(?=\S)(.+?)(?<=\S)__(?!${W})`, "gu"), "$1");
+  // `__x__` is strong emphasis, except a dunder identifier such as
+  // `__init__.py`, `__slots__` or `__call__()` (followed by `.`, `(`, `)` or the
+  // end of the item), which keeps its underscores.
+  out = out.replace(new RegExp(String.raw`(?<!${W})__(?=\S)(.+?)(?<=\S)__(?!${W})`, "gu"), (match: string, inner: string, offset: number, whole: string) =>
+    /^[\p{L}\p{N}_]+$/u.test(inner) && /^(?:[.()]|$)/u.test(whole.slice(offset + match.length)) ? match : inner,
+  );
   // Single-delimiter emphasis only at a non-word boundary, so `5*3*2`,
   // `2 * 3`, `snake_case_name` and `a_b` keep their characters.
   out = out.replace(new RegExp(String.raw`(?<![\p{L}\p{N}*])\*([^\s*](?:[^*]*?[^\s*])?)\*(?![\p{L}\p{N}*])`, "gu"), "$1");

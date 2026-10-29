@@ -153,7 +153,7 @@ Acceptance criteria:
 Export turns a validated résumé into a file someone else can receive (#33). Plain text is built end to end: the server path (#517, #521) and the Application Editor's Export menu (#523). PDF and DOCX are **Target** (#525, #527).
 
 - **Callable.** `exportAsset({ applicationId, assetId, format })` checks the owner, re-checks the export gate on the server (see Validation layer), renders, writes exactly one object at `applications/{applicationId}/{assetId}.{ext}` in the default bucket (re-export overwrites it), and returns a V4 signed URL valid for 5 minutes with the file name, format, content type and expiry. It writes no Firestore data. An unregistered format (`pdf` and `docx` today, `json`, or anything else) is `invalid-argument` before any read.
-- **Renderers.** Each format implements one contract (`functions/src/export/types.ts`) and registers in `functions/src/export/registry.ts`. A renderer changes presentation only; it never adds, drops, reorders or rewrites an item, and it renders exactly the content object the gate checked. Plain text (`functions/src/export/text.ts`) is deterministic: UTF-8 without a byte-order mark, LF line endings, no trailing whitespace, section headings SUMMARY, EXPERIENCE, SKILLS and EDUCATION in the editor's order, items in stored order, Markdown reduced to plain text, and every other character, including em dashes and non-ASCII text, passed through unnormalized.
+- **Renderers.** Each format implements one contract (`functions/src/export/types.ts`) and registers in `functions/src/export/registry.ts`. A renderer changes presentation only; it never adds, drops, reorders or rewrites an item, and it renders exactly the content object the gate checked. Plain text (`functions/src/export/text.ts`) is deterministic: UTF-8 without a byte-order mark, LF line endings, no trailing whitespace, section headings SUMMARY, EXPERIENCE, SKILLS and EDUCATION in the editor's order, items in stored order, inline Markdown (`**`, `*`, `__`, `_`, code spans, links, images, autolinks and escapes) reduced to plain text, and every other character, including em dashes and non-ASCII text, passed through unnormalized. At a line start only a `#` heading marker, a `-`/`*`/`+` bullet marker (neither when a number or sign follows, so `# 1 ranked` and `+ 12% NRR` survive) and a thematic-break line are removed; blockquote `>`, ordered-list `1.`/`1)` and strikethrough `~~` are kept as typed, because the editor shows item text verbatim and `>40% faster` or `2019. B.A.` is a claim, not markup.
 - **File name.** `{Company} — {Title} — Resume.{ext}`, with a real em dash. A missing part is left out rather than filled in (Roles created today have no Company document, so the name is usually `{Title} — Resume.{ext}`). The name travels in a `Content-Disposition: attachment` header carried by the signed URL, with an RFC 5987 `filename*` for the exact UTF-8 name and an ASCII `filename` fallback (`functions/src/export/filename.ts`).
 - **Export menu.** `src/components/ExportMenu.tsx` is a dropdown driven only by its props: the export gate, the format list (always shown in the order PDF, DOCX, Text; only Text today) and the export call. It imports nothing from the Application Editor, so the Package can mount it (#628). While the gate is closed the trigger is disabled with the gate's reason and the re-validate action; there is no client path to the callable. Choosing a format calls `exportAndDownload` (`src/services/export.ts`), which holds a busy lease across the callable and starts the download from the returned URL through an anchor with `download` (only `https:` URLs, or `http:` on a loopback host for the emulator, are followed). The trigger reads "Exporting…" until the call settles. A failure, including the server's `failed-precondition` sentence when its gate re-check refuses, shows inline under the menu, never as a toast, and the menu is usable again at once. The menu is keyboard-operable (Enter, Space or the arrow keys open it; arrows, Home and End move; Enter or Space chooses; Escape closes).
 - **Emulator.** Under the Storage emulator the callable returns the emulator's object URL instead of signing; production always signs. Provisioning and the runtime service account's Storage and signing grants: `DEPLOYMENT.md`.
@@ -162,17 +162,7 @@ Export turns a validated résumé into a file someone else can receive (#33). Pl
 
 - **Full flow (Target, not met).** From a populated Capability Graph, a user can paste a JD and produce a validated, exportable resume in under 20 s at p95. One timed run on matchline-dev took about 88 s of callable time, measured in the browser, to a saved validation verdict, about 4.4× the 20 s figure (n = 1, #619; see Execution targets). One run does not measure the p95; the target is still not met, because JD parsing alone exceeds 20 s (production p95 31.9 s, n = 5). The 236 s p95 from #177 timed résumé extraction through matching in the eval harness, not this flow. Plain-text export is built but was not part of that timed run; PDF and DOCX are not built (#33).
 - **Cost (Target).** Per-application LLM spend (parse + match + generate + validate) is under $1, with a p95 target of $0.75. Per-call cost is attributed by task since #483. One timed run of the full flow cost $0.87 (#619), under the $1 ceiling; a single run does not establish a p95.
-- **Zero fabrication.** Every claim in every exported or sent output
-  traces to an approved Experience Unit. This is an invariant, not a
-  metric. Today it is enforced at the export gate, which requires a
-  passing, server-attested validation for the asset's current content.
-  Plain-text export enforces it twice: the Export menu stays disabled
-  while the gate is closed, and the `exportAsset` callable re-checks
-  the attestation on the server and renders exactly the content it
-  checked, changing presentation only. A freshly generated draft is shown before validation runs
-  (see Validation layer), so it can carry an untraced claim until the
-  user validates it. **Target:** validation completes before generated
-  output is first shown.
+- **Zero fabrication.** Every claim in every exported or sent output traces to an approved Experience Unit. This is an invariant, not a metric. Today it is enforced at the export gate, which requires a passing, server-attested validation for the asset's current content. Plain-text export enforces it twice: the Export menu stays disabled while the gate is closed, and the `exportAsset` callable re-checks the attestation on the server and renders exactly the content it checked, changing presentation only. A freshly generated draft is shown before validation runs (see Validation layer), so it can carry an untraced claim until the user validates it. **Target:** validation completes before generated output is first shown.
 
 ## Data model
 
@@ -606,14 +596,7 @@ that isn't serving the core loop or the pipeline around it.
    Requirements & matches, Package, Process, Correspondence). The
    header details and persistent action bar described in PRD v0.1 were
    never built.
-4. **Application Editor** — two-pane view (output ↔ approved Units),
-   inline traceability annotations, validation flag badges, inline
-   editing with undo, re-run validation, and an Export menu (Text
-   today) that stays disabled, with the gate's reason and the
-   re-validate action, until the export gate passes, and shows export
-   failures inline. **Transitional** (PRD decision 5): the Package tab becomes
-   the home for editing, validation, and export, and any expanded
-   editor is another view of the same package.
+4. **Application Editor** — two-pane view (output ↔ approved Units), inline traceability annotations, validation flag badges, inline editing with undo, re-run validation, and an Export menu (Text today) that stays disabled, with the gate's reason and the re-validate action, until the export gate passes, and shows export failures inline. **Transitional** (PRD decision 5): the Package tab becomes the home for editing, validation, and export, and any expanded editor is another view of the same package.
 5. **Pipeline** — kanban by application stage
    (Saved, Drafting, Applied, Interviewing, Offer, Rejected,
    Withdrawn), with drag-and-drop and arrow-key moves; cards show
