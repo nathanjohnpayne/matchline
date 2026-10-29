@@ -499,6 +499,37 @@ describe("Calibrate container with account decks", () => {
     expect(account.calls.saves).toEqual([0, 2]);
   });
 
+  it("tells the reviewer, in the opened review, when this browser's unsaved labels were replaced", async () => {
+    const account = fakeAccount([deck]);
+    // This browser holds labels on revision 0 that never reached the account,
+    // while another device has moved the account on to revision 1.
+    const accountCopy = { session_id: "s", state: { ...initSession(deck, 1), rev: 2 } };
+    account.sessions.set("demo-cell", { rev: 1, stored: accountCopy, fingerprint: deckFingerprint(deck) });
+    localStorage.setItem(
+      "matchline:calibrate:v1:account:uid-test:demo-cell",
+      JSON.stringify({ ...accountCopy, base_rev: 0, state: { ...accountCopy.state, rev: 5 } }),
+    );
+    render(<Calibrate services={account.services} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Start|Resume/ }));
+    await screen.findByTestId("calibrate-card");
+    expect(screen.getByRole("alert").textContent).toContain("replaced by it");
+  });
+
+  it("keeps a save that lands after an account switch in the scope of the owner who made it", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    let uid = "alice";
+    render(<Calibrate services={{ ...account.services, ownerUid: () => uid, saveAccountSession: slow.save }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    uid = "bob";
+    await slow.land();
+    expect(localStorage.getItem("matchline:calibrate:v1:account:bob:demo-cell")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("matchline:calibrate:v1:account:alice:demo-cell") ?? "{}").base_rev).toBe(0);
+  });
+
   it("names a removed deck instead of calling it a conflict", async () => {
     const account = fakeAccount([deck]);
     render(<Calibrate services={account.services} />);

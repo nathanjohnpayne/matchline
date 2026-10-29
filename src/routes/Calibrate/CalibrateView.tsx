@@ -385,6 +385,11 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           Not saved to your account yet ({saveState.message}). Progress is kept in this browser, and the save completes when the connection returns.
         </p>
       )}
+      {props.loadError && (
+        <p role="alert" className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          {props.loadError}
+        </p>
+      )}
       {locked && (
         <div role="alert" className="mt-2 space-y-2 rounded-md border border-amber-500/50 p-3 text-sm text-amber-700 dark:text-amber-400">
           <p>

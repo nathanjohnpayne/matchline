@@ -155,7 +155,10 @@ export default function Calibrate({
   // latest unsaved session, the decks with a write in flight, and those
   // stopped by a refused write.
   const accountRev = useRef(new Map<string, number>());
-  const pending = useRef(new Map<string, { deck: Deck; stored: StoredSession }>());
+  // Each pending save carries the owner who made it: a save can settle after
+  // a sign-out or an account switch, and its local copy must stay in that
+  // owner's scope.
+  const pending = useRef(new Map<string, { deck: Deck; stored: StoredSession; ownerUid: string | undefined }>());
   const inflight = useRef(new Set<string>());
   const stopped = useRef(new Set<string>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,7 +195,7 @@ export default function Calibrate({
           // state still pending (it descends from the one just written), so a
           // reload before the next write lands resumes it rather than setting it aside.
           const newest = pending.current.get(deckId)?.stored ?? item.stored;
-          saveSession({ ...newest, base_rev: rev }, { ownerUid: services.ownerUid() });
+          saveSession({ ...newest, base_rev: rev }, { ownerUid: item.ownerUid });
           if (pending.current.has(deckId)) flushRef.current();
           else setSaveState(deckId, { kind: "saved" });
         },
@@ -286,7 +289,7 @@ export default function Calibrate({
         if (session === local && local && (!d.session || local.state.rev > d.session.state.rev)) {
           // This browser is ahead of the account (labels saved here, not there
           // yet): send them now rather than waiting for the next decision.
-          pending.current.set(id, { deck: d.deck, stored: { session_id: local.session_id, state: local.state } });
+          pending.current.set(id, { deck: d.deck, stored: { session_id: local.session_id, state: local.state }, ownerUid: services.ownerUid() });
         } else if (session !== local && d.session) {
           // The account copy won: it becomes this browser's copy too, so a
           // replaced set is reported once, not on every reopen.
@@ -374,7 +377,7 @@ export default function Calibrate({
     else saveSession(next);
     setRuns((prev) => prev.map((r, i) => (i === index ? { ...r, session: next } : r)));
     if (run.source === "account") {
-      pending.current.set(deckId, { deck: run.deck, stored: next });
+      pending.current.set(deckId, { deck: run.deck, stored: next, ownerUid: services.ownerUid() });
       setSaveState(deckId, { kind: "saving" });
       schedule(SAVE_DELAY_MS);
     }
@@ -388,7 +391,7 @@ export default function Calibrate({
     const deckId = run.deck.deck_id;
     accountRev.current.set(deckId, state.accountRev);
     stopped.current.delete(deckId);
-    pending.current.set(deckId, { deck: run.deck, stored: run.session });
+    pending.current.set(deckId, { deck: run.deck, stored: run.session, ownerUid: services.ownerUid() });
     flush();
   };
 

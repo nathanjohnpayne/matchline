@@ -952,6 +952,22 @@ describe("rules: calibration field limits", () => {
     await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, fingerprint: "feedbeef:99" }));
   });
 
+  it("removes a deck and its session in one batch, and refuses a batch naming a missing session", async () => {
+    // deleteAccountDeck batches both deletes, and leaves the session out
+    // when there is none: a delete of a missing doc fails the whole batch.
+    await seedDoc("calibrationDecks", "d-1", deck);
+    const ownerDb = db(OWNER_UID);
+    const lonely = writeBatch(ownerDb);
+    lonely.delete(doc(ownerDb, "calibrationSessions", "d-1"));
+    lonely.delete(doc(ownerDb, "calibrationDecks", "d-1"));
+    await assertFails(lonely.commit());
+    await seedDoc("calibrationSessions", "d-1", session);
+    const both = writeBatch(ownerDb);
+    both.delete(doc(ownerDb, "calibrationSessions", "d-1"));
+    both.delete(doc(ownerDb, "calibrationDecks", "d-1"));
+    await assertSucceeds(both.commit());
+  });
+
   it("DENIES a deck id with characters outside the allowed set", async () => {
     await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a/b" }));
     await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_id: "a b" }));

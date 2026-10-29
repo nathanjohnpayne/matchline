@@ -127,4 +127,10 @@ test("a deck can be labelled end to end on a phone-sized screen", async ({ page 
   expect(labels.items).toHaveLength(total);
   expect(labels.items.some((i: { undos: number }) => i.undos > 0)).toBe(true);
   expect(Object.keys(labels).sort()).toEqual(["attention", "deck_id", "items", "seed", "session_id"]);
+
+  // Remove deletes the deck and its labels together (one batch).
+  await page.getByRole("button", { name: "Decks" }).click();
+  await page.getByRole("button", { name: `Remove ${deck.deck_id}` }).click();
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("No decks yet.", { exact: false })).toBeVisible();
 });

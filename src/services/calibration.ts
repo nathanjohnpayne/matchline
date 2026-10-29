@@ -21,7 +21,9 @@
  */
 
 import { FirebaseError } from "firebase/app";
-import { deleteDoc, getDoc, getDocs, query, setDoc } from "firebase/firestore";
+import { getDoc, getDocs, query, setDoc, writeBatch } from "firebase/firestore";
+
+import { getDb } from "../firebase.ts";
 
 import { parseDeck, type Deck } from "../lib/labelDeck/deck.ts";
 import { beginAppBusy } from "../lib/appBusy.ts";
@@ -190,15 +192,22 @@ export async function deleteAccountDeck(deckId: string): Promise<void> {
   const id = docIdFor(getOwnerUidOrThrow(), deckId);
   const release = beginAppBusy("calibration.deleteDeck");
   try {
-    // Session first: a deck with no session is harmless, the reverse is an
-    // orphan. A deck never labelled has no session, and the rules deny
-    // deleting a missing document (permission-denied), so that is skipped.
+    // One batch, so an interrupted removal (offline, timed out) can never
+    // delete the labels and leave the deck, or the reverse. The rules deny
+    // deleting a missing document, so a never-labelled deck's absent session
+    // is left out of the batch; reading a missing one is denied too, which
+    // here just means "none".
+    const sessionRef = typedDoc<SessionDoc>(SESSIONS, id);
+    let hasSession = false;
     try {
-      await withTimeout(deleteDoc(typedDoc<SessionDoc>(SESSIONS, id)), WRITE_TIMEOUT_MS, `Removing the labels of ${deckId}`);
+      hasSession = (await getDoc(sessionRef)).exists();
     } catch (err) {
       if (!isPermissionDenied(err)) throw err;
     }
-    await withTimeout(deleteDoc(typedDoc<DeckDoc>(DECKS, id)), WRITE_TIMEOUT_MS, `Removing ${deckId}`);
+    const batch = writeBatch(getDb());
+    if (hasSession) batch.delete(sessionRef);
+    batch.delete(typedDoc<DeckDoc>(DECKS, id));
+    await withTimeout(batch.commit(), WRITE_TIMEOUT_MS, `Removing ${deckId}`);
   } finally {
     release();
   }
