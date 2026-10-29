@@ -18,6 +18,7 @@
     "ontology:harvest-jd": "tsx scripts/ontology/harvest-jd-vocab.ts",
     "latency:report": "tsx scripts/latency/llm-calls-report.ts",
     "eval:analyze": "tsx tests/eval/analyze.ts",
+    "eval:fixed-inputs": "tsx tests/eval/fixedInputs/run.ts",
     "lint": "eslint .",
     "test:e2e": "scripts/firebase/with-java.sh firebase emulators:exec --only auth,firestore --project demo-matchline-e2e 'playwright test'"
   },

@@ -234,6 +234,52 @@ Versus the incumbent, per metric: the difference of means (mean over the cells b
 
 Power check, for the incumbent: s is the pooled within-cell SD (`sqrt(Σ(n_c−1)s_c² / Σ(n_c−1))`). The half-width at n = 6 samples per cell is `1.96·s/√(2n)`; the report also shows the C-cell form `1.96·s·√(2/(C·n))`, the half-width of an equal-cell-weight difference over C cells, which equals the first at C = 4 (today's labeled corpus). For share metrics it gives the n per cell needed for a ±2.5-point half-width from both forms.
 
+### Fixed-input matching runner (`eval:fixed-inputs`, #648)
+
+**Match-accuracy numbers from this runner are diagnostic until the labels and the owner corrections are reviewed (#636).** Use them to choose bounded fixes, not as measured quality.
+
+The runner holds the matcher's inputs fixed so that representation loss (a labelled Unit or Requirement never reaches the matcher) can be told apart from ranking loss (both reach it and the pair ranks too low). It makes no LLM call: it re-runs matching on Units and Requirements a `--record` run already saved.
+
+```bash
+npm run eval:fixed-inputs -- --records ~/.matchline/eval-records/2a-inc-ext-1 ~/.matchline/eval-records/2a-sonnet55-high-1 \
+  --units gold --requirements gold --scorer current,renormalized,cosine \
+  [--k 24] [--embeddings-cache ~/.matchline/eval-embeddings/embeddings.jsonl] \
+  [--out ~/.matchline/eval-analysis/fixed-inputs-<date>] [--max-usd 0.10] [--dry-run]
+```
+
+- **Conditions.** `--units` and `--requirements` each name the alternative to the recorded side: `record` (the default), `gold`, or an owner-corrected file. For every flow the runner evaluates {record, `--units`} × {record, `--requirements`}, collapsing the duplicates when an alternative is `record`. So `--units gold --requirements gold` gives four conditions, `record/record`, `gold/record`, `record/gold` and `gold/gold` (Units side first).
+- **Gold inputs** are the labels used as inputs. A gold Unit is an `expected_units` entry: its id, `normalized_summary` (also used as `raw_text`), skills, tools and domains, with confidence 1 and no date range, seniority or scope signals, outcomes or metrics. A gold Requirement is an `expected_requirements` entry: its id, text (as `raw_text` and `normalized_requirement`), category and must-have flag (priority `high` for a must-have, else `medium`). **Gold Requirements carry no structure**: no keywords, tools, domains or seniority level, so every structural axis of the scorer is neutral on them. Gold sides map to label ids by identity; record and corrected sides map with `mapUnitIds` / `mapRequirementIds` at the 0.10 floor, as `runForFixture` does.
+- **Matching.** Each condition runs the production `runMatchingPipeline` unchanged, with in-memory `listUnits` / `listRequirements` / `persistBatch` and `asOf` pinned to the flow's `finishedAt`, so recency does not drift with the calendar.
+- **Scorers** (`--scorer`, a comma list; default `current`). `current` is production `score()`. `renormalized` (#433/#601) and `cosine` are **experimental scorers** that live in `tests/eval/fixedInputs/scorers.ts`, are injected through `MatchingDeps.score`, and do not touch `functions/src`. `renormalized` keeps only the axes the pair's `component_applicability` marks applicable and renormalizes the PRD weights over them (0 with none); `cosine` ranks on `confidence × semantic_similarity`. Both keep `score()`'s components, so the rationale generator still runs on real values.
+- **Metric.** Without `--k`, match accuracy exactly as the eval computes it: `topKOverlap` over the label's `expected_top_matches` and k. With `--k N`, recall@N: labelled pairs in the top N over the number of unique labelled pairs, not capped at the label's k.
+- **Output.** A Markdown report on stdout: the plan; a table of condition × scorer per arm (variant label), with the equal-cell-weight mean (mean of cell means, the `eval:analyze` convention); the same per cell; and the decomposition of labelled pairs, each of which is found (in the window) or missed for one reason: **A** Unit missing (no input Unit mapped to its Unit label; A∧B also lacks the Requirement), **B** Requirement missing (Unit mapped, Requirement label not), **C** ranking (both mapped, ranked below the window, with the median rank). found + A + B + C = the labelled pairs. FP counts window entries that are not labelled pairs, and how many have an unmapped side. Without `--k`, a last table compares `record/record` under the current scorer with the match accuracy and match count each flow recorded; a mismatch there comes from embedding jitter (the API returns slightly different vectors for one text in different batches, which can flip a pair at the window boundary). `--out <dir>` also writes `fixed-inputs.json` (every flow × condition × scorer with its decomposition, the plan, the spend and the corrections) and `report.md`. The directory is refused inside the repository (the `--record` check) and when it already holds either file.
+- **Skipped flows.** Flows that saved no Units or no Requirements (an upstream stage failed) and flows whose cell has no labels under `tests/fixtures/` are skipped and counted in the plan.
+- **Not reproduced.** The diagnostic's fifth condition (gold Requirement text on parsed structure) and its strict 0.5/0.3 mapping view are not part of this runner.
+
+#### Embeddings, cache and spend
+
+The only paid call is embedding texts the cache does not hold (`text-embedding-3-small`, through the production `embedMany`).
+
+- The cache is an append-only JSONL file, by default `~/.matchline/eval-embeddings/embeddings.jsonl` (`--embeddings-cache` overrides it; a path inside the repository is refused). Each line is `{"v":1,"model":...,"sha256":<hex of the UTF-8 text>,"dims":...,"vector":[...]}`: keyed by model and text hash, with no text stored. The same text across flows, arms and runs is embedded once, so a repeated run spends nothing and a changed correction re-embeds only what changed. On a duplicate key the first line wins.
+- The run prices the uncached texts before any request (characters / 4 × 1.35 tokens, at the `rates.ts` price) and refuses, without building a client, when the estimate exceeds `--max-usd` (default $0.10). While embedding, it checks the bound again before each request of up to 256 texts and appends each request's vectors as soon as they return, so an interrupted run keeps what it paid for. Usage is priced locally and never written to Firestore.
+- `--dry-run` prints the plan (flows, conditions, scorers, distinct, cached and uncached texts, estimated tokens and USD, the cache path, the corrections) and exits 0 without constructing a client.
+- With uncached texts and no `OPENAI_API_KEY` the run refuses (exit 1). A fully cached run needs no key at all.
+
+Exit codes: 0 done (or a dry run); 1 refused (over `--max-usd`, no key for uncached texts, or a corrections file the manifest does not list); 2 usage error, an in-repo path, or a crash.
+
+#### Owner-corrected inputs
+
+`--units <file.json>` and `--requirements <file.json>` take an owner-filled calibration scaffold (`corrections/<cell>.json`: one flow's saved Units and Requirements with `owner_verdict` and the corrected fields). The flags may repeat, one file per cell; one file can serve both sides.
+
+- **Named by hash.** A file is accepted only when the sha256 of its bytes is listed in the frozen manifest `tests/eval/fixedInputs/corrections-manifest.json` (`{"version":1,"entries":[{"sha256","name","cell"}]}`), with the cell the file is for. The manifest ships empty: each corrected set is added in a reviewed commit, and a listed file is never edited (an edit is a new set with a new hash). An unlisted file is refused with its computed hash. The run prints each set's name and hash.
+- **Verdicts.** Units take `keep`, `fix`, `drop` or `add`; Requirements take `keep`, `fix` or `drop`. Every item on a side in use needs a non-null verdict, and every saved item of the source flow must be listed. `keep` must equal the saved item. A Unit `fix` takes `owner_corrected_raw_text` as `raw_text` plus any in-place edits (`normalized_summary`, which is what the matcher embeds, and `skills`). A Requirement `fix` takes `owner_corrected_text` as `normalized_requirement` and `owner_must_have` as `must_have`, plus in-place edits. A `fix` must change something. An `add` Unit needs `raw_text`, `normalized_summary` and `skills`, gets the id `added_<n>`, and takes the gold-Unit constants for every field it does not set. The owner-review fields (`owner_*` other than `owner_uid`) are stripped, and the result maps to labels like any record side.
+- **Source flow.** The scaffold names no invocation or arm (that is sealed in the packet's `KEY.json`, which the runner never reads). The source flow is the one flow in `--records` for the file's cell whose saved ids include every non-added id in the file; zero or several are refused. A corrections run evaluates only the source flows, so its `record` side is the flow the scaffold came from. When both sides are corrected they must cover the same cells and resolve to the same flow.
+- **Provenance.** The report lists, per corrected side, the ids kept, fixed (with the fields that changed), dropped and added, and each Requirement text or must-have override. `fixed-inputs.json` holds the same.
+
+#### Validating offline
+
+`tests/eval/fixedInputs/diagnosticReproduction.test.ts` reproduces the read-only matching diagnostic from its saved vectors without a request. It is skipped unless `MATCHLINE_DIAG_EMBEDDINGS` (the diagnostic's `emb-all.json`) and `MATCHLINE_DIAG_RECORDS` (the directory holding `2a-inc-ext-1/` and `2a-sonnet55-high-1/`) are set. It seeds a cache first-wins in the diagnostic's order (incumbent flows, Sonnet flows, gold texts) and checks incumbent 22.6, Sonnet 5.5 high 20.1 and gold + gold 0.3125 (90 of 288 pairs, which the diagnostic printed as 31.2) with the current scorer.
+
 ### Fit-brief eval — private corpus (#495 Phase 3)
 
 `npm run eval:fit-brief` generates a fit brief for each job description in a **private** corpus and scores it against the brief the owner wrote and approved for that role. The corpus is the owner's real job search, and this repository is public, so the harness enforces three rules:
@@ -357,6 +403,7 @@ tests/eval/
 ├── recorder.ts        --record: writes invocation.json + flows.jsonl
 ├── analyze.ts         eval:analyze CLI
 ├── analysis/          pure: metrics, statistics, arm comparison for eval:analyze
+├── fixedInputs/       eval:fixed-inputs: matcher on fixed record/gold/corrected inputs (#648)
 ├── fitBrief/          private-corpus fit-brief eval (#495)
 ├── loadFixtures.ts    typed fixture-file readers (#136)
 ├── mapping.ts         runtime UUID → labeler mnemonic (#136)
