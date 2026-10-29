@@ -37,10 +37,11 @@ import {
 } from "../../functions/src/llm/config.ts";
 import { priceFor } from "../../functions/src/llm/cost.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
+import { clearPromptVersionOverrides, setPromptVersionOverrides } from "../../functions/src/prompts/loader.ts";
 
 import { StageCache } from "./cache.ts";
 import { cacheKey } from "./cache.ts";
-import { loadResumeText } from "./loadFixtures.ts";
+import { loadJdText, loadResumeText } from "./loadFixtures.ts";
 import {
   describeError,
   EXTRACTION_ONLY_JD_ID,
@@ -170,6 +171,45 @@ describe("promptFingerprint", () => {
     expect(promptFingerprint("extraction", "resume")).not.toBe(
       promptFingerprint("parsing", "jd"),
     );
+  });
+
+  // #656: a parsing/jd=v2 run must never be read as comparable with, or
+  // served from, a v1 run. Both the version label and the content hash
+  // change, so the stage-cache key and the recorded fingerprint do too.
+  describe("parsing/jd v2 (#656)", () => {
+    afterEach(() => clearPromptVersionOverrides());
+
+    it("changes with the version, in both the label and the hash", () => {
+      const v1 = promptFingerprint("parsing", "jd");
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      const v2 = promptFingerprint("parsing", "jd");
+      expect(v1).toMatch(/^v1:[0-9a-f]{16}$/);
+      expect(v2).toMatch(/^v2:[0-9a-f]{16}$/);
+      expect(v2.slice(3)).not.toBe(v1.slice(3));
+      expect(promptFingerprint("parsing", "jd")).toBe(v2);
+    });
+
+    it("leaves the extraction fingerprint alone", () => {
+      const before = promptFingerprint("extraction", "resume");
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      expect(promptFingerprint("extraction", "resume")).toBe(before);
+    });
+
+    it("gives the parsing stage a different cache key", () => {
+      const key = (): string =>
+        cacheKey({
+          stage: "requirement_parsing",
+          provider: "anthropic",
+          model: modelFor("requirement_parsing").model,
+          promptVersion: promptFingerprint("parsing", "jd"),
+          input: "JD text",
+        });
+      const v1 = key();
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      expect(key()).not.toBe(v1);
+      clearPromptVersionOverrides();
+      expect(key()).toBe(v1);
+    });
   });
 
   // Codex P2 round 4. The section boundary must be forgeable by
@@ -810,6 +850,44 @@ describe("runForFixture", () => {
       // Two embedding entries: one for the Unit texts, one for the
       // Requirement texts.
       expect(entriesIn("embedding")).toHaveLength(2);
+    });
+
+    it("a parsing/jd=v2 run misses the v1 parsing entry and writes its own (#656)", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const pair = { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" };
+      const entriesIn = (stage: string): string[] => readdirSync(join(cacheDir, stage)).sort();
+      try {
+        await runForFixture(pair, {
+          anthropicClient: makeMockAnthropic([extraction, parsing]),
+          openaiClient: makeMockOpenAi(),
+          cache: new StageCache({ dir: cacheDir }),
+        });
+        const v1Entries = entriesIn("requirement_parsing");
+        expect(v1Entries).toHaveLength(1);
+
+        setPromptVersionOverrides({ "parsing/jd": "v2" });
+        const v2Anthropic = makeMockAnthropic([parsing]);
+        const v2 = await runForFixture(pair, {
+          anthropicClient: v2Anthropic,
+          openaiClient: makeMockOpenAi(),
+          cache: new StageCache({ dir: cacheDir }),
+        });
+        expect(v2.ok).toBe(true);
+        // Extraction is replayed; parsing is not, because its key changed.
+        expect(v2Anthropic.messages.create).toHaveBeenCalledTimes(1);
+        const body = vi.mocked(v2Anthropic.messages.create).mock.calls[0]![0] as { system: string };
+        expect(body.system).toContain("One Unit per ask.");
+        const v2Key = cacheKey({
+          stage: "requirement_parsing",
+          provider: modelFor("requirement_parsing").provider,
+          model: modelFor("requirement_parsing").model,
+          promptVersion: promptFingerprint("parsing", "jd"),
+          input: loadJdText("google-compute-spm-2026"),
+        });
+        expect(entriesIn("requirement_parsing")).toEqual([...v1Entries, `${v2Key}.json`].sort());
+      } finally {
+        clearPromptVersionOverrides();
+      }
     });
 
     /**

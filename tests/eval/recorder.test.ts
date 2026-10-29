@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearEffortOverrides, clearModelOverrides, modelFor, setEffortOverrides } from "../../functions/src/llm/config.ts";
 import type { UsageRecord } from "../../functions/src/llm/cost.ts";
 import { profileFor } from "../../functions/src/llm/modelProfile.ts";
+import { clearPromptVersionOverrides } from "../../functions/src/prompts/loader.ts";
 
 import { repoRoot } from "./fitBrief/corpus.ts";
 import { parseFlowsJsonl } from "./flowRecord.ts";
@@ -67,6 +68,7 @@ afterEach(() => {
   rmSync(base, { recursive: true, force: true });
   clearEffortOverrides();
   clearModelOverrides();
+  clearPromptVersionOverrides();
 });
 
 /** Hermetic git: no global or system config, and no repository inherited from a hook environment. */
@@ -391,6 +393,46 @@ describe("captureStageConfig / describeVariants", () => {
       {},
     );
     expect(sweep[0]).toMatchObject({ label: "h", tokenSource: "api", requested: { efforts: { extraction: "low" } } });
+  });
+});
+
+describe("recording a parsing/jd=v2 arm (#656)", () => {
+  const ARM: SweepVariant = {
+    label: "jd-haiku55-med-v2",
+    models: { requirement_parsing: { provider: "anthropic", model: "claude-haiku-5-5" } },
+    efforts: { requirement_parsing: "medium" },
+    promptVersions: { "parsing/jd": "v2" },
+  };
+
+  it("records v2 and its fingerprint for requirement parsing while the arm runs, and v1 outside it", async () => {
+    const outside = captureStageConfig("api").requirement_parsing!;
+    expect(outside).toMatchObject({ promptVersion: "v1" });
+    let inside: ReturnType<typeof captureStageConfig> | undefined;
+    await runVariant(ARM, {
+      runCorpus: async () => {
+        inside = captureStageConfig("api");
+        return [result("r1", "j1")];
+      },
+    });
+    expect(inside!.requirement_parsing).toMatchObject({
+      model: "claude-haiku-5-5",
+      effortSent: "medium",
+      promptVersion: "v2",
+    });
+    expect(inside!.requirement_parsing!.promptFingerprint).toMatch(/^v2:[0-9a-f]{16}$/);
+    expect(inside!.requirement_parsing!.promptFingerprint).not.toBe(outside.promptFingerprint);
+    // Extraction keeps its own prompt.
+    expect(inside!.extraction!.promptFingerprint).toBe(captureStageConfig("api").extraction!.promptFingerprint);
+    // The override is gone once the arm finishes.
+    expect(captureStageConfig("api").requirement_parsing).toMatchObject({ promptVersion: "v1" });
+  });
+
+  it("puts the requested prompt version in the arm's invocation description", () => {
+    const [arm] = describeVariants([ARM], "api", {});
+    expect(arm).toMatchObject({
+      label: "jd-haiku55-med-v2",
+      requested: { promptVersions: { "parsing/jd": "v2" }, efforts: { requirement_parsing: "medium" } },
+    });
   });
 });
 

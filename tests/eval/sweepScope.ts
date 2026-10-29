@@ -14,6 +14,7 @@
 
 import { VALIDATION_STAGES, type ModelConfig, type Stage } from "../../functions/src/llm/config.ts";
 import { profileFor, type Effort } from "../../functions/src/llm/modelProfile.ts";
+import { JD_PARSING_SCHEMA_VERSIONS } from "../../functions/src/parsing/jdResponseSchema.ts";
 import { PROMPT_CONFIG } from "../../functions/src/prompts/config.ts";
 
 export type SweepSuite = "corpus" | "validation" | "generation";
@@ -35,6 +36,14 @@ export interface SweepScope {
    * imports statically (see `assertPromptSchemasCompatible`).
    */
   readonly wiredSchemaVersion: Readonly<Record<string, string>>;
+  /**
+   * Prompt versions whose module picks the schema by the resolved
+   * version instead of importing one statically, per key (#656:
+   * `parsing/jd`, through `functions/src/parsing/jdResponseSchema.ts`).
+   * A version listed here is validated against its own schema, so the
+   * wired-schema comparison does not apply to it.
+   */
+  readonly dispatchedSchemaVersions?: Readonly<Record<string, readonly string[]>>;
 }
 
 function scope(s: SweepScope): SweepScope {
@@ -43,6 +52,13 @@ function scope(s: SweepScope): SweepScope {
     stages: Object.freeze([...s.stages]),
     promptKeys: Object.freeze([...s.promptKeys]),
     wiredSchemaVersion: Object.freeze({ ...s.wiredSchemaVersion }),
+    ...(s.dispatchedSchemaVersions !== undefined && {
+      dispatchedSchemaVersions: Object.freeze(
+        Object.fromEntries(
+          Object.entries(s.dispatchedSchemaVersions).map(([k, v]) => [k, Object.freeze([...v])]),
+        ),
+      ),
+    }),
   });
 }
 
@@ -76,6 +92,7 @@ export const SWEEP_SCOPES: Readonly<Record<SweepSuite, SweepScope>> = Object.fre
     stages: ["extraction", "requirement_parsing"],
     promptKeys: ["extraction/resume", "parsing/jd"],
     wiredSchemaVersion: { "extraction/resume": "v1", "parsing/jd": "v1" },
+    dispatchedSchemaVersions: { "parsing/jd": JD_PARSING_SCHEMA_VERSIONS },
   }),
   validation: scope({
     suite: "validation",

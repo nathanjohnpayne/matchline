@@ -15,7 +15,16 @@ import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 
 import { StageCache } from "./cache.ts";
 import { buildFlowRecord } from "./flowRecord.ts";
-import { newFlowTrace, traceEnterStep, traceFailure, traceStepDone, traceStepFor, traceValue } from "./flowTrace.ts";
+import {
+  newFlowTrace,
+  traceAttemptFailure,
+  traceEnterStep,
+  traceFailure,
+  traceStepDone,
+  traceStepFor,
+  traceValue,
+  type FlowTrace,
+} from "./flowTrace.ts";
 import { runForFixture } from "./runForFixture.ts";
 
 interface Step {
@@ -152,6 +161,29 @@ describe("flowTrace helpers", () => {
     }
     expect(() => traceFailure(undefined, new Error("x"))).not.toThrow();
   });
+
+  it("keeps a reported attempt failure's step, attempt, kind and issue codes and paths only (#656)", () => {
+    const t = newFlowTrace();
+    const issue = { code: "invalid_value", path: ["requirements", 1, "category"], message: "model text" };
+    traceAttemptFailure(t, "requirement_parsing", { attempt: 0, kind: "schema_error", issues: [issue] });
+    traceAttemptFailure(t, "requirement_parsing", { attempt: 1, kind: "no_tool_use" });
+    traceAttemptFailure(t, "requirement_parsing", { attempt: 2, kind: "schema_error", issues: [] });
+    expect(t.attemptFailures).toEqual([
+      { step: "requirement_parsing", attempt: 0, kind: "schema_error", issues: [{ code: "invalid_value", path: ["requirements", 1, "category"] }] },
+      { step: "requirement_parsing", attempt: 1, kind: "no_tool_use" },
+      { step: "requirement_parsing", attempt: 2, kind: "schema_error" },
+    ]);
+    // A copy: later changes to the caller's path do not reach the trace.
+    issue.path.push("x");
+    expect(t.attemptFailures![0]!.issues![0]!.path).toEqual(["requirements", 1, "category"]);
+  });
+
+  it("is a no-op without a trace, or on a trace built without the attempt-failure list", () => {
+    expect(() => traceAttemptFailure(undefined, "requirement_parsing", { attempt: 0, kind: "schema_error" })).not.toThrow();
+    const bare: FlowTrace = { calls: [], stepCacheHits: {} };
+    traceAttemptFailure(bare, "requirement_parsing", { attempt: 0, kind: "schema_error" });
+    expect(bare.attemptFailures).toBeUndefined();
+  });
 });
 
 describe("runForFixture with a trace (--record hook)", () => {
@@ -241,6 +273,32 @@ describe("runForFixture with a trace (--record hook)", () => {
     expect(rec.failures).toEqual([expect.objectContaining({ kind: "refusal", attempt: 0 })]);
   });
 
+  it("records a recovered JD parsing schema failure's codes and paths on the call that failed (#656)", async () => {
+    const trace = newFlowTrace();
+    const outOfEnum = { requirements: [{ ...REQ, category: "education" }, REQ] };
+    const result = await runForFixture(INPUT, {
+      anthropicClient: mockAnthropic([{ input: EXTRACTION }, { input: outOfEnum }, { input: PARSING }]),
+      openaiClient: mockOpenAi(),
+      trace,
+    });
+    expect(result.ok).toBe(true);
+    const rec = buildFlowRecord(CTX, result, trace);
+    // The stage recovered, so nothing was thrown and no failures array kept...
+    expect(rec.failures).toBeNull();
+    // ...but the failed attempt's call still carries its kind, code and path.
+    const parsing = rec.calls.filter((c) => c.step === "requirement_parsing");
+    expect(parsing.map((c) => c.attempt)).toEqual([0, 1]);
+    expect(parsing[0]).toMatchObject({
+      failureKind: "schema_error",
+      issues: [{ code: "invalid_value", path: ["requirements", 0, "category"] }],
+    });
+    expect(parsing[1]!.failureKind).toBeUndefined();
+    expect(parsing[1]!.issues).toBeUndefined();
+    // No other step's call is tagged, and no model output is copied.
+    expect(rec.calls.filter((c) => c.failureKind !== undefined)).toHaveLength(1);
+    expect(JSON.stringify(rec.calls)).not.toContain("education");
+  });
+
   it("charges a throw in matching to matching, not to the last embedding call", async () => {
     const trace = newFlowTrace();
     const result = await runForFixture(INPUT, {
@@ -303,6 +361,28 @@ describe("runForFixture with a trace (--record hook)", () => {
       });
       expect(warm.units).toHaveLength(2);
       expect(warm.requirements).toHaveLength(2);
+    });
+
+    it("tags only the live run's failed attempt; a warm replay runs no attempt and tags nothing (#656)", async () => {
+      const outOfEnum = { requirements: [{ ...REQ, category: "education" }] };
+      const run = (trace: FlowTrace, steps: readonly Step[]) =>
+        runForFixture(INPUT, {
+          anthropicClient: mockAnthropic(steps),
+          openaiClient: mockOpenAi(),
+          cache: new StageCache({ dir }),
+          trace,
+        });
+      const cold = newFlowTrace();
+      await run(cold, [{ input: EXTRACTION }, { input: outOfEnum }, { input: PARSING }]);
+      expect(cold.attemptFailures).toHaveLength(1);
+
+      const warm = newFlowTrace();
+      const result = await run(warm, []);
+      expect(result.ok).toBe(true);
+      expect(warm.attemptFailures).toEqual([]);
+      const rec = buildFlowRecord(CTX, result, warm);
+      expect(rec.calls.filter((c) => c.step === "requirement_parsing").map((c) => c.replayed)).toEqual([true, true]);
+      expect(rec.calls.some((c) => c.failureKind !== undefined || c.issues !== undefined)).toBe(false);
     });
   });
 });

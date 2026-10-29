@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { VALIDATION_STAGES } from "../../functions/src/llm/config.ts";
 
+import { JD_PARSING_SCHEMA_VERSIONS } from "../../functions/src/parsing/jdResponseSchema.ts";
 import { PROMPT_CONFIG } from "../../functions/src/prompts/config.ts";
 
 import { loadClassifier } from "./subtasks/instrument.ts";
@@ -20,6 +21,22 @@ describe("SWEEP_SCOPES", () => {
     expect(SWEEP_SCOPES.corpus.stages).toEqual(SWEEPABLE_STAGES);
     expect(SWEEP_SCOPES.corpus.promptKeys).toEqual(SWEEPABLE_PROMPT_KEYS);
     expect(SWEEP_SCOPES.corpus.wiredSchemaVersion).toEqual({ "extraction/resume": "v1", "parsing/jd": "v1" });
+  });
+
+  it("lets JD parsing pick its schema by version, and no other key (#656)", () => {
+    expect(SWEEP_SCOPES.corpus.dispatchedSchemaVersions).toEqual({ "parsing/jd": ["v1", "v2"] });
+    expect(SWEEP_SCOPES.corpus.dispatchedSchemaVersions?.["parsing/jd"]).toEqual([...JD_PARSING_SCHEMA_VERSIONS]);
+    expect(Object.isFrozen(SWEEP_SCOPES.corpus.dispatchedSchemaVersions)).toBe(true);
+    expect(Object.isFrozen(SWEEP_SCOPES.corpus.dispatchedSchemaVersions?.["parsing/jd"])).toBe(true);
+    expect(SWEEP_SCOPES.validation.dispatchedSchemaVersions).toBeUndefined();
+    expect(SWEEP_SCOPES.generation.dispatchedSchemaVersions).toBeUndefined();
+  });
+
+  it("has a prompt file and a schema file for every dispatched JD parsing version", () => {
+    for (const version of SWEEP_SCOPES.corpus.dispatchedSchemaVersions!["parsing/jd"]!) {
+      expect(existsSync(join(PROMPTS_ROOT, "parsing", `jd.${version}.md`)), version).toBe(true);
+      expect(existsSync(join(PROMPTS_ROOT, "parsing", `jd.${version}.schema.ts`)), version).toBe(true);
+    }
   });
 
   it("scopes the validation suite to the three subtasks", () => {

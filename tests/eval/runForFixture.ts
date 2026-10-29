@@ -47,7 +47,10 @@ import {
 import { embedMany } from "../../functions/src/llm/embeddings.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 import { runMatchingPipeline } from "../../functions/src/matching/pipeline.ts";
-import { parseJobRequirements } from "../../functions/src/parsing/jd.ts";
+import {
+  parseJobRequirements,
+  type JdAttemptFailureNotice,
+} from "../../functions/src/parsing/jd.ts";
 import type { PromptName, PromptStage } from "../../functions/src/prompts/config.ts";
 import { loadPromptText, resolvePromptVersion } from "../../functions/src/prompts/loader.ts";
 import type {
@@ -59,6 +62,7 @@ import type {
 import { StageCache, sumUsageCost, type CacheKeyInput } from "./cache.ts";
 // --record hook (per-flow recorder): see flowTrace.ts.
 import {
+  traceAttemptFailure,
   traceCacheOutcome,
   traceCall,
   traceEnterStep,
@@ -667,7 +671,16 @@ async function runForFixtureInner(
       parseJobRequirements(
         jdText,
         { ownerUid: EVAL_OWNER_UID, roleId: EVAL_ROLE_ID },
-        { client: deps.anthropicClient, record },
+        {
+          client: deps.anthropicClient,
+          record,
+          // --record hook (#656): keep each failed attempt's kind and Zod
+          // issue codes and paths, including attempts a retry recovered.
+          ...(tally.trace !== undefined && {
+            onAttemptFailure: (failure: JdAttemptFailureNotice) =>
+              traceAttemptFailure(tally.trace, "requirement_parsing", failure),
+          }),
+        },
       ),
   );
 

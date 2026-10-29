@@ -206,11 +206,12 @@ Use `--no-cache` (or `--samples` above 1, which bypasses the cache) when the rec
 
 #### Derived per-call fields
 
-The pipeline does not expose a stop reason per call (extraction and JD parsing record usage before inspecting `stop_reason`, and `UsageRecord` has no field for it), and this harness does not change `functions/src`. Each recorded call therefore carries flags derived from what is recorded:
+The pipeline does not expose a stop reason per call (extraction and JD parsing record usage before inspecting `stop_reason`, and `UsageRecord` has no field for it), and the harness adds no stop-reason field to `functions/src`. #656 changed two things there: `parsing/jd.ts` picks its schema by prompt version, and it gained an optional per-attempt failure hook (`onAttemptFailure`) that only the harness passes. Nothing else in the call path changed, and production's request is the same. Each recorded call therefore carries flags derived from what is recorded:
 
 - `truncated`: `maxTokens` is set and `outputTokens >= maxTokens`, or the stage's thrown `failures` list a `max_tokens_exceeded` at that attempt.
 - `retry`: `attempt > 0`. A transport error records no usage but advances `attempt`, so the call after it counts as a retry.
 - `refusal`: the failing stage's `failures` list a `refusal` at that attempt. A stage throws `failures` only when it gives up, so a recovered failure (for example a truncated attempt followed by a good one) is visible through `truncated`/`retry`, not through `failures`.
+- `failureKind` and `issues` (JD parsing only, #656): set on a live `requirement_parsing` call whose attempt failed, whether or not a later attempt recovered. `failureKind` is the attempt's failure kind (`schema_error`, `no_tool_use`, `max_tokens_exceeded`, `refusal`). `issues` lists each Zod issue's `code` and `path`, with no message, expected value or model output. They come from the stage's `onAttemptFailure` hook, which runs for every failed attempt, so recovered schema failures are classifiable without a thrown `failures` array. A transport error records no call, so it is tagged nowhere; it still shows as the gap in the attempt sequence. A call replayed from the stage cache is never tagged, because a replay runs no attempt. Records written before #656 have neither field.
 - There is no reasoning-token field: Anthropic counts thinking inside `outputTokens`.
 
 ### Comparing arms (`eval:analyze`)
@@ -235,6 +236,56 @@ Metrics:
 Versus the incumbent, per metric: the difference of means (mean over the cells both arms hold of candidate minus incumbent cell means); a 95% percentile CI from a stratified bootstrap (10,000 resamples, each arm resampled with replacement within each cell, seeded; blank when any common cell has fewer than two values in either arm, since a single value is redrawn unchanged every resample and would narrow the interval, so the CI and the p-value below are blank together); a two-sided stratified Welch t p-value on the same equal-cell-weight difference (`D = (1/C)·Σ_c (m_cand,c − m_inc,c)`, `se² = (1/C²)·Σ_c (s²_cand,c/n_cand,c + s²_inc,c/n_inc,c)`, Welch–Satterthwaite df over the 2C variance components; blank when any common cell has fewer than two values in either arm), so the p-value and the CI test the printed difference rather than a pooled, cell-mix-dependent one; per-cell differences and the number of cells where the candidate is ahead. Guard `ran-cell-no-values`: when a cell both arms ran (any flow) has values for a metric in one arm only (for example every candidate flow in it refused), the difference, CI and p-value for that metric print as unavailable (—) instead of being computed on the remaining cells, which would favour the arm that produced nothing in a hard cell; the row's "failed guards" column names the guard and the cell, and a warning says which arm has no values. A cell with no values in either arm is left out with a warning but fails no guard, since that treats both arms alike.
 
 Power check, for the incumbent: s is the pooled within-cell SD (`sqrt(Σ(n_c−1)s_c² / Σ(n_c−1))`). The half-width at n = 6 samples per cell is `1.96·s/√(2n)`; the report also shows the C-cell form `1.96·s·√(2/(C·n))`, the half-width of an equal-cell-weight difference over C cells, which equals the first at C = 4 (today's labeled corpus). For share metrics it gives the n per cell needed for a ±2.5-point half-width from both forms.
+
+### JD parsing prompt v2 (`parsing/jd=v2`, #656)
+
+`functions/src/prompts/parsing/jd.v2.md` is an eval-only revision of the JD parsing prompt. Production keeps `jd.v1.md` (`PROMPT_CONFIG.parsing.jd` is `v1`, and `jd.v1.*` is unchanged). Labels and scorers are unchanged.
+
+**Why.** In round 2b of #495, `claude-haiku-5-5` at effort medium beat the incumbent on requirement-set accuracy (+6.7 points) at about a fifth of the parsing cost. It failed two checks: rule 1, because 7 of 23 first attempts failed schema validation (6 of those 7 also failed the second attempt, so 13 retry calls in all, and every flow recovered on the third), and the precision guard (−5.3 points), with more parsed Requirements and fewer must-haves per JD. All 13 failed attempts are `schema_error`. Tool choice is forced, nothing was truncated or refused, and the attempt sequence has no transport gap. The failures cluster on one JD: one of the four public cells failed 6 of 6 first attempts, a second cell 1 of 6, and the other two none. Their Zod paths and codes were not recorded. Before #656 a flow kept `failures[].zodIssues` only when its stage threw, and every one of these flows recovered. Recovered attempts now record their codes and paths (`failureKind` and `issues` in "Derived per-call fields"), but the 2b records cannot be read again for them. The recovery pattern is indirect evidence, though. One of 7 attempts recovered after the generic reminder, and all 6 recovered after the reminder that names field types and enum values. That points to an out-of-enum value or a wrong field type, not to unknown or missing keys.
+
+**What v2 changes.** Only the System text. The few-shot and the response schema are v1's: `jd.v2.schema.ts` re-exports the v1 shapes. The System gains:
+
+- an explicit statement that `category` is one of exactly seven strings, with a home for a degree (`credential`) and for a practical condition such as travel (`skill`);
+- a must-have definition line for items under a plain qualifications header;
+- the six `seniority_level` values, with an instruction to leave the field out rather than send `null` or `""`;
+- a field-type rule covering every key;
+- a granularity rule: one Unit per stated ask, usually one per bullet; a bullet whose two sentences each state their own ask gives one Unit per sentence, and an ask is never split because it lists several examples or tools;
+- a note that the few-shot is abbreviated and omits one responsibility bullet, so the example is not read as permission to skip an ask.
+
+**How it is selected.** Use a variant clause `prompt.parsing/jd=v2` or a command-wide `--prompt parsing/jd=v2`. `parseJobRequirements` builds its tool schema from the schema of the version it loaded, and validates against that same schema (`functions/src/parsing/jdResponseSchema.ts`). An unregistered version throws before any request. The corpus scope lists the dispatched versions (`dispatchedSchemaVersions`), so the schema pre-flight accepts v2 and refuses any unregistered `parsing/jd` version before a token is spent, even one whose schema file is byte-identical to v1's or absent, because the stage would throw on it.
+
+**What the records show.** Every v2 call records `promptVersion: "parsing/jd.v2"`. Each flow's `stages.requirement_parsing` records `promptVersion: "v2"` and a `promptFingerprint` of the form `v2:<hash>`. `invocation.json` records the requested and resolved prompt versions for each arm. The stage-cache key includes the fingerprint, so a v2 run never reads or overwrites a v1 entry, and v1 and v2 runs are never comparable by accident. `STAGE_IMPL_VERSION` does not move, because v1's request is byte-for-byte unchanged.
+
+**Re-run plan (not run; project it on #495 and get owner approval first).** Haiku 5.5 at effort medium, over the four labelled public cells × 6 samples. As in 2b, that is two invocations of `--samples 3`. Each invocation runs two arms on the same HEAD: v2, and v1 as a same-HEAD control. The v1 arm is what lets the run classify v1's failures by schema path and Zod code, which the 2b records cannot do. The ticket estimates about $4 for the v2 arm alone, so both arms come to about $8. The projection guard prints the exact figure before the run starts. If only the v2 arm is approved, v1's failure classification stays open and the report must say so.
+
+```bash
+npm run eval -- --full --samples 3 --token-source api --record ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-1 \
+  --variant 'jd-haiku55-med-v1:model.requirement_parsing=claude-haiku-5-5,effort.requirement_parsing=medium,prompt.parsing/jd=v1' \
+  --variant 'jd-haiku55-med-v2:model.requirement_parsing=claude-haiku-5-5,effort.requirement_parsing=medium,prompt.parsing/jd=v2'
+# ...then the same command again with a -2 record directory.
+
+npm run eval:analyze -- --task jd \
+  --records <2b incumbent record dirs> ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-1 ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-2 \
+  --incumbent <2b incumbent label> --candidates jd-haiku55-med-v1,jd-haiku55-med-v2
+
+# Failure classification: one line per (prompt version, attempt, kind, Zod code, path),
+# with array indexes folded to `*`, counted. Metadata only; no text field is read.
+jq -r '.stages.requirement_parsing.promptVersion as $v
+  | .calls[] | select(.step == "requirement_parsing" and .failureKind != null)
+  | . as $c | ((.issues // [{code: "-", path: []}])[])
+  | [$v, "attempt \($c.attempt)", $c.failureKind, .code, (.path | map(if type == "number" then "*" else . end) | join("."))]
+  | @tsv' ~/.matchline/eval-records/<date>-jd-haiku55-med-v1v2-{1,2}/flows.jsonl | sort | uniq -c
+```
+
+Report these together:
+
+- rule 1: first-attempt schema failures at most 5%, which is at most 1 of 24;
+- the failure classification for each arm: failed attempts by Zod code and path, and the share of failed attempts that carry issue detail (the ticket asks for at least 90%);
+- the precision guard (5 points);
+- requirement-set accuracy;
+- the parsed-requirement count and the must-have count.
+
+A prompt that makes Haiku 5.5 parse more coarsely can give back the +6.7. The incumbent records come from the 2b frozen baseline (`2b9debf`). The HEAD difference is a caveat to state in the report, not a reason to refuse the comparison. The guidance was written against the four public cells and may overfit them. Its wording is general, and the few-shot is unchanged. The v2 rules target the failure class inferred from the 2b recovery pattern, not a measured one. The v1 arm's classification is what confirms or refutes that inference.
 
 ### Fixed-input matching runner (`eval:fixed-inputs`, #648)
 

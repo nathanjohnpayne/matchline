@@ -179,10 +179,13 @@ export function assertPromptsExist(
  * STATICALLY wired to.
  *
  * `functions/src/extraction/resume.ts` imports
- * `ExtractionResponseV1Schema` and builds its tool schema from it;
- * `functions/src/parsing/jd.ts` does the same with
- * `JdParsingResponseV1Schema`. Neither consults the resolved prompt
- * version, even though the loader can return a version's own schema.
+ * `ExtractionResponseV1Schema` and builds its tool schema from it,
+ * without consulting the resolved prompt version. `parsing/jd` is
+ * listed as v1 here, but since #656 `functions/src/parsing/jd.ts` picks
+ * the schema of the version it loaded from `parsing/jdResponseSchema.ts`:
+ * a version in the scope's `dispatchedSchemaVersions` is validated
+ * against its own schema, and any other version throws on the stage's
+ * first call (see `assertPromptSchemasCompatible`).
  */
 const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = SWEEP_SCOPES.corpus.wiredSchemaVersion;
 
@@ -200,6 +203,14 @@ const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = SWEEP_SCOPES.corp
  * failure the other pre-flights exist to prevent, and prompt tuning
  * (#177 workstream B) is what will first author such a v2.
  *
+ * For a key the scope lists in `dispatchedSchemaVersions` (JD parsing
+ * since #656), the stage picks the schema by version: a listed version
+ * is validated against its own schema and passes, and any other version
+ * refuses here whatever its schema file holds, because the stage throws
+ * for an unregistered version on its first call. Comparing files would
+ * pass a byte-identical or absent schema that the stage then rejects
+ * after earlier variants had spent tokens.
+ *
  * Compares file contents rather than importing: a byte-identical schema
  * is safe to sweep, an absent one means the version reuses the wired
  * schema, and anything else refuses before a token is spent.
@@ -212,9 +223,22 @@ export function assertPromptSchemasCompatible(
 ): void {
   const wiredVersions = scope.suite === "corpus" ? WIRED_SCHEMA_VERSION : scope.wiredSchemaVersion;
   const conflicts: string[] = [];
+  const unregistered: string[] = [];
   const check = (key: string, version: string): void => {
     const wired = wiredVersions[key];
     if (wired === undefined || wired === version) return;
+    // The stage picks the schema by version (#656): a registered version
+    // is validated against its own schema, any other one throws at run time.
+    const dispatched = scope.dispatchedSchemaVersions?.[key];
+    if (dispatched !== undefined) {
+      if (dispatched.includes(version)) return;
+      unregistered.push(
+        `${key}=${version} has no schema registered with its stage ` +
+          `(registered: ${dispatched.join(", ")}; for parsing/jd, add it to ` +
+          `functions/src/parsing/jdResponseSchema.ts)`,
+      );
+      return;
+    }
     const [stage, name] = key.split("/") as [string, string];
     const overrideSchema = join(promptsRoot, stage, `${name}.${version}.schema.ts`);
     // No schema of its own — the version reuses the wired one.
@@ -230,6 +254,15 @@ export function assertPromptSchemasCompatible(
   for (const [k, v] of Object.entries(base)) check(k, v);
   for (const variant of variants) {
     for (const [k, v] of Object.entries(variant.promptVersions ?? {})) check(k, v);
+  }
+  if (unregistered.length > 0) {
+    throw new Error(
+      `sweep: prompt version(s) whose stage has no schema for them:\n  ` +
+        `${unregistered.join("\n  ")}\n` +
+        `The stage picks its schema by prompt version and throws for an ` +
+        `unregistered one, so every flow of this variant would fail after ` +
+        `earlier variants had already spent tokens. Register the schema first.`,
+    );
   }
   if (conflicts.length > 0) {
     throw new Error(
