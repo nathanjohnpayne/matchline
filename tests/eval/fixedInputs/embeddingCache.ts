@@ -169,8 +169,10 @@ export class EmbeddingCache {
 
   /**
    * Load (or start) the cache at `path`. Refuses a path inside the
-   * repository, its main checkout or any of its worktrees. A missing
-   * file is an empty cache; a malformed line throws with `<path>:<line>`.
+   * repository, its main checkout or any of its worktrees, symlinks
+   * resolved (a dangling one to the file an append would create). A
+   * missing file is an empty cache; a malformed line throws with
+   * `<path>:<line>`.
    */
   static load(path: string, options: { readonly model?: string; readonly root?: string } = {}): EmbeddingCache {
     assertRecordDirOutsideRepo(path, "--embeddings-cache", options.root);
