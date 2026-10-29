@@ -19,6 +19,7 @@ import { httpsCallable } from "firebase/functions";
 
 import { getFunctionsClient } from "../firebase.ts";
 import { beginAppBusy } from "../lib/appBusy.ts";
+import { ExportRefusal } from "../lib/exportRefusal.ts";
 import type { ExportFormat } from "../../functions/src/export/types.ts";
 import { callableOptions } from "./callable-timeouts.ts";
 
@@ -60,8 +61,8 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /**
  * Only an `https:` URL, or `http:` on a loopback host (the Storage
- * emulator), may be navigated to. Guards against a tampered response
- * handing the page a `javascript:` or `data:` URL.
+ * emulator), may be loaded. Guards against a tampered response handing
+ * the page a `javascript:` or `data:` URL.
  */
 export function isSafeDownloadUrl(url: string): boolean {
   let parsed: URL;
@@ -74,33 +75,66 @@ export function isSafeDownloadUrl(url: string): boolean {
   return parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname);
 }
 
+/** Shown inline when the callable's URL fails {@link isSafeDownloadUrl}. */
+export const UNSAFE_DOWNLOAD_LINK_MESSAGE =
+  "The export returned an unexpected download link, so nothing was downloaded.";
+
 /**
- * Start the browser download of `url`. A same-tab navigation through an
- * anchor with `download`: the response is `Content-Disposition:
- * attachment`, so the page stays where it is, and unlike `target=_blank`
- * no popup blocker applies even though the click comes after an `await`.
- * The `download` attribute is ignored cross-origin, which is why the
- * server-side disposition is what actually names the file.
+ * How long the hidden download frame stays in the document. Long enough
+ * for the signed URL's response headers to arrive on a slow connection
+ * (the browser then owns the download, and removing the frame does not
+ * cancel it); short enough that repeated exports do not pile up frames.
  */
-export function startDownload(url: string, filename: string, doc: Document = document): void {
+export const DOWNLOAD_FRAME_LIFETIME_MS = 60_000;
+
+export interface StartDownloadOptions {
+  readonly doc?: Document;
+  /** Test seam for the removal timer. */
+  readonly schedule?: (run: () => void, ms: number) => unknown;
+}
+
+/**
+ * Start the browser download of `url` by loading it in a hidden iframe,
+ * which is removed after {@link DOWNLOAD_FRAME_LIFETIME_MS}.
+ *
+ * Why a frame and not a same-tab navigation. The response is
+ * `Content-Disposition: attachment`, so a successful navigation leaves
+ * the page where it is. A failed one does not: a 403, a signed URL that
+ * expired before the click, or the emulator's 404 answers with an error
+ * page (Cloud Storage's is XML), and a top-level navigation (an anchor
+ * click or a `window.location` assignment) replaces the editor with it.
+ * Loaded in a frame, that error page lands in the frame and the editor
+ * stays.
+ *
+ * The trade-off: the frame's response is cross-origin, so the page
+ * cannot read it, and a failed download is silent (no file arrives and
+ * no inline error shows). Keeping the editor wins over reporting a rare
+ * expiry; the user can export again, which signs a fresh URL. Nothing
+ * else is lost: an anchor's `download` attribute is ignored cross-origin,
+ * so the server's `Content-Disposition` named the file before and still
+ * does, and no popup blocker applies even though this runs after an
+ * `await`.
+ */
+export function startDownload(url: string, options: StartDownloadOptions = {}): void {
   if (!isSafeDownloadUrl(url)) {
-    throw new Error("The export returned an unexpected download link.");
+    throw new ExportRefusal(UNSAFE_DOWNLOAD_LINK_MESSAGE);
   }
-  const anchor = doc.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.rel = "noopener noreferrer";
-  anchor.style.display = "none";
-  doc.body.appendChild(anchor);
-  try {
-    anchor.click();
-  } finally {
-    anchor.remove();
-  }
+  const doc = options.doc ?? document;
+  const schedule = options.schedule ?? ((run: () => void, ms: number) => setTimeout(run, ms));
+  const frame = doc.createElement("iframe");
+  frame.style.display = "none";
+  frame.setAttribute("aria-hidden", "true");
+  frame.tabIndex = -1;
+  frame.referrerPolicy = "no-referrer";
+  frame.dataset.exportDownload = "true";
+  frame.src = url;
+  doc.body.appendChild(frame);
+  schedule(() => frame.remove(), DOWNLOAD_FRAME_LIFETIME_MS);
 }
 
 export interface ExportAndDownloadDeps {
   readonly invoke?: typeof invokeExportAsset;
+  /** Defaults to {@link startDownload}, which names nothing itself: the server's disposition does. */
   readonly download?: (url: string, filename: string) => void;
 }
 
@@ -109,8 +143,8 @@ export interface ExportAndDownloadDeps {
  * the download from the returned URL. Holds a per-invocation busy lease
  * across both steps (code-modification-rules § Busy leases), so the
  * update-reload prompt never appears mid-export. Rejects with the
- * callable error, or the download-link error, for the caller to show
- * inline.
+ * callable error, or the download-link `ExportRefusal`, for the caller
+ * to show inline.
  */
 export async function exportAndDownload(
   applicationId: string,
@@ -119,7 +153,7 @@ export async function exportAndDownload(
   deps: ExportAndDownloadDeps = {},
 ): Promise<ExportAssetResponse> {
   const invoke = deps.invoke ?? invokeExportAsset;
-  const download = deps.download ?? ((url: string, filename: string) => startDownload(url, filename));
+  const download = deps.download ?? ((url: string) => startDownload(url));
   const releaseBusy = beginAppBusy("export.asset");
   try {
     const response = await invoke(applicationId, assetId, format);

@@ -122,6 +122,33 @@ describe("friendlyCallableError", () => {
       expect(msg).toMatch(/try again/i);
     });
 
+    it("treats the upper-case status name an uncaught server exception carries as bare", () => {
+      // firebase-functions turns a throw that is not an HttpsError into
+      // HttpsError("internal", "INTERNAL"); the client must not show "INTERNAL".
+      const msg = friendlyCallableError(serverError("internal", "INTERNAL"), {
+        operation: "exporting this resume",
+      });
+      expect(msg).not.toBe("INTERNAL");
+      expect(msg).toBe(
+        "The server stopped responding before exporting this resume finished. Try again.",
+      );
+      expect(friendlyCallableError(serverError("internal", "INTERNAL [500]"))).toContain(
+        "stopped responding",
+      );
+      expect(friendlyCallableError(serverError("internal", "Internal"))).toContain(
+        "stopped responding",
+      );
+    });
+
+    it("treats an upper-case status name with underscores as bare too", () => {
+      expect(
+        friendlyCallableError(serverError("deadline-exceeded", "DEADLINE_EXCEEDED")),
+      ).toContain("timed out");
+      expect(
+        friendlyCallableError(serverError("failed-precondition", "FAILED_PRECONDITION")),
+      ).toContain("manual review");
+    });
+
     it("maps deadline-exceeded to a timeout message", () => {
       expect(friendlyCallableError(bareError("deadline-exceeded"))).toContain(
         "timed out",

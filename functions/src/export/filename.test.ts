@@ -119,6 +119,27 @@ describe("asciiFallback", () => {
   it("removes quotes and backslashes", () => {
     expect(asciiFallback('a"b\\c')).toBe("abc");
   });
+
+  it("re-applies the reserved-character replacement after NFKD, so fullwidth / < > never become ASCII", () => {
+    // Fullwidth solidus, less-than and greater-than survive the sanitizer (they are not reserved as
+    // typed) and NFKD turns them into the ASCII reserved characters.
+    const name = exportFilename({ company: "A\uff0fB \uff1cC\uff1e", title: "PM\uff1aData", extension: "txt" });
+    expect(name).toBe(`A\uff0fB \uff1cC\uff1e ${EM_DASH} PM\uff1aData ${EM_DASH} Resume.txt`);
+    const out = asciiFallback(name);
+    expect(out).toBe("A B C - PM Data - Resume.txt");
+    expect(out).not.toMatch(/[/\\:*?"<>|]/);
+    expect(contentDisposition(name)).toMatch(/^attachment; filename="A B C - PM Data - Resume\.txt"; /);
+  });
+
+  it("strips a leading dot that NFKD makes out of U+2024 ONE DOT LEADER", () => {
+    const name = exportFilename({ company: "\u2024hidden", title: "\u2025PM", extension: "txt" });
+    // As typed, U+2024 is not a dot, so the UTF-8 name keeps it.
+    expect(name.startsWith("\u2024hidden")).toBe(true);
+    const out = asciiFallback(name);
+    expect(out).toBe("hidden - ..PM - Resume.txt");
+    expect(out.startsWith(".")).toBe(false);
+    expect(asciiFallback("\u2024\u2024 \u2024 Resume.txt")).toBe("Resume.txt");
+  });
 });
 
 describe("rfc5987", () => {

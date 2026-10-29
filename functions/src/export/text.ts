@@ -30,11 +30,14 @@
  *     whitespace or a non-word character, and around a single
  *     identifier-like token (letters, digits and `_`, as in `__init__` or
  *     `__slots__`) it is a dunder name and keeps its underscores,
- *     whatever follows it;
+ *     whatever follows it. A word-only `__x__` is kept on purpose, even
+ *     where Markdown would bold it: keeping characters is the safe side
+ *     of the zero-fabrication invariant;
  *   - at a line start only a `#` heading marker, a `-`/`*`/`+` bullet
- *     marker (neither when a number or sign follows) and a thematic break
- *     are removed, and blockquote `>`, ordered-list `1.` and
- *     strikethrough `~~` are kept as typed, so no character that can
+ *     marker (neither when the first non-whitespace character after it is
+ *     a number or sign, however much whitespace comes between) and a
+ *     thematic break are removed, and blockquote `>`, ordered-list `1.`
+ *     and strikethrough `~~` are kept as typed, so no character that can
  *     carry a claim is dropped;
  *   - Unicode passes through untouched: em dashes, arrows, curly quotes,
  *     accents, CJK and emoji are kept as typed, with no normalization
@@ -82,8 +85,18 @@ function sentinelFor(text: string): string {
  * `+ 12% NRR` and `# 1 ranked` keep their first character.
  */
 const CONTENT_START = String.raw`[\p{N}\p{Sc}%+\-\u2212.]`;
-const HEADING_MARKER = new RegExp(String.raw`^#{1,6}[ \t]+(?!${CONTENT_START})`, "u");
-const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+(?!${CONTENT_START})`, "u");
+/**
+ * The guard after a marker's whitespace. It skips any remaining whitespace
+ * itself (`\s*`) before testing for {@link CONTENT_START}, so it always
+ * inspects the first non-whitespace character. A bare `(?!CONTENT_START)`
+ * let `[ \t]+` backtrack: in `-  30% cost` (two spaces) the guard ran
+ * against the second space, passed, and the minus was dropped. `\s`, not
+ * `[ \t]`, because the final trim eats NBSP and the other Unicode spaces
+ * too, so `- \u00a030%` must keep its minus as well.
+ */
+const NOT_CONTENT_NEXT = String.raw`(?!\s*${CONTENT_START})`;
+const HEADING_MARKER = new RegExp(String.raw`^#{1,6}[ \t]+${NOT_CONTENT_NEXT}`, "u");
+const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+${NOT_CONTENT_NEXT}`, "u");
 
 /**
  * Strip the block-level markup that cannot be content, at a line start.
@@ -91,10 +104,10 @@ const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+(?!${CONTENT_START})`, "
  * Zero fabrication: the Application Editor shows an item's text verbatim,
  * and the validator checked those characters, so only markers that carry
  * no meaning are removed: a thematic-break line, a `#` heading marker and a
- * `-`/`*`/`+` bullet marker, and the last two only when the next character
- * is not a number or sign. Blockquote `>` and ordered-list `1.`/`1)`
- * markers are kept as typed, because `>40% faster`, `2019. B.A.` and
- * `1999) Founded` are claims, not markup.
+ * `-`/`*`/`+` bullet marker, and the last two only when the first
+ * non-whitespace character after them is not a number or sign. Blockquote
+ * `>` and ordered-list `1.`/`1)` markers are kept as typed, because
+ * `>40% faster`, `2019. B.A.` and `1999) Founded` are claims, not markup.
  */
 function stripBlockMarkup(line: string): string | null {
   const trimmed = line.replace(/^[ \t]+/, "");

@@ -138,6 +138,8 @@ const REFUSAL_MESSAGES: Readonly<Record<ExportGateRefusal, string>> = {
     "This resume's current content isn't covered by a passing validation run. Re-run validation before exporting.",
   "not-passed":
     "This resume's last validation run didn't pass. Resolve its flags and re-run validation before exporting.",
+  "evidence-unrecorded":
+    "This resume's last validation run didn't record the Units it checked. Re-run validation before exporting.",
   "evidence-missing":
     "This resume cites Units that no longer exist. Edit or remove the bullets that cite them, then re-validate.",
   "evidence-unapproved":
@@ -151,6 +153,13 @@ const REFUSAL_MESSAGES: Readonly<Record<ExportGateRefusal, string>> = {
 function refuse(reason: ExportGateRefusal): HttpsError {
   return new HttpsError("failed-precondition", REFUSAL_MESSAGES[reason], { reason });
 }
+
+/**
+ * The one `internal` sentence for any failure the handler did not mean to
+ * throw. Without it an unexpected throw reaches the client as
+ * `HttpsError("internal", "INTERNAL")`, and the user reads "INTERNAL".
+ */
+const EXPORT_FAILED_MESSAGE = "The export file couldn't be prepared. Try again in a moment.";
 
 /**
  * Inner handler, exported so unit tests call it with a fabricated
@@ -186,91 +195,105 @@ export async function exportAssetHandler(
   const loadRole = deps.loadRole ?? defaultLoadRole;
   const loadCompany = deps.loadCompany ?? defaultLoadCompany;
 
-  // One read of the Application; everything below works from it.
-  const app = await loadApplication(applicationId);
-  if (app === null || app.owner_uid !== ownerUid) {
-    throw new HttpsError("permission-denied", NOT_FOUND_MESSAGE);
-  }
-  const asset = (app.generated_assets ?? []).find((a) => a.id === assetId);
-  if (asset === undefined) {
-    throw new HttpsError("permission-denied", NOT_FOUND_MESSAGE);
-  }
-  if (asset.kind !== "resume") {
-    throw new HttpsError("failed-precondition", "Only resumes can be exported.", { reason: "not-a-resume" });
-  }
-  const content: unknown = asset.generated_content;
-  if (content === undefined || content === null) {
-    throw new HttpsError("failed-precondition", "This resume has no generated content to export yet.", {
-      reason: "no-content",
-    });
-  }
-  if (!isAttestableContent(content)) throw refuse("malformed-content");
-
-  // The attestation for exactly this content (#502).
-  const contentVersion = assetContentVersion(content);
-  const attestation = await loadAttestation(applicationId, validationAttestationId(assetId, contentVersion));
-  // Only cited Units matter; load them unfiltered by approval so the
-  // gate can tell "missing" from "unapproved".
-  const cited = [...citedUnitIdsOf(content as GeneratedAssetContent)];
-  const units = attestation === null ? [] : await loadUnits(cited, ownerUid);
-  const gate = checkExportGate({
-    scope: { assetId, applicationId, ownerUid },
-    content,
-    attestation,
-    unitsById: new Map(units.map((u) => [u.id, u])),
-  });
-  if (!gate.ok) throw refuse(gate.reason);
-
-  // Filename parts. A missing or foreign Role or Company drops the
-  // part; it never fails the export and is never filled in.
-  const role = typeof app.role_id === "string" && app.role_id.length > 0 ? await loadRole(app.role_id) : null;
-  const ownRole = role !== null && role.owner_uid === ownerUid ? role : null;
-  const company =
-    ownRole !== null && typeof ownRole.company_id === "string" && ownRole.company_id.length > 0
-      ? await loadCompany(ownRole.company_id)
-      : null;
-  const ownCompany = company !== null && company.owner_uid === ownerUid ? company : null;
-
-  const rendered = await renderer.render(gate.content);
-  const filename = exportFilename({
-    company: ownCompany?.name,
-    title: ownRole?.title,
-    extension: rendered.extension,
-  });
-  const disposition = contentDisposition(filename);
-  const path = exportObjectPath(applicationId, assetId, rendered.extension);
-
-  const env = deps.env ?? process.env;
+  // Everything from the first read to the signed URL runs in one try, so
+  // an unexpected throw maps to a written `internal` sentence (below).
   try {
-    // A Storage emulator host inside a deployed runtime is refused before
-    // the bucket is touched, so a refused export leaves no object behind.
-    assertExportEnvironment(env);
-    const bucket = (deps.bucket ?? defaultExportBucket)();
-    const file = bucket.file(path);
-    await writeExport(file, rendered, disposition);
-    const link = await downloadUrl({
-      file,
-      bucketName: bucket.name,
-      path,
-      disposition,
-      contentType: rendered.contentType,
-      nowMs: (deps.now ?? Date.now)(),
-      env,
+    // One read of the Application; everything below works from it.
+    const app = await loadApplication(applicationId);
+    if (app === null || app.owner_uid !== ownerUid) {
+      throw new HttpsError("permission-denied", NOT_FOUND_MESSAGE);
+    }
+    const asset = (app.generated_assets ?? []).find((a) => a.id === assetId);
+    if (asset === undefined) {
+      throw new HttpsError("permission-denied", NOT_FOUND_MESSAGE);
+    }
+    if (asset.kind !== "resume") {
+      throw new HttpsError("failed-precondition", "Only resumes can be exported.", { reason: "not-a-resume" });
+    }
+    const content: unknown = asset.generated_content;
+    if (content === undefined || content === null) {
+      throw new HttpsError("failed-precondition", "This resume has no generated content to export yet.", {
+        reason: "no-content",
+      });
+    }
+    if (!isAttestableContent(content)) throw refuse("malformed-content");
+
+    // The attestation for exactly this content (#502).
+    const contentVersion = assetContentVersion(content);
+    const attestation = await loadAttestation(applicationId, validationAttestationId(assetId, contentVersion));
+    // Only cited Units matter; load them unfiltered by approval so the
+    // gate can tell "missing" from "unapproved".
+    const cited = [...citedUnitIdsOf(content as GeneratedAssetContent)];
+    const units = attestation === null ? [] : await loadUnits(cited, ownerUid);
+    const gate = checkExportGate({
+      scope: { assetId, applicationId, ownerUid },
+      content,
+      attestation,
+      unitsById: new Map(units.map((u) => [u.id, u])),
     });
-    return {
-      url: link.url,
-      filename,
-      format: renderer.format,
-      contentType: rendered.contentType,
-      expiresAt: link.expiresAt,
-    };
+    if (!gate.ok) throw refuse(gate.reason);
+
+    // Filename parts. A missing or foreign Role or Company drops the
+    // part; it never fails the export and is never filled in.
+    const role = typeof app.role_id === "string" && app.role_id.length > 0 ? await loadRole(app.role_id) : null;
+    const ownRole = role !== null && role.owner_uid === ownerUid ? role : null;
+    const company =
+      ownRole !== null && typeof ownRole.company_id === "string" && ownRole.company_id.length > 0
+        ? await loadCompany(ownRole.company_id)
+        : null;
+    const ownCompany = company !== null && company.owner_uid === ownerUid ? company : null;
+
+    const rendered = await renderer.render(gate.content);
+    const filename = exportFilename({
+      company: ownCompany?.name,
+      title: ownRole?.title,
+      extension: rendered.extension,
+    });
+    const disposition = contentDisposition(filename);
+    const path = exportObjectPath(applicationId, assetId, rendered.extension);
+
+    const env = deps.env ?? process.env;
+    try {
+      // A Storage emulator host inside a deployed runtime is refused before
+      // the bucket is touched, so a refused export leaves no object behind.
+      assertExportEnvironment(env);
+      const bucket = (deps.bucket ?? defaultExportBucket)();
+      const file = bucket.file(path);
+      await writeExport(file, rendered, disposition);
+      const link = await downloadUrl({
+        file,
+        bucketName: bucket.name,
+        path,
+        disposition,
+        contentType: rendered.contentType,
+        nowMs: (deps.now ?? Date.now)(),
+        env,
+      });
+      return {
+        url: link.url,
+        filename,
+        format: renderer.format,
+        contentType: rendered.contentType,
+        expiresAt: link.expiresAt,
+      };
+    } catch (err) {
+      // Storage write or signing failed (bucket not provisioned, missing
+      // signBlob permission), or the environment was refused. Log the cause
+      // for the operator; the client gets a retryable message without
+      // infrastructure detail.
+      console.error("exportAsset: storage write or URL signing failed", { applicationId, assetId, path, err });
+      throw new HttpsError("internal", EXPORT_FAILED_MESSAGE);
+    }
   } catch (err) {
-    // Storage write or signing failed (bucket not provisioned, missing
-    // signBlob permission), or the environment was refused. Log the cause
-    // for the operator; the client gets a retryable message without
-    // infrastructure detail.
-    console.error("exportAsset: storage write or URL signing failed", { applicationId, assetId, path, err });
-    throw new HttpsError("internal", "The export file couldn't be prepared. Try again in a moment.");
+    // The refusals above (permission-denied, failed-precondition) and the
+    // storage `internal` are deliberate and pass through. Anything else, a
+    // Firestore read, the gate check or the render throwing, would reach
+    // the client as the bare "INTERNAL"; give it the written sentence and
+    // keep the cause in the log. Nothing has been written at that point:
+    // the only write is inside the storage block.
+    if (err instanceof HttpsError) throw err;
+    console.error("exportAsset: reading, checking or rendering the export failed", { applicationId, assetId, err });
+    throw new HttpsError("internal", EXPORT_FAILED_MESSAGE);
   }
 }
 

@@ -81,6 +81,13 @@ export function exportFilename({ company, title, extension }: ExportFilenamePart
  * `-`; accented letters lose their accents (`Zürich` → `Zurich`); any
  * other non-ASCII character becomes `_`. Quotes and backslashes are
  * removed so the value can sit inside a quoted-string unescaped.
+ *
+ * NFKD runs after {@link sanitizeFilenamePart}, and it can produce what the
+ * sanitizer removed: fullwidth `／＜＞：＊？｜` decompose to `/<>:*?|`, and
+ * U+2024 ONE DOT LEADER to `.`, so a part that was safe as typed could
+ * gain a path separator or a leading dot here. The reserved-character
+ * replacement and the leading-dot strip are therefore applied again to the
+ * ASCII result.
  */
 export function asciiFallback(name: string): string {
   return name
@@ -88,7 +95,12 @@ export function asciiFallback(name: string): string {
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .replace(/[^\x20-\x7e]/gu, "_")
-    .replace(/["\\]/g, "");
+    .replace(/["\\]/g, "")
+    .replace(RESERVED_CHARS, " ")
+    .replace(/ {2,}/g, " ")
+    .trim()
+    .replace(/^[. ]+/, "")
+    .trim();
 }
 
 /**

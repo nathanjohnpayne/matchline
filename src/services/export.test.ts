@@ -15,10 +15,16 @@ vi.mock("firebase/functions", () => ({
 }));
 vi.mock("../firebase.ts", () => ({ getFunctionsClient: () => ({ client: true }) }));
 
-const { exportAndDownload, invokeExportAsset, isSafeDownloadUrl, startDownload } = await import(
-  "./export.ts"
-);
+const {
+  DOWNLOAD_FRAME_LIFETIME_MS,
+  UNSAFE_DOWNLOAD_LINK_MESSAGE,
+  exportAndDownload,
+  invokeExportAsset,
+  isSafeDownloadUrl,
+  startDownload,
+} = await import("./export.ts");
 const { isAppBusy } = await import("../lib/appBusy.ts");
+const { ExportRefusal } = await import("../lib/exportRefusal.ts");
 
 const RESPONSE = {
   url: "https://storage.googleapis.com/bucket/applications/app-1/asset-1.txt?X-Goog-Signature=abc",
@@ -44,6 +50,7 @@ function deferred<T>(): {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   document.body.innerHTML = "";
 });
 
@@ -99,13 +106,21 @@ describe("exportAndDownload", () => {
     expect(isAppBusy()).toBe(false);
   });
 
-  it("releases the lease when starting the download throws", async () => {
-    await expect(
-      exportAndDownload("app-1", "asset-1", "txt", {
-        invoke: () => Promise.resolve({ ...RESPONSE, url: "javascript:alert(1)" }),
-      }),
-    ).rejects.toThrow("unexpected download link");
+  it("releases the lease when starting the download throws, rejecting with an ExportRefusal", async () => {
+    const run = exportAndDownload("app-1", "asset-1", "txt", {
+      invoke: () => Promise.resolve({ ...RESPONSE, url: "javascript:alert(1)" }),
+    });
+    await expect(run).rejects.toBeInstanceOf(ExportRefusal);
+    await expect(run).rejects.toThrow(UNSAFE_DOWNLOAD_LINK_MESSAGE);
     expect(isAppBusy()).toBe(false);
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("starts the default download in a hidden iframe", async () => {
+    vi.useFakeTimers();
+    await exportAndDownload("app-1", "asset-1", "txt", { invoke: () => Promise.resolve(RESPONSE) });
+    const frame = document.querySelector("iframe");
+    expect(frame?.src).toBe(RESPONSE.url);
   });
 
   it("uses one lease per invocation, so the first export settling cannot release the second's", async () => {
@@ -124,31 +139,59 @@ describe("exportAndDownload", () => {
 });
 
 describe("startDownload", () => {
-  it("clicks a hidden anchor carrying the URL, the filename and noopener, then removes it", () => {
-    const clicked: HTMLAnchorElement[] = [];
-    const spy = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        clicked.push(this);
-      });
-    startDownload(RESPONSE.url, RESPONSE.filename);
-    expect(clicked).toHaveLength(1);
-    const anchor = clicked[0]!;
-    expect(anchor.href).toBe(RESPONSE.url);
-    expect(anchor.download).toBe("Acme — Senior PM — Resume.txt");
-    expect(anchor.rel).toBe("noopener noreferrer");
-    expect(anchor.target).toBe("");
-    expect(document.querySelector("a")).toBeNull();
-    spy.mockRestore();
+  it("loads the URL in a hidden iframe and removes the frame after its lifetime", () => {
+    vi.useFakeTimers();
+    startDownload(RESPONSE.url);
+    const frames = document.querySelectorAll("iframe");
+    expect(frames).toHaveLength(1);
+    const frame = frames[0]!;
+    expect(frame.src).toBe(RESPONSE.url);
+    expect(frame.style.display).toBe("none");
+    expect(frame.getAttribute("aria-hidden")).toBe("true");
+    expect(frame.tabIndex).toBe(-1);
+    expect(frame.referrerPolicy).toBe("no-referrer");
+    expect(frame.dataset.exportDownload).toBe("true");
+    vi.advanceTimersByTime(DOWNLOAD_FRAME_LIFETIME_MS - 1);
+    expect(document.querySelector("iframe")).toBe(frame);
+    vi.advanceTimersByTime(1);
+    expect(document.querySelector("iframe")).toBeNull();
   });
 
-  it("refuses a non-https link and never navigates", () => {
-    const spy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  it("never navigates the page: no window.location change and no anchor click", () => {
+    const before = window.location.href;
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
+    const scheduled: Array<[() => void, number]> = [];
+    startDownload(RESPONSE.url, { schedule: (run, ms) => scheduled.push([run, ms]) });
+    expect(window.location.href).toBe(before);
+    expect(click).not.toHaveBeenCalled();
+    expect(document.querySelector("a")).toBeNull();
+    // The URL went to the frame and nowhere else.
+    expect(document.querySelector("iframe")?.src).toBe(RESPONSE.url);
+    expect(scheduled.map(([, ms]) => ms)).toEqual([DOWNLOAD_FRAME_LIFETIME_MS]);
+    scheduled[0]![0]();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(window.location.href).toBe(before);
+    click.mockRestore();
+  });
+
+  it("gives each download its own frame", () => {
+    vi.useFakeTimers();
+    startDownload(RESPONSE.url);
+    startDownload("http://127.0.0.1:9199/b/applications/a/x.txt");
+    expect([...document.querySelectorAll("iframe")].map((f) => f.src)).toEqual([
+      RESPONSE.url,
+      "http://127.0.0.1:9199/b/applications/a/x.txt",
+    ]);
+    vi.advanceTimersByTime(DOWNLOAD_FRAME_LIFETIME_MS);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("refuses a non-https link with an ExportRefusal and creates no frame", () => {
     for (const url of ["javascript:alert(1)", "data:text/plain,hi", "http://example.com/x.txt", "not a url"]) {
-      expect(() => startDownload(url, "Resume.txt")).toThrow("unexpected download link");
+      expect(() => startDownload(url)).toThrow(ExportRefusal);
+      expect(() => startDownload(url)).toThrow(UNSAFE_DOWNLOAD_LINK_MESSAGE);
     }
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+    expect(document.querySelector("iframe")).toBeNull();
   });
 });
 

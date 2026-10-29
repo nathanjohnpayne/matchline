@@ -61,10 +61,15 @@ afterAll(async () => {
   await testEnv?.cleanup();
 });
 
+/** An object outside `applications/`, so default deny is tested against a real object. */
+const OTHER_PATH = "other/x.txt";
+
 beforeEach(async () => {
-  // Seed the export the callable would have written, bypassing rules.
+  // Seed the export the callable would have written, and an object outside
+  // applications/, bypassing rules.
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await ctx.storage().ref(EXPORT_PATH).put(TEXT, METADATA);
+    await ctx.storage().ref(OTHER_PATH).put(TEXT, METADATA);
   });
 });
 
@@ -78,6 +83,7 @@ describe("storage rules: seeded export exists", () => {
   it("is readable with rules disabled, so the denials below are rules decisions", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await assertSucceeds(ctx.storage().ref(EXPORT_PATH).getMetadata());
+      await assertSucceeds(ctx.storage().ref(OTHER_PATH).getMetadata());
     });
   });
 });
@@ -119,5 +125,21 @@ describe("storage rules: default deny outside applications/", () => {
     const storage = testEnv.authenticatedContext(OWNER_UID).storage();
     await assertFails(Promise.resolve(storage.ref("other/x.txt").put(TEXT, METADATA)));
     await assertFails(Promise.resolve(storage.ref("x.txt").put(TEXT, METADATA)));
+  });
+
+  describe.each([
+    ["the owner", () => testEnv.authenticatedContext(OWNER_UID)],
+    ["an unauthenticated caller", () => testEnv.unauthenticatedContext()],
+  ] as const)("for %s", (_label, context) => {
+    it("cannot read an object elsewhere: no download URL, no metadata", async () => {
+      const ref = context().storage().ref(OTHER_PATH);
+      await assertFails(ref.getDownloadURL());
+      await assertFails(ref.getMetadata());
+    });
+
+    it("cannot list another path or the bucket root", async () => {
+      await assertFails(context().storage().ref("other").listAll());
+      await assertFails(context().storage().ref().listAll());
+    });
   });
 });

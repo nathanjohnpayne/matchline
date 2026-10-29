@@ -16,8 +16,10 @@
  *      `passed`. A pass recorded for earlier content lives under a
  *      different doc id and a different `content_version`, so a stale
  *      pass never covers edited content.
- *   3. Every Unit any item cites still exists, is approved, and is at
- *      the `unitEvidenceVersion` the validator recorded for it.
+ *   3. The attestation records the Unit versions it read
+ *      (`validated_unit_versions` is an object), and every Unit any item
+ *      cites still exists, is approved, and is at the
+ *      `unitEvidenceVersion` the validator recorded for it.
  *
  * Dependency-light so the app imports it across the package boundary,
  * as it does `./attestation.ts`.
@@ -37,6 +39,7 @@ export type ExportGateRefusal =
   | "no-attestation"
   | "attestation-mismatch"
   | "not-passed"
+  | "evidence-unrecorded"
   | "evidence-missing"
   | "evidence-unapproved"
   | "evidence-outdated"
@@ -163,6 +166,15 @@ export function evidenceRefusal(counts: CitedEvidenceCounts): ExportGateRefusal 
   return null;
 }
 
+/**
+ * A plain object, as `validated_unit_versions` must be: not null, not an
+ * array. The editor's gate uses it too, so a malformed attestation blocks
+ * Export there instead of throwing while the editor renders.
+ */
+export function isVersionMap(value: unknown): value is Readonly<Record<string, string>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export interface ExportGateInput {
   readonly scope: AttestationScope;
   /** The asset's `generated_content`, as loaded; `unknown` until checked. */
@@ -189,7 +201,11 @@ export function checkExportGate(input: ExportGateInput): ExportGateResult {
   const attested = attestationRefusal(input.scope, content, input.attestation);
   if (attested !== null) return { ok: false, reason: attested };
   // `attestation` is non-null here: attestationRefusal returned null.
-  const versions = (input.attestation as ValidationAttestation).validated_unit_versions;
+  const versions: unknown = (input.attestation as ValidationAttestation).validated_unit_versions;
+  // A stored attestation is data, not a type: one without a version map
+  // (or with a non-object one) records no evidence to compare against, so
+  // it refuses rather than throwing a TypeError on `versions[id]`.
+  if (!isVersionMap(versions)) return { ok: false, reason: "evidence-unrecorded" };
   const evidence = evidenceRefusal(citedEvidenceCounts(content, versions, input.unitsById));
   if (evidence !== null) return { ok: false, reason: evidence };
   return { ok: true, content };

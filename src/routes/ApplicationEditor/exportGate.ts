@@ -5,6 +5,7 @@ import {
   attestationRefusal,
   citedEvidenceCounts,
   citedUnitIdsOf,
+  isVersionMap,
 } from "../../../functions/src/validation/exportGate.ts";
 
 // The counting and attestation checks are shared with the server's
@@ -179,7 +180,10 @@ export type AttestationLookup = ValidationAttestation | null | undefined;
  * The asset's `passed` is trusted only when the server attested the
  * asset's CURRENT content as passed. The asset-level status sits in a
  * client-writable list, so it can say `passed` for content no
- * validator ever saw; the attestation cannot (#502).
+ * validator ever saw; the attestation cannot (#502). An attestation
+ * without a `validated_unit_versions` map records no evidence to
+ * re-check, so it does not count either (the server refuses it as
+ * `evidence-unrecorded`).
  */
 function attestedPassed(
   asset: AssetRef,
@@ -187,6 +191,7 @@ function attestedPassed(
 ): boolean {
   return (
     asset.generated_content !== undefined &&
+    isVersionMap(attestation.validated_unit_versions as unknown) &&
     attestationRefusal({ assetId: asset.id }, asset.generated_content, attestation) === null
   );
 }

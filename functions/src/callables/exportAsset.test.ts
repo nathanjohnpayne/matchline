@@ -16,7 +16,7 @@
 import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderPlainText } from "../export/text.ts";
+import { renderPlainText, textRenderer } from "../export/text.ts";
 import type { AssetRef, GeneratedAssetContent } from "../types/crm.ts";
 import { assetContentVersion, validationAttestationId, type ValidationAttestation } from "../validation/attestation.ts";
 import type { GateUnit } from "../validation/exportGate.ts";
@@ -365,12 +365,84 @@ describe("exportAssetHandler", () => {
       expectNothingWritten(h);
     });
 
+    it("refuses an attestation with no validated_unit_versions, without a TypeError, and writes nothing", async () => {
+      const { validated_unit_versions: _dropped, ...withoutVersions } = attestationFor(CONTENT);
+      const h = harness({ attestations: [withoutVersions as unknown as ValidationAttestation] });
+      const err = await callExpectingError(VALID, h);
+      expect(err.code).toBe("failed-precondition");
+      expect(err.details).toEqual({ reason: "evidence-unrecorded" });
+      expect(err.message).toBe(
+        "This resume's last validation run didn't record the Units it checked. Re-run validation before exporting.",
+      );
+      expectNothingWritten(h);
+      expect(h.filePaths).toEqual([]);
+    });
+
+    it("refuses an attestation whose validated_unit_versions is not an object", async () => {
+      const h = harness({
+        attestations: [{ ...attestationFor(CONTENT), validated_unit_versions: "ev3:x" } as unknown as ValidationAttestation],
+      });
+      const err = await callExpectingError(VALID, h);
+      expect(err.code).toBe("failed-precondition");
+      expect(err.details).toEqual({ reason: "evidence-unrecorded" });
+      expectNothingWritten(h);
+    });
+
     it("ignores the asset's own validation_status: the attestation decides", async () => {
       const h = harness({
         app: { owner_uid: ALICE, role_id: "role-1", generated_assets: [makeAsset({ validation_status: "stale" })] },
       });
       const out = await exportAssetHandler(makeRequest(VALID), h.deps);
       expect(out.format).toBe("txt");
+    });
+  });
+
+  describe("unexpected failures", () => {
+    const SENTENCE = "The export file couldn't be prepared. Try again in a moment.";
+    const boom = (): Promise<never> => Promise.reject(new Error("firestore unavailable: 14 UNAVAILABLE"));
+
+    it.each([
+      ["the Application read", (h: Harness): ExportAssetDeps => ({ ...h.deps, loadApplication: boom })],
+      ["the attestation read", (h: Harness): ExportAssetDeps => ({ ...h.deps, loadAttestation: boom })],
+      ["the Units read", (h: Harness): ExportAssetDeps => ({ ...h.deps, loadUnits: boom })],
+      ["the Role read", (h: Harness): ExportAssetDeps => ({ ...h.deps, loadRole: boom })],
+      ["the Company read", (h: Harness): ExportAssetDeps => ({ ...h.deps, loadCompany: boom })],
+    ])("maps a throw from %s to internal with a written sentence, writing nothing", async (_label, withFailure) => {
+      const h = harness();
+      let caught: unknown;
+      try {
+        await exportAssetHandler(makeRequest(VALID), withFailure(h));
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(HttpsError);
+      const err = caught as HttpsError;
+      expect(err.code).toBe("internal");
+      expect(err.message).toBe(SENTENCE);
+      expect(err.message).not.toMatch(/INTERNAL|firestore|UNAVAILABLE/);
+      expectNothingWritten(h);
+      expect(h.filePaths).toEqual([]);
+      expect(console.error).toHaveBeenCalledWith(
+        "exportAsset: reading, checking or rendering the export failed",
+        expect.objectContaining({ applicationId: APP_ID, assetId: ASSET_ID }),
+      );
+    });
+
+    it("maps a throw from the render to internal with a written sentence, writing nothing", async () => {
+      vi.spyOn(textRenderer, "render").mockRejectedValueOnce(new TypeError("render exploded"));
+      const h = harness();
+      const err = await callExpectingError(VALID, h);
+      expect(err.code).toBe("internal");
+      expect(err.message).toBe(SENTENCE);
+      expectNothingWritten(h);
+      expect(h.filePaths).toEqual([]);
+    });
+
+    it("passes the deliberate refusals through unchanged", async () => {
+      const h = harness({ attestations: [] });
+      const err = await callExpectingError(VALID, h);
+      expect(err.code).toBe("failed-precondition");
+      expect(console.error).not.toHaveBeenCalled();
     });
   });
 

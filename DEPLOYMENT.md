@@ -912,7 +912,9 @@ gcloud firestore indexes composite list --project=<proj>
 
   The update replaces the bucket's whole lifecycle configuration, so add any other rule the bucket needs to the file rather than alongside it.
 
-A missing grant surfaces as the callable's generic `internal` "The export file couldn't be prepared" message, with the cause in the function log (`exportAsset: storage write or URL signing failed`). No bucket CORS configuration is needed: the browser navigates to the signed URL rather than fetching it. Under the Storage emulator the callable returns the emulator's object URL instead of signing.
+A missing grant surfaces as the callable's generic `internal` "The export file couldn't be prepared" message, with the cause in the function log (`exportAsset: storage write or URL signing failed`). No bucket CORS configuration is needed: the browser loads the signed URL in a hidden frame rather than fetching it. Under the Storage emulator the callable returns the emulator's object URL instead of signing.
+
+**Confirm the download file name on a deployed project, not in the emulator.** The Storage emulator appends its own `filename*=` to the stored `Content-Disposition` when it serves the object, so the name a browser saves under the emulator is not the header production sends. After the first deploy that includes `exportAsset`, export a résumé whose Role title has an em dash or an accent and check that the saved file is `{Company} — {Title} — Resume.txt` (or `{Title} — Resume.txt`) with those characters intact.
 
 ### Triage order when a callable fails
 

@@ -194,6 +194,50 @@ describe("markdown reduction", () => {
     expect(plainTextOf(input)).toBe(expected);
   });
 
+  // The guard after a marker must look at the first non-whitespace character, however much
+  // whitespace sits between: with a backtracking `[ \t]+` the guard ran against the second space,
+  // and `-  30% cost` lost its minus while `- 30% cost` kept it (external review, P1).
+  it.each([
+    ["-  30% cost", "- 30% cost"],
+    ["-\t30% cost", "- 30% cost"],
+    ["- \t30% cost", "- 30% cost"],
+    ["-\t \t30% cost", "- 30% cost"],
+    ["+  12% NRR", "+ 12% NRR"],
+    ["+\t12% NRR", "+ 12% NRR"],
+    ["*  5x throughput", "* 5x throughput"],
+    ["- \t$2M saved", "- $2M saved"],
+    ["-  .5 FTE", "- .5 FTE"],
+    ["#  1 ranked team", "# 1 ranked team"],
+    ["#\t1 ranked team", "# 1 ranked team"],
+    ["## \t1 ranked team", "## 1 ranked team"],
+    // NBSP and the other Unicode spaces are trimmed at the end too, so they cannot hide a sign either.
+    ["- \u00a030% cost", "- \u00a030% cost"],
+    ["- \f30% cost", "- 30% cost"],
+  ])("keeps a marker followed by more than one whitespace character and a number or sign: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    ["-  Led the team", "Led the team"],
+    ["-\tLed the team", "Led the team"],
+    ["- \tLed the team", "Led the team"],
+    ["-\t \tLed the team", "Led the team"],
+    ["+  Grew revenue", "Grew revenue"],
+    ["*\tShipped search", "Shipped search"],
+    ["#  Platform work", "Platform work"],
+    ["#\tPlatform work", "Platform work"],
+    ["## \tPlatform work", "Platform work"],
+    ["- \u00a0Led the team", "Led the team"],
+  ])("still strips a marker followed by any whitespace run and a letter: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it("keeps the sign through the full render when the marker has two spaces", () => {
+    const out = renderPlainText(withBullets(["-  30% cost", "- \t$2M saved"]));
+    expect(out).toContain("\n- - 30% cost\n");
+    expect(out).toContain("\n- - $2M saved\n");
+  });
+
   it("a bullet item that starts with a sign keeps it after the list prefix", () => {
     const out = renderPlainText(withBullets(["+ 40% net revenue retention", ">10M users"]));
     expect(out).toContain("\n- + 40% net revenue retention\n");

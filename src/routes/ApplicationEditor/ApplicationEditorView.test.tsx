@@ -8,6 +8,7 @@ import type {
   GeneratedAssetContent,
   ValidationFlag,
 } from "../../types/crm.ts";
+import type { ExportFormat } from "../../services/export.ts";
 
 import {
   assetContentVersion,
@@ -899,7 +900,11 @@ describe("ApplicationEditorView", () => {
   });
 
   it("accepts a format-aware export handler (the container's exportAndDownload signature)", () => {
+    // A type-level check only: static markup never runs the handler, so an
+    // assertion inside it would never execute. That choosing Text passes
+    // "txt" is pinned in ApplicationEditorView.export.dom.test.tsx.
     const passed = asset({ validation_status: "passed", validation_flags: [] });
+    const onExport: (format: ExportFormat) => Promise<unknown> = (format) => Promise.resolve(format);
     const html = renderToStaticMarkup(
       <ApplicationEditorView
         status="ready"
@@ -907,9 +912,7 @@ describe("ApplicationEditorView", () => {
         asset={passed}
         units={[]}
         attestation={attestFor(passed)}
-        onExport={async (format) => {
-          expect(format).toBe("txt");
-        }}
+        onExport={onExport}
       />,
     );
     expect(html).toContain('data-export-enabled="true"');

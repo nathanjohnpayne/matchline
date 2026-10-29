@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { FunctionsError } from "firebase/functions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ExportRefusal } from "../lib/exportRefusal.ts";
 import ExportMenu, {
   EXPORT_FORMAT_OPTIONS,
   type ExportMenuGate,
@@ -243,17 +244,39 @@ describe("ExportMenu: exporting", () => {
     expect(error.textContent?.length ?? 0).toBeGreaterThan(20);
   });
 
-  it("shows generic copy for a non-callable failure (for example a refused download link)", async () => {
+  it("shows generic friendly copy for the upper-case INTERNAL an uncaught server exception carries", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const onExport = vi.fn(() =>
-      Promise.reject(new Error("The export returned an unexpected download link.")),
+    const onExport = vi.fn(() => Promise.reject(new FunctionsError("internal", "INTERNAL")));
+    renderMenu({ onExport });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByTestId("export-format-txt"));
+    expect((await screen.findByTestId("export-error")).textContent).toBe(
+      "The server stopped responding before exporting this resume finished. Try again.",
     );
+  });
+
+  it("shows generic copy for an unmarked non-callable failure, never its message", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onExport = vi.fn(() => Promise.reject(new TypeError("Cannot read properties of undefined")));
     renderMenu({ onExport });
     fireEvent.click(trigger());
     fireEvent.click(screen.getByTestId("export-format-txt"));
     expect((await screen.findByTestId("export-error")).textContent).toBe(
       "Something went wrong. Try again.",
     );
+  });
+
+  it("shows the app's own ExportRefusal sentence verbatim, and the control works again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sentence = "This resume can't be exported right now.";
+    const onExport = vi.fn(() => Promise.reject(new ExportRefusal(sentence)));
+    renderMenu({ onExport });
+    fireEvent.click(trigger());
+    fireEvent.click(screen.getByTestId("export-format-txt"));
+    const error = await screen.findByTestId("export-error");
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.textContent).toBe(sentence);
+    await waitFor(() => expect(trigger().disabled).toBe(false));
   });
 
   it("clears the error when the gate changes", async () => {

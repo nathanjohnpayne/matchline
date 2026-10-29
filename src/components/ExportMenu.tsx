@@ -18,9 +18,11 @@
  *   "Exporting…" and is disabled until it settles.
  * - Failure: the error shows inline under the control (UI guidance rule
  *   10: never a toast), including the server's `failed-precondition`
- *   sentence when the server-side gate refuses. The control is usable
- *   again straight away, and the error clears on the next attempt or
- *   when the gate changes.
+ *   sentence when the server-side gate refuses. An `ExportRefusal` (the
+ *   app's own guards: no ids to export, an unsafe download link) shows
+ *   its own sentence verbatim; any other unmarked error shows the generic
+ *   copy. The control is usable again straight away, and the error clears
+ *   on the next attempt or when the gate changes.
  * - Keyboard (rule 5): Enter, Space or ArrowDown on the trigger opens the
  *   menu on the first item, ArrowUp opens it on the last; ArrowUp/Down
  *   (wrapping), Home and End move; Enter or Space chooses; Escape closes
@@ -42,6 +44,7 @@ import {
 } from "react";
 
 import { friendlyCallableError } from "../lib/callable-errors.ts";
+import { ExportRefusal } from "../lib/exportRefusal.ts";
 import {
   EXPORT_FORMAT_ORDER,
   type ExportFormat,
@@ -74,8 +77,9 @@ export interface ExportMenuProps {
   readonly gate: ExportMenuGate;
   /**
    * Export the asset in `format`. Resolves once the download has started;
-   * rejects with the callable error, which is shown inline. Absent means
-   * the surface has no export wired: the trigger stays disabled.
+   * rejects with the callable error or an `ExportRefusal`, which is shown
+   * inline. Absent means the surface has no export wired: the trigger
+   * stays disabled.
    */
   readonly onExport?: (format: ExportFormat) => void | Promise<unknown>;
   /** Defaults to {@link EXPORT_FORMAT_OPTIONS}; always shown in PDF, DOCX, Text order. */
@@ -194,7 +198,11 @@ export default function ExportMenu({
         await onExport(format);
       } catch (err) {
         console.warn("export failed", err);
-        setError(friendlyCallableError(err, { operation: "exporting this resume" }));
+        setError(
+          err instanceof ExportRefusal
+            ? err.message
+            : friendlyCallableError(err, { operation: "exporting this resume" }),
+        );
       } finally {
         busyRef.current = false;
         setBusy(null);

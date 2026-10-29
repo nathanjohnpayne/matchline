@@ -161,6 +161,30 @@ describe("checkExportGate", () => {
     });
   });
 
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["an array", ["ev3:x"]],
+    ["a string", "ev3:x"],
+    ["a number", 3],
+  ])("refuses, without throwing, an attestation whose validated_unit_versions is %s", (_label, versions) => {
+    const att = { ...attestation(), validated_unit_versions: versions } as unknown as ValidationAttestation;
+    expect(checkExportGate({ scope: SCOPE, content: CONTENT, attestation: att, unitsById: UNITS })).toEqual({
+      ok: false,
+      reason: "evidence-unrecorded",
+    });
+  });
+
+  it("refuses a missing validated_unit_versions even when the content cites no Units", () => {
+    const bare: GeneratedAssetContent = { summary: { id: "s", text: "x", source_unit_ids: [] }, bullets: [], skills: [] };
+    const { validated_unit_versions: _dropped, ...rest } = attestation({}, bare);
+    const att = rest as unknown as ValidationAttestation;
+    expect(checkExportGate({ scope: SCOPE, content: bare, attestation: att, unitsById: new Map() })).toEqual({
+      ok: false,
+      reason: "evidence-unrecorded",
+    });
+  });
+
   it("passes content that cites no Units", () => {
     const bare: GeneratedAssetContent = {
       summary: { id: "s", text: "x", source_unit_ids: [] },
