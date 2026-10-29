@@ -162,7 +162,35 @@ export function loadPromptText<S extends PromptStage, N extends PromptName<S>>(
   stage: S,
   name: N,
 ): LoadedPrompt {
-  const version = resolvePromptVersion(stage, name);
+  return loadPromptTextVersion(stage, name, resolvePromptVersion(stage, name));
+}
+
+/**
+ * A prompt version as it appears in a file name: `v` and a number. The
+ * version becomes part of a path, so anything else (`../x`, `v2/../v1`,
+ * an empty string) is refused before any path is built.
+ */
+const PROMPT_VERSION = /^v[0-9]+$/u;
+
+/**
+ * Load one named version of a prompt's Markdown body, ignoring both the
+ * runtime overrides and `PROMPT_CONFIG`. For callers that choose the
+ * version per call (the fit-brief eval's `--prompt-version`), so a run
+ * never has to set module-wide overrides. Shares `loadPromptText`'s
+ * cache, keyed by version. Throws for a version that is not `v<N>`,
+ * whether it came from the caller, a runtime override or the config.
+ */
+export function loadPromptTextVersion<S extends PromptStage, N extends PromptName<S>>(
+  stage: S,
+  name: N,
+  version: string,
+): LoadedPrompt {
+  if (typeof version !== "string" || !PROMPT_VERSION.test(version)) {
+    throw new Error(
+      `Invalid prompt version ${JSON.stringify(version)} for ${String(stage)}/${String(name)}: ` +
+        `expected v<N> (for example v1); refusing to build a prompt path from it.`,
+    );
+  }
   const cacheKey = `${String(stage)}/${String(name)}/${String(version)}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
