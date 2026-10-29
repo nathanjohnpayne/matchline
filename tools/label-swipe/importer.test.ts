@@ -185,6 +185,7 @@ describe("import-labels CLI core", () => {
 
   it("rejects a value flag with no value", () => {
     expect(() => parseArgs(["--out"])).toThrow(/--out needs a value/);
+    expect(() => parseArgs(["--packet="])).toThrow(/--packet needs a value/);
     expect(parseArgs(["a.json", "--force"], ["force"])).toEqual({ flags: new Map([["force", true]]), positional: ["a.json"] });
   });
 });

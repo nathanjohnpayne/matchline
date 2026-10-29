@@ -53,8 +53,11 @@ export function parseArgs(argv: string[], booleans: string[] = []): { flags: Map
       continue;
     }
     const [name, inline] = arg.slice(2).split("=", 2);
-    if (inline !== undefined) flags.set(name, inline);
-    else if (booleans.includes(name)) flags.set(name, true);
+    if (booleans.includes(name)) flags.set(name, true);
+    else if (inline !== undefined) {
+      if (inline === "") throw new Error(`--${name} needs a value`);
+      flags.set(name, inline);
+    }
     else if (argv[i + 1] !== undefined && !argv[i + 1].startsWith("--")) flags.set(name, argv[++i]);
     else throw new Error(`--${name} needs a value`);
   }

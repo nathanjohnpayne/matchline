@@ -151,5 +151,8 @@ describe("export", () => {
     expect(Core.stateMatchesDeck(s, deck)).toBe(true);
     expect(Core.stateMatchesDeck(s, { ...deck, cards: deck.cards.slice(1) })).toBe(false);
     expect(Core.stateMatchesDeck(null, deck)).toBe(false);
+    const { queue: _queue, ...noQueue } = s;
+    expect(Core.stateMatchesDeck(noQueue, deck)).toBe(false);
+    expect(Core.stateMatchesDeck({ ...s, decisions: null }, deck)).toBe(false);
   });
 });

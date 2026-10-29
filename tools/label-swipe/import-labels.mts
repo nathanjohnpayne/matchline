@@ -36,11 +36,13 @@ export function importIntoPacket(labelsPath: string, packet: string, options: { 
     throw new UnknownItemsError(result.unknown);
   }
   if (!options.dryRun) {
-    writePrivate(sheetPath, result.sheet);
+    // Scaffold first, sheet last: the sheet is what makes a re-run a no-op,
+    // so a failure between the two writes is repaired by running again.
     if (result.scaffold && scaffoldRaw !== null) {
       // Keep the scaffold's own layout: 2-space indent, trailing newline only if it had one.
       writePrivate(scaffoldPath, JSON.stringify(result.scaffold, null, 2) + (scaffoldRaw.endsWith("\n") ? "\n" : ""));
     }
+    writePrivate(sheetPath, result.sheet);
   }
   return result;
 }

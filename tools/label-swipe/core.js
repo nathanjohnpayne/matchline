@@ -197,6 +197,9 @@
   // A persisted state is usable only if it describes exactly this deck.
   function stateMatchesDeck(state, deck) {
     if (!state || state.deck_id !== deck.deck_id || !state.types) return false;
+    // A partial write or a hand edit must start a fresh session, not throw later.
+    if (!Array.isArray(state.queue) || !Array.isArray(state.history)) return false;
+    for (const field of ["decisions", "requeued", "undos", "elapsed"]) if (!state[field] || typeof state[field] !== "object") return false;
     const ids = deck.cards.map((c) => c.item_id);
     return ids.length === Object.keys(state.types).length && ids.every((id) => state.types[id]);
   }
