@@ -239,6 +239,39 @@ describe("applyUnitCorrections", () => {
     ]);
   });
 
+  it("validates every scoring field of a fixed Unit and refuses a malformed one by id and field", () => {
+    const fix = (extra: Record<string, unknown>, drop: readonly string[] = []) => {
+      const s = scaffold(items);
+      const unit: Record<string, unknown> = { ...s.units[0]!, owner_verdict: "fix", normalized_summary: "A sharper summary", ...extra };
+      for (const k of drop) delete unit[k];
+      s.units[0] = unit;
+      return () => applyUnitCorrections(s.units, source, "c.json");
+    };
+    const id = source[0]!.id;
+    expect(fix({ tools: null })).toThrow(new RegExp(`c\\.json: units\\[0\\]: fixed Unit ${id}'s tools must be a list of strings \\(got null\\)`));
+    expect(fix({ domains: ["cloud", 3] })).toThrow(new RegExp(`fixed Unit ${id}'s domains must be a list of strings`));
+    expect(fix({ scope_signals: "org-wide" })).toThrow(/scope_signals must be a list of strings/);
+    expect(fix({ business_outcomes: [null] })).toThrow(/business_outcomes must be a list of strings/);
+    expect(fix({ seniority_signals: {} })).toThrow(/seniority_signals must be a list of strings/);
+    expect(fix({}, ["tools"])).toThrow(/tools must be a list of strings \(got undefined\)/);
+    expect(fix({ metrics: [{ claim: "x" }] })).toThrow(new RegExp(`fixed Unit ${id}'s metrics must be a list of \\{claim`));
+    expect(fix({ metrics: null })).toThrow(/metrics must be a list of/);
+    expect(fix({ confidence_score: 1.2 })).toThrow(new RegExp(`fixed Unit ${id}'s confidence_score must be a number in \\[0, 1\\]`));
+    expect(fix({}, ["confidence_score"])).toThrow(/confidence_score must be a number/);
+    expect(fix({ date_range: null })).toThrow(new RegExp(`fixed Unit ${id}'s date_range must be \\{start, end\\?\\}`));
+    expect(fix({ date_range: { start: "2020-01", until: "2021-01" } })).toThrow(/date_range must be/);
+
+    // A valid fix that edits scoring fields still passes; date_range stays optional.
+    const metric = { claim: "cut cost 30%", value: 30, unit: "%", direction: "down", confidence: "high" };
+    const ok = { tools: ["Kubernetes"], metrics: [metric], confidence_score: 0.8, date_range: { start: "2020-01" } };
+    const s = scaffold(items);
+    s.units[0] = { ...s.units[0]!, owner_verdict: "fix", ...ok };
+    const { items: out, provenance } = applyUnitCorrections(s.units, source, "c");
+    expect(out[0]).toMatchObject({ id, ...ok });
+    expect(provenance.fixed).toEqual([{ id, fields: ["confidence_score", "date_range", "metrics", "tools"] }]);
+    expect(fix({})).not.toThrow();
+  });
+
   it("treats an owner_corrected_raw_text equal to the saved raw_text on keep or drop as a confirmation", () => {
     const s = scaffold(items);
     s.units[0]!.owner_corrected_raw_text = source[0]!.raw_text;
@@ -317,6 +350,38 @@ describe("applyRequirementCorrections", () => {
     expect(provenance.kept).toEqual(source.filter((_, i) => i !== 2).map((q) => q.id));
     expect(provenance.dropped).toEqual([source[2]!.id]);
     expect(provenance.fixed).toEqual([]);
+  });
+
+  it("validates every scoring field of a fixed Requirement and refuses a malformed one by id and field", () => {
+    const fix = (extra: Record<string, unknown>, drop: readonly string[] = []) => {
+      const s = scaffold(items);
+      const req: Record<string, unknown> = { ...s.requirements[0]!, owner_verdict: "fix", owner_corrected_text: "Rewritten requirement text", ...extra };
+      for (const k of drop) delete req[k];
+      s.requirements[0] = req;
+      return () => applyRequirementCorrections(s.requirements, source, "c.json");
+    };
+    const id = source[0]!.id;
+    expect(fix({ keywords: "kubernetes" })).toThrow(
+      new RegExp(`c\\.json: requirements\\[0\\]: fixed Requirement ${id}'s keywords must be a list of strings \\(got "kubernetes"\\)`),
+    );
+    expect(fix({ keywords: ["a", 1] })).toThrow(/keywords must be a list of strings/);
+    expect(fix({}, ["keywords"])).toThrow(/keywords must be a list of strings \(got undefined\)/);
+    expect(fix({ tools: null })).toThrow(new RegExp(`fixed Requirement ${id}'s tools must be a list of strings`));
+    expect(fix({ domains: [{}] })).toThrow(/domains must be a list of strings/);
+    expect(fix({ must_have: "yes" })).toThrow(new RegExp(`fixed Requirement ${id}'s must_have must be true or false`));
+    expect(fix({ priority: "urgent" })).toThrow(new RegExp(`fixed Requirement ${id}'s priority must be one of high\\|medium\\|low \\(got "urgent"\\)`));
+    expect(fix({ category: "vibe" })).toThrow(/category must be one of skill\|tool\|domain\|experience_level\|scope\|soft_skill\|credential/);
+    expect(fix({}, ["category"])).toThrow(/category must be one of/);
+    expect(fix({ seniority_level: "god-tier" })).toThrow(/seniority_level must be one of junior\|mid\|senior\|staff\|principal\|director/);
+
+    // A valid fix that edits scoring fields still passes; seniority_level stays optional.
+    const ok = { keywords: ["distributed", "systems"], tools: ["Go"], domains: ["cloud"], priority: "low", category: "tool", seniority_level: "staff" };
+    const s = scaffold(items);
+    s.requirements[0] = { ...s.requirements[0]!, owner_verdict: "fix", ...ok };
+    const { items: out, provenance } = applyRequirementCorrections(s.requirements, source, "c");
+    expect(out[0]).toMatchObject({ id, ...ok });
+    expect(provenance.fixed).toEqual([{ id, fields: ["category", "domains", "keywords", "priority", "seniority_level", "tools"] }]);
+    expect(fix({})).not.toThrow();
   });
 
   it("refuses add, overrides on keep, and bad values", () => {

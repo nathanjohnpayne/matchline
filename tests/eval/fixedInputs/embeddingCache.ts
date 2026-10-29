@@ -19,6 +19,10 @@
  * chunks, appending each chunk's vectors as soon as it returns so an
  * interrupted run keeps what it paid for. Before each chunk it refuses
  * when the spend so far plus that chunk's bound would pass `maxUsd`.
+ * `load` accepts a file whose last line has no trailing newline (a
+ * seeded cache, say), so an append to a non-empty file that does not end
+ * in `\n` writes one first; otherwise the first new entry would join the
+ * last line and every later load would refuse the file.
  *
  * The guard prices tokens at the UTF-8 byte length of each text
  * (`embeddingTokenBound`), a strict upper bound for a byte-level BPE:
@@ -35,7 +39,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -136,6 +140,21 @@ function parseLine(raw: unknown, where: string): CacheLine {
     throw new Error(`${where}: dims ${r.dims} disagrees with a vector of length ${r.vector.length}`);
   }
   return { v: r.v, model: r.model, sha256: r.sha256, dims: r.dims, vector: r.vector as number[] };
+}
+
+/** Whether `path` is a non-empty file whose last byte is not `\n` (so an append must start a new line). */
+function lacksFinalNewline(path: string): boolean {
+  if (!existsSync(path)) return false;
+  const fd = openSync(path, "r");
+  try {
+    const { size } = fstatSync(fd);
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    readSync(fd, last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export class EmbeddingCache {
@@ -281,7 +300,8 @@ export class EmbeddingCache {
         lines.push(JSON.stringify(entry));
       });
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${lines.join("\n")}\n`, "utf8");
+      const separator = lacksFinalNewline(this.path) ? "\n" : "";
+      appendFileSync(this.path, `${separator}${lines.join("\n")}\n`, "utf8");
       embedded += chunk.length;
     }
     return { requests, embedded, inputTokens, usd };

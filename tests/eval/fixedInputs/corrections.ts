@@ -37,6 +37,16 @@
  *   `normalized_requirement` and `owner_must_have` overrides `must_have`;
  *   other in-place edits are taken as written. A `fix` must change
  *   something.
+ *
+ *   Every scoring field of a fixed item is checked, since the matcher
+ *   catches a scoring exception and omits the pair (which the A/B/C
+ *   decomposition would count as ranking loss). A fixed Unit's string
+ *   lists, `metrics`, `confidence_score` and `date_range` take the
+ *   checks an added Unit's do, and all but `date_range` must be present;
+ *   a fixed Requirement's `keywords`, `tools` and `domains` must be lists
+ *   of strings, `must_have` a boolean, `priority` and `category` (and
+ *   `seniority_level`, when set) values of the production enums. A
+ *   malformed field is refused with the item's id and the field's name.
  * - `drop`: left out.
  *
  * On a `keep` or `drop` item, an `owner_corrected_raw_text`,
@@ -91,6 +101,7 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
+import { ParsedRequirementV1Schema } from "../../../functions/src/prompts/parsing/jd.v1.schema.ts";
 import type { DateRange, ExperienceUnit, JobRequirementUnit, Metric } from "../../../functions/src/types/capability.ts";
 
 import type { FlowRecord } from "../flowRecord.ts";
@@ -329,22 +340,62 @@ function isMetric(v: unknown): v is Metric {
   );
 }
 
+/** The Unit list fields the matcher scores on (every one a list of strings). */
+const UNIT_LIST_FIELDS = ["skills", "tools", "domains", "seniority_signals", "scope_signals", "business_outcomes"] as const;
 /** Unit fields an `add` item may carry, besides owner-review fields (which are stripped). */
-const ADDED_UNIT_LIST_FIELDS = ["skills", "tools", "domains", "seniority_signals", "scope_signals", "business_outcomes"] as const;
 const ADDED_UNIT_FIELDS: readonly string[] = [
   "raw_text",
   "normalized_summary",
-  ...ADDED_UNIT_LIST_FIELDS,
+  ...UNIT_LIST_FIELDS,
   "metrics",
   "confidence_score",
   "date_range",
 ];
 
 /**
+ * Check the scoring fields of an added or fixed Unit: the string lists
+ * as lists of strings, `metrics` in the Unit `Metric` shape,
+ * `confidence_score` a number in [0, 1] and `date_range` `{start, end?}`.
+ * `subject` names the item in the message ("an added Unit", "fixed Unit
+ * <id>"). With `complete`, every field but `date_range` must be present
+ * (a fixed Unit is a whole saved Unit; an added one takes defaults for
+ * what it leaves unset). The matcher catches a scoring exception and
+ * omits the pair, which the decomposition would then count as ranking
+ * loss, so nothing reaches it unchecked.
+ */
+function checkUnitScoringFields(
+  item: Record<string, unknown>,
+  at: string,
+  subject: string,
+  options: { readonly complete: boolean },
+): void {
+  const unset = (v: unknown): boolean => v === undefined && !options.complete;
+  for (const field of UNIT_LIST_FIELDS) {
+    if (!unset(item[field]) && !isStringArray(item[field])) {
+      throw new Error(`${at}: ${subject}'s ${field} must be a list of strings (got ${JSON.stringify(item[field])})`);
+    }
+  }
+  if (!unset(item.metrics) && !(Array.isArray(item.metrics) && item.metrics.every(isMetric))) {
+    throw new Error(
+      `${at}: ${subject}'s metrics must be a list of {claim, value?, unit?, direction?: up|down, confidence: high|medium|low} ` +
+        `(got ${JSON.stringify(item.metrics)})`,
+    );
+  }
+  const c = item.confidence_score;
+  if (!unset(c) && (typeof c !== "number" || !Number.isFinite(c) || c < 0 || c > 1)) {
+    throw new Error(`${at}: ${subject}'s confidence_score must be a number in [0, 1] (got ${JSON.stringify(c)})`);
+  }
+  if (item.date_range !== undefined && !isDateRange(item.date_range)) {
+    throw new Error(
+      `${at}: ${subject}'s date_range must be {start, end?} with non-empty date strings (got ${JSON.stringify(item.date_range)})`,
+    );
+  }
+}
+
+/**
  * Check every field on an added Unit: no key outside `ADDED_UNIT_FIELDS`
- * (owner-review fields aside), the string lists as lists of strings,
- * `metrics` in the Unit `Metric` shape, and the optional confidence and
- * date range. Nothing reaches the matcher unchecked.
+ * (owner-review fields aside), then its scoring fields
+ * (`checkUnitScoringFields`). Nothing reaches the matcher unchecked.
  */
 function checkAddedFields(item: Record<string, unknown>, at: string): void {
   const allowed = new Set(ADDED_UNIT_FIELDS);
@@ -355,23 +406,41 @@ function checkAddedFields(item: Record<string, unknown>, at: string): void {
         `it may set only ${ADDED_UNIT_FIELDS.join(", ")} (and owner_* review fields)`,
     );
   }
-  for (const field of ADDED_UNIT_LIST_FIELDS) {
-    if (item[field] !== undefined && !isStringArray(item[field])) {
-      throw new Error(`${at}: an added Unit's ${field} must be a list of strings (got ${JSON.stringify(item[field])})`);
+  checkUnitScoringFields(item, at, "an added Unit", { complete: false });
+}
+
+/** The production JD-parsing enums, so the check cannot drift from what a flow saves. */
+const REQUIREMENT_SHAPE = ParsedRequirementV1Schema.shape;
+const REQUIREMENT_CATEGORIES: readonly string[] = REQUIREMENT_SHAPE.category.options;
+const REQUIREMENT_PRIORITIES: readonly string[] = REQUIREMENT_SHAPE.priority.options;
+const SENIORITY_LEVELS: readonly string[] = REQUIREMENT_SHAPE.seniority_level.unwrap().options;
+const REQUIREMENT_LIST_FIELDS = ["keywords", "tools", "domains"] as const;
+
+/**
+ * Check the scoring fields of a fixed Requirement: `keywords`, `tools`
+ * and `domains` as lists of strings, `must_have` a boolean, `priority`
+ * and `category` from the production enums, and `seniority_level`, when
+ * set, a level of the ladder. Same reason as `checkUnitScoringFields`.
+ */
+function checkRequirementScoringFields(item: Record<string, unknown>, at: string, subject: string): void {
+  for (const field of REQUIREMENT_LIST_FIELDS) {
+    if (!isStringArray(item[field])) {
+      throw new Error(`${at}: ${subject}'s ${field} must be a list of strings (got ${JSON.stringify(item[field])})`);
     }
   }
-  if (item.metrics !== undefined && !(Array.isArray(item.metrics) && item.metrics.every(isMetric))) {
-    throw new Error(
-      `${at}: an added Unit's metrics must be a list of {claim, value?, unit?, direction?: up|down, confidence: high|medium|low}`,
-    );
+  if (typeof item.must_have !== "boolean") {
+    throw new Error(`${at}: ${subject}'s must_have must be true or false (got ${JSON.stringify(item.must_have)})`);
   }
-  const c = item.confidence_score;
-  if (c !== undefined && (typeof c !== "number" || !Number.isFinite(c) || c < 0 || c > 1)) {
-    throw new Error(`${at}: an added Unit's confidence_score must be a number in [0, 1] (got ${JSON.stringify(c)})`);
-  }
-  if (item.date_range !== undefined && !isDateRange(item.date_range)) {
-    throw new Error(`${at}: an added Unit's date_range must be {start, end?} with non-empty date strings`);
-  }
+  const oneOf = (field: string, allowed: readonly string[], optional: boolean): void => {
+    const v = item[field];
+    if (optional && v === undefined) return;
+    if (typeof v !== "string" || !allowed.includes(v)) {
+      throw new Error(`${at}: ${subject}'s ${field} must be one of ${allowed.join("|")} (got ${JSON.stringify(v)})`);
+    }
+  };
+  oneOf("priority", REQUIREMENT_PRIORITIES, false);
+  oneOf("category", REQUIREMENT_CATEGORIES, false);
+  oneOf("seniority_level", SENIORITY_LEVELS, true);
 }
 
 interface Applied<T> {
@@ -481,6 +550,7 @@ export function applyUnitCorrections(
     if (!nonEmpty(after.normalized_summary) || !isStringArray(after.skills)) {
       throw new Error(`${at}: a fixed Unit needs a normalized_summary and a skills list`);
     }
+    checkUnitScoringFields(after, at, `fixed Unit ${id}`, { complete: true });
     const fields = changedFields(before, after);
     if (fields.length === 0) throw new Error(`${at}: Unit ${id} is marked fix but changes nothing`);
     out.push(after as unknown as ExperienceUnit);
@@ -572,6 +642,7 @@ export function applyRequirementCorrections(
       ...(hasMustHave && { must_have: mustHave }),
     };
     if (!nonEmpty(after.normalized_requirement)) throw new Error(`${at}: a fixed Requirement needs a normalized_requirement`);
+    checkRequirementScoringFields(after, at, `fixed Requirement ${id}`);
     const fields = changedFields(before, after);
     if (fields.length === 0) throw new Error(`${at}: Requirement ${id} is marked fix but changes nothing`);
     out.push(after as unknown as JobRequirementUnit);

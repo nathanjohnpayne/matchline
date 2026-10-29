@@ -101,6 +101,30 @@ describe("EmbeddingCache", () => {
     expect(reloaded.plan(texts).uncached).toEqual(["c three", "d four"]);
   });
 
+  it("starts a new line before appending to a seeded cache whose last line has no trailing newline", async () => {
+    const path = join(base, "seeded.jsonl");
+    const seeded = cacheLinesFor([{ text: "seeded text", vector: textVector("seeded text") }]).trimEnd();
+    writeFileSync(path, seeded);
+    expect(readFileSync(path, "utf8").endsWith("\n")).toBe(false);
+    const cache = EmbeddingCache.load(path, { root });
+    expect(cache.has("seeded text")).toBe(true);
+    const client = mockOpenAi();
+    const result = await cache.fill(["seeded text", "fresh text"], { client, maxUsd: 1 });
+    expect(result).toMatchObject({ requests: 1, embedded: 1 });
+    expect(client.embeddings.create).toHaveBeenCalledWith({ model: "text-embedding-3-small", input: ["fresh text"] });
+    // Both entries sit on their own lines, and the file reloads with both.
+    const fresh = cacheLinesFor([{ text: "fresh text", vector: textVector("fresh text") }]);
+    expect(readFileSync(path, "utf8")).toBe(`${seeded}\n${fresh}`);
+    const reloaded = EmbeddingCache.load(path, { root });
+    expect(reloaded.size).toBe(2);
+    expect(reloaded.get("seeded text")).toEqual(textVector("seeded text"));
+    expect(reloaded.get("fresh text")).toEqual(textVector("fresh text"));
+    // A file that already ends in a newline gets no blank line.
+    await reloaded.fill(["third text"], { client, maxUsd: 1 });
+    expect(readFileSync(path, "utf8")).not.toMatch(/\n\n/);
+    expect(EmbeddingCache.load(path, { root }).size).toBe(3);
+  });
+
   it("refuses the next chunk when it would pass the bound", async () => {
     const path = join(base, "e.jsonl");
     const texts = ["x".repeat(4000), "y".repeat(4000)];
