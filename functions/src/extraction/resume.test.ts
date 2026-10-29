@@ -681,6 +681,59 @@ describe("extractFromResume — units returned as a JSON string (#650)", () => {
     expect(systemOf(client, 2)).toContain("Your previous two attempts failed schema validation.");
   });
 
+  it("names the shape in the retry reminder after a units string decoded but its contents failed", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const { result, client, record } = await extractWith([
+      { units: JSON.stringify([{ wrong_shape: true }]) },
+      VALID_RESPONSE,
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(record.mock.calls[0]![0]).toMatchObject({ attempt: 0, recovered: "units-string" });
+    expect(systemOf(client, 0)).not.toContain(UNITS_STRING_REMINDER_TEXT);
+    expect(systemOf(client, 1)).toContain(UNITS_STRING_REMINDER_TEXT);
+  });
+
+  it("reads content that is not an array as no tool_use, retries it, and records usage on every attempt", async () => {
+    vi.spyOn(logger, "error").mockImplementation(() => {});
+    const noArray = { ...mockMessage(VALID_RESPONSE), content: undefined } as unknown as Anthropic.Messages.Message;
+    const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+    const client = mockClient([noArray, noArray, noArray]);
+
+    const err = await extractFromResume("Synthetic resume text", { ownerUid: "user-alice" }, { client, record }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(ExtractionError);
+    expect((err as ExtractionError).failures.map((f) => [f.attempt, f.kind])).toEqual([
+      [0, "no_tool_use"],
+      [1, "no_tool_use"],
+      [2, "no_tool_use"],
+    ]);
+    expect(record).toHaveBeenCalledTimes(3);
+    expect(record.mock.calls.map(([usage]) => usage.attempt)).toEqual([0, 1, 2]);
+  });
+
+  it("skips a null content element instead of throwing before usage is recorded", async () => {
+    const toolUse = mockMessage(VALID_RESPONSE).content[0]!;
+    const onlyNull = { ...mockMessage(VALID_RESPONSE), content: [null] } as unknown as Anthropic.Messages.Message;
+    const nullThenTool = { ...mockMessage(VALID_RESPONSE), content: [null, toolUse] } as unknown as Anthropic.Messages.Message;
+    const record = vi.fn<typeof RecordUsage>(async () => 0.01);
+    const client = mockClient([onlyNull, nullThenTool]);
+
+    const units = await extractFromResume("Synthetic resume text", { ownerUid: "user-alice" }, {
+      client,
+      record,
+      generateId: () => "id-1",
+      now: () => new Date("2026-10-29T00:00:00Z"),
+    });
+
+    // `[null]` is no tool_use and retries; `[null, tool_use]` finds the call.
+    expect(units).toHaveLength(1);
+    expect(client.messages.create).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
   it("does not add the units reminder after an unrelated schema failure", async () => {
     const { result, client } = await extractWith([{ units: [{ wrong_shape: true }] }, VALID_RESPONSE]);
 

@@ -7,8 +7,9 @@
  *
  * Two views:
  *   - per stage / subtask: n, p50, p95, max of `latencyMs`, and how
- *     many calls the stage recovered before validation (`recovered`,
- *     #650);
+ *     many calls had their tool input decoded before validation
+ *     (`recovered`, #650; the attempt may still have failed and
+ *     retried);
  *   - per application run: calls that share an `applicationId`
  *     (generation and validation tag it), with the call count, the
  *     sum of call latency, and the wall-clock span from the first call's
@@ -53,7 +54,10 @@ export interface StageRow extends LatencyStats {
   readonly subtask: string;
   readonly models: readonly string[];
   readonly costUsd: number;
-  /** Calls carrying a `recovered` kind: output repaired instead of retried. */
+  /**
+   * Calls carrying a `recovered` kind: the tool input was decoded before
+   * validation. The attempt may still have failed and retried.
+   */
   readonly recovered: number;
 }
 

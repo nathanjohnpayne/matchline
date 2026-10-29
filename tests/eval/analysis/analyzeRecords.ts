@@ -114,12 +114,19 @@ export interface ArmSummary {
   readonly repeatedMatchReplays: number;
   readonly errorKinds: Readonly<Record<string, number>>;
   /**
-   * Live records whose stage recovered the model's output before
-   * validating it, by recovery kind (the usage record's `recovered`
-   * field, e.g. extraction's `units-string`, #650). A recovered call did
-   * not fail, so it never shows in `errorKinds`.
+   * Live records whose tool input the stage decoded before validation,
+   * by recovery kind (the usage record's `recovered` field, e.g.
+   * extraction's `units-string`, #650). The attempt may still have failed
+   * validation and retried; `recoveriesWithoutRetry` counts the ones that
+   * did not.
    */
   readonly recoveries: Readonly<Record<string, number>>;
+  /**
+   * The subset of `recoveries` that avoided a retry: the recovered call
+   * was its step's last attempt in the flow and did not fail (see
+   * `recoveryAvoidedRetry`).
+   */
+  readonly recoveriesWithoutRetry: Readonly<Record<string, number>>;
   /** Live (non-replayed) usage records. */
   readonly records: number;
   readonly replayedRecords: number;
@@ -320,6 +327,23 @@ function flowMetrics(flow: FlowRecord, task: Task, labels: AnalysisLabels): Metr
   return jdMetrics(flow, l);
 }
 
+/**
+ * Whether a recovered call avoided a retry: no later attempt of its step
+ * in the flow recorded usage, and the flow's thrown `failures` (present
+ * only when that step gave up) have no entry at its attempt. The second
+ * check covers a recovered attempt that failed validation and was
+ * followed only by transport errors, which record no usage.
+ */
+function recoveryAvoidedRetry(flow: FlowRecord, call: RecordedCall): boolean {
+  const attempt = call.attempt ?? 0;
+  const laterAttempt = flow.calls.some(
+    (c) => c.step === call.step && c.replayed === call.replayed && (c.attempt ?? 0) > attempt,
+  );
+  if (laterAttempt) return false;
+  if (flow.error?.step !== call.step || flow.failures === null) return true;
+  return !flow.failures.some((f) => (f as { attempt?: unknown } | null)?.attempt === attempt);
+}
+
 function liveCalls(flows: readonly FlowRecord[]): RecordedCall[] {
   return flows.flatMap((f) => f.calls.filter((c) => !c.replayed));
 }
@@ -361,8 +385,15 @@ function summarizeArm(
   }
   const live = liveCalls(flows);
   const recoveries: Record<string, number> = {};
-  for (const c of live) {
-    if (typeof c.recovered === "string") recoveries[c.recovered] = (recoveries[c.recovered] ?? 0) + 1;
+  const recoveriesWithoutRetry: Record<string, number> = {};
+  for (const f of flows) {
+    for (const c of f.calls) {
+      if (c.replayed || typeof c.recovered !== "string") continue;
+      recoveries[c.recovered] = (recoveries[c.recovered] ?? 0) + 1;
+      if (recoveryAvoidedRetry(f, c)) {
+        recoveriesWithoutRetry[c.recovered] = (recoveriesWithoutRetry[c.recovered] ?? 0) + 1;
+      }
+    }
   }
   const replayed = flows.reduce((n, f) => n + f.calls.filter((c) => c.replayed).length, 0);
 
@@ -423,6 +454,7 @@ function summarizeArm(
     repeatedMatchReplays: scoredArm.repeatedMatchReplays,
     errorKinds,
     recoveries,
+    recoveriesWithoutRetry,
     records: live.length,
     replayedRecords: replayed,
     retryShare: live.length === 0 ? null : live.filter((c) => c.retry).length / live.length,
@@ -595,15 +627,16 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 
   lines.push("", "## Arms", "");
   lines.push(
-    "| arm | flows | failed | in task step | refusals | error kinds | recoveries | task outputs | replayed task outputs | repeated replays dropped | repeated match replays dropped | " +
+    "| arm | flows | failed | in task step | refusals | error kinds | recoveries | recoveries without retry | task outputs | replayed task outputs | repeated replays dropped | repeated match replays dropped | " +
       "live records | retry share | truncations | replayed records | invocations | configs | modeled $/flow |",
   );
-  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   const counts = (byKind: Readonly<Record<string, number>>): string =>
     Object.entries(byKind).sort(([x], [y]) => x.localeCompare(y)).map(([k, n]) => `${k} ${n}`).join(", ") || "—";
   for (const a of result.arms) {
     lines.push(
       `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.taskStepFailures} | ${a.refusals} | ${counts(a.errorKinds)} | ${counts(a.recoveries)} | ` +
+        `${counts(a.recoveriesWithoutRetry)} | ` +
         `${a.taskOutputFlows} | ${a.replayedTaskFlows} | ${a.repeatedReplays} | ${a.repeatedMatchReplays} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
         `${a.truncations} | ${a.replayedRecords} | ${a.invocations.length} | ${a.configs} | ` +
         `${a.modeledCostPerFlowUsd === null ? "—" : `$${a.modeledCostPerFlowUsd.toFixed(4)}`} |`,

@@ -16,15 +16,17 @@
  *   4. After 2 retries (3 total attempts), throw `ExtractionError`
  *      with the per-attempt failure log.
  *
- * One recovery runs before validation and spends no attempt (#650):
- * when the tool call's `units` is a string that `JSON.parse`s to an
- * array (`claude-sonnet-4-6` sometimes double-encodes it on long
- * résumés), that array is validated in its place. The attempt's usage
- * record, and any schema_error the decoded array still fails with,
- * carry `recovered: "units-string"`, and a warn line without résumé
- * content is logged. A string that does not decode to an array fails
- * exactly as before, and the next attempt's reminder says `units`
- * must be a JSON array, not a string. See `prepareToolInput`.
+ * One recovery runs before validation (#650): when the tool call's
+ * `units` is a string that `JSON.parse`s to an array
+ * (`claude-sonnet-4-6` sometimes double-encodes it on long résumés),
+ * that array is validated in its place, so a well-formed one succeeds
+ * without spending a retry. The attempt's usage record, and any
+ * schema_error the decoded array still fails with, carry
+ * `recovered: "units-string"`, and a warn line without résumé content
+ * is logged. A string that does not decode to an array fails exactly
+ * as before. After any attempt whose `units` arrived as a string,
+ * decoded or not, every later attempt's reminder says `units` must be
+ * a JSON array, not a string. See `prepareToolInput`.
  *
  * `recordUsage` fires after every attempt, successful or not, so the
  * cost accounting in #47 doesn't undercount retries.
@@ -123,10 +125,10 @@ const RETRY_REMINDERS: readonly string[] = [
 ];
 
 /**
- * Appended after the attempt's reminder once an earlier attempt
- * returned `units` as a string and failed (#650). The generic
- * reminders above did not change that shape in the #495 runs, so this
- * one names it.
+ * Appended after the attempt's reminder once an earlier attempt's
+ * `units` arrived as a string, whether or not it decoded (#650). The
+ * generic reminders above did not change that shape in the #495 runs,
+ * so this one names it.
  */
 const UNITS_STRING_REMINDER =
   "\n\n`units` must be a JSON array, not a string. A previous response returned `units` as a string; return the array of Unit objects itself, not a string that encodes it.";
@@ -182,12 +184,15 @@ type ToolUseBlock = Extract<Anthropic.Messages.ContentBlock, { type: "tool_use" 
 
 /**
  * The response's first tool_use block. Guarded so a malformed
- * `content` cannot throw ahead of usage recording, which now waits on
- * this lookup.
+ * `content` (not an array, or holding a non-object element) cannot
+ * throw ahead of usage recording, which now waits on this lookup; it
+ * reads as no tool_use and is retried like one.
  */
 function findToolUse(content: Anthropic.Messages.Message["content"]): ToolUseBlock | undefined {
   if (!Array.isArray(content)) return undefined;
-  return content.find((b): b is ToolUseBlock => b.type === "tool_use");
+  return content.find(
+    (b): b is ToolUseBlock => b !== null && typeof b === "object" && b.type === "tool_use",
+  );
 }
 
 export async function extractFromResume(
@@ -223,9 +228,9 @@ export async function extractFromResume(
   });
 
   const failures: ExtractionAttemptFailure[] = [];
-  // Set once an attempt returns `units` as a string, so every later
-  // attempt's reminder names the shape (#650). A later attempt runs
-  // only if that one failed.
+  // Set after any attempt whose `units` arrived as a string, decoded or
+  // not, so every later attempt's reminder names the shape (#650). A
+  // later attempt runs only if that one failed.
   let sawUnitsString = false;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
