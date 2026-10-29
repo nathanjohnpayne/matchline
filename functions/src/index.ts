@@ -55,3 +55,13 @@ export { validateAssetCallable as validateAsset } from "./callables/validateAsse
  * calls `validateAsset` next to flip the status.
  */
 export { generateResumeCallable as generateResume } from "./callables/generateResume.js";
+
+/**
+ * Export a validated résumé as a downloadable file (#521). Re-checks
+ * the export gate on the server against the attestation for the
+ * asset's current content, writes one private object at
+ * `applications/{applicationId}/{assetId}.{ext}` and returns a
+ * short-lived signed URL. Plain text today; formats register in
+ * `export/registry.ts`.
+ */
+export { exportAssetCallable as exportAsset } from "./callables/exportAsset.js";

@@ -1,10 +1,17 @@
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { AssetRef, ValidationFlag } from "../../types/crm.ts";
-import { unitEvidenceVersion } from "../../../functions/src/validation/unitEvidenceVersion.ts";
+import type { ValidationAttestation } from "../../../functions/src/validation/attestation.ts";
 import {
-  assetContentVersion,
-  type ValidationAttestation,
-} from "../../../functions/src/validation/attestation.ts";
+  attestationRefusal,
+  citedEvidenceCounts,
+  citedUnitIdsOf,
+  isVersionMap,
+} from "../../../functions/src/validation/exportGate.ts";
+
+// The counting and attestation checks are shared with the server's
+// `exportAsset` callable (#521), which re-checks this gate before it
+// renders anything; see `functions/src/validation/exportGate.ts`.
+export { isOlderEvidenceVersion } from "../../../functions/src/validation/exportGate.ts";
 
 /**
  * Decide whether the Export button is enabled, and the tooltip text
@@ -94,25 +101,6 @@ export type ExportGateState =
       readonly canRevalidate?: boolean;
     };
 
-/**
- * The recorded-version forms older than `UNIT_EVIDENCE_VERSION_PREFIX`:
- * `ev1:` and `ev2:`, and the pre-prefix form, which recorded the Unit's
- * `updated_at` (an ISO timestamp). Listed rather than "anything not
- * `ev3:`", so a newer prefix written by functions deployed ahead of
- * this app bundle is not mistaken for an older one (#485 review).
- */
-const OLDER_EVIDENCE_VERSION = /^(?:ev1:|ev2:|\d{4}-\d{2}-\d{2}T)/;
-
-/**
- * True when `recorded` is an evidence version in a known older form:
- * the verdict was reached on text the validator no longer reads.
- * False for the current prefix and for any form this bundle does not
- * know, such as a newer prefix.
- */
-export function isOlderEvidenceVersion(recorded: string): boolean {
-  return OLDER_EVIDENCE_VERSION.test(recorded);
-}
-
 /** Count of unresolved (i.e. non-traced) flags. */
 function unresolvedFlagCount(flags: readonly ValidationFlag[]): number {
   return flags.filter(
@@ -123,18 +111,7 @@ function unresolvedFlagCount(flags: readonly ValidationFlag[]): number {
 /** Every Unit id cited by any item of the asset's content. */
 export function citedUnitIds(asset: AssetRef): ReadonlySet<string> {
   const content = asset.generated_content;
-  const ids = new Set<string>();
-  if (content === undefined) return ids;
-  const items = [
-    content.summary,
-    ...content.bullets,
-    ...content.skills,
-    ...(content.education ?? []),
-  ];
-  for (const item of items) {
-    for (const id of item.source_unit_ids) ids.add(id);
-  }
-  return ids;
+  return content === undefined ? new Set<string>() : citedUnitIdsOf(content);
 }
 
 /**
@@ -148,32 +125,13 @@ function citedEvidenceProblem(
   versions: Readonly<Record<string, string>>,
   unitsById: ReadonlyMap<string, ExperienceUnit>,
 ): { readonly reason: string; readonly canRevalidate: boolean } | null {
-  let missing = 0;
-  let unapproved = 0;
-  let outdated = 0;
-  let edited = 0;
-  for (const id of citedUnitIds(asset)) {
-    const unit = unitsById.get(id);
-    if (unit === undefined) {
-      missing += 1;
-    } else if (unit.user_approved !== true) {
-      unapproved += 1;
-    } else {
-      const recorded = versions[id];
-      if (typeof recorded === "string" && isOlderEvidenceVersion(recorded)) {
-        // Recorded under an earlier evidence format (#485): the Unit
-        // may be untouched, but the verdict was not reached on the text
-        // the validator reads now.
-        outdated += 1;
-      } else if (recorded !== unitEvidenceVersion(unit)) {
-        // A cited Unit the validator did not load (absent key) was not
-        // evidence for this verdict either. A prefix newer than
-        // UNIT_EVIDENCE_VERSION_PREFIX lands here too: this bundle
-        // cannot check it, so it is not claimed to be outdated.
-        edited += 1;
-      }
-    }
-  }
+  const content = asset.generated_content;
+  if (content === undefined) return null;
+  const { missing, unapproved, outdated, edited } = citedEvidenceCounts(
+    content,
+    versions,
+    unitsById,
+  );
   const units = (n: number): string => (n === 1 ? "1 Unit" : `${n} Units`);
   const verb = (n: number, one: string, many: string): string => (n === 1 ? one : many);
   if (missing > 0) {
@@ -222,17 +180,19 @@ export type AttestationLookup = ValidationAttestation | null | undefined;
  * The asset's `passed` is trusted only when the server attested the
  * asset's CURRENT content as passed. The asset-level status sits in a
  * client-writable list, so it can say `passed` for content no
- * validator ever saw; the attestation cannot (#502).
+ * validator ever saw; the attestation cannot (#502). An attestation
+ * without a `validated_unit_versions` map records no evidence to
+ * re-check, so it does not count either (the server refuses it as
+ * `evidence-unrecorded`).
  */
 function attestedPassed(
   asset: AssetRef,
   attestation: ValidationAttestation,
 ): boolean {
   return (
-    attestation.asset_id === asset.id &&
-    attestation.status === "passed" &&
     asset.generated_content !== undefined &&
-    attestation.content_version === assetContentVersion(asset.generated_content)
+    isVersionMap(attestation.validated_unit_versions as unknown) &&
+    attestationRefusal({ assetId: asset.id }, asset.generated_content, attestation) === null
   );
 }
 

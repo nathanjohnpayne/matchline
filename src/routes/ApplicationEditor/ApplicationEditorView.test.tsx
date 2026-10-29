@@ -8,6 +8,7 @@ import type {
   GeneratedAssetContent,
   ValidationFlag,
 } from "../../types/crm.ts";
+import type { ExportFormat } from "../../services/export.ts";
 
 import {
   assetContentVersion,
@@ -877,6 +878,44 @@ describe("ApplicationEditorView", () => {
     );
     expect(html).toContain('data-export-enabled="false"');
     expect(html).toContain("Export is not available yet.");
+  });
+
+  it("renders Export as a closed menu button (#523): aria-haspopup=menu, collapsed, no menu in the markup", () => {
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={passed}
+        units={[]}
+        attestation={attestFor(passed)}
+        onExport={() => undefined}
+      />,
+    );
+    expect(html).toMatch(/<button[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"[^>]*data-testid="export-button"/);
+    expect(html).toContain('data-export-busy="false"');
+    expect(html).not.toContain('data-testid="export-menu"');
+    expect(html).not.toContain('data-testid="export-error"');
+    expect(html).toContain("Export");
+  });
+
+  it("accepts a format-aware export handler (the container's exportAndDownload signature)", () => {
+    // A type-level check only: static markup never runs the handler, so an
+    // assertion inside it would never execute. That choosing Text passes
+    // "txt" is pinned in ApplicationEditorView.export.dom.test.tsx.
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
+    const onExport: (format: ExportFormat) => Promise<unknown> = (format) => Promise.resolve(format);
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={passed}
+        units={[]}
+        attestation={attestFor(passed)}
+        onExport={onExport}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="true"');
   });
 
   it("hides Remove on the popover when onRemoveBullet handler is absent (no silent no-ops)", () => {

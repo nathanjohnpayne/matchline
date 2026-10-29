@@ -262,6 +262,15 @@ describe("exportGateState: server attestation", () => {
     expect(exportGateState(a, ALL(), attest(a, { asset_id: "other" })).enabled).toBe(false);
   });
 
+  it("blocks, without throwing, an attestation with no validated_unit_versions, and offers a re-run", () => {
+    const a = passedAsset();
+    const { validated_unit_versions: _dropped, ...rest } = attest(a);
+    const state = exportGateState(a, ALL(), rest as unknown as ValidationAttestation);
+    expect(state.enabled).toBe(false);
+    expect(state.disabledReason).toContain("couldn't be confirmed");
+    expect(state.enabled === false && state.canRevalidate).toBe(true);
+  });
+
   it("keeps the status-based copy for pending, stale and failed whatever the attestation says", () => {
     const a = passedAsset();
     const stale = exportGateState({ ...a, validation_status: "stale" }, ALL(), attest(a));

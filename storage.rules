@@ -1,0 +1,24 @@
+rules_version = '2';
+
+// Cloud Storage security rules (#521).
+//
+// Storage holds résumé exports only. The `exportAsset` callable writes
+// them with the admin SDK, which bypasses these rules, and hands the
+// owner a short-lived signed URL, which is the only way to read one.
+// No client — not the owner, not another user, not an anonymous caller
+// — may read, list, write, overwrite or delete anything here.
+// `tests/storage-rules.test.ts` pins this under the Storage emulator.
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Export files: applications/{applicationId}/{assetId}.{ext}.
+    match /applications/{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    // Default deny. Nothing else uses client Storage yet; a feature
+    // that needs it (artifact upload, #519) opens its own path here.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
