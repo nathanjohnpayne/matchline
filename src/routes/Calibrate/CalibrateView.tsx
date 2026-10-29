@@ -26,8 +26,10 @@ export type DeckSource = "account" | "file";
 /** The state of saving to the account (decks opened from a file only save in the browser). */
 export type SaveState =
   | { readonly kind: "idle" | "saving" | "saved" }
-  /** A save failed (offline, timed out); it is retried. */
+  /** A save is not confirmed yet (offline); it is still queued and lands when it can. */
   | { readonly kind: "error"; readonly message: string }
+  /** A save was refused; finding out why. Labelling is already paused. */
+  | { readonly kind: "checking" }
   /** Another device saved this deck since this one read it; the account is at `accountRev`. */
   | { readonly kind: "conflict"; readonly accountRev: number }
   /** The deck was removed from the account, or replaced with different content. */
@@ -36,7 +38,7 @@ export type SaveState =
   | { readonly kind: "refused"; readonly message: string };
 
 /** Save states that stop labelling on this device until the owner resolves them. */
-const LOCKING: readonly SaveState["kind"][] = ["conflict", "removed", "replaced", "refused"];
+const LOCKING: readonly SaveState["kind"][] = ["checking", "conflict", "removed", "replaced", "refused"];
 
 export interface DeckRun {
   readonly deck: Deck;
@@ -380,13 +382,15 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
       </div>
       {saveState.kind === "error" && (
         <p role="alert" className="mt-2 text-sm text-amber-600 dark:text-amber-500">
-          Not saved to your account yet ({saveState.message}). Progress is kept in this browser and the save is retried.
+          Not saved to your account yet ({saveState.message}). Progress is kept in this browser, and the save completes when the connection returns.
         </p>
       )}
       {locked && (
         <div role="alert" className="mt-2 space-y-2 rounded-md border border-amber-500/50 p-3 text-sm text-amber-700 dark:text-amber-400">
           <p>
-            {saveState.kind === "conflict"
+            {saveState.kind === "checking"
+              ? "Your account refused the last save. Checking why; labelling here is paused."
+              : saveState.kind === "conflict"
               ? "This deck was saved from another device after this one opened it. Labelling here is paused so neither copy overwrites the other."
               : saveState.kind === "removed"
                 ? "This deck was removed from your account. Labelling here is paused; this device's labels can still be downloaded."

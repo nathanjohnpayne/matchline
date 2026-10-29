@@ -372,23 +372,66 @@ describe("Calibrate container with account decks", () => {
     expect(Object.keys(sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
   });
 
-  it("retries a failed save and says so inline meanwhile", async () => {
-    const account = fakeAccount([deck]);
-    let fail = true;
-    const services = {
-      ...account.services,
-      saveAccountSession: (d: Deck, st: StoredSession, base: number) => (fail ? Promise.reject(new Error("offline")) : account.services.saveAccountSession(d, st, base)),
+  /** A save the test settles by hand, like a write queued while offline. */
+  function deferredSaves(account: ReturnType<typeof fakeAccount>) {
+    const queue: { run: () => Promise<number>; resolve: (n: number) => void; reject: (e: unknown) => void }[] = [];
+    const save = (d: Deck, st: StoredSession, base: number) =>
+      new Promise<number>((resolve, reject) => queue.push({ run: () => account.services.saveAccountSession(d, st, base), resolve, reject }));
+    const land = async () => {
+      const next = queue.shift()!;
+      await act(async () => {
+        await next.run().then(next.resolve, next.reject);
+      });
     };
-    render(<Calibrate services={services} />);
+    return { save, queue, land };
+  }
+
+  it("never sends a second write while one is unsettled, shows the wait, and lands both in order", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    render(<Calibrate services={{ ...account.services, saveAccountSession: slow.save }} slowSaveMs={50} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start" }));
     await screen.findByTestId("calibrate-card");
     key("ArrowRight");
-    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("offline");
-    expect(screen.getByText(/1 of 3 labelled/)).toBeTruthy();
-    fail = false;
-    await screen.findByText(/· saved/, undefined, { timeout: 8000 });
-    expect(account.calls.saves).toEqual([0]);
-  }, 12_000);
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    key("ArrowRight");
+    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("waiting for the connection");
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(slow.queue).toHaveLength(1); // the second decision waits for the first write
+    await slow.land();
+    await waitFor(() => expect(slow.queue).toHaveLength(1));
+    await slow.land();
+    await saved();
+    expect(account.calls.saves).toEqual([0, 1]);
+  });
+
+  it("resumes this device's own labels after a reload between two saves", async () => {
+    const account = fakeAccount([deck]);
+    const slow = deferredSaves(account);
+    const first = render(<Calibrate services={{ ...account.services, saveAccountSession: slow.save }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await waitFor(() => expect(slow.queue).toHaveLength(1), { timeout: 3000 });
+    key("ArrowRight"); // pending behind the first write
+    await slow.land(); // the first write lands; the second is now in flight
+    first.unmount(); // the tab goes before the second lands
+    render(<Calibrate services={account.services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    await screen.findByTestId("calibrate-card");
+    expect(screen.getByText(/2 of 3 labelled/)).toBeTruthy();
+    expect(screen.queryByText(/set aside/)).toBeNull();
+  });
+
+  it("pauses on a save the account can never accept, with the reason", async () => {
+    const account = fakeAccount([deck]);
+    render(<Calibrate services={{ ...account.services, saveAccountSession: () => Promise.reject(new Error("The session for demo-cell is too large to store.")) }} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("too large");
+    expect((screen.getByRole("button", { name: /True/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
 
   it("pauses labelling when another device saved in between, then keeps this device's copy on request", async () => {
     const account = fakeAccount([deck]);

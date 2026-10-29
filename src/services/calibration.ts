@@ -206,7 +206,9 @@ export async function deleteAccountDeck(deckId: string): Promise<void> {
 
 /**
  * Save a deck's session to the owner's account, replacing revision
- * `baseRev`; resolves to the new revision. The rules refuse it
+ * `baseRev`; resolves to the new revision once the write is committed,
+ * which offline can be much later. Any rejection is final: the SDK retries
+ * network failures itself and rejects only what will not succeed. The rules refuse it
  * (permission-denied) when the stored revision is no longer `baseRev`
  * (another device saved since), when the stored deck has different
  * content, or when the deck was removed; `inspectAccountSession` tells
@@ -216,7 +218,10 @@ export async function saveAccountSession(deck: Deck, stored: StoredSession, base
   const data = buildSessionDoc(deck, stored, getOwnerUidOrThrow(), now, baseRev);
   const release = beginAppBusy("calibration.saveSession");
   try {
-    await withTimeout(setDoc(typedDoc<SessionDoc>(SESSIONS, data.id), data), WRITE_TIMEOUT_MS, "Saving your labels");
+    // No timeout here: offline, the SDK keeps this write queued and commits it
+    // later, so giving up on it and sending another would race the two (and
+    // the compare-and-swap would refuse ours). The caller shows the wait.
+    await setDoc(typedDoc<SessionDoc>(SESSIONS, data.id), data);
     return data.rev;
   } finally {
     release();

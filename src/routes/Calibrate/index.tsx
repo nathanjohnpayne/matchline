@@ -37,8 +37,8 @@ import { clearSession, loadSession, saveSession } from "./storage.ts";
 
 /** Account saves are coalesced: at most one write per deck in flight, the latest state after this pause. */
 export const SAVE_DELAY_MS = 800;
-/** Retry delays after a failed (not refused) save. */
-const RETRY_MS = [5_000, 15_000, 60_000];
+/** After this long unacknowledged, a save is shown as waiting for the connection. */
+export const SLOW_SAVE_MS = 20_000;
 
 export interface CalibrationServices {
   readonly listAccountDecks: () => Promise<AccountDeckList>;
@@ -124,7 +124,14 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly services?: CalibrationServices }): ReactElement {
+export default function Calibrate({
+  services = FIRESTORE_SERVICES,
+  slowSaveMs = SLOW_SAVE_MS,
+}: {
+  readonly services?: CalibrationServices;
+  /** Injectable for tests. */
+  readonly slowSaveMs?: number;
+}): ReactElement {
   const [runs, setRuns] = useState<DeckRun[]>([]);
   const [active, setActive] = useState(0);
   const [openCount, setOpenCount] = useState(0);
@@ -135,13 +142,12 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
   const reducedMotion = usePrefersReducedMotion();
 
   // Per deck: the account revision this device's next write replaces, the
-  // latest unsaved session, the decks with a write in flight, those stopped
-  // by a refused write, and the retry count after failures.
+  // latest unsaved session, the decks with a write in flight, and those
+  // stopped by a refused write.
   const accountRev = useRef(new Map<string, number>());
   const pending = useRef(new Map<string, { deck: Deck; stored: StoredSession }>());
   const inflight = useRef(new Set<string>());
   const stopped = useRef(new Set<string>());
-  const retries = useRef(new Map<string, number>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setSaveState = useCallback((deckId: string, state: SaveState) => {
@@ -164,30 +170,34 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
       inflight.current.add(deckId);
       const base = accountRev.current.get(deckId) ?? -1;
       setSaveState(deckId, { kind: "saving" });
+      // Offline, a write stays queued until the connection returns; say so, but
+      // never send a second write for this deck while this one is unsettled.
+      const slow = setTimeout(() => setSaveState(deckId, { kind: "error", message: "waiting for the connection" }), slowSaveMs);
       services.saveAccountSession(item.deck, item.stored, base).then(
         (rev) => {
+          clearTimeout(slow);
           inflight.current.delete(deckId);
-          retries.current.delete(deckId);
           accountRev.current.set(deckId, rev);
-          // This browser's copy of that state now builds on the new revision.
-          if (!pending.current.has(deckId)) saveSession({ ...item.stored, base_rev: rev });
+          // This browser's newest copy builds on the new revision, including a
+          // state still pending (it descends from the one just written), so a
+          // reload before the next write lands resumes it rather than setting it aside.
+          const newest = pending.current.get(deckId)?.stored ?? item.stored;
+          saveSession({ ...newest, base_rev: rev });
           if (pending.current.has(deckId)) flushRef.current();
           else setSaveState(deckId, { kind: "saved" });
         },
         async (err: unknown) => {
+          clearTimeout(slow);
           inflight.current.delete(deckId);
-          if (!isPermissionDenied(err)) {
-            // Offline, timed out, or transient: keep the newest state and try again later.
-            if (!pending.current.has(deckId)) pending.current.set(deckId, item);
-            const attempt = retries.current.get(deckId) ?? 0;
-            retries.current.set(deckId, attempt + 1);
-            setSaveState(deckId, { kind: "error", message: message(err) });
-            schedule(RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]);
-            return;
-          }
-          // Refused by the rules: labelling on this deck stops; find out why before saying so.
+          // Final: refused by the rules, or not storable. Labelling on this deck
+          // stops at once (no decision may slip in while the reason is checked).
           stopped.current.add(deckId);
           pending.current.delete(deckId);
+          setSaveState(deckId, { kind: "checking" });
+          if (!isPermissionDenied(err)) {
+            setSaveState(deckId, { kind: "refused", message: message(err) });
+            return;
+          }
           try {
             const now = await services.inspectAccountSession(item.deck);
             if (!now.deckExists) setSaveState(deckId, { kind: "removed" });
@@ -200,7 +210,7 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
         },
       );
     }
-  }, [services, setSaveState, schedule]);
+  }, [services, setSaveState, slowSaveMs]);
   flushRef.current = flush;
 
   // Do not leave a decision unsaved when the tab is hidden or closed.
@@ -257,7 +267,11 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
         accountRev.current.set(d.deck.deck_id, d.accountRev);
         stopped.current.delete(d.deck.deck_id);
         pending.current.delete(d.deck.deck_id);
-        return { deck: d.deck, session: pickSession(d.deck, d.session, d.accountRev, local), source: "account" as const };
+        const session = pickSession(d.deck, d.session, d.accountRev, local);
+        // When the account copy wins, it becomes this browser's copy too, so a
+        // set-aside is reported once, not on every reopen.
+        if (session !== local && d.session) saveSession({ ...session, base_rev: d.accountRev });
+        return { deck: d.deck, session, source: "account" as const };
       });
     start(opened);
     if (setAside.length) {
