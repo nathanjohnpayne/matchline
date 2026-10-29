@@ -701,24 +701,38 @@ describe("documented reductions of links, images and block markers", () => {
 
 // Every pattern runs in time linear in the item's length. The old trim, the `[^\]]` label class,
 // the link destination and autolink classes and the unbounded `.+?` emphasis span each rescanned the
-// rest of the text from every start position, and these inputs took 0.8 to 3 seconds.
+// rest of the text from every start position, and these inputs took 0.8 to 3 seconds at the base size.
+// The check is relative so it holds on slow CI runners: the input grows 4×, so a linear renderer takes
+// about 4× as long and a quadratic one about 16×. A loose absolute cap is the backstop.
 describe("linear time on pathological input", () => {
-  const BUDGET_MS = 500;
-  it.each([
-    ["a run of 40,000 NBSP", `a${"\u00a0".repeat(40000)}b`],
-    ["40,000 `[`", "[".repeat(40000)],
-    ["20,000 `![`", "![".repeat(20000)],
-    ["30,000 unclosed `**a `", "**a ".repeat(30000)],
-    ["30,000 unclosed `__a `", "__a ".repeat(30000)],
-    ["15,000 unclosed `***a `", "***a ".repeat(15000)],
-    ["10,000 unclosed `[a](`", "[a](".repeat(10000)],
-    ["10,000 unclosed `![a](`", "![a](".repeat(10000)],
-    ["10,000 unclosed `<https://`", "<https://".repeat(10000)],
-  ])("renders %s in well under a second, as typed", (_name, text) => {
+  const SCALE = 4;
+  const MAX_RATIO = 8;
+  const FLOOR_MS = 5;
+  const CAP_MS = 5000;
+  const timeOf = (text: string): number => {
+    plainTextOf(text); // warm up the JIT once so the first measurement is not an outlier
     const start = performance.now();
-    const out = plainTextOf(text);
-    expect(performance.now() - start).toBeLessThan(BUDGET_MS);
-    expect(out).toBe(text.trim());
+    plainTextOf(text);
+    return performance.now() - start;
+  };
+  it.each([
+    ["a run of NBSP", (n: number) => `a${"\u00a0".repeat(n)}b`, 10000],
+    ["`[`", (n: number) => "[".repeat(n), 10000],
+    ["`![`", (n: number) => "![".repeat(n), 5000],
+    ["unclosed `**a `", (n: number) => "**a ".repeat(n), 7500],
+    ["unclosed `__a `", (n: number) => "__a ".repeat(n), 7500],
+    ["unclosed `***a `", (n: number) => "***a ".repeat(n), 4000],
+    ["unclosed `[a](`", (n: number) => "[a](".repeat(n), 2500],
+    ["unclosed `![a](`", (n: number) => "![a](".repeat(n), 2500],
+    ["unclosed `<https://`", (n: number) => "<https://".repeat(n), 2500],
+  ])("renders %s in time that grows linearly, as typed", (_name, build, base) => {
+    const small = build(base);
+    const large = build(base * SCALE);
+    const tSmall = Math.max(timeOf(small), FLOOR_MS);
+    const tLarge = timeOf(large);
+    expect(tLarge).toBeLessThan(Math.max(tSmall * MAX_RATIO, FLOOR_MS * MAX_RATIO));
+    expect(tLarge).toBeLessThan(CAP_MS);
+    expect(plainTextOf(large)).toBe(large.trim());
   });
 
   it("renders a long emphasis span up to the bound and keeps the delimiters of a longer one", () => {
