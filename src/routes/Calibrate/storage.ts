@@ -26,8 +26,9 @@ export function loadSession(deck: Deck, storage?: Storage): StoredSession | null
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
-    const { session_id, state } = parsed as Partial<StoredSession>;
-    return typeof session_id === "string" && sessionMatchesDeck(state, deck) ? { session_id, state } : null;
+    const { session_id, state, base_rev } = parsed as Partial<StoredSession>;
+    if (typeof session_id !== "string" || !sessionMatchesDeck(state, deck)) return null;
+    return typeof base_rev === "number" ? { session_id, state, base_rev } : { session_id, state };
   } catch {
     return null;
   }

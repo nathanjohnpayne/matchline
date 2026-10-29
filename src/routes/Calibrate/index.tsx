@@ -7,8 +7,13 @@
  * Account decks and their sessions live in the owner's own Firestore
  * (`src/services/calibration.ts`, owner-only rules). Every session is also
  * kept in this browser's localStorage (ids, labels, notes, timings, no card
- * text), so a failed or offline save loses nothing: on open, whichever
- * matching copy has more history wins.
+ * text), tagged with the account revision it builds on, so a failed or
+ * offline save loses nothing.
+ *
+ * Account saves are compare-and-swap (see the service): each write names
+ * the revision it replaces. When another device saved in between, the
+ * write is refused, labelling on this device stops, and the owner chooses
+ * between loading the account's copy and keeping this device's.
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
@@ -17,11 +22,13 @@ import { parseDeck, type Deck } from "../../lib/labelDeck/deck.ts";
 import { buildExport, deckFingerprint, exportFilename, initSession, newSessionId, progress, randomSeed, type StoredSession } from "../../lib/labelDeck/session.ts";
 import {
   deleteAccountDeck,
+  inspectAccountSession,
   isPermissionDenied,
   listAccountDecks,
   saveAccountSession,
   uploadDeck,
   type AccountDeckList,
+  type AccountSessionState,
 } from "../../services/calibration.ts";
 
 import CalibrateView, { type DeckRun, type SaveState } from "./CalibrateView.tsx";
@@ -30,15 +37,18 @@ import { clearSession, loadSession, saveSession } from "./storage.ts";
 
 /** Account saves are coalesced: at most one write per deck in flight, the latest state after this pause. */
 export const SAVE_DELAY_MS = 800;
+/** Retry delays after a failed (not refused) save. */
+const RETRY_MS = [5_000, 15_000, 60_000];
 
 export interface CalibrationServices {
   readonly listAccountDecks: () => Promise<AccountDeckList>;
   readonly uploadDeck: (deck: Deck) => Promise<void>;
   readonly deleteAccountDeck: (deckId: string) => Promise<void>;
-  readonly saveAccountSession: (deck: Deck, stored: StoredSession) => Promise<void>;
+  readonly saveAccountSession: (deck: Deck, stored: StoredSession, baseRev: number) => Promise<number>;
+  readonly inspectAccountSession: (deck: Deck) => Promise<AccountSessionState>;
 }
 
-const FIRESTORE_SERVICES: CalibrationServices = { listAccountDecks, uploadDeck, deleteAccountDeck, saveAccountSession };
+const FIRESTORE_SERVICES: CalibrationServices = { listAccountDecks, uploadDeck, deleteAccountDeck, saveAccountSession, inspectAccountSession };
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -59,13 +69,19 @@ export async function readDeckFiles(files: readonly File[]): Promise<Deck[]> {
 }
 
 /**
- * The session to resume: the matching copy with the higher revision (every
- * saved change, undo included, raises it), else a new one. On a tie the
- * account copy wins; the two are then the same save.
+ * The session to resume. This browser's copy wins when there is no account
+ * copy, or when it builds on the account's current revision and has not
+ * fallen behind it (it is the account copy plus changes not yet saved).
+ * Otherwise another device has saved since, and the account copy wins.
  */
-export function pickSession(deck: Deck, account: StoredSession | null, local: StoredSession | null): StoredSession {
-  if (account && local) return local.state.rev > account.state.rev ? local : account;
-  return account ?? local ?? { session_id: newSessionId(), state: initSession(deck, randomSeed()) };
+export function pickSession(deck: Deck, account: StoredSession | null, accountRev: number, local: StoredSession | null): StoredSession {
+  if (local && (!account || (local.base_rev === accountRev && local.state.rev >= account.state.rev))) return local;
+  return account ?? { session_id: newSessionId(), state: initSession(deck, randomSeed()) };
+}
+
+/** True when the account copy wins over browser labels that never reached the account. */
+export function setsAsideLocal(account: StoredSession | null, accountRev: number, local: StoredSession | null): boolean {
+  return Boolean(account && local && local.base_rev !== accountRev && local.state.rev > account.state.rev);
 }
 
 /** Account decks as listed, with each one's best known session (this browser may be ahead). */
@@ -73,13 +89,13 @@ const withLocal = (list: AccountDeckList): AccountDeckList => ({
   ...list,
   decks: list.decks.map((d) => {
     const local = loadSession(d.deck);
-    return local || d.session ? { ...d, session: pickSession(d.deck, d.session, local) } : d;
+    return local || d.session ? { ...d, session: pickSession(d.deck, d.session, d.accountRev, local) } : d;
   }),
 });
 
 /** Open picked files for this device only, resuming any session saved in this browser. */
 export async function openDecks(files: readonly File[], storage?: Storage): Promise<DeckRun[]> {
-  return (await readDeckFiles(files)).map((deck) => ({ deck, session: pickSession(deck, null, loadSession(deck, storage)), source: "file" as const }));
+  return (await readDeckFiles(files)).map((deck) => ({ deck, session: pickSession(deck, null, -1, loadSession(deck, storage)), source: "file" as const }));
 }
 
 /** Save the labels file through a Blob download (the Files app on a phone). */
@@ -115,44 +131,77 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
   const [account, setAccount] = useState<AccountState>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  const [saveStates, setSaveStates] = useState<ReadonlyMap<string, SaveState>>(new Map());
   const reducedMotion = usePrefersReducedMotion();
 
-  // Account saves: the latest unsaved session per deck, and the decks with a write in flight.
+  // Per deck: the account revision this device's next write replaces, the
+  // latest unsaved session, the decks with a write in flight, those stopped
+  // by a refused write, and the retry count after failures.
+  const accountRev = useRef(new Map<string, number>());
   const pending = useRef(new Map<string, { deck: Deck; stored: StoredSession }>());
   const inflight = useRef(new Set<string>());
+  const stopped = useRef(new Set<string>());
+  const retries = useRef(new Map<string, number>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const conflicted = useRef(false);
+
+  const setSaveState = useCallback((deckId: string, state: SaveState) => {
+    setSaveStates((prev) => new Map(prev).set(deckId, state));
+  }, []);
+
+  const flushRef = useRef<() => void>(() => {});
+  const schedule = useCallback((ms: number) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => flushRef.current(), ms);
+  }, []);
 
   const flush = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     for (const [deckId, item] of [...pending.current]) {
-      // One write per deck at a time, so revisions reach the account in order.
-      if (inflight.current.has(deckId) || conflicted.current) continue;
+      // One write per deck at a time, so each names the revision it replaces.
+      if (inflight.current.has(deckId) || stopped.current.has(deckId)) continue;
       pending.current.delete(deckId);
       inflight.current.add(deckId);
-      setSaveState({ kind: "saving" });
-      services.saveAccountSession(item.deck, item.stored).then(
-        () => {
+      const base = accountRev.current.get(deckId) ?? -1;
+      setSaveState(deckId, { kind: "saving" });
+      services.saveAccountSession(item.deck, item.stored, base).then(
+        (rev) => {
           inflight.current.delete(deckId);
-          if (pending.current.size) flush();
-          else if (inflight.current.size === 0) setSaveState((s) => (s.kind === "saving" || s.kind === "error" ? { kind: "saved" } : s));
+          retries.current.delete(deckId);
+          accountRev.current.set(deckId, rev);
+          // This browser's copy of that state now builds on the new revision.
+          if (!pending.current.has(deckId)) saveSession({ ...item.stored, base_rev: rev });
+          if (pending.current.has(deckId)) flushRef.current();
+          else setSaveState(deckId, { kind: "saved" });
         },
-        (err: unknown) => {
+        async (err: unknown) => {
           inflight.current.delete(deckId);
-          if (isPermissionDenied(err)) {
-            // The account holds a newer revision: another device saved since this one opened the deck.
-            conflicted.current = true;
-            pending.current.clear();
-            setSaveState({ kind: "conflict" });
-          } else {
-            setSaveState({ kind: "error", message: message(err) });
+          if (!isPermissionDenied(err)) {
+            // Offline, timed out, or transient: keep the newest state and try again later.
+            if (!pending.current.has(deckId)) pending.current.set(deckId, item);
+            const attempt = retries.current.get(deckId) ?? 0;
+            retries.current.set(deckId, attempt + 1);
+            setSaveState(deckId, { kind: "error", message: message(err) });
+            schedule(RETRY_MS[Math.min(attempt, RETRY_MS.length - 1)]);
+            return;
+          }
+          // Refused by the rules: labelling on this deck stops; find out why before saying so.
+          stopped.current.add(deckId);
+          pending.current.delete(deckId);
+          try {
+            const now = await services.inspectAccountSession(item.deck);
+            if (!now.deckExists) setSaveState(deckId, { kind: "removed" });
+            else if (!now.deckCurrent) setSaveState(deckId, { kind: "replaced" });
+            else if (now.rev !== base) setSaveState(deckId, { kind: "conflict", accountRev: now.rev });
+            else setSaveState(deckId, { kind: "refused", message: message(err) });
+          } catch (inspectErr) {
+            setSaveState(deckId, { kind: "refused", message: message(inspectErr) });
           }
         },
       );
     }
-  }, [services]);
+  }, [services, setSaveState, schedule]);
+  flushRef.current = flush;
 
   // Do not leave a decision unsaved when the tab is hidden or closed.
   useEffect(() => {
@@ -166,12 +215,16 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
     };
   }, [flush]);
 
-  const refresh = useCallback(async () => {
+  /** Load the account list; returns it as stored (before merging this browser's copies). */
+  const refresh = useCallback(async (): Promise<AccountDeckList | null> => {
     try {
-      const list = withLocal(await services.listAccountDecks());
-      setAccount({ status: "ready", decks: list.decks, unreadable: list.unreadable });
+      const list = await services.listAccountDecks();
+      const merged = withLocal(list);
+      setAccount({ status: "ready", decks: merged.decks, unreadable: merged.unreadable });
+      return list;
     } catch (err) {
       setAccount({ status: "error", error: message(err) });
+      return null;
     }
   }, [services]);
 
@@ -181,9 +234,8 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
 
   const start = (opened: DeckRun[]) => {
     flush();
-    conflicted.current = false;
     setLoadError(null);
-    setSaveState({ kind: "idle" });
+    setSaveStates(new Map());
     setRuns(opened);
     setOpenCount((n) => n + 1);
     // Resume at the first cell with cards left.
@@ -191,14 +243,26 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
     setActive(next < 0 ? opened.length - 1 : next);
   };
 
-  const onOpenAccount = (deckIds: readonly string[]) => {
-    if (account.status !== "ready") return;
+  const onOpenAccount = async (deckIds: readonly string[]) => {
+    // Re-read the account first: another device may have saved since the list loaded.
+    const list = await refresh();
+    if (!list) return;
     const wanted = new Set(deckIds);
-    start(
-      account.decks
-        .filter((d) => wanted.has(d.deck.deck_id))
-        .map((d) => ({ deck: d.deck, session: pickSession(d.deck, d.session, loadSession(d.deck)), source: "account" as const })),
-    );
+    const setAside: string[] = [];
+    const opened = list.decks
+      .filter((d) => wanted.has(d.deck.deck_id))
+      .map((d) => {
+        const local = loadSession(d.deck);
+        if (setsAsideLocal(d.session, d.accountRev, local)) setAside.push(d.deck.deck_id);
+        accountRev.current.set(d.deck.deck_id, d.accountRev);
+        stopped.current.delete(d.deck.deck_id);
+        pending.current.delete(d.deck.deck_id);
+        return { deck: d.deck, session: pickSession(d.deck, d.session, d.accountRev, local), source: "account" as const };
+      });
+    start(opened);
+    if (setAside.length) {
+      setLoadError(`Opened the account copy of ${setAside.join(", ")}: another device saved after this browser's last labels, which were set aside.`);
+    }
   };
 
   const onOpenFiles = async (files: File[]) => {
@@ -211,14 +275,14 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
 
   const onUploadFiles = async (files: File[]) => {
     setLoadError(null);
+    if (account.status !== "ready") return;
     try {
       const decks = await readDeckFiles(files);
       // Replacing a deck whose content changed makes its labels unusable (they
       // belong to the old content). Refuse while any exist, so nothing is lost
       // before it has been downloaded.
-      const stored = account.status === "ready" ? account.decks : [];
       for (const deck of decks) {
-        const old = stored.find((d) => d.deck.deck_id === deck.deck_id);
+        const old = account.decks.find((d) => d.deck.deck_id === deck.deck_id);
         const done = old?.session ? progress(old.session.state).done : 0;
         if (old && done > 0 && deckFingerprint(old.deck) !== deckFingerprint(deck)) {
           throw new Error(
@@ -256,14 +320,28 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
   const onSession = (index: number, next: StoredSession) => {
     const run = runs[index];
     if (!run) return;
-    saveSession(next);
+    const deckId = run.deck.deck_id;
+    // A refused deck is locked until the owner loads the latest or keeps this copy.
+    if (run.source === "account" && stopped.current.has(deckId)) return;
+    saveSession(run.source === "account" ? { ...next, base_rev: accountRev.current.get(deckId) ?? -1 } : next);
     setRuns((prev) => prev.map((r, i) => (i === index ? { ...r, session: next } : r)));
-    if (run.source === "account" && !conflicted.current) {
-      pending.current.set(run.deck.deck_id, { deck: run.deck, stored: next });
-      setSaveState({ kind: "saving" });
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(flush, SAVE_DELAY_MS);
+    if (run.source === "account") {
+      pending.current.set(deckId, { deck: run.deck, stored: next });
+      setSaveState(deckId, { kind: "saving" });
+      schedule(SAVE_DELAY_MS);
     }
+  };
+
+  /** After a conflict: write this device's copy over the account's newer one. */
+  const onKeepThisDevice = () => {
+    const run = runs[active];
+    const state = run && saveStates.get(run.deck.deck_id);
+    if (!run || state?.kind !== "conflict") return;
+    const deckId = run.deck.deck_id;
+    accountRev.current.set(deckId, state.accountRev);
+    stopped.current.delete(deckId);
+    pending.current.set(deckId, { deck: run.deck, stored: run.session });
+    flush();
   };
 
   const onBackToDecks = () => {
@@ -272,6 +350,7 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
     void refresh();
   };
 
+  const run = runs[active];
   return (
     <CalibrateView
       runs={runs}
@@ -280,9 +359,9 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
       account={account}
       busy={busy}
       loadError={loadError}
-      saveState={saveState}
+      saveState={(run && saveStates.get(run.deck.deck_id)) || { kind: "idle" }}
       reducedMotion={reducedMotion}
-      onOpenAccount={onOpenAccount}
+      onOpenAccount={(ids) => void onOpenAccount(ids)}
       onOpenFiles={(files) => void onOpenFiles(files)}
       onUploadFiles={(files) => void onUploadFiles(files)}
       onRemoveDeck={(id) => void onRemoveDeck(id)}
@@ -290,6 +369,7 @@ export default function Calibrate({ services = FIRESTORE_SERVICES }: { readonly 
       onOpenCell={setActive}
       onDownload={() => runs[active] && downloadLabels(runs[active])}
       onBackToDecks={onBackToDecks}
+      onKeepThisDevice={onKeepThisDevice}
     />
   );
 }

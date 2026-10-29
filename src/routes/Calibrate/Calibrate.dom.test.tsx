@@ -11,13 +11,13 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Card, Deck, LabelsFile } from "../../lib/labelDeck/deck.ts";
-import { initSession, type StoredSession } from "../../lib/labelDeck/session.ts";
+import { deckFingerprint, initSession, type StoredSession } from "../../lib/labelDeck/session.ts";
 import { FirebaseError } from "firebase/app";
 
 import type { AccountDeck } from "../../services/calibration.ts";
 
 import CalibrateView, { type CalibrateViewProps, type DeckRun } from "./CalibrateView.tsx";
-import Calibrate, { downloadLabels, openDecks, pickSession, readDeckFiles, type CalibrationServices } from "./index.tsx";
+import Calibrate, { downloadLabels, openDecks, pickSession, readDeckFiles, setsAsideLocal, type CalibrationServices } from "./index.tsx";
 
 afterEach(() => {
   cleanup();
@@ -58,6 +58,7 @@ const NOOP_PROPS: Omit<CalibrateViewProps, "runs" | "onSession" | "onDownload"> 
   onRemoveDeck: () => {},
   onOpenCell: () => {},
   onBackToDecks: () => {},
+  onKeepThisDevice: () => {},
 };
 
 /** The container's wiring, minus decks and storage; queue in deck order unless given. */
@@ -304,29 +305,58 @@ describe("Calibrate timing and input edge cases", () => {
 });
 
 describe("Calibrate container with account decks", () => {
-  function fakeServices(initial: AccountDeck[] = []) {
-    let stored = [...initial];
-    const calls = { uploads: [] as string[], saves: [] as string[], removes: [] as string[] };
+  /**
+   * An in-memory account with the rules' compare-and-swap: a session write
+   * must name the stored revision, and its deck must be stored with the
+   * same content. `bump` plays another device saving in between.
+   */
+  function fakeAccount(initialDecks: Deck[] = []) {
+    const decks = new Map(initialDecks.map((d) => [d.deck_id, d]));
+    const sessions = new Map<string, { rev: number; stored: StoredSession; fingerprint: string }>();
+    const calls = { uploads: [] as string[], saves: [] as number[], removes: [] as string[] };
+    const denied = () => new FirebaseError("permission-denied", "Missing or insufficient permissions.");
     const services: CalibrationServices = {
-      listAccountDecks: async () => ({ decks: stored, unreadable: [] }),
+      listAccountDecks: async () => ({
+        decks: [...decks.values()].map((d): AccountDeck => {
+          const s = sessions.get(d.deck_id);
+          return { deck: d, uploadedAt: "now", session: s && s.fingerprint === deckFingerprint(d) ? s.stored : null, accountRev: s?.rev ?? -1 };
+        }),
+        unreadable: [],
+      }),
       uploadDeck: async (d) => {
         calls.uploads.push(d.deck_id);
-        stored = [...stored.filter((s) => s.deck.deck_id !== d.deck_id), { deck: d, uploadedAt: "now", session: null }];
+        decks.set(d.deck_id, d);
       },
       deleteAccountDeck: async (id) => {
         calls.removes.push(id);
-        stored = stored.filter((s) => s.deck.deck_id !== id);
+        decks.delete(id);
+        sessions.delete(id);
       },
-      saveAccountSession: async (d) => {
-        calls.saves.push(d.deck_id);
+      saveAccountSession: async (d, stored, base) => {
+        const current = sessions.get(d.deck_id);
+        const storedDeck = decks.get(d.deck_id);
+        if (!storedDeck || deckFingerprint(storedDeck) !== deckFingerprint(d) || (current?.rev ?? -1) !== base) throw denied();
+        sessions.set(d.deck_id, { rev: base + 1, stored: JSON.parse(JSON.stringify(stored)), fingerprint: deckFingerprint(d) });
+        calls.saves.push(base + 1);
+        return base + 1;
       },
+      inspectAccountSession: async (d) => ({
+        deckExists: decks.has(d.deck_id),
+        deckCurrent: decks.has(d.deck_id) && deckFingerprint(decks.get(d.deck_id) as Deck) === deckFingerprint(d),
+        rev: sessions.get(d.deck_id)?.rev ?? -1,
+      }),
     };
-    return { services, calls };
+    const bump = (id: string) => {
+      const s = sessions.get(id);
+      if (s) sessions.set(id, { ...s, rev: s.rev + 1 });
+    };
+    return { services, calls, sessions, decks, bump };
   }
   const file = (name: string, value: unknown) => new File([JSON.stringify(value)], name, { type: "application/json" });
+  const saved = () => screen.findByText(/· saved/, undefined, { timeout: 3000 });
 
   it("uploads deck files, lists them, labels from the account and saves each decision there", async () => {
-    const { services, calls } = fakeServices();
+    const { services, calls, sessions } = fakeAccount();
     render(<Calibrate services={services} />);
     await screen.findByText(/No decks yet/);
     fireEvent.change(screen.getByLabelText("Upload deck files…"), { target: { files: [file("a.json", deck)] } });
@@ -335,76 +365,119 @@ describe("Calibrate container with account decks", () => {
     fireEvent.click(screen.getByRole("button", { name: "Label all" }));
     await screen.findByTestId("calibrate-card");
     key("ArrowRight");
-    await waitFor(() => expect(calls.saves).toEqual(["demo-cell"]), { timeout: 3000 });
-    await screen.findByText(/· saved/, undefined, { timeout: 3000 });
+    await saved();
+    key("ArrowLeft");
+    await saved();
+    expect(calls.saves).toEqual([0, 1]);
+    expect(Object.keys(sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
   });
 
-  it("shows a failed save inline and keeps going", async () => {
-    const { services } = fakeServices([{ deck, uploadedAt: "now", session: null }]);
-    render(<Calibrate services={{ ...services, saveAccountSession: async () => Promise.reject(new Error("offline")) }} />);
+  it("retries a failed save and says so inline meanwhile", async () => {
+    const account = fakeAccount([deck]);
+    let fail = true;
+    const services = {
+      ...account.services,
+      saveAccountSession: (d: Deck, st: StoredSession, base: number) => (fail ? Promise.reject(new Error("offline")) : account.services.saveAccountSession(d, st, base)),
+    };
+    render(<Calibrate services={services} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
     key("ArrowRight");
     expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("offline");
     expect(screen.getByText(/1 of 3 labelled/)).toBeTruthy();
-  });
+    fail = false;
+    await screen.findByText(/· saved/, undefined, { timeout: 8000 });
+    expect(account.calls.saves).toEqual([0]);
+  }, 12_000);
 
-  it("stops saving and offers the latest when another device saved since this one opened the deck", async () => {
-    const { services } = fakeServices([{ deck, uploadedAt: "now", session: null }]);
-    const denied = Object.assign(new FirebaseError("permission-denied", "Missing or insufficient permissions."), {});
-    let attempts = 0;
-    render(
-      <Calibrate
-        services={{
-          ...services,
-          saveAccountSession: async () => {
-            attempts += 1;
-            throw denied;
-          },
-        }}
-      />,
-    );
+  it("pauses labelling when another device saved in between, then keeps this device's copy on request", async () => {
+    const account = fakeAccount([deck]);
+    render(<Calibrate services={account.services} />);
     fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await saved();
+    account.bump("demo-cell"); // another device saves
     key("ArrowRight");
     expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("saved from another device");
+    // Paused: no decision is taken while the conflict stands.
     key("ArrowRight");
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(attempts).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Load the latest" }));
-    await screen.findByRole("region", { name: "Your decks" });
+    expect(screen.getByText(/2 of 3 labelled/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /True/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
+    await saved();
+    expect(account.sessions.get("demo-cell")?.rev).toBe(2);
+    expect(Object.keys(account.sessions.get("demo-cell")?.stored.state.decisions ?? {})).toHaveLength(2);
+  });
+
+  it("opens the account copy, not this browser's, when another device saved since", async () => {
+    const account = fakeAccount([deck]);
+    const first = render(<Calibrate services={account.services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await saved();
+    first.unmount();
+    // Another device labels two more cards on top of revision 0.
+    const other = account.sessions.get("demo-cell")!;
+    let st = other.stored.state;
+    st = { ...st, rev: st.rev + 5 };
+    account.sessions.set("demo-cell", { ...other, rev: 1, stored: { ...other.stored, state: st } });
+    render(<Calibrate services={account.services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    await screen.findByTestId("calibrate-card");
+    key("ArrowRight");
+    await saved();
+    expect(account.calls.saves).toEqual([0, 2]);
+  });
+
+  it("names a removed deck instead of calling it a conflict", async () => {
+    const account = fakeAccount([deck]);
+    render(<Calibrate services={account.services} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start" }));
+    await screen.findByTestId("calibrate-card");
+    account.decks.delete("demo-cell");
+    key("ArrowRight");
+    expect((await screen.findByRole("alert", undefined, { timeout: 3000 })).textContent).toContain("removed from your account");
   });
 
   it("refuses to replace a deck whose labels belong to different content, and shows unreadable decks", async () => {
     const labelled = { session_id: "s", state: { ...initSession(deck, 1), rev: 1, decisions: { [deck.cards[0].item_id]: { label: "true" as const, note: "", ms: 1, order: 1 } } } };
-    const { services, calls } = fakeServices([{ deck, uploadedAt: "now", session: labelled }]);
-    render(<Calibrate services={{ ...services, listAccountDecks: async () => ({ decks: [{ deck, uploadedAt: "now", session: labelled }], unreadable: ["old-cell"] }) }} />);
+    const account = fakeAccount([deck]);
+    render(
+      <Calibrate
+        services={{ ...account.services, listAccountDecks: async () => ({ decks: [{ deck, uploadedAt: "now", session: labelled, accountRev: 0 }], unreadable: ["old-cell"] }) }}
+      />,
+    );
     expect((await screen.findAllByRole("alert"))[0].textContent).toContain("old-cell");
     const edited = { ...deck, sources: { ...deck.sources, jd: { title: "JD demo", text: "edited" } } };
     fireEvent.change(screen.getByLabelText("Upload deck files…"), { target: { files: [file("a.json", edited)] } });
     expect((await screen.findByText(/has 1 labels for different deck content/)).textContent).toContain("Download its labels");
-    expect(calls.uploads).toEqual([]);
+    expect(account.calls.uploads).toEqual([]);
   });
 
-  it("removes a deck only after confirming", async () => {
-    const { services, calls } = fakeServices([{ deck, uploadedAt: "now", session: null }]);
-    render(<Calibrate services={services} />);
+  it("removes a deck only after confirming, with this browser's copy", async () => {
+    const account = fakeAccount([deck]);
+    localStorage.setItem("matchline:calibrate:v1:demo-cell", "{}");
+    render(<Calibrate services={account.services} />);
     fireEvent.click(await screen.findByRole("button", { name: "Remove demo-cell" }));
-    expect(calls.removes).toEqual([]);
+    expect(account.calls.removes).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await screen.findByText(/No decks yet/);
-    expect(calls.removes).toEqual(["demo-cell"]);
+    expect(account.calls.removes).toEqual(["demo-cell"]);
+    expect(localStorage.getItem("matchline:calibrate:v1:demo-cell")).toBeNull();
   });
 
-  it("names a deck picked twice, and resumes the session with more history", async () => {
+  it("names a deck picked twice, and resumes this browser's copy only when it builds on the account's revision", async () => {
     await expect(readDeckFiles([file("a.json", deck), file("b.json", deck)])).rejects.toThrow(/picked twice/);
     const base = { session_id: "x", state: initSession(deck, 1) };
-    // An undo shortens the history but still raises the revision: revision decides.
-    const newer = { session_id: "y", state: { ...base.state, rev: 4, history: [] } };
-    const older = { session_id: "z", state: { ...base.state, rev: 3, history: [{ kind: "decide" as const, id: "a", ms: 1 }] } };
-    expect(pickSession(deck, older, newer).session_id).toBe("y");
-    expect(pickSession(deck, newer, older).session_id).toBe("y");
-    expect(pickSession(deck, base, { ...base, session_id: "local" }).session_id).toBe("x");
-    expect(pickSession(deck, newer, null).session_id).toBe("y");
-    expect(pickSession(deck, null, null).state.deck_id).toBe("demo-cell");
+    const accountCopy = { ...base, state: { ...base.state, rev: 3 } };
+    const ahead = { ...base, session_id: "local", base_rev: 5, state: { ...base.state, rev: 4 } };
+    expect(pickSession(deck, accountCopy, 5, ahead).session_id).toBe("local");
+    expect(pickSession(deck, accountCopy, 6, ahead).session_id).toBe("x");
+    expect(setsAsideLocal(accountCopy, 6, ahead)).toBe(true);
+    expect(pickSession(deck, null, -1, ahead).session_id).toBe("local");
+    expect(pickSession(deck, null, -1, null).state.deck_id).toBe("demo-cell");
   });
 });
 

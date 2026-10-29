@@ -26,9 +26,17 @@ export type DeckSource = "account" | "file";
 /** The state of saving to the account (decks opened from a file only save in the browser). */
 export type SaveState =
   | { readonly kind: "idle" | "saving" | "saved" }
+  /** A save failed (offline, timed out); it is retried. */
   | { readonly kind: "error"; readonly message: string }
-  /** The account holds a newer revision of this session, saved from another device. */
-  | { readonly kind: "conflict" };
+  /** Another device saved this deck since this one read it; the account is at `accountRev`. */
+  | { readonly kind: "conflict"; readonly accountRev: number }
+  /** The deck was removed from the account, or replaced with different content. */
+  | { readonly kind: "removed" | "replaced" }
+  /** Refused for another reason (for example, access revoked). */
+  | { readonly kind: "refused"; readonly message: string };
+
+/** Save states that stop labelling on this device until the owner resolves them. */
+const LOCKING: readonly SaveState["kind"][] = ["conflict", "removed", "replaced", "refused"];
 
 export interface DeckRun {
   readonly deck: Deck;
@@ -48,6 +56,8 @@ export interface CalibrateViewProps extends DeckScreenProps {
   readonly onOpenCell: (index: number) => void;
   readonly onDownload: () => void;
   readonly onBackToDecks: () => void;
+  /** After a conflict: write this device's copy over the account's. */
+  readonly onKeepThisDevice: () => void;
   /** Clock for decision timing; injectable for tests. */
   readonly now?: () => number;
 }
@@ -147,7 +157,8 @@ function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card 
 }
 
 export default function CalibrateView(props: CalibrateViewProps): ReactElement {
-  const { runs, active, openCount, saveState, reducedMotion, onSession, onOpenCell, onDownload, onBackToDecks } = props;
+  const { runs, active, openCount, saveState, reducedMotion, onSession, onOpenCell, onDownload, onBackToDecks, onKeepThisDevice } = props;
+  const locked = LOCKING.includes(saveState.kind);
   const now = props.now ?? (() => performance.now());
   const run = runs[active];
 
@@ -224,7 +235,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   };
 
   const record = (label: Label, offset?: { x: number; y: number }) => {
-    if (!run || !state || !card) return;
+    if (!run || !state || !card || locked) return;
     if (label === "mixed" && !allowsMixed(card.type)) {
       setRefusal(true);
       return;
@@ -254,7 +265,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   };
 
   const doUndo = () => {
-    if (!run || !state || state.history.length === 0) return;
+    if (!run || !state || state.history.length === 0 || locked) return;
     closeNote();
     setNoteTarget(null);
     setGhost(null);
@@ -369,15 +380,30 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
       </div>
       {saveState.kind === "error" && (
         <p role="alert" className="mt-2 text-sm text-amber-600 dark:text-amber-500">
-          Not saved to your account ({saveState.message}). Progress is kept in this browser; it saves again with your next card.
+          Not saved to your account yet ({saveState.message}). Progress is kept in this browser and the save is retried.
         </p>
       )}
-      {saveState.kind === "conflict" && (
-        <div role="alert" className="mt-2 flex flex-wrap items-center gap-2 text-sm text-amber-600 dark:text-amber-500">
-          <span>This deck was saved from another device since you opened it here, so this device stopped saving to your account.</span>
-          <button type="button" onClick={onBackToDecks} className={SECONDARY_BUTTON}>
-            Load the latest
-          </button>
+      {locked && (
+        <div role="alert" className="mt-2 space-y-2 rounded-md border border-amber-500/50 p-3 text-sm text-amber-700 dark:text-amber-400">
+          <p>
+            {saveState.kind === "conflict"
+              ? "This deck was saved from another device after this one opened it. Labelling here is paused so neither copy overwrites the other."
+              : saveState.kind === "removed"
+                ? "This deck was removed from your account. Labelling here is paused; this device's labels can still be downloaded."
+                : saveState.kind === "replaced"
+                  ? "This deck was replaced in your account with different content. Labelling here is paused; this device's labels can still be downloaded."
+                  : `Your account refused the save (${saveState.kind === "refused" ? saveState.message : ""}). Labelling here is paused; this device's labels can still be downloaded.`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onBackToDecks} className={SECONDARY_BUTTON}>
+              {saveState.kind === "conflict" ? "Load the latest" : "Back to decks"}
+            </button>
+            {saveState.kind === "conflict" && (
+              <button type="button" onClick={onKeepThisDevice} className={SECONDARY_BUTTON}>
+                {"Keep this device's copy"}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -417,7 +443,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
               <button
                 key={a.label}
                 type="button"
-                disabled={a.label === "mixed" && !allowsMixed(card.type)}
+                disabled={locked || (a.label === "mixed" && !allowsMixed(card.type))}
                 onClick={() => {
                   // Focus moves to the next card, so Enter or Space on a
                   // still-focused button cannot record a second decision.
@@ -438,7 +464,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           </div>
           {refusal && <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">This card takes True or False only; Mixed is for the two partial-credit questions.</p>}
           <div className="mt-2 flex items-center justify-between">
-            <button type="button" onClick={doUndo} disabled={state.history.length === 0} className={SECONDARY_BUTTON}>
+            <button type="button" onClick={doUndo} disabled={locked || state.history.length === 0} className={SECONDARY_BUTTON}>
               Undo (Z)
             </button>
             <button type="button" onClick={() => setExpanded((v) => !v)} className={`text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${FOCUS_RING}`}>

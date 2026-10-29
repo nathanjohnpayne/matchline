@@ -152,7 +152,8 @@ export default function DeckScreen({ account, busy, loadError, onOpenAccount, on
       </section>
 
       <div className="flex flex-wrap items-center gap-3">
-        <FilePick label="Upload deck files…" className={SECONDARY_BUTTON} onFiles={onUploadFiles} disabled={working} />
+        {/* Upload needs the account list: it checks a re-upload against the stored deck's labels. */}
+        <FilePick label="Upload deck files…" className={SECONDARY_BUTTON} onFiles={onUploadFiles} disabled={working || account.status !== "ready"} />
         <FilePick
           label="Open a file without uploading"
           className={`text-sm text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${FOCUS_RING}`}

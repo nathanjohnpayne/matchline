@@ -268,33 +268,40 @@ service cloud.firestore {
         let d = request.resource.data;
         return d.keys().hasOnly([
             'id', 'owner_uid', 'deck_id', 'fingerprint', 'session_id',
-            'rev', 'state_json', 'updated_at'
+            'rev', 'base_rev', 'state_json', 'updated_at'
           ])
           && d.keys().hasAll([
             'owner_uid', 'deck_id', 'fingerprint', 'session_id',
-            'rev', 'state_json', 'updated_at'
+            'rev', 'base_rev', 'state_json', 'updated_at'
           ])
           && d.get('id', docId) == docId
           && d.deck_id is string && d.deck_id.matches('^[A-Za-z0-9._-]{1,200}$')
           && d.fingerprint is string && d.fingerprint.size() <= 64
           && d.session_id is string && d.session_id.size() <= 100
-          && d.rev is int && d.rev >= 0
+          && d.rev is int && d.base_rev is int
           && d.state_json is string && d.state_json.size() <= 200000
           && d.updated_at is string;
       }
+      // A session belongs to the stored deck with the same doc id, and to
+      // that deck's current content: a device still open on a removed deck
+      // cannot recreate an orphan, and one open on an older version of a
+      // re-uploaded deck cannot overwrite the current session.
+      function forStoredDeck() {
+        let deckPath = /databases/$(database)/documents/calibrationDecks/$(docId);
+        return exists(deckPath)
+          && request.resource.data.fingerprint == get(deckPath).data.fingerprint;
+      }
       allow read, delete: if isOwner();
-      // A session belongs to a stored deck (same doc id), so a device still
-      // open on a removed deck cannot recreate an orphan.
-      allow create: if isCreatingAsOwner() && validSession()
-        && exists(/databases/$(database)/documents/calibrationDecks/$(docId));
-      // Only a newer revision may replace a session, so a device that fell
-      // behind (another device saved since it opened the deck) is refused
-      // instead of overwriting newer labels. A changed deck (new
-      // fingerprint) starts over at any revision.
-      allow update: if canUpdateAsOwner() && validSession()
+      // Writes are compare-and-swap: `base_rev` must be the revision being
+      // replaced (-1 for the first write) and `rev` the next one. A device
+      // that fell behind another one is refused, never merged silently.
+      allow create: if isCreatingAsOwner() && validSession() && forStoredDeck()
+        && request.resource.data.base_rev == -1
+        && request.resource.data.rev == 0;
+      allow update: if canUpdateAsOwner() && validSession() && forStoredDeck()
         && request.resource.data.deck_id == resource.data.deck_id
-        && (request.resource.data.rev > resource.data.rev
-          || request.resource.data.fingerprint != resource.data.fingerprint);
+        && request.resource.data.base_rev == resource.data.rev
+        && request.resource.data.rev == resource.data.rev + 1;
     }
 
     match /roles/{docId} {

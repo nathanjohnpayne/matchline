@@ -43,6 +43,12 @@ export interface SessionState {
 export interface StoredSession {
   session_id: string;
   state: SessionState;
+  /**
+   * For a copy kept in the browser of an account deck: the account
+   * revision it builds on. Equal to the account's current revision means
+   * the copy is the account's plus any changes not yet saved.
+   */
+  base_rev?: number;
 }
 
 /** Small deterministic PRNG (mulberry32). */

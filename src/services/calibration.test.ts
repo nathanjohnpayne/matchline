@@ -38,9 +38,10 @@ describe("calibration storage shapes", () => {
 
   it("round-trips a session, and drops one saved for different deck content", () => {
     const stored = { session_id: "s-1", state: decide(initSession(deck, 7), "true", 900) };
-    const doc = buildSessionDoc(deck, stored, "uid-1", NOW);
-    expect(Object.keys(doc).sort()).toEqual(["deck_id", "fingerprint", "id", "owner_uid", "rev", "session_id", "state_json", "updated_at"]);
-    expect(doc.rev).toBe(1);
+    const doc = buildSessionDoc(deck, stored, "uid-1", NOW, 4);
+    expect(Object.keys(doc).sort()).toEqual(["base_rev", "deck_id", "fingerprint", "id", "owner_uid", "rev", "session_id", "state_json", "updated_at"]);
+    expect(doc).toMatchObject({ base_rev: 4, rev: 5 });
+    expect(buildSessionDoc(deck, stored, "uid-1", NOW, -1)).toMatchObject({ base_rev: -1, rev: 0 });
     expect(parseSessionDoc(doc, deck)).toEqual(stored);
     const changed = { ...deck, sources: { ...deck.sources, jd: { title: "J", text: "edited" } } };
     expect(parseSessionDoc(doc, changed)).toBeNull();

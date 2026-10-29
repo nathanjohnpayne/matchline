@@ -11,12 +11,17 @@
  *     as JSON text, tagged with the deck's content hash so a re-uploaded,
  *     changed deck starts a fresh session instead of reusing old labels.
  *
+ * Session writes are compare-and-swap. `rev` counts writes to the account
+ * document; each write carries `base_rev`, the revision it was based on,
+ * and the rules accept it only when that is still the stored revision. A
+ * device that fell behind another one is refused, never silently merged.
+ *
  * Decks hold private résumé and JD text. They stay in the owner's own
  * project under the owner allowlist; nothing here sends them anywhere else.
  */
 
 import { FirebaseError } from "firebase/app";
-import { deleteDoc, getDocs, query, setDoc } from "firebase/firestore";
+import { deleteDoc, getDoc, getDocs, query, setDoc } from "firebase/firestore";
 
 import { parseDeck, type Deck } from "../lib/labelDeck/deck.ts";
 import { beginAppBusy } from "../lib/appBusy.ts";
@@ -56,8 +61,10 @@ export interface SessionDoc {
   deck_id: string;
   fingerprint: string;
   session_id: string;
-  /** The session's revision; the rules only accept a higher one for the same deck content. */
+  /** Writes to this document so far, minus one (0 for the first). */
   rev: number;
+  /** The `rev` this write replaces; -1 for the first write. */
+  base_rev: number;
   state_json: string;
   updated_at: string;
 }
@@ -83,7 +90,7 @@ export function buildDeckDoc(deck: Deck, ownerUid: string, now: Date): DeckDoc {
   };
 }
 
-export function buildSessionDoc(deck: Deck, stored: StoredSession, ownerUid: string, now: Date): SessionDoc {
+export function buildSessionDoc(deck: Deck, stored: StoredSession, ownerUid: string, now: Date, baseRev: number): SessionDoc {
   const state_json = JSON.stringify(stored.state);
   if (state_json.length > MAX_SESSION_JSON) throw new Error(`The session for ${deck.deck_id} is too large to store.`);
   return {
@@ -92,7 +99,8 @@ export function buildSessionDoc(deck: Deck, stored: StoredSession, ownerUid: str
     deck_id: deck.deck_id,
     fingerprint: deckFingerprint(deck),
     session_id: stored.session_id,
-    rev: stored.state.rev,
+    rev: baseRev + 1,
+    base_rev: baseRev,
     state_json,
     updated_at: now.toISOString(),
   };
@@ -126,6 +134,8 @@ export interface AccountDeck {
   readonly uploadedAt: string;
   /** The saved session, if one matches this deck. */
   readonly session: StoredSession | null;
+  /** The account session document's `rev`, whatever deck content it was for; -1 if none. */
+  readonly accountRev: number;
 }
 
 export interface AccountDeckList {
@@ -152,7 +162,13 @@ export async function listAccountDecks(): Promise<AccountDeckList> {
       unreadable.push(String(data.deck_id ?? snap.id));
       continue;
     }
-    out.push({ deck, uploadedAt: data.uploaded_at, session: parseSessionDoc(sessionById.get(snap.id), deck) });
+    const sessionDoc = sessionById.get(snap.id);
+    out.push({
+      deck,
+      uploadedAt: data.uploaded_at,
+      session: parseSessionDoc(sessionDoc, deck),
+      accountRev: typeof sessionDoc?.rev === "number" ? sessionDoc.rev : -1,
+    });
   }
   out.sort((a, b) => a.deck.cell_order - b.deck.cell_order || a.deck.deck_id.localeCompare(b.deck.deck_id));
   return { decks: out, unreadable };
@@ -189,16 +205,55 @@ export async function deleteAccountDeck(deckId: string): Promise<void> {
 }
 
 /**
- * Save a deck's session to the owner's account. The rules refuse it
- * (permission-denied) when the account already holds a newer revision of
- * this session, e.g. saved from another device since this one opened it.
+ * Save a deck's session to the owner's account, replacing revision
+ * `baseRev`; resolves to the new revision. The rules refuse it
+ * (permission-denied) when the stored revision is no longer `baseRev`
+ * (another device saved since), when the stored deck has different
+ * content, or when the deck was removed; `inspectAccountSession` tells
+ * which.
  */
-export async function saveAccountSession(deck: Deck, stored: StoredSession, now: Date = new Date()): Promise<void> {
-  const data = buildSessionDoc(deck, stored, getOwnerUidOrThrow(), now);
+export async function saveAccountSession(deck: Deck, stored: StoredSession, baseRev: number, now: Date = new Date()): Promise<number> {
+  const data = buildSessionDoc(deck, stored, getOwnerUidOrThrow(), now, baseRev);
   const release = beginAppBusy("calibration.saveSession");
   try {
     await withTimeout(setDoc(typedDoc<SessionDoc>(SESSIONS, data.id), data), WRITE_TIMEOUT_MS, "Saving your labels");
+    return data.rev;
   } finally {
     release();
   }
+}
+
+export interface AccountSessionState {
+  /** The deck is still stored, with the same content as `deck`. */
+  readonly deckCurrent: boolean;
+  readonly deckExists: boolean;
+  /** The stored session's revision, or -1 if there is none. */
+  readonly rev: number;
+}
+
+/**
+ * Why a session write was refused. The rules deny reading a missing
+ * document (permission-denied), which here means "not there".
+ */
+export async function inspectAccountSession(deck: Deck): Promise<AccountSessionState> {
+  const id = docIdFor(getOwnerUidOrThrow(), deck.deck_id);
+  const read = async <T,>(fn: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (isPermissionDenied(err)) return null;
+      throw err;
+    }
+  };
+  const [deckSnap, sessionSnap] = await Promise.all([
+    read(() => getDoc(typedDoc<DeckDoc>(DECKS, id))),
+    read(() => getDoc(typedDoc<SessionDoc>(SESSIONS, id))),
+  ]);
+  const deckData = deckSnap?.exists() ? deckSnap.data() : null;
+  const sessionData = sessionSnap?.exists() ? sessionSnap.data() : null;
+  return {
+    deckExists: deckData !== null,
+    deckCurrent: deckData?.fingerprint === deckFingerprint(deck),
+    rev: typeof sessionData?.rev === "number" ? sessionData.rev : -1,
+  };
 }

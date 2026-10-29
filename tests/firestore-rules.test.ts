@@ -120,7 +120,8 @@ const calibrationSession = () => ({
   deck_id: "demo-cell",
   fingerprint: "0badcafe:120",
   session_id: "s-1",
-  rev: 1,
+  rev: 0,
+  base_rev: -1,
   state_json: '{"queue":[]}',
   updated_at: "2026-10-29T00:00:00.000Z",
 });
@@ -902,8 +903,8 @@ describe("rules: calibration field limits", () => {
     await assertFails(getDocs(collectionRef(db(OWNER_UID), "calibrationSessions")));
     await assertFails(getDoc(sessionRef(OTHER_UID)));
     await assertFails(getDoc(doc(db(null), "calibrationSessions", "d-1")));
-    await assertFails(updateDoc(sessionRef(OTHER_UID), { rev: 9 }));
-    await assertFails(updateDoc(sessionRef(OWNER_UID), { rev: 9, owner_uid: OTHER_UID }));
+    await assertFails(updateDoc(sessionRef(OTHER_UID), { rev: 1, base_rev: 0 }));
+    await assertFails(updateDoc(sessionRef(OWNER_UID), { rev: 1, base_rev: 0, owner_uid: OTHER_UID }));
     await assertFails(deleteDoc(sessionRef(OTHER_UID)));
     await assertSucceeds(deleteDoc(sessionRef(OWNER_UID)));
     await assertFails(setDoc(doc(db(STRANGER_UID), "calibrationSessions", "d-1"), { ...session, owner_uid: STRANGER_UID }));
@@ -916,13 +917,28 @@ describe("rules: calibration field limits", () => {
     await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
   });
 
-  it("accepts only a newer revision of a session, unless the deck content changed", async () => {
+  it("accepts a session write only as a compare-and-swap on the stored revision", async () => {
     await seedDoc("calibrationDecks", "d-1", deck);
-    await seedDoc("calibrationSessions", "d-1", { ...session, rev: 50 });
-    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 41 }));
-    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 50 }));
-    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 51 }));
-    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, fingerprint: "feedbeef:99" }));
+    // First write: base -1, rev 0.
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 3, base_rev: 2 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    // Next: must name rev 0 as its base and be rev 1.
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    // A device still based on rev 0 is refused, however far it counted.
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 48, base_rev: 47 }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 3, base_rev: 1 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 2, base_rev: 1 }));
+  });
+
+  it("DENIES a session whose deck content is not the stored deck's", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, fingerprint: "feedbeef:99" }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    // A device still open on an older version of a re-uploaded deck.
+    await seedDoc("calibrationDecks", "d-1", { ...deck, fingerprint: "feedbeef:99" });
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0 }));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), { ...session, rev: 1, base_rev: 0, fingerprint: "feedbeef:99" }));
   });
 
   it("DENIES a deck id with characters outside the allowed set", async () => {
@@ -945,8 +961,8 @@ describe("rules: calibration field limits", () => {
     }
     await seedDoc("calibrationDecks", "d-1", deck);
     for (const bad of [
-      { ...session, rev: -1 },
-      { ...session, rev: "2" },
+      { ...session, rev: "0" },
+      Object.fromEntries(Object.entries(session).filter(([k]) => k !== "base_rev")),
       { ...session, notes: "x" },
       { ...session, state_json: { queue: [] } },
       { ...session, session_id: 7 },

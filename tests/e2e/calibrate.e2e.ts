@@ -62,6 +62,8 @@ test("a deck can be labelled end to end on a phone-sized screen", async ({ page 
   await expect(page.getByRole("heading", { name: "Calibrate" })).toBeVisible();
   await shot(page, "1-picker");
 
+  // Upload waits for the deck list: it checks a re-upload against stored labels.
+  await expect(page.getByText("No decks yet.", { exact: false })).toBeVisible();
   await page.getByLabel("Upload deck files…").setInputFiles(deckPath);
   await expect(page.getByText(deck.deck_id.split("__")[0], { exact: true })).toBeVisible();
   await expect(page.getByText(`Not started · ${total} cards`)).toBeVisible();
