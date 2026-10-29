@@ -295,3 +295,105 @@ describe("MatchCard: legacy rationale is not presented as a claim (#440)", () =>
     expect(html).not.toContain("Explanation unavailable");
   });
 });
+
+describe("MatchCard: renormalized rows explain their own number (#601)", () => {
+  type Axes = NonNullable<UnitMatch["component_applicability"]>;
+  type Weights = NonNullable<UnitMatch["effective_weights"]>;
+  const AXES: Axes = {
+    semantic_similarity: true,
+    skill_overlap: true,
+    domain_overlap: false,
+    tool_overlap: false,
+    seniority_alignment: false,
+    scope_alignment: false,
+    recency: true,
+  };
+  const total = 0.3 + 0.2 + 0.05;
+  const EW: Weights = {
+    semantic_similarity: 0.3 / total,
+    skill_overlap: 0.2 / total,
+    domain_overlap: 0,
+    tool_overlap: 0,
+    seniority_alignment: 0,
+    scope_alignment: 0,
+    recency: 0.05 / total,
+  };
+  const ZERO: Weights = {
+    semantic_similarity: 0,
+    skill_overlap: 0,
+    domain_overlap: 0,
+    tool_overlap: 0,
+    seniority_alignment: 0,
+    scope_alignment: 0,
+    recency: 0,
+  };
+
+  it("shows the effective weights and no neutral-placeholder note", () => {
+    const rule = 0.45 * EW.semantic_similarity + 0.6 * EW.skill_overlap + EW.recency;
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({
+          component_applicability: AXES,
+          effective_weights: EW,
+          rule_score: rule,
+          final_score: 0.85 * rule,
+        })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    // 0.30 / 0.55 and 0.20 / 0.55, not the fixed 0.30 / 0.20.
+    expect(html).toContain("×0.55");
+    expect(html).toContain("×0.36");
+    expect(html).not.toContain("×0.30");
+    expect(html).not.toContain("match-score-unevaluated-contribution");
+    expect(html).not.toContain("neutral placeholders");
+    expect(html).toContain("match-score-formula-renormalized");
+    // Contributions shown: 0.245 + 0.218 + 0.091 = rule_score 0.555.
+    expect(html).toContain("0.245");
+    expect(html).toContain("0.218");
+    expect(html).toContain("0.091");
+    expect(rule).toBeCloseTo(0.5545, 3);
+  });
+
+  it("an all-zero row says it was not evaluated instead of listing contributions", () => {
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({
+          component_applicability: {
+            ...AXES,
+            skill_overlap: false,
+          },
+          effective_weights: ZERO,
+          rule_score: 0,
+          final_score: 0,
+          rationale: "Not scored: nothing in this requirement could be compared against this Experience Unit.",
+          surface_evidence: "",
+        })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).toContain("match-score-not-scored");
+    expect(html).toContain("no score");
+    expect(html).not.toContain('data-testid="match-score-row"');
+    expect(html).not.toContain("match-score-unevaluated-contribution");
+    expect(html).not.toContain("still contribute");
+    expect(html).not.toContain("×0.30");
+  });
+
+  it("a legacy row (no effective_weights) renders exactly as before", () => {
+    const html = renderToStaticMarkup(
+      <MatchCard
+        match={makeMatch({ component_applicability: AXES })}
+        unit={makeUnit()}
+        onApprovalStateChange={() => {}}
+      />,
+    );
+    expect(html).toContain("×0.30");
+    expect(html).toContain("×0.20");
+    expect(html).toContain("match-score-unevaluated-contribution");
+    expect(html).not.toContain("match-score-formula-renormalized");
+    expect(html).not.toContain("match-score-not-scored");
+  });
+});

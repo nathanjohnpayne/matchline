@@ -275,6 +275,24 @@ describe("GapsView: could not be evaluated (#602)", () => {
     expect(html).not.toContain("gaps-unverifiable");
   });
 
+  it("does not blame the requirement alone: the copy covers a level the Units cannot be checked against", () => {
+    // A seniority-only must-have ("senior") is also not_evaluated
+    // when every Unit carries only unmapped seniority signals
+    // (tests/not-evaluated-seniority.test.ts). The requirement
+    // names a checkable level there, so the copy must not say it
+    // names none; it says no level could be checked against the
+    // user's Experience Units.
+    const html = renderToStaticMarkup(
+      <GapsView
+        gaps={[{ ...notEvaluated, requirement: makeReq("r-senior") }]}
+      />,
+    );
+    expect(html).toContain(
+      "no seniority level that could be checked against your Experience Units",
+    );
+    expect(html).not.toContain("no seniority level it could");
+  });
+
   it("an evaluated, unmet requirement still renders as an unmet gap alongside it, counted separately", () => {
     const html = renderToStaticMarkup(
       <GapsView gaps={[unmet, notEvaluated, { ...notEvaluated, requirement: makeReq("r-blank-2") }]} />,

@@ -113,6 +113,7 @@ export default function MatchCard({
           finalScore={match.final_score}
           components={match.components}
           componentApplicability={match.component_applicability}
+          effectiveWeights={match.effective_weights}
           confidence={unit !== null ? unit.confidence_score : null}
         />
       </header>

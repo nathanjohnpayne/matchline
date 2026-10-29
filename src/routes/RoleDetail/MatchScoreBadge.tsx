@@ -23,6 +23,15 @@
  *     reference even when the wrapper isn't actively
  *     hovered/focused. SSR-safe.
  *
+ * Renormalized rows (#601) carry `effective_weights`: the rows
+ * then show the weight each axis actually carried, the visible
+ * contributions sum to the rule score, and there are no hidden
+ * neutral placeholders to disclose. A row whose effective
+ * weights are all 0 had no structural axis to compare and has
+ * no score; the tooltip says so instead of listing
+ * contributions. Legacy rows (no `effective_weights`) render as
+ * before, with the fixed weights and the placeholder note.
+ *
  * Legacy data: pre-#131 matches in storage don't have
  * `components` populated. The breakdown helper returns
  * `null` and the tooltip renders a "rerun matching to see
@@ -33,7 +42,7 @@ import { useId, type ReactElement } from "react";
 
 import type { ScoreComponents } from "../../types/capability.ts";
 
-import { buildBreakdownRows } from "./scoreBreakdown.ts";
+import { buildBreakdownRows, isNotScored } from "./scoreBreakdown.ts";
 
 export interface MatchScoreBadgeProps {
   /** Final score in [0, 1]; rendered as 0–100 with 1 decimal. */
@@ -50,6 +59,11 @@ export interface MatchScoreBadgeProps {
     Record<keyof ScoreComponents, boolean>
   >;
   /**
+   * Persisted `effective_weights` (#601). Present on a
+   * renormalized row, `undefined` on a legacy fixed-weight row.
+   */
+  readonly effectiveWeights?: Readonly<Record<keyof ScoreComponents, number>>;
+  /**
    * Source Unit's `confidence_score` in [0, 1]. Multiplied
    * against `rule_score` to produce `final_score`.
    * `null` when the source Unit isn't in the loaded set
@@ -62,22 +76,33 @@ export default function MatchScoreBadge({
   finalScore,
   components,
   componentApplicability,
+  effectiveWeights,
   confidence,
 }: MatchScoreBadgeProps): ReactElement {
   const popoverId = useId();
   const score100 = (finalScore * 100).toFixed(1);
-  const rows = buildBreakdownRows(components, componentApplicability);
+  const rows = buildBreakdownRows(
+    components,
+    componentApplicability,
+    effectiveWeights,
+  );
+  const renormalized = effectiveWeights !== undefined;
+  const notScored = isNotScored(effectiveWeights);
   // `score()` includes an unevaluated axis's neutral in
   // `rule_score`, so hiding those rows outright left the footer
   // stating an equation the visible rows could not reproduce —
   // e.g. a badge reading 51.9 while the shown contributions sum
   // to 15.7. Surfacing the aggregate keeps the breakdown an
   // explanation of the number rather than a different number.
-  // Codex P2 on PR #435. Removing them from the arithmetic
-  // entirely is #433.
-  const hiddenContribution = (rows ?? [])
-    .filter((r) => !r.evaluated)
-    .reduce((sum, r) => sum + r.contribution, 0);
+  // Codex P2 on PR #435. Since #601 a renormalized row gives an
+  // unevaluated axis weight 0, so nothing is hidden and the note
+  // must not render: it would claim a contribution that is not in
+  // the score.
+  const hiddenContribution = renormalized
+    ? 0
+    : (rows ?? [])
+        .filter((r) => !r.evaluated)
+        .reduce((sum, r) => sum + r.contribution, 0);
 
   return (
     <span
@@ -106,6 +131,15 @@ export default function MatchScoreBadge({
           >
             Breakdown unavailable for this match. Re-run matching to populate
             the per-component scores.
+          </p>
+        ) : notScored ? (
+          <p
+            className="italic text-zinc-500"
+            data-testid="match-score-not-scored"
+          >
+            Not evaluated: no skill, tool, domain, seniority or scope axis
+            applied to this pair, so it has no score. Semantic similarity
+            alone does not score a match.
           </p>
         ) : (
           <>
@@ -186,9 +220,19 @@ export default function MatchScoreBadge({
                   Source Unit unavailable; confidence multiplier hidden.
                 </p>
               )}
-              <p className="text-zinc-500 mt-0.5">
-                Final score = Σ(score × weight) × confidence.
-              </p>
+              {renormalized ? (
+                <p
+                  className="text-zinc-500 mt-0.5"
+                  data-testid="match-score-formula-renormalized"
+                >
+                  Final score = Σ(score × weight) × confidence, with the
+                  weights rescaled to sum to 1 over the evaluated axes.
+                </p>
+              ) : (
+                <p className="text-zinc-500 mt-0.5">
+                  Final score = Σ(score × weight) × confidence.
+                </p>
+              )}
             </div>
           </>
         )}

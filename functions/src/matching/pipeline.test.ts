@@ -12,6 +12,7 @@ import {
   runMatchingPipeline,
   type RunMatchingContext,
 } from "./pipeline.ts";
+import { NOT_SCORED_RATIONALE } from "./rationale.ts";
 import type { ScoreResult } from "./score.ts";
 
 /**
@@ -147,8 +148,12 @@ describe("runMatchingPipeline", () => {
   it("scores every (Unit × Requirement) pair, persists, and returns the matches", async () => {
     const unit1 = makeUnit({ id: "u1" });
     const unit2 = makeUnit({ id: "u2" });
-    const req1 = makeRequirement({ id: "r1" });
-    const req2 = makeRequirement({ id: "r2" });
+    // A recognized skill keeps each pair evaluated, so the real
+    // rationale generator narrates it (with Unit evidence) rather
+    // than emitting the not-scored sentence an unevaluable pair
+    // gets since #601.
+    const req1 = makeRequirement({ id: "r1", keywords: ["product strategy"] });
+    const req2 = makeRequirement({ id: "r2", keywords: ["product strategy"] });
 
     const score = vi.fn(() => makeScoreResult(0.8));
     const persistBatch = vi.fn(async () => {});
@@ -624,5 +629,9 @@ describe("runMatchingPipeline: renormalized scoring (#601)", () => {
     expect(last.semantic_score).toBeGreaterThan(0);
     expect(last.component_applicability).toBeDefined();
     expect(last.rationale.length).toBeGreaterThan(0);
+    // ...but the rationale must not claim a match beside a 0 score.
+    expect(last.rationale).toBe(NOT_SCORED_RATIONALE);
+    expect(last.surface_evidence).toBe("");
+    expect(result[0]!.rationale).not.toBe(NOT_SCORED_RATIONALE);
   });
 });

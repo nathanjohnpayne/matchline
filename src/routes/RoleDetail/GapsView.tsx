@@ -309,10 +309,10 @@ export default function GapsView({
               We couldn&apos;t evaluate{" "}
               {notEvaluated.length === 1 ? "this requirement" : "these requirements"}.
               Nothing in {notEvaluated.length === 1 ? "it" : "them"} could be
-              compared against your Experience Units: no skill, tool, domain or
-              scope the matcher recognizes, and no seniority level it could
-              check. {notEvaluated.length === 1 ? "It is" : "They are"} not
-              counted as covered, and this is not a finding about your
+              compared: no skill, tool, domain or scope the matcher recognizes,
+              and no seniority level that could be checked against your
+              Experience Units. {notEvaluated.length === 1 ? "It is" : "They are"}{" "}
+              not counted as covered, and this is not a finding about your
               experience.
             </p>
           </header>

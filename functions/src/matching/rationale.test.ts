@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { generateRationale, type RationaleInput } from "./rationale.js";
+import {
+  generateRationale,
+  NOT_SCORED_RATIONALE,
+  type RationaleInput,
+} from "./rationale.js";
 import {
   effectiveAxes,
   effectiveWeights,
@@ -45,10 +49,17 @@ function makeInput(
       seniority_signals: [],
       scope_signals: [],
     },
+    // One recognized skill keeps a structural axis applicable, so
+    // the pair is evaluated and the per-axis templates are
+    // reachable. With no structural axis at all the pair scores 0
+    // (#601) and gets NOT_SCORED_RATIONALE instead; tests for that
+    // case pass their own Requirement. The default components put
+    // 0 on skill_overlap, so this axis never drives unless a test
+    // says so.
     requirement: {
       normalized_requirement: "Senior PM with streaming experience",
       category: "skill",
-      keywords: [],
+      keywords: ["product strategy"],
       tools: [],
       domains: [],
     },
@@ -149,6 +160,9 @@ describe("generateRationale: semantic_similarity template", () => {
     // Pure-semantic match: no shared skills/tools/domains, but
     // high embedding similarity. The rationale points at
     // semantic; surface_evidence is the unit's normalized_summary.
+    // The Requirement names one recognized skill the Unit lacks,
+    // so the pair is evaluated (an unevaluable pair scores 0 and
+    // is not narrated as a match since #601).
     const input = makeInput({
       components: makeComponents({ semantic_similarity: 1 }),
       unit: {
@@ -164,7 +178,7 @@ describe("generateRationale: semantic_similarity template", () => {
         normalized_requirement:
           "Senior PM with streaming optimization experience",
         category: "skill",
-        keywords: [],
+        keywords: ["product strategy"],
         tools: [],
         domains: [],
       },
@@ -1070,10 +1084,12 @@ describe("recencyTemplate: partial date ranges (CodeRabbit on #435)", () => {
     seniority_signals: [],
     scope_signals: [],
   };
+  // One recognized, unshared skill keeps the pair evaluated, so
+  // the recency template is reachable (#601).
   const requirement = {
     normalized_requirement: "y",
     category: "skill" as const,
-    keywords: [],
+    keywords: ["product strategy"],
     tools: [],
     domains: [],
   };
@@ -1213,7 +1229,7 @@ describe("generateRationale: renormalized weights do not move the driving axis (
     });
   }
 
-  it("a pair with no applicable structural axis still narrates on semantics", () => {
+  it("a pair with no applicable structural axis keeps the semantic driving axis but is not narrated as a match", () => {
     const input = makeInput({
       components: makeComponents({
         semantic_similarity: 0.8,
@@ -1233,8 +1249,55 @@ describe("generateRationale: renormalized weights do not move the driving axis (
         domains: [],
       },
     });
-    expect(generateRationale(input).driving_component).toBe(
-      "semantic_similarity",
+    const r = generateRationale(input);
+    expect(r.driving_component).toBe("semantic_similarity");
+    // It scores 0 (#601), so the prose must not claim a match.
+    expect(r.rationale).toBe(NOT_SCORED_RATIONALE);
+    expect(r.rationale).not.toMatch(/matched/i);
+    expect(r.surface_evidence).toBe("");
+  });
+
+  it("a seniority-only Requirement against a Unit with only unmapped signals is not scored", () => {
+    // effectiveAxes drops seniority for this pair, leaving no
+    // structural axis: the Requirement names a checkable level,
+    // but this Unit gives nothing to check it against.
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({ semantic_similarity: 0.9 }),
+        unit: { ...unit, skills: [], tools: [], domains: [], seniority_signals: ["mentored"] },
+        requirement: {
+          normalized_requirement: "Senior-level product manager",
+          category: "experience_level",
+          keywords: [],
+          tools: [],
+          domains: [],
+          seniority_level: "senior",
+        },
+      }),
     );
+    expect(r.rationale).toBe(NOT_SCORED_RATIONALE);
+    expect(r.surface_evidence).toBe("");
+  });
+
+  it("the same Requirement against a Unit with a mapped signal is narrated as before", () => {
+    const r = generateRationale(
+      makeInput({
+        components: makeComponents({
+          semantic_similarity: 0.1,
+          seniority_alignment: 1,
+        }),
+        unit: { ...unit, seniority_signals: ["senior"] },
+        requirement: {
+          normalized_requirement: "Senior-level product manager",
+          category: "experience_level",
+          keywords: [],
+          tools: [],
+          domains: [],
+          seniority_level: "senior",
+        },
+      }),
+    );
+    expect(r.driving_component).toBe("seniority_alignment");
+    expect(r.rationale).not.toBe(NOT_SCORED_RATIONALE);
   });
 });

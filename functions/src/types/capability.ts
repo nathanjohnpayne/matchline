@@ -311,10 +311,15 @@ export interface UnitMatch {
    *      structural axis fell back to a no-constraint default; or
    *   2. it constrains something and this Unit scored 0.0 on all
    *      of them — an evaluated mismatch.
-   * Either way `final_score` rests on semantics plus unearned
-   * neutral credit, which is why `computeGaps` refuses to let
-   * such a match cover a must-have. The match still ranks and
-   * still renders.
+   * Before #601 either case left `final_score` resting on
+   * semantics plus up to ~0.425 of unearned neutral credit.
+   * Since #601 (rows carrying `effective_weights`) the first
+   * case scores 0, and the second rests on semantics and
+   * recency against a renormalized structural weight the Unit
+   * scored 0 on. The gate stays either way: `computeGaps`
+   * refuses to let such a match cover a must-have, because a
+   * high semantic score alone is not evidence. The match still
+   * ranks and still renders.
    *
    * Optional because rows written before this field existed
    * won't have it. Readers treat `undefined` as "legacy, don't

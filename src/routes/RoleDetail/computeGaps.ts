@@ -16,15 +16,21 @@
  * doesn't constrain an axis — 0.5 on skill / tool / domain,
  * 1.0 on seniority and scope. That's deliberate (an
  * unconstrained axis must not read as a candidate
- * deficiency), but a Requirement that constrains NOTHING
- * evaluable stacks those defaults into ~0.425 of unearned
- * `rule_score`, and a recent Unit then clears 0.4 on
- * semantics alone. The credential-shaped Requirement
- * `jd.v1.md` emits with empty `keywords` / `tools` /
- * `domains` is the canonical case: "BS in Computer Science
- * required" would show as covered by whichever Unit happened
- * to embed closest, which is precisely the dishonesty this
- * view exists to prevent.
+ * deficiency). Before #601, a Requirement that constrained
+ * NOTHING evaluable stacked those defaults into ~0.425 of
+ * unearned `rule_score`, and a recent Unit then cleared 0.4
+ * on semantics alone. Since #601 (rows carrying
+ * `effective_weights`) an inapplicable axis carries weight 0,
+ * so such a pair scores 0, and an evaluated mismatch rests on
+ * semantics and recency against renormalized structural
+ * weight it scored 0 on. The gate below stays: legacy rows
+ * still carry the old credit, and a high semantic score must
+ * never cover a must-have on its own. The credential-shaped
+ * Requirement `jd.v1.md` emits with empty `keywords` /
+ * `tools` / `domains` is the canonical case: "BS in Computer
+ * Science required" would show as covered by whichever Unit
+ * happened to embed closest, which is precisely the
+ * dishonesty this view exists to prevent.
  *
  * Such matches are NOT hidden — `specs/matchline.md`'s
  * non-goals are explicit that low-quality matches still
@@ -137,10 +143,14 @@ export const GAP_THRESHOLD = 0.4;
 /**
  * Why a Requirement appears in the Gaps list.
  *
- * `not_evaluated` (#602): the Requirement names nothing the
- * matcher could compare against any Unit — no recognized skill,
- * tool, domain, seniority level or scope — so "nothing qualifies"
- * would be a claim about the user that was never tested.
+ * `not_evaluated` (#602): nothing the matcher could compare,
+ * for any Unit. Either the Requirement names no recognized
+ * skill, tool, domain, seniority level or scope, or it names
+ * only a seniority level and no Unit carries a ladder-mapped
+ * seniority signal to check it against (`effectiveAxes` then
+ * drops seniority for every pair). Either way "nothing
+ * qualifies" would be a claim about the user that was never
+ * tested.
  *
  * `unmet` is the original meaning: nothing qualifies. `unverifiable`
  * is #441's addition: something might qualify, but the evidence
