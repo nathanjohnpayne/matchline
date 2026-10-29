@@ -12,7 +12,7 @@ import type { FitBriefCorpus } from "./corpus.ts";
 import type { JudgeResult } from "./judge.ts";
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 
-import { fitBriefRequestFingerprint, type FitBriefResult } from "../../../functions/src/generation/fitBrief.ts";
+import { fitBriefMaxTokens, fitBriefRequestFingerprint, type FitBriefResult } from "../../../functions/src/generation/fitBrief.ts";
 import type { FitBriefResponseV2 } from "../../../functions/src/prompts/generation/fitBrief.v2.schema.ts";
 
 import { judgeRequestFingerprint } from "./judge.ts";
@@ -737,14 +737,28 @@ describe("runFitBriefEval with prompt v2 (#655)", () => {
     }
   });
 
+  it("records the output budget a v2 run's requests carried, twice v1's, in the header and every artifact (#655 round 2)", async () => {
+    const d = depsV2();
+    const out = await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    const budget = fitBriefMaxTokens(OPTIONS.model, "v2");
+    expect(budget).toBe(2 * fitBriefMaxTokens(OPTIONS.model, "v1"));
+    expect(out.report.split("\n")[0]).toMatch(new RegExp(`, generator max_tokens ${budget}, claim-rule checks 2$`));
+    for (const a of artifacts(d.files)) expect(a.config.generatorMaxTokens).toBe(budget);
+    // A 5.5 model's profile doubles it again.
+    const opus = await runFitBriefEval(CORPUS_V2, { ...OPTIONS_V2, model: "claude-opus-5-5", effort: "high" }, depsV2());
+    expect(opus.report.split("\n")[0]).toContain(`generator max_tokens ${fitBriefMaxTokens("claude-opus-5-5", "v2")},`);
+    expect(fitBriefMaxTokens("claude-opus-5-5", "v2")).toBe(32_768);
+  });
+
   it("keeps a v1 run's config exactly as before: v1 label and fingerprint, no claimRuleChecks key", async () => {
     const d = deps();
     const out = await runFitBriefEval(CORPUS, OPTIONS, d);
     expect(out.report.split("\n")[0]).toContain(`prompts generation/fitBrief.v1 (request ${fitBriefRequestFingerprint(OPTIONS.model, OPTIONS.effort)})`);
-    expect(out.report).not.toMatch(/claim-rule checks|Self-audit|Short cited spans/);
+    expect(out.report).not.toMatch(/claim-rule checks|Self-audit|Short cited spans|max_tokens/);
     for (const a of artifacts(d.files)) {
       expect(a.config.generatorPrompt).toBe("generation/fitBrief.v1");
       expect("claimRuleChecks" in a.config).toBe(false);
+      expect("generatorMaxTokens" in a.config).toBe(false);
     }
     expect([...d.files.keys()].some((k) => k.endsWith(CLAIM_RULE_CHECKS_FILE))).toBe(false);
   });
@@ -757,7 +771,7 @@ describe("runFitBriefEval with prompt v2 (#655)", () => {
     const [v1Config, v2Config] = [artifacts(d1.files)[0].config, artifacts(d2.files)[0].config];
     const result = comparable(v1Config, v2Config);
     expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/fitBrief\.v1 vs generation\/fitBrief\.v2/) });
-    expect(result.differences).toEqual(["generatorPrompt", "generatorRequest", "claimRuleChecks"]);
+    expect(result.differences).toEqual(["generatorPrompt", "generatorRequest", "generatorMaxTokens", "claimRuleChecks"]);
     // Two v1 runs of the same cell stay comparable.
     const d3 = deps();
     await runFitBriefEval(CORPUS_V2, OPTIONS, d3);

@@ -453,6 +453,8 @@ export function formatAggregate(
     readonly unitsSource?: string;
     /** Units mode: hash of exactly the evidence the generator read. */
     readonly unitsSha256?: string;
+    /** v2 only: the generator's `max_tokens`. */
+    readonly generatorMaxTokens?: number;
     /** v2 only: how many numbered claim-rule checks the request carried. */
     readonly claimRuleChecks?: number;
     readonly spentUsd: number;
@@ -481,6 +483,7 @@ export function formatAggregate(
             .filter(Boolean)
             .join(", ")}`
         : "") +
+      (meta.generatorMaxTokens !== undefined ? `, generator max_tokens ${meta.generatorMaxTokens}` : "") +
       (meta.claimRuleChecks !== undefined ? `, claim-rule checks ${meta.claimRuleChecks}` : ""),
     "",
     `| split | briefs | gates passed | ${FAILURE_CATEGORIES.join(" | ")} | recall* | precision* | verdict agreement |`,
@@ -549,6 +552,8 @@ export interface FitBriefRunConfig {
   readonly unitsSha256?: string;
   /** v2 only: how many numbered claim-rule checks the request carried. */
   readonly claimRuleChecks?: number;
+  /** v2 only: the generator's `max_tokens` (`fitBriefMaxTokens`), recorded since v2 doubled v1's budget. */
+  readonly generatorMaxTokens?: number;
 }
 
 export type Comparability =
@@ -560,6 +565,7 @@ const RUN_CONFIG_KEYS = [
   "effort",
   "generatorPrompt",
   "generatorRequest",
+  "generatorMaxTokens",
   "judgeModel",
   "judgeEffort",
   "judgePrompt",

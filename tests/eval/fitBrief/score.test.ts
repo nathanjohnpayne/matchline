@@ -433,6 +433,15 @@ describe("formatAggregate across prompt versions", () => {
       claimRuleChecks: 7,
     });
     expect(out.split("\n")[0]).toMatch(/prompts generation\/fitBrief\.v2 \(request sha256:aaaaaaaaaaaa\), judge sha256:5b48bb3edeed, claim-rule checks 7$/);
+    // v2's output budget, when given, sits before the check count (#655 round 2).
+    const withBudget = formatAggregate(aggregate([{ split: "dev", score: v2 }]), {
+      ...meta,
+      generatorPrompt: "generation/fitBrief.v2",
+      generatorRequest: "sha256:aaaaaaaaaaaa",
+      generatorMaxTokens: 32_768,
+      claimRuleChecks: 7,
+    });
+    expect(withBudget.split("\n")[0]).toMatch(/judge sha256:5b48bb3edeed, generator max_tokens 32768, claim-rule checks 7$/);
     expect(out).toContain("Self-audit dropped (dev): 2 point(s) in 1 brief(s) (span_does_not_support 1, no_span 0, claim_rule 1).");
     for (const leaked of ["Clear writer", "Certified", "Wrote the PCI policy", "writing"]) expect(out).not.toContain(leaked);
   });
@@ -454,6 +463,7 @@ describe("comparable", () => {
     ...V1,
     generatorPrompt: "generation/fitBrief.v2",
     generatorRequest: "sha256:87bf32191ac1",
+    generatorMaxTokens: 32_768,
     claimRuleChecks: 9,
   };
 
@@ -470,7 +480,7 @@ describe("comparable", () => {
     if (result.ok) return;
     expect(result.reason).toMatch(/generation\/fitBrief\.v1 vs generation\/fitBrief\.v2/);
     // The declared v2-minus-v1 contrast differs exactly here and nowhere else.
-    expect(result.differences).toEqual(["generatorPrompt", "generatorRequest", "claimRuleChecks"]);
+    expect(result.differences).toEqual(["generatorPrompt", "generatorRequest", "generatorMaxTokens", "claimRuleChecks"]);
     expect(comparable(V2, V1).ok).toBe(false);
   });
 

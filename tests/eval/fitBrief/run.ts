@@ -58,6 +58,7 @@ import { rateFor } from "../../../functions/src/llm/rates.ts";
 import { loadPromptText } from "../../../functions/src/prompts/loader.ts";
 import {
   claimRuleChecks,
+  fitBriefMaxTokens,
   fitBriefPromptLabel,
   fitBriefRequestFingerprint,
   generateFitBrief,
@@ -414,8 +415,13 @@ export async function runFitBriefEval(
       unitsFormat: UNITS_FORMAT_FINGERPRINT,
       unitsSource: options.frozenUnits ? "frozen" : "extracted",
     }),
-    // v2 only, so v1 configs keep exactly their Phase 3 shape.
-    ...(checks !== undefined && { claimRuleChecks: checks.length }),
+    // v2 only, so v1 configs keep exactly their Phase 3 shape: the check
+    // count, and the output budget v2's requests carry (twice v1's base,
+    // #655), so an artifact says which budget produced its brief.
+    ...(checks !== undefined && {
+      claimRuleChecks: checks.length,
+      generatorMaxTokens: fitBriefMaxTokens(options.model, options.promptVersion),
+    }),
   };
   // Set once the Units are known: a hash of exactly what the generator
   // read, so two runs can be checked for identical evidence.
@@ -795,6 +801,8 @@ async function main(): Promise<number> {
   prepareOutDir(options.outDir);
   const client: Anthropic = anthropicForCli();
   const outcome = await runFitBriefEval(corpus, { ...options, ...(frozenUnits && { frozenUnits }) }, {
+    // The flag is the only source of the generator's prompt version; the
+    // generator refuses a missing or unknown one before building a request.
     generate: (input, record, guard) =>
       generateFitBrief(input, {
         model: options.model,

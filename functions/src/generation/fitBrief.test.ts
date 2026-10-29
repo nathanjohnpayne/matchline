@@ -1,7 +1,9 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import { LONG_REQUEST_TIMEOUT_MS } from "../llm/modelProfile.ts";
 
 import {
   _clearCacheForTests,
@@ -13,11 +15,14 @@ import {
   auditProblem,
   claimRuleChecks,
   FitBriefError,
+  fitBriefMaxTokens,
   fitBriefPromptLabel,
   fitBriefRequestFingerprint,
   generateFitBrief,
   isFitBriefPromptVersion,
   renderClaimRuleChecks,
+  type FitBriefDeps,
+  type FitBriefPromptVersion,
 } from "./fitBrief.ts";
 
 const BRIEF = {
@@ -78,7 +83,7 @@ describe("generateFitBrief", () => {
     const record = vi.fn<typeof RecordUsage>(async () => 0);
     const c = client([message(BRIEF)]);
 
-    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record, runId: "r1" });
+    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record, runId: "r1", promptVersion: "v1" });
 
     expect(result.brief.verdict).toBe("apply");
     expect(result.inputTokens).toBe(1000);
@@ -101,6 +106,7 @@ describe("generateFitBrief", () => {
     const c = client([message({ ...BRIEF, verdict: "maybe" }), message(BRIEF)]);
     const result = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: c,
       record: vi.fn<typeof RecordUsage>(async () => 0),
     });
@@ -115,6 +121,7 @@ describe("generateFitBrief", () => {
     const c = client([message(BRIEF, { model: "claude-sonnet-5-5" })]);
     await generateFitBrief(INPUT, {
       model: "claude-sonnet-5-5",
+      promptVersion: "v1",
       effort: "medium",
       client: c,
       record: vi.fn<typeof RecordUsage>(async () => 0),
@@ -131,6 +138,7 @@ describe("generateFitBrief", () => {
     ]);
     const err = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: c,
       record: vi.fn<typeof RecordUsage>(async () => 0),
     }).catch((e: unknown) => e);
@@ -146,6 +154,7 @@ describe("generateFitBrief", () => {
     ]);
     const err = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: c,
       record: vi.fn<typeof RecordUsage>(async () => 0),
     }).catch((e: unknown) => e);
@@ -159,6 +168,7 @@ describe("generateFitBrief", () => {
     });
     const err = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: { messages: { create } } as unknown as Anthropic,
       record: vi.fn<typeof RecordUsage>(async () => 0),
       sleep: async () => {},
@@ -176,6 +186,7 @@ describe("generateFitBrief", () => {
     });
     await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: { messages: { create } } as unknown as Anthropic,
       record: vi.fn<typeof RecordUsage>(async () => 0),
       sleep: async () => {},
@@ -192,6 +203,7 @@ describe("generateFitBrief", () => {
     });
     const result = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: { messages: { create } } as unknown as Anthropic,
       record: vi.fn<typeof RecordUsage>(async () => 0),
       sleep: async () => {},
@@ -204,6 +216,7 @@ describe("generateFitBrief", () => {
     const text = message(BRIEF, { content: [{ type: "text", text: "no" }] } as Partial<Anthropic.Messages.Message>);
     const err = await generateFitBrief(INPUT, {
       model: "claude-sonnet-4-6",
+      promptVersion: "v1",
       client: client([text, text, text]),
       record: vi.fn<typeof RecordUsage>(async () => 0),
     }).catch((e: unknown) => e);
@@ -311,6 +324,66 @@ describe("claimRuleChecks", () => {
     ]);
   });
 
+  it("keeps every rule when '===' lines separate rules: an '===' paragraph is a heading only over a list item (#655 round 2)", () => {
+    const abc = [
+      { number: 1, text: "Never claim A." },
+      { number: 2, text: "Never claim B." },
+      { number: 3, text: "Never claim C." },
+    ];
+    expect(claimRuleChecks("Never claim A.\n===\nNever claim B.\n===\nNever claim C.")).toEqual(abc);
+    expect(claimRuleChecks("Never claim A.\n===\n\nNever claim B.\n===\n\nNever claim C.")).toEqual(abc);
+    // A rule above a separator keeps the heading it sits under.
+    expect(claimRuleChecks("# Rules\n\nNever claim A.\n===\nNever claim B.")).toEqual([
+      { number: 1, text: "Never claim A.", context: "Rules" },
+      { number: 2, text: "Never claim B.", context: "Rules" },
+    ]);
+    // Under a list item or on its own line, '===' underlines nothing: a separator, never rule text.
+    expect(claimRuleChecks("- Never claim A.\n===\nNever claim B.\n===\nNever claim C.")).toEqual(abc);
+    expect(claimRuleChecks("Never claim A.\n\n===\n\nNever claim B.")).toEqual(abc.slice(0, 2));
+    // Over a list item (directly, or through a lead-in) it is still a heading.
+    expect(claimRuleChecks("Titles\n===\n- Never Director.\n\nScale\n===\n\nNever claim:\n- Twelve teams.")).toEqual([
+      { number: 1, text: "Never Director.", context: "Titles" },
+      { number: 2, text: "Twelve teams.", context: "Scale › Never claim:" },
+    ]);
+    // Over a paragraph rule the title errs toward being a check too: an extra not_applicable, never a lost rule.
+    expect(claimRuleChecks("Claim rules\n===========\n\nNever claim a certification.")).toEqual([
+      { number: 1, text: "Claim rules" },
+      { number: 2, text: "Never claim a certification." },
+    ]);
+  });
+
+  it("reads a fenced block as text of the rule it sits in, never as headings, separators or items (#655 round 2)", () => {
+    // The spurious checks this replaces: "```", "not a rule\n```".
+    expect(claimRuleChecks("- Rule A.\n\n```\n# not heading\n- not a rule\n```")).toEqual([
+      { number: 1, text: "Rule A." },
+      { number: 2, text: "```\n# not heading\n- not a rule\n```" },
+    ]);
+    expect(
+      claimRuleChecks("# Rules\n\n- Use this wording:\n```\n# not heading\n---\n- not an item\n===\n\nstill the rule\n```\n- Next rule."),
+    ).toEqual([
+      { number: 1, text: "Use this wording:\n```\n# not heading\n---\n- not an item\n===\n\nstill the rule\n```", context: "Rules" },
+      { number: 2, text: "Next rule.", context: "Rules" },
+    ]);
+    // After a blank line a fence is a rule of its own, under the same heading; tildes and info strings count.
+    expect(claimRuleChecks("# Rules\n\n- A.\n\n~~~md\n# not heading\n~~~\n\n- B.")).toEqual([
+      { number: 1, text: "A.", context: "Rules" },
+      { number: 2, text: "~~~md\n# not heading\n~~~", context: "Rules" },
+      { number: 3, text: "B.", context: "Rules" },
+    ]);
+    // A fence closes only on the same character, at least as long as the opener.
+    expect(claimRuleChecks("````\n```\n# x\n~~~~\n````\n\n- B.").map((c) => c.text)).toEqual(["````\n```\n# x\n~~~~\n````", "B."]);
+    // An opener that never closes is an ordinary line, so it cannot merge the rules after it.
+    expect(claimRuleChecks("- A.\n```\n# Scale\n- B.")).toEqual([
+      { number: 1, text: "A.\n```" },
+      { number: 2, text: "B.", context: "Scale" },
+    ]);
+    // '===' under a fenced block is a separator, never a heading underline.
+    expect(claimRuleChecks("```\ncode rule\n```\n===\nNever claim B.")).toEqual([
+      { number: 1, text: "```\ncode rule\n```" },
+      { number: 2, text: "Never claim B." },
+    ]);
+  });
+
   it("keeps an indented '#' line inside a list item as the item's text; an unindented heading still closes it", () => {
     expect(claimRuleChecks("- Use # of teams wording\n  # teams is 4\n- other")).toEqual([
       { number: 1, text: "Use # of teams wording\n# teams is 4" },
@@ -336,6 +409,8 @@ describe("claimRuleChecks", () => {
       "- A item.\n\nNever claim B.\n---",
       "Never claim A.\n---\n- B item.",
       "Titles\n======\n\nLead-in:\n- Never Director.\n- Never VP.\n\n## Scale\n\nSay four teams.\n***\nLast rule.",
+      "Never claim A.\n===\nNever claim B.\n===\n\nNever claim C.\n\n===\n\n- D item.\n===\nE para.",
+      "- Rule A.\n```js\n# not heading\n- not an item\n===\n\nstill code\n```\n- Rule B.\n\n~~~\n---\n~~~",
     ];
     const isSeparator = (l: string) => /^ {0,3}(?:=+|-+|\*{3,}|_{3,}|(?:[-*_][ \t]*){3,})[ \t]*$/.test(l);
     const isHeading = (l: string) => /^#{1,6}(?:[ \t]|$)/.test(l);
@@ -467,9 +542,14 @@ describe("generateFitBrief prompt versions (#655)", () => {
   const body = (c: Anthropic, call = 0) =>
     vi.mocked(c.messages.create).mock.calls[call]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
 
-  it("sends v1 by default, unchanged, and tags the result v1", async () => {
+  it("sends v1 unchanged when asked for v1, and tags the result v1", async () => {
     const c = client([message(BRIEF)]);
-    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) });
+    const result = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: c,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      promptVersion: "v1",
+    });
     expect(result.promptVersion).toBe("v1");
     const user = String(body(c).messages[0]!.content);
     expect(user.endsWith("Claim rules (obey every one):\n\nNever claim PCI certification.")).toBe(true);
@@ -514,20 +594,35 @@ describe("generateFitBrief prompt versions (#655)", () => {
     expect(user.endsWith("Run the self-audit, then call the tool.")).toBe(true);
   });
 
-  it("follows a runtime override when no version is passed", async () => {
+  it("reads the version only from the caller: a runtime override never changes it", async () => {
+    // One resolution path (#655 round 2): the harness passes its flag and
+    // the generator sends exactly that, whatever the loader would resolve.
     setPromptVersionOverrides({ "generation/fitBrief": "v2" });
-    const c = client([message(BRIEF_V2)]);
-    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) });
-    expect(result.promptVersion).toBe("v2");
+    const c = client([message(BRIEF)]);
+    const result = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: c,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      promptVersion: "v1",
+    });
+    expect(result.promptVersion).toBe("v1");
+    expect(String(body(c).system)).not.toMatch(/Self-audit/);
   });
 
-  it("refuses an unknown version before any request", async () => {
-    setPromptVersionOverrides({ "generation/fitBrief": "v9" });
-    const c = client([message(BRIEF)]);
-    await expect(
-      generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) }),
-    ).rejects.toThrow(/Unknown fit-brief prompt version v9/);
-    expect(vi.mocked(c.messages.create)).not.toHaveBeenCalled();
+  it("refuses an unknown or missing version before any request is built", async () => {
+    // An unregistered model would make building the request throw, so the
+    // version error proves the check runs first; no client call either.
+    for (const promptVersion of ["v9", "V2", "../v1", undefined]) {
+      const c = client([message(BRIEF)]);
+      const deps = { model: "unregistered-model", client: c, record: vi.fn<typeof RecordUsage>(async () => 0), promptVersion };
+      await expect(generateFitBrief(INPUT, deps as unknown as FitBriefDeps)).rejects.toThrow(
+        /^Unknown fit-brief prompt version .*pass deps\.promptVersion as one of v1, v2\.$/,
+      );
+      expect(vi.mocked(c.messages.create)).not.toHaveBeenCalled();
+    }
+    expect(() => fitBriefRequestFingerprint("claude-sonnet-4-6", undefined, "v9" as FitBriefPromptVersion)).toThrow(
+      /Unknown fit-brief prompt version "v9"/,
+    );
   });
 
   it("refuses v2 rules text with no rule line before any request", async () => {
@@ -568,6 +663,48 @@ describe("generateFitBrief prompt versions (#655)", () => {
     const c = client([message(BRIEF), message(BRIEF_V2)]);
     await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0), promptVersion: "v2" });
     expect(String(body(c, 1).system)).toMatch(/failed schema validation[\s\S]*rule_audit/);
+  });
+});
+
+describe("output budget per prompt version (#655 round 2)", () => {
+  const firstCall = (c: Anthropic) => vi.mocked(c.messages.create).mock.calls[0]!;
+
+  it("sends v1's request byte for byte as before v2 had its own budget", async () => {
+    // sha256 of JSON.stringify([body, options]), captured from generateFitBrief at da95a4b.
+    for (const [model, effort, maxTokens, sha] of [
+      ["claude-sonnet-4-6", undefined, 8192, "d746cb219a1f776c"],
+      ["claude-opus-5-5", "high", 16384, "ebb3aefaf8330575"],
+    ] as const) {
+      const c = client([message(BRIEF)]);
+      await generateFitBrief(INPUT, {
+        model,
+        ...(effort !== undefined && { effort }),
+        client: c,
+        record: vi.fn<typeof RecordUsage>(async () => 0),
+        promptVersion: "v1",
+      });
+      expect(firstCall(c)[0].max_tokens).toBe(maxTokens);
+      expect(createHash("sha256").update(JSON.stringify(firstCall(c))).digest("hex").slice(0, 16)).toBe(sha);
+      expect(fitBriefMaxTokens(model, "v1")).toBe(maxTokens);
+    }
+  });
+
+  it("gives v2 twice v1's budget on every model, scaled by the profile, and records it on usage", async () => {
+    for (const [model, effort, v1MaxTokens, longRequest] of [
+      ["claude-sonnet-4-6", undefined, 8192, false],
+      ["claude-opus-5-5", "high", 16384, true],
+      ["claude-sonnet-5-5", "medium", 16384, true],
+    ] as const) {
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+      const c = client([message(BRIEF_V2)]);
+      await generateFitBrief(INPUT, { model, ...(effort !== undefined && { effort }), client: c, record, promptVersion: "v2" });
+      const [sent, options] = firstCall(c);
+      expect(sent.max_tokens).toBe(2 * v1MaxTokens);
+      expect(fitBriefMaxTokens(model, "v2")).toBe(2 * v1MaxTokens);
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "generation/fitBrief.v2", maxTokens: 2 * v1MaxTokens }));
+      // Above the SDK's non-streaming limit the request carries its own timeout.
+      expect(options).toEqual(longRequest ? { timeout: LONG_REQUEST_TIMEOUT_MS } : undefined);
+    }
   });
 });
 
