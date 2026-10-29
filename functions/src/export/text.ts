@@ -34,11 +34,14 @@
  *     where Markdown would bold it: keeping characters is the safe side
  *     of the zero-fabrication invariant;
  *   - at a line start only a `#` heading marker, a `-`/`*`/`+` bullet
- *     marker (neither when the first non-whitespace character after it is
- *     a number or sign, however much whitespace comes between) and a
- *     thematic break are removed, and blockquote `>`, ordered-list `1.`
- *     and strikethrough `~~` are kept as typed, so no character that can
- *     carry a claim is dropped;
+ *     marker (neither when the first visible character after it is a
+ *     number, a sign or a backslash-escaped literal: the guard looks
+ *     through any whitespace, inline formatting (`*`, `_`, a code-span
+ *     backtick, `~`, the `[` or `![` of a link or image whose label starts
+ *     the content) and escapes, so `- **30%** cost` and `- \-30% cost`
+ *     keep their minus) and a thematic break are removed, and blockquote
+ *     `>`, ordered-list `1.` and strikethrough `~~` are kept as typed, so
+ *     no character that can carry a claim is dropped;
  *   - Unicode passes through untouched: em dashes, arrows, curly quotes,
  *     accents, CJK and emoji are kept as typed, with no normalization
  *     (the #141 glyph-loss failure must not recur here);
@@ -80,23 +83,93 @@ function sentinelFor(text: string): string {
 }
 
 /**
- * A leading token that is content, not a list or heading marker: a number,
- * a currency sign, a percent sign or another sign. `- 30% cost`,
+ * Literals held out of reach of markup reduction: each sits in the text as
+ * a `{sentinel}{index}{sentinel}` placeholder until step 4 of
+ * {@link plainTextOf} restores it.
+ */
+interface Held {
+  readonly sentinel: string;
+  readonly literals: readonly string[];
+}
+
+/** An image and a link, as step 3 of {@link plainTextOf} reduces them. */
+const IMAGE = String.raw`!\[([^\]]*)\]\(\s*<?([^)\s>]*)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)`;
+const LINK = String.raw`\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)`;
+const OPENS_IMAGE = new RegExp(`^${IMAGE}`);
+const OPENS_LINK = new RegExp(`^${LINK}`);
+/** Inline opening delimiters: emphasis `*` and `_`, a code-span backtick and strikethrough `~`. */
+const INLINE_OPENERS: ReadonlySet<string> = new Set(["*", "_", "`", "~"]);
+
+/** The first character a reader sees after a block marker. */
+interface Visible {
+  /** The character, with a held placeholder resolved to the literal it holds. */
+  readonly char: string;
+  /** True when the author typed a backslash to make this character literal content. */
+  readonly escaped: boolean;
+}
+
+/**
+ * The first visible character of `rest` once inline markup is reduced, or
+ * `undefined` when nothing visible follows. It looks past whitespace (`\s`,
+ * not only `[ \t]`, because the final trim eats NBSP and the other Unicode
+ * spaces too), the {@link INLINE_OPENERS}, and the `[` or `![` that opens a
+ * link or image whose label starts the content (an image with an empty
+ * label reduces to nothing, so it is skipped whole). A held placeholder
+ * resolves to the escaped literal it holds (`\-`, `\+`, `\#`, `\*`), and a
+ * backslash that escapes nothing (`\3`: CommonMark escapes only ASCII
+ * punctuation, so it is kept as typed) is visible itself; both count as
+ * escaped.
+ */
+function firstVisibleChar(rest: string, held: Held): Visible | undefined {
+  const placeholder = new RegExp(`^${held.sentinel}(\\d+)${held.sentinel}`);
+  for (let i = 0; i < rest.length; ) {
+    const tail = rest.slice(i);
+    const char = String.fromCodePoint(rest.codePointAt(i) ?? 0);
+    if (/^\s$/u.test(char) || INLINE_OPENERS.has(char)) {
+      i += char.length;
+      continue;
+    }
+    const image = OPENS_IMAGE.exec(tail);
+    if (image !== null) {
+      i += image[1] === "" ? image[0].length : "![".length;
+      continue;
+    }
+    if (OPENS_LINK.test(tail)) {
+      i += "[".length;
+      continue;
+    }
+    const placed = placeholder.exec(tail);
+    if (placed !== null) return { char: held.literals[Number(placed[1])] ?? "", escaped: true };
+    return { char, escaped: char === "\\" };
+  }
+  return undefined;
+}
+
+/**
+ * A leading character that is content, not a list or heading marker: a
+ * number, a currency sign, a percent sign or another sign. `- 30% cost`,
  * `+ 12% NRR` and `# 1 ranked` keep their first character.
  */
-const CONTENT_START = String.raw`[\p{N}\p{Sc}%+\-\u2212.]`;
+const CONTENT_START = /^[\p{N}\p{Sc}%+\-\u2212.]$/u;
+const HEADING_MARKER = /^#{1,6}[ \t]+/;
+const BULLET_MARKER = /^[-*+][ \t]+/;
+
 /**
- * The guard after a marker's whitespace. It skips any remaining whitespace
- * itself (`\s*`) before testing for {@link CONTENT_START}, so it always
- * inspects the first non-whitespace character. A bare `(?!CONTENT_START)`
- * let `[ \t]+` backtrack: in `-  30% cost` (two spaces) the guard ran
- * against the second space, passed, and the minus was dropped. `\s`, not
- * `[ \t]`, because the final trim eats NBSP and the other Unicode spaces
- * too, so `- \u00a030%` must keep its minus as well.
+ * Remove `marker` (with the whitespace after it) from the start of `line`,
+ * unless what follows starts with content: its first visible character
+ * ({@link firstVisibleChar}) is in {@link CONTENT_START} or is a literal
+ * the author escaped. Deciding on the raw next character let inline
+ * formatting hide a sign: `- **30%** cost` met `*`, and rendered as
+ * `30% cost`.
  */
-const NOT_CONTENT_NEXT = String.raw`(?!\s*${CONTENT_START})`;
-const HEADING_MARKER = new RegExp(String.raw`^#{1,6}[ \t]+${NOT_CONTENT_NEXT}`, "u");
-const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+${NOT_CONTENT_NEXT}`, "u");
+function stripMarker(line: string, marker: RegExp, held: Held): string {
+  const match = marker.exec(line);
+  if (match === null) return line;
+  const rest = line.slice(match[0].length);
+  const first = firstVisibleChar(rest, held);
+  const startsWithContent = first !== undefined && (first.escaped || CONTENT_START.test(first.char));
+  return startsWithContent ? line : rest;
+}
 
 /**
  * Strip the block-level markup that cannot be content, at a line start.
@@ -104,16 +177,17 @@ const BULLET_MARKER = new RegExp(String.raw`^[-*+][ \t]+${NOT_CONTENT_NEXT}`, "u
  * Zero fabrication: the Application Editor shows an item's text verbatim,
  * and the validator checked those characters, so only markers that carry
  * no meaning are removed: a thematic-break line, a `#` heading marker and a
- * `-`/`*`/`+` bullet marker, and the last two only when the first
- * non-whitespace character after them is not a number or sign. Blockquote
- * `>` and ordered-list `1.`/`1)` markers are kept as typed, because
+ * `-`/`*`/`+` bullet marker, and the last two only when the first visible
+ * character after them, looking through whitespace, inline formatting and
+ * escapes, is not a number, a sign or an escaped literal. Blockquote `>`
+ * and ordered-list `1.`/`1)` markers are kept as typed, because
  * `>40% faster`, `2019. B.A.` and `1999) Founded` are claims, not markup.
  */
-function stripBlockMarkup(line: string): string | null {
+function stripBlockMarkup(line: string, held: Held): string | null {
   const trimmed = line.replace(/^[ \t]+/, "");
   // A thematic break line (---, ***, ___, optionally spaced) carries no text.
   if (/^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(trimmed)) return null;
-  return trimmed.replace(HEADING_MARKER, "").replace(BULLET_MARKER, "");
+  return stripMarker(stripMarker(trimmed, HEADING_MARKER, held), BULLET_MARKER, held);
 }
 
 /**
@@ -134,14 +208,14 @@ export function plainTextOf(text: string): string {
   // 2. Block markup, per line; then the item becomes one line.
   out = out
     .split(LINE_BREAKS)
-    .map(stripBlockMarkup)
+    .map((line) => stripBlockMarkup(line, { sentinel, literals: held }))
     .filter((line): line is string => line !== null)
     .join(" ");
 
   // 3. Inline markup. Code spans first, and held, so markup inside them stays literal.
   out = out.replace(/(`+)([^`]|[^`].*?[^`])\1(?!`)/g, (_m, _ticks: string, code: string) => hold(code.trim() === "" ? code : code.replace(/^ (.*) $/, "$1")));
-  out = out.replace(/!\[([^\]]*)\]\(\s*<?([^)\s>]*)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g, "$1");
-  out = out.replace(/\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g, (_m, label: string, url: string) =>
+  out = out.replace(new RegExp(IMAGE, "g"), "$1");
+  out = out.replace(new RegExp(LINK, "g"), (_m, label: string, url: string) =>
     label.trim() === url ? hold(url) : `${label} (${hold(url)})`,
   );
   // URLs are held too, so emphasis stripping never eats a `_x_` or `*x*` inside one.

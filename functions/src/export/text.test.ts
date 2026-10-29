@@ -232,6 +232,66 @@ describe("markdown reduction", () => {
     expect(plainTextOf(input)).toBe(expected);
   });
 
+  // The guard decides on the first *visible* character. Block markers are stripped before inline
+  // formatting is reduced, so a guard that read the raw next character met `*`, `_`, a backtick or a
+  // held-escape placeholder instead of the number, and `- **30%** cost` lost its minus (external review, P2).
+  it.each([
+    ["- **30%** cost", "- 30% cost"],
+    ["+ **12%** NRR", "+ 12% NRR"],
+    ["- *30%* cost", "- 30% cost"],
+    ["- __30%__ cost", "- 30% cost"],
+    ["- `30%` cost", "- 30% cost"],
+    ["# **1** ranked", "# 1 ranked"],
+    ["* **$2M** saved", "* $2M saved"],
+    ["- **−30%** cost", "- −30% cost"],
+    ["- ***30%*** cost", "- 30% cost"],
+    ["-  **30%** cost", "- 30% cost"],
+    ["- ~~30%~~ cost", "- ~~30%~~ cost"],
+    ["- [30% savings](https://example.com/c) on cloud", "- 30% savings (https://example.com/c) on cloud"],
+    ["- [**30%** savings](https://example.com/c)", "- 30% savings (https://example.com/c)"],
+    ["- ![30%](https://example.com/chart.png) cost", "- 30% cost"],
+  ])("keeps a marker whose first visible character, through inline formatting, is a number or sign: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    // A held placeholder stands for a literal the author escaped: that is content, so the marker stays.
+    ["- \\-30% cost", "- -30% cost"],
+    ["+ \\+12% NRR", "+ +12% NRR"],
+    ["- **\\-30%** cost", "- -30% cost"],
+    ["# \\#1 ranked app", "# #1 ranked app"],
+    ["- \\*starred\\* note", "- *starred* note"],
+    // A backslash before a digit escapes nothing, so it is kept as typed and is the visible content.
+    ["- \\30% cost", "- \\30% cost"],
+  ])("keeps a marker whose first visible character is an escaped literal: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it.each([
+    ["- **Led** the team", "Led the team"],
+    ["* _Owned_ the roadmap", "Owned the roadmap"],
+    ["# **Summary**", "Summary"],
+    ["## __Platform work__", "Platform work"],
+    ["+ `dbt` models", "dbt models"],
+    ["- ~~Draft~~ Final", "~~Draft~~ Final"],
+    ["- [Case study](https://example.com/c)", "Case study (https://example.com/c)"],
+  ])("still strips a marker whose first visible character, through inline formatting, is a letter: %j → %j", (input, expected) => {
+    expect(plainTextOf(input)).toBe(expected);
+  });
+
+  it("keeps the sign through the full render when inline formatting or an escape follows the marker", () => {
+    const bullets = ["- **30%** cost", "+ **12%** NRR", "- \\-30% cost", "* **$2M** saved", "- **Led** the team"];
+    expect(renderPlainText(withBullets(bullets))).toBe(
+      "SUMMARY\nSummary.\n\nEXPERIENCE\n- - 30% cost\n- + 12% NRR\n- - -30% cost\n- * $2M saved\n- Led the team\n",
+    );
+    const content: GeneratedAssetContent = {
+      summary: item("# **1** ranked team"),
+      bullets: [item("- `30%` cost")],
+      skills: [item("* _Owned_ the roadmap")],
+    };
+    expect(renderPlainText(content)).toBe("SUMMARY\n# 1 ranked team\n\nEXPERIENCE\n- - 30% cost\n\nSKILLS\n- Owned the roadmap\n");
+  });
+
   it("keeps the sign through the full render when the marker has two spaces", () => {
     const out = renderPlainText(withBullets(["-  30% cost", "- \t$2M saved"]));
     expect(out).toContain("\n- - 30% cost\n");
