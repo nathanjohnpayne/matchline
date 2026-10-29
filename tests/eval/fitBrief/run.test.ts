@@ -741,7 +741,7 @@ describe("runFitBriefEval with prompt v2 (#655)", () => {
     const d = deps();
     const out = await runFitBriefEval(CORPUS, OPTIONS, d);
     expect(out.report.split("\n")[0]).toContain(`prompts generation/fitBrief.v1 (request ${fitBriefRequestFingerprint(OPTIONS.model, OPTIONS.effort)})`);
-    expect(out.report).not.toMatch(/claim-rule checks|Self-audit/);
+    expect(out.report).not.toMatch(/claim-rule checks|Self-audit|Short cited spans/);
     for (const a of artifacts(d.files)) {
       expect(a.config.generatorPrompt).toBe("generation/fitBrief.v1");
       expect("claimRuleChecks" in a.config).toBe(false);
@@ -795,6 +795,8 @@ describe("runFitBriefEval with prompt v2 (#655)", () => {
     const out = await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
     expect(artifacts(d.files)[0].brief.dropped_points[0].point).toBe("SECRET dropped point");
     expect(out.report).toContain("Self-audit dropped (dev): 2 point(s) in 2 brief(s) (span_does_not_support 2, no_span 0, claim_rule 0).");
+    expect(out.report).toMatch(/^Short cited spans \(dev\): \d+ of \d+ span\(s\) under 4 words, in \d+ brief\(s\) \(diagnostic only; the evidence gate is unchanged\)\.$/m);
+    expect(artifacts(d.files)[0].score.shortSpans).toEqual(expect.objectContaining({ spans: expect.any(Number), short: expect.any(Number) }));
     expect(out.report).not.toContain("SECRET");
     expect(out.report).not.toContain("Never claim PCI");
   });

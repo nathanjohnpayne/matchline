@@ -268,10 +268,91 @@ describe("claimRuleChecks", () => {
     ]);
   });
 
-  it("reads an underlined heading as a heading", () => {
+  it("reads an '===' underlined paragraph as a heading when a rule follows it", () => {
     expect(claimRuleChecks("Titles\n======\n\n- Never Director.")).toEqual([
       { number: 1, text: "Never Director.", context: "Titles" },
     ]);
+  });
+
+  it("keeps an '===' underlined paragraph as a rule when no rule follows it before the next heading or the end", () => {
+    expect(claimRuleChecks("Never claim A.\n===")).toEqual([{ number: 1, text: "Never claim A." }]);
+    expect(claimRuleChecks("Never claim A.\nor A-prime.\n===\n\n# Scale\n\n- Say B.")).toEqual([
+      { number: 1, text: "Never claim A.\nor A-prime." },
+      { number: 2, text: "Say B.", context: "Scale" },
+    ]);
+    expect(claimRuleChecks("First title\n===\nSecond title\n===\n- Rule.")).toEqual([
+      { number: 1, text: "First title" },
+      { number: 2, text: "Rule.", context: "Second title" },
+    ]);
+  });
+
+  it("never reads '---' under a paragraph as a heading underline: the paragraph is a rule, the line a separator (boundary)", () => {
+    expect(claimRuleChecks("Rule.\n---\nNext.")).toEqual([
+      { number: 1, text: "Rule." },
+      { number: 2, text: "Next." },
+    ]);
+    expect(claimRuleChecks("Rule para one\n---\nRule two")).toEqual([
+      { number: 1, text: "Rule para one" },
+      { number: 2, text: "Rule two" },
+    ]);
+    expect(claimRuleChecks("- A.\n\nNever claim B.\n---")).toEqual([
+      { number: 1, text: "A." },
+      { number: 2, text: "Never claim B." },
+    ]);
+    expect(claimRuleChecks("Never claim A.\n---\n- B.")).toEqual([
+      { number: 1, text: "Never claim A." },
+      { number: 2, text: "B." },
+    ]);
+    expect(claimRuleChecks("Never claim A.\n-\nNever claim B.\n--").map((c) => c.text)).toEqual(["Never claim A.", "Never claim B."]);
+    // A lead-in over a separator introduces nothing, so it is a rule too.
+    expect(claimRuleChecks("Never claim:\n---\n- B.")).toEqual([
+      { number: 1, text: "Never claim:" },
+      { number: 2, text: "B." },
+    ]);
+  });
+
+  it("keeps an indented '#' line inside a list item as the item's text; an unindented heading still closes it", () => {
+    expect(claimRuleChecks("- Use # of teams wording\n  # teams is 4\n- other")).toEqual([
+      { number: 1, text: "Use # of teams wording\n# teams is 4" },
+      { number: 2, text: "other" },
+    ]);
+    expect(claimRuleChecks("- A.\n# Scale\n- B.")).toEqual([
+      { number: 1, text: "A." },
+      { number: 2, text: "B.", context: "Scale" },
+    ]);
+  });
+
+  it("makes a multi-line paragraph one check, as Markdown reads it (rules one per line need bullets or blank lines)", () => {
+    expect(claimRuleChecks("Never claim A.\nNever claim B.\nNever claim C.")).toEqual([
+      { number: 1, text: "Never claim A.\nNever claim B.\nNever claim C." },
+    ]);
+    expect(claimRuleChecks("Never claim A.\n\nNever claim B.\n\nNever claim C.")).toHaveLength(3);
+  });
+
+  it("drops no rule line: every line that is not a heading or a separator lands in exactly one check's text, or (an '===' title or a ':' lead-in only) in a context", () => {
+    const layouts = [
+      "# Rules\n\nPreamble line.\n\nNever claim:\n\n- F1. Rule a.\n* F2. Rule b\n  continued.\n  - Rule b detail.\n1. S1. Rule c.\n\n---\n\nParagraph rule.\nParagraph rule continued.\n---\n- Rule d.\n  # Rule d continued.\n\nUnderlined title\n===\n\nRule e.\n\nUnderlined title with no rule\n===",
+      "Rule para one\n---\nRule two",
+      "- A item.\n\nNever claim B.\n---",
+      "Never claim A.\n---\n- B item.",
+      "Titles\n======\n\nLead-in:\n- Never Director.\n- Never VP.\n\n## Scale\n\nSay four teams.\n***\nLast rule.",
+    ];
+    const isSeparator = (l: string) => /^ {0,3}(?:=+|-+|\*{3,}|_{3,}|(?:[-*_][ \t]*){3,})[ \t]*$/.test(l);
+    const isHeading = (l: string) => /^#{1,6}(?:[ \t]|$)/.test(l);
+    for (const source of layouts) {
+      const checks = claimRuleChecks(source);
+      const lines = source.split("\n");
+      for (const [i, raw] of lines.entries()) {
+        if (raw.trim() === "" || isSeparator(raw) || isHeading(raw)) continue;
+        const mayBeContext = raw.trim().endsWith(":") || /^ {0,3}=+[ \t]*$/.test(lines[i + 1] ?? "");
+        // A rule's first line loses its bullet glyph; a nested item keeps its marker.
+        const forms = [raw.trim(), raw.trim().replace(/^[-*+•][ \t]+/, "")];
+        const line = forms[1]!;
+        const inText = checks.filter((c) => c.text.split("\n").some((t) => forms.includes(t)));
+        const inContext = mayBeContext && checks.some((c) => c.context?.includes(line) ?? false);
+        expect(inText.length === 1 || (inText.length === 0 && inContext), `${JSON.stringify(line)} in ${JSON.stringify(source)}`).toBe(true);
+      }
+    }
   });
 
   it("makes a plain paragraph its own check, and a ':' paragraph with no list after it too", () => {

@@ -13,12 +13,14 @@ import {
   checkEvidence,
   classifyUnsupportedQuotes,
   comparable,
+  countShortSpans,
   evidenceUnits,
   FAILURE_CATEGORIES,
   formatAggregate,
   judgedBrief,
   normalizeForMatch,
   scoreBrief,
+  SHORT_SPAN_WORDS,
   type FitBriefRunConfig,
 } from "./score.ts";
 
@@ -361,6 +363,40 @@ describe("dropped points", () => {
     expect(dev!.droppedPoints).toEqual({ briefs: 1, items: 2, byReason: { span_does_not_support: 1, no_span: 0, claim_rule: 1 } });
     const v1 = scoreBrief({ evidence: { total: 1, unsupported: [] }, judge: judge(), generatedVerdict: "apply" });
     expect(aggregate([{ split: "dev", score: v1 }])[0]!.droppedPoints).toBeUndefined();
+  });
+});
+
+describe("short cited spans (v2 diagnostic)", () => {
+  it("counts spans under four words, at the boundary and with stray whitespace", () => {
+    expect(SHORT_SPAN_WORDS).toBe(4);
+    expect(countShortSpans(["Led", " PCI ", "Owned the checkout", "Owned the checkout API", "Owned  the\ncheckout API daily"])).toEqual({
+      spans: 5,
+      short: 3,
+    });
+    expect(countShortSpans([])).toEqual({ spans: 0, short: 0 });
+  });
+
+  it("never touches the evidence gate: one-word spans found in the sources still pass", () => {
+    const brief = { ...briefV2(), strengths: [{ jd_clause: "c", evidence: ["Led", "PCI"], argument: "a" }], exposures: [] };
+    const evidence = checkEvidence(brief, ["Led the PCI audit for checkout."]);
+    expect(evidence.unsupported).toEqual([]);
+    const s = scoreBrief({ evidence, judge: judge(), generatedVerdict: "apply", dropped: [], citedSpans: briefQuotes(brief) });
+    expect(s.gatesPass).toBe(true);
+    expect(s.failureCategories).toEqual([]);
+    expect(s.shortSpans).toEqual({ spans: 2, short: 2 });
+  });
+
+  it("rolls up by split and prints counts only; a v1 score has none", () => {
+    const short = scoreBrief({ evidence: { total: 2, unsupported: [] }, judge: judge(), generatedVerdict: "apply", dropped: [], citedSpans: ["Led", "Owned the checkout API"] });
+    const long = scoreBrief({ evidence: { total: 1, unsupported: [] }, judge: judge(), generatedVerdict: "apply", dropped: [], citedSpans: ["Owned the checkout API"] });
+    const [dev] = aggregate([{ split: "dev", score: short }, { split: "dev", score: long }, { split: "dev", score: null }]);
+    expect(dev!.shortSpans).toEqual({ briefs: 1, spans: 3, short: 1 });
+    const v1 = scoreBrief({ evidence: { total: 1, unsupported: [] }, judge: judge(), generatedVerdict: "apply" });
+    expect(v1.shortSpans).toBeUndefined();
+    expect(aggregate([{ split: "dev", score: v1 }])[0]!.shortSpans).toBeUndefined();
+    const out = formatAggregate([dev!], { model: "m", judgeModel: "j", evidenceMode: "resume", spentUsd: 0, incomplete: false });
+    expect(out).toContain("Short cited spans (dev): 1 of 3 span(s) under 4 words, in 1 brief(s) (diagnostic only; the evidence gate is unchanged).");
+    expect(out).not.toContain("Led");
   });
 });
 

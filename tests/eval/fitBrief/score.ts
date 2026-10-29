@@ -169,6 +169,24 @@ export function countDroppedPoints(dropped: readonly FitBriefDroppedPointV2[]): 
 }
 
 /**
+ * A v2 cited span shorter than this many words ("Led", "PCI") passes the
+ * evidence gate whenever the word is in the résumé, so it says little
+ * about the point it supports. Counted as a diagnostic only.
+ */
+export const SHORT_SPAN_WORDS = 4;
+
+/** v2 cited spans, and how many are under `SHORT_SPAN_WORDS` words. Counts only. */
+export interface ShortSpanCount {
+  readonly spans: number;
+  readonly short: number;
+}
+
+export function countShortSpans(spans: readonly string[]): ShortSpanCount {
+  const words = (s: string) => s.trim().split(/\s+/u).filter((w) => w !== "").length;
+  return { spans: spans.length, short: spans.filter((s) => words(s) < SHORT_SPAN_WORDS).length };
+}
+
+/**
  * Split failed quotes by whether a Unit's `raw_text` holds them (same
  * normalization and word-boundary rule as the gate). Classification only:
  * a quote matching a Unit still fails the evidence gate, because Units
@@ -269,6 +287,11 @@ export interface BriefScore {
    * a dropped point is recall the brief gave up, not a gate failure.
    */
   readonly droppedPoints?: DroppedPointCount;
+  /**
+   * v2 only: cited spans under `SHORT_SPAN_WORDS` words. A diagnostic
+   * beside the gate, never part of it, so v1 and v2 gates stay the same.
+   */
+  readonly shortSpans?: ShortSpanCount;
 }
 
 export function scoreBrief(args: {
@@ -277,6 +300,8 @@ export function scoreBrief(args: {
   readonly generatedVerdict: FitBriefResponseV1["verdict"];
   /** v2 only: the brief's `dropped_points`. */
   readonly dropped?: readonly FitBriefDroppedPointV2[];
+  /** v2 only: every span the brief cites (`briefQuotes`), for the short-span diagnostic. */
+  readonly citedSpans?: readonly string[];
 }): BriefScore {
   const { evidence, judge } = args;
   const refs = judge.reference_points;
@@ -307,6 +332,7 @@ export function scoreBrief(args: {
       judge.reference_verdict === "unclear" ? null : judge.reference_verdict === args.generatedVerdict,
     gatesPass: evidence.unsupported.length === 0 && unsupportedClaims === 0 && claimRuleViolations === 0,
     ...(args.dropped !== undefined && { droppedPoints: countDroppedPoints(args.dropped) }),
+    ...(args.citedSpans !== undefined && { shortSpans: countShortSpans(args.citedSpans) }),
   };
 }
 
@@ -332,6 +358,8 @@ export interface AggregateRow {
   readonly verdictAgreement: number | null;
   /** v2 only: briefs with a dropped point, dropped items, and items by reason. */
   readonly droppedPoints?: DroppedPointCount & { readonly briefs: number };
+  /** v2 only: cited spans, short ones, and briefs with at least one short span. */
+  readonly shortSpans?: ShortSpanCount & { readonly briefs: number };
 }
 
 function mean(values: readonly (number | null)[]): number | null {
@@ -351,6 +379,7 @@ export function aggregate(
     const verdicts = scored.map((s) => s.verdictAgrees).filter((v): v is boolean => v !== null);
     const failed = inSplit.length - scored.length;
     const withAudit = scored.map((s) => s.droppedPoints).filter((d): d is DroppedPointCount => d !== undefined);
+    const withSpans = scored.map((s) => s.shortSpans).filter((d): d is ShortSpanCount => d !== undefined);
     const count = (cat: FailureCategory, items: (s: BriefScore) => number): CategoryCount => ({
       briefs: scored.filter((s) => s.failureCategories.includes(cat)).length,
       items: sum(items),
@@ -381,6 +410,13 @@ export function aggregate(
           byReason: Object.fromEntries(
             DROPPED_POINT_REASONS.map((r) => [r, withAudit.reduce((a, d) => a + d.byReason[r], 0)]),
           ) as Record<DroppedPointReason, number>,
+        },
+      }),
+      ...(withSpans.length > 0 && {
+        shortSpans: {
+          briefs: withSpans.filter((d) => d.short > 0).length,
+          spans: withSpans.reduce((a, d) => a + d.spans, 0),
+          short: withSpans.reduce((a, d) => a + d.short, 0),
         },
       }),
     };
@@ -462,6 +498,14 @@ export function formatAggregate(
         : [
             `Self-audit dropped (${r.split}): ${r.droppedPoints.items} point(s) in ${r.droppedPoints.briefs} brief(s) ` +
               `(${DROPPED_POINT_REASONS.map((reason) => `${reason} ${r.droppedPoints!.byReason[reason]}`).join(", ")}).`,
+          ],
+    ),
+    ...rows.flatMap((r) =>
+      r.shortSpans === undefined
+        ? []
+        : [
+            `Short cited spans (${r.split}): ${r.shortSpans.short} of ${r.shortSpans.spans} span(s) under ${SHORT_SPAN_WORDS} words, ` +
+              `in ${r.shortSpans.briefs} brief(s) (diagnostic only; the evidence gate is unchanged).`,
           ],
     ),
     "",

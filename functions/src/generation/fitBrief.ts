@@ -392,6 +392,18 @@ function fitBriefRequestFingerprintV2(model: string, effort?: Effort): string {
     "---",
     "",
     "<paragraph rule>",
+    "<paragraph rule continued>",
+    "---",
+    "- <rule d>",
+    "  # <rule d continued>",
+    "",
+    "<underlined title>",
+    "===",
+    "",
+    "<rule e>",
+    "",
+    "<underlined title with no rule>",
+    "===",
   ].join("\n");
   const hash = createHash("sha256")
     .update(
@@ -438,24 +450,35 @@ export interface ClaimRuleCheck {
 }
 
 const RULE_HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/u;
-const RULE_SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
+const RULE_SETEXT_UNDERLINE = /^ {0,3}=+[ \t]*$/u;
+const RULE_DASH_LINE = /^ {0,3}-+[ \t]*$/u;
 const RULE_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
 const RULE_LIST_ITEM = /^([ \t]*)(?:([-*+•])|(\d+[.)]))[ \t]+(\S.*)$/u;
 
 /**
  * Split claim-rules text into one check per rule, in order, without
  * rewording anything. The text's layout is the owner's, so the split is
- * line-based and errs toward more checks, never fewer:
+ * line-based, and where the layout is ambiguous it errs toward more
+ * checks, never fewer: an extra check costs a `not_applicable` audit
+ * entry, a lost one costs a rule.
  *
  * - a list item (`-`, `*`, `+`, `•`, or `1.` / `1)`) is one rule; a
- *   bullet glyph is dropped, a number is kept. Indented lines, nested
- *   list items and unindented lines that follow it without a blank line
- *   belong to it (Markdown's own reading of a list item);
- * - a paragraph is one rule, except a paragraph ending in ":" that
- *   introduces a list, which becomes the context of that list's rules;
- * - a heading (`#` or underlined) is never a rule; it becomes the
- *   context of the rules under it. A horizontal rule ends a lead-in's
- *   reach; blank lines only separate.
+ *   bullet glyph is dropped, a number is kept. Indented lines (an
+ *   indented `#` line included), nested list items and unindented lines
+ *   that follow it without a blank line belong to it (Markdown's own
+ *   reading of a list item);
+ * - a paragraph is one rule however many lines it spans, as in Markdown,
+ *   so rules written one per line with no bullet and no blank line
+ *   between them are ONE check (the owner confirms the count in the
+ *   dry-run plan). A paragraph ending in ":" that introduces a list
+ *   becomes the context of that list's rules instead;
+ * - a `#` heading is never a rule; it becomes the context of the rules
+ *   under it. A paragraph underlined with `===` is a heading too, unless
+ *   no rule follows it before the next heading or the end, in which case
+ *   it is kept as a rule. A paragraph followed by a `-`/`---` line is a
+ *   rule and the line a separator (never Markdown's `---` heading
+ *   underline, which would silently hide a rule above a separator);
+ * - a horizontal rule ends a lead-in's reach; blank lines only separate.
  *
  * Absent or blank text has no checks (as in v1, which then sends no
  * rules section). Text that is not blank but holds no rule, only
@@ -471,12 +494,15 @@ export function claimRuleChecks(text: string | undefined): ClaimRuleCheck[] {
   let block: { kind: "item" | "paragraph"; indent: number; lines: string[] } | undefined;
   // A paragraph ending in ":", held until the next block shows whether it introduces a list.
   let pendingLeadIn: string | undefined;
+  // An `===`-underlined heading no rule has followed yet: kept as a rule if none does.
+  let pendingSetext: string | undefined;
 
   const contextOf = (): string | undefined => {
     const parts = [section, leadIn].filter((p): p is string => p !== undefined && p !== "");
     return parts.length > 0 ? parts.join(" › ") : undefined;
   };
   const emit = (ruleText: string): void => {
+    pendingSetext = undefined;
     const context = contextOf();
     checks.push({ number: checks.length + 1, text: ruleText, ...(context !== undefined && { context }) });
   };
@@ -485,6 +511,14 @@ export function claimRuleChecks(text: string | undefined): ClaimRuleCheck[] {
     leadIn = undefined;
     emit(pendingLeadIn);
     pendingLeadIn = undefined;
+  };
+  // Before a new heading or the end: an `===` heading with no rule under it is a rule after all.
+  const releasePendingSetext = (): void => {
+    if (pendingSetext === undefined) return;
+    const ruleText = pendingSetext;
+    section = undefined;
+    leadIn = undefined;
+    emit(ruleText);
   };
   const flush = (): void => {
     if (block === undefined) return;
@@ -506,22 +540,33 @@ export function claimRuleChecks(text: string | undefined): ClaimRuleCheck[] {
       flush();
       continue;
     }
+    const lineIndent = /^[ \t]*/u.exec(line)![0].replace(/\t/gu, "    ").length;
+    if (block?.kind === "item" && lineIndent > 0 && RULE_HEADING.test(line)) {
+      // An indented "# ..." line inside a list item is its text, not a heading.
+      block.lines.push(line.trim());
+      continue;
+    }
     const heading = RULE_HEADING.exec(line);
     if (heading) {
       flush();
       releasePendingAsRule();
+      releasePendingSetext();
       section = heading[1] || undefined;
       leadIn = undefined;
       continue;
     }
     if (block?.kind === "paragraph" && RULE_SETEXT_UNDERLINE.test(line)) {
-      // "Title" over "===" or "---" is a heading, not a rule.
+      // "Title" over "===" is a heading, unless no rule ever follows it.
+      releasePendingAsRule();
+      releasePendingSetext();
       section = block.lines.join(" ");
+      pendingSetext = block.lines.join("\n");
       leadIn = undefined;
       block = undefined;
       continue;
     }
-    if (RULE_BREAK.test(line)) {
+    if (RULE_BREAK.test(line) || (block?.kind === "paragraph" && RULE_DASH_LINE.test(line))) {
+      // A paragraph over "---" (or "-", "--") is a rule above a separator.
       flush();
       releasePendingAsRule();
       leadIn = undefined;
@@ -554,6 +599,7 @@ export function claimRuleChecks(text: string | undefined): ClaimRuleCheck[] {
   }
   flush();
   releasePendingAsRule();
+  releasePendingSetext();
 
   if (checks.length === 0) {
     throw new Error("The claim rules text has no rule lines (only headings or separators); refusing to send no checks.");

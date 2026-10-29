@@ -72,6 +72,7 @@ import { assertOutsideRepo, loadCorpus, type CorpusPair, type FitBriefCorpus } f
 import { judgeBrief, judgeRequestFingerprint, type JudgeResult } from "./judge.ts";
 import {
   aggregate,
+  briefQuotes,
   checkEvidence,
   formatAggregate,
   judgedBrief,
@@ -542,7 +543,10 @@ export async function runFitBriefEval(
           evidence,
           judge: judgement,
           generatedVerdict: generated.brief.verdict,
-          ...(generated.promptVersion === "v2" && { dropped: generated.brief.dropped_points }),
+          ...(generated.promptVersion === "v2" && {
+            dropped: generated.brief.dropped_points,
+            citedSpans: briefQuotes(generated.brief),
+          }),
         });
         rows.push({ split: pair.split, score });
         writeFile(
