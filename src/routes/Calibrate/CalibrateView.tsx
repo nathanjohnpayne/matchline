@@ -4,44 +4,47 @@
  * Right / → / True, left / ← / False, down / ↓ / Mixed (only where the sheet
  * takes `partial`), up / ↑ / Can't tell (the card comes back at the end of
  * the cell with its full source open). Z undoes, N adds a note after False
- * or Mixed, Space or a tap opens the full source.
+ * or Mixed, Space or a tap opens the full text and source.
  *
  * The view owns interaction state (timer, open source, note, the card
  * flying out); the session itself is lifted to the container, which
- * persists it and handles files and downloads.
+ * persists it and handles decks, files and downloads.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 
 import { allowsMixed, type Card, type Deck, type Label } from "../../lib/labelDeck/deck.ts";
-import { addTime, current, decide, progress, setNote, undo } from "../../lib/labelDeck/session.ts";
+import { addTime, current, decide, progress, setNote, undo, type StoredSession } from "../../lib/labelDeck/session.ts";
 
+import DeckScreen, { FOCUS_RING, PRIMARY_BUTTON, SECONDARY_BUTTON, type DeckScreenProps } from "./DeckScreen.tsx";
 import { DIRECTION_FOR, LABEL_FOR, dragTransform, exitTransform, type Direction } from "./gesture.ts";
-import type { StoredSession } from "./storage.ts";
-import SwipeCard, { CARD_SURFACE, CardFace, STAMPS } from "./SwipeCard.tsx";
+import { QUESTIONS } from "./questions.ts";
+import SwipeCard, { CARD_SURFACE, CardFace, FieldList, STAMPS } from "./SwipeCard.tsx";
+
+export type DeckSource = "account" | "file";
 
 export interface DeckRun {
   readonly deck: Deck;
   readonly session: StoredSession;
+  /** Where progress is saved: the owner's account, or this browser only. */
+  readonly source: DeckSource;
 }
 
-export interface CalibrateViewProps {
+export interface CalibrateViewProps extends DeckScreenProps {
   readonly runs: readonly DeckRun[];
   readonly active: number;
-  readonly loadError: string | null;
+  /** Changes every time decks are (re)opened, so a re-opened card starts a fresh clock. */
+  readonly openCount: number;
+  /** The last save to the account failed; progress is still kept in this browser. */
+  readonly saveError: string | null;
   readonly reducedMotion: boolean;
-  readonly onOpenFiles: (files: File[]) => void;
   readonly onSession: (index: number, next: StoredSession) => void;
   readonly onOpenCell: (index: number) => void;
   readonly onDownload: () => void;
+  readonly onBackToDecks: () => void;
   /** Clock for decision timing; injectable for tests. */
   readonly now?: () => number;
 }
-
-const FOCUS_RING =
-  "focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-2 dark:focus-visible:ring-zinc-100 dark:focus-visible:ring-offset-zinc-950";
-const PRIMARY_BUTTON = `rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 motion-safe:transition-colors motion-safe:duration-150 ${FOCUS_RING}`;
-const SECONDARY_BUTTON = `rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-800 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-800 motion-safe:transition-colors motion-safe:duration-150 ${FOCUS_RING}`;
 
 const ACTIONS: { label: Label; text: string; glyph: string; key: string; glyphClass: string }[] = [
   { label: "false", text: "False", glyph: "✕", key: "←", glyphClass: "text-red-600 dark:text-red-500" },
@@ -49,6 +52,8 @@ const ACTIONS: { label: Label; text: string; glyph: string; key: string; glyphCl
   { label: "unsure", text: "Can't tell", glyph: "?", key: "↑", glyphClass: "text-zinc-500 dark:text-zinc-400" },
   { label: "true", text: "True", glyph: "✓", key: "→", glyphClass: "text-emerald-600 dark:text-emerald-500" },
 ];
+
+const SPOKEN: Record<Label, string> = { true: "True", false: "False", mixed: "Mixed", unsure: "Can't tell" };
 
 const KEY_LABELS: Record<string, Label> = { ArrowRight: "true", ArrowLeft: "false", ArrowDown: "mixed", ArrowUp: "unsure" };
 
@@ -80,11 +85,14 @@ function GhostCard({ ghost, onDone }: { readonly ghost: Ghost; readonly onDone: 
       <span className={`absolute z-10 rounded-md border-2 bg-white/90 px-2 py-0.5 text-sm font-semibold tracking-wide uppercase dark:bg-zinc-900/90 ${STAMPS[ghost.direction].className} ${STAMPS[ghost.direction].position}`}>
         {STAMPS[ghost.direction].text}
       </span>
-      <CardFace card={ghost.card} secondLook={ghost.secondLook} />
+      <div className="max-h-[55svh] overflow-hidden sm:max-h-none">
+        <CardFace card={ghost.card} secondLook={ghost.secondLook} />
+      </div>
     </div>
   );
 }
 
+/** The full card (never clipped) and the source text with its evidence lines marked. */
 function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card }): ReactElement {
   const firstHit = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -93,11 +101,21 @@ function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card 
   const parts = card.source === "both" ? (["resume", "jd"] as const) : ([card.source] as const);
   let marked = false;
   return (
-    <section aria-label="Full source" className="mt-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+    <section aria-label="Full source" className="mt-4 space-y-4 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="grid gap-4 sm:hidden">
+        <div>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Claim</h3>
+          <FieldList fields={card.claim} />
+        </div>
+        <div>
+          <h3 className="mb-1.5 text-xs font-medium tracking-wide text-zinc-400 uppercase dark:text-zinc-500">Evidence</h3>
+          <FieldList fields={card.evidence} />
+        </div>
+      </div>
       {parts.map((part) => {
         const hits = new Set(card.highlight[part]);
         return (
-          <div key={part} className="mb-4 last:mb-0">
+          <div key={part}>
             <h3 className="mb-2 text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">{deck.sources[part].title}</h3>
             <div className="text-sm leading-snug text-zinc-700 dark:text-zinc-300">
               {deck.sources[part].text.split("\n").map((line, i) => {
@@ -122,60 +140,8 @@ function SourcePanel({ deck, card }: { readonly deck: Deck; readonly card: Card 
   );
 }
 
-function Picker({ loadError, onOpenFiles }: Pick<CalibrateViewProps, "loadError" | "onOpenFiles">): ReactElement {
-  return (
-    <div className="mx-auto max-w-xl space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold">Calibrate</h1>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          Judge the calibration review one card at a time. Open the deck files built by <code className="text-xs">build-deck.mts</code>; you can pick several, and the
-          cells run in the review order.
-        </p>
-      </div>
-      <label className={`inline-flex cursor-pointer ${PRIMARY_BUTTON}`}>
-        <input
-          type="file"
-          accept="application/json,.json"
-          multiple
-          className="sr-only"
-          aria-label="Deck files"
-          onChange={(e) => {
-            const files = Array.from(e.currentTarget.files ?? []);
-            e.currentTarget.value = "";
-            if (files.length) onOpenFiles(files);
-          }}
-        />
-        Open deck files…
-      </label>
-      {loadError && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-500">
-          {loadError}
-        </p>
-      )}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200 bg-white p-4 text-sm dark:border-zinc-800 dark:bg-zinc-900">
-        {[
-          ["Swipe right · →", "True"],
-          ["Swipe left · ←", "False"],
-          ["Swipe down · ↓", "Mixed (partial), where the sheet allows it"],
-          ["Swipe up · ↑", "Can't tell: comes back at the end with the source open"],
-          ["Tap · Space", "Full source"],
-          ["Z · N", "Undo · note after False or Mixed"],
-        ].map(([k, v]) => (
-          <div key={k} className="contents">
-            <dt className="text-zinc-500 dark:text-zinc-400">{k}</dt>
-            <dd className="text-zinc-900 dark:text-zinc-100">{v}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-        Decks stay on this device: they are read in the browser and never uploaded. Only item ids, labels, notes and timings are kept here so you can resume.
-      </p>
-    </div>
-  );
-}
-
 export default function CalibrateView(props: CalibrateViewProps): ReactElement {
-  const { runs, active, loadError, reducedMotion, onOpenFiles, onSession, onOpenCell, onDownload } = props;
+  const { runs, active, openCount, saveError, reducedMotion, onSession, onOpenCell, onDownload, onBackToDecks } = props;
   const now = props.now ?? (() => performance.now());
   const run = runs[active];
 
@@ -184,10 +150,14 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
   const [ghost, setGhost] = useState<Ghost | null>(null);
   const shownAt = useRef(0);
   const pausedAt = useRef<number | null>(null);
   const ghostKey = useRef(0);
+  const cardRef = useRef<HTMLElement | null>(null);
+  const focusCard = useRef(false);
   const nowRef = useRef(now);
   nowRef.current = now;
 
@@ -195,14 +165,28 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   const currentId = state ? current(state) : null;
   const cards = useMemo(() => new Map((run?.deck.cards ?? []).map((c) => [c.item_id, c])), [run?.deck]);
   const card = currentId ? cards.get(currentId) : undefined;
+  // One value per showing of a card. The history grows with every decision
+  // and re-queue and shrinks with undo, so this changes even when the same
+  // card comes straight back (a Can't tell on the last card left).
+  const showing = `${openCount}:${active}:${state?.history.length ?? 0}:${currentId ?? ""}`;
 
-  // A new card starts its own clock; a re-queued one comes back open.
+  // Each showing starts its own clock; a re-queued card comes back open.
   useEffect(() => {
     shownAt.current = nowRef.current();
     pausedAt.current = null;
     setExpanded(Boolean(currentId && state?.requeued[currentId]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the card, not on every session change
-  }, [currentId, active]);
+    setRefusal(false);
+    if (focusCard.current) {
+      focusCard.current = false;
+      cardRef.current?.focus({ preventScroll: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the showing, not on every session change
+  }, [showing]);
+
+  // The fly-out belongs to the decision just made; nothing may replay it later.
+  useEffect(() => {
+    if (!card) setGhost(null);
+  }, [card]);
 
   useEffect(() => {
     if (!toast) return;
@@ -235,7 +219,7 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   const record = (label: Label, offset?: { x: number; y: number }) => {
     if (!run || !state || !card) return;
     if (label === "mixed" && !allowsMixed(card.type)) {
-      setToast("This card is True / False only");
+      setRefusal(true);
       return;
     }
     closeNote();
@@ -252,16 +236,25 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
       });
     }
     setNoteTarget(label === "false" || label === "mixed" ? card.item_id : null);
-    if (label === "unsure" && !next.decisions[card.item_id]) setToast("Moved to the end, with the source open");
+    const requeued = label === "unsure" && !next.decisions[card.item_id];
+    if (requeued) setToast("Moved to the end, with the source open");
+    const left = next.queue.length;
+    const following = current(next);
+    const nextChip = following ? QUESTIONS[cards.get(following)?.type ?? "verbatim"].chip : null;
+    setAnnouncement(
+      `${requeued ? "Can't tell, moved to the end" : SPOKEN[label]}. ${following ? `${left} left. Next: ${nextChip}` : "Cell done."}`,
+    );
   };
 
   const doUndo = () => {
     if (!run || !state || state.history.length === 0) return;
     closeNote();
     setNoteTarget(null);
+    setGhost(null);
     const banked = currentId ? addTime(state, elapsed()) : state;
     onSession(active, { ...run.session, state: undo(banked) });
     setToast("Undone");
+    setAnnouncement("Undone.");
   };
 
   const openNote = () => {
@@ -290,10 +283,15 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       const h = handlers.current;
+      // A held key would otherwise label a run of cards at the repeat rate.
+      if (e.repeat && (KEY_LABELS[e.key] || e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        return;
+      }
       if (h.card && KEY_LABELS[e.key]) {
         e.preventDefault();
         h.record(KEY_LABELS[e.key]);
-      } else if (h.card && e.key === " ") {
+      } else if (h.card && e.key === " " && !(t instanceof Element && t.closest("button, a, label"))) {
         e.preventDefault();
         setExpanded((v) => !v);
       } else if (e.key === "z" || e.key === "Z") {
@@ -310,12 +308,11 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
 
   const clearGhost = useCallback(() => setGhost(null), []);
 
-  if (!run || !state) return <Picker loadError={loadError} onOpenFiles={onOpenFiles} />;
+  if (!run || !state) return <DeckScreen {...props} />;
 
   const p = progress(state);
   const percent = p.total ? (p.done / p.total) * 100 : 0;
-  const nextId = state.queue[1];
-  const nextCard = nextId ? cards.get(nextId) : undefined;
+  const nextCard = state.queue[1] ? cards.get(state.queue[1]) : undefined;
 
   const noteBar = noteTarget && state.decisions[noteTarget] && (
     <div className="mt-3">
@@ -351,31 +348,21 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-lg font-semibold">Calibrate</h1>
-        <div className="flex items-center gap-2">
-          <label className={`cursor-pointer ${SECONDARY_BUTTON}`}>
-            <input
-              type="file"
-              accept="application/json,.json"
-              multiple
-              className="sr-only"
-              aria-label="Open other deck files"
-              onChange={(e) => {
-                const files = Array.from(e.currentTarget.files ?? []);
-                e.currentTarget.value = "";
-                if (files.length) onOpenFiles(files);
-              }}
-            />
-            Open decks
-          </label>
+        <h1 className="truncate text-lg font-semibold" title={run.deck.deck_id}>
+          Calibrate
+        </h1>
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" onClick={onBackToDecks} className={SECONDARY_BUTTON}>
+            Decks
+          </button>
           <button type="button" onClick={onDownload} className={SECONDARY_BUTTON}>
             Download labels
           </button>
         </div>
       </div>
-      {loadError && (
-        <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-500">
-          {loadError}
+      {saveError && (
+        <p role="alert" className="mt-2 text-sm text-amber-600 dark:text-amber-500">
+          Not saved to your account ({saveError}). Progress is kept in this browser; it saves again with your next card.
         </p>
       )}
 
@@ -384,25 +371,27 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
           <div className="h-full bg-zinc-900 motion-safe:transition-[width] motion-safe:duration-200 dark:bg-zinc-100" style={{ width: `${percent}%` }} />
         </div>
         <p className="mt-1 text-xs text-zinc-500 tabular-nums dark:text-zinc-400">
-          Cell {active + 1} of {runs.length} · {p.done} of {p.total} labelled
+          Cell {active + 1} of {runs.length} · {p.done} of {p.total} labelled{run.source === "file" ? " · this device only" : ""}
         </p>
       </div>
 
       {card ? (
         <>
-          <div className="relative mt-4">
+          {/* overflow-x-clip: the fly-out must not add a horizontal scrollbar. */}
+          <div className="relative mt-4 overflow-x-clip">
             {nextCard && (
               <div aria-hidden="true" className={`pointer-events-none absolute inset-x-0 top-2 bottom-0 scale-[0.97] opacity-60 ${CARD_SURFACE}`} />
             )}
             {ghost && <GhostCard key={ghost.key} ghost={ghost} onDone={clearGhost} />}
             <SwipeCard
-              key={card.item_id + ":" + p.done}
+              key={showing}
+              ref={cardRef}
               card={card}
               secondLook={Boolean(state.requeued[card.item_id])}
               mixedAllowed={allowsMixed(card.type)}
               reducedMotion={reducedMotion}
               onSwipe={(direction, offset) => record(LABEL_FOR[direction], offset)}
-              onMixedRefused={() => setToast("This card is True / False only")}
+              onMixedRefused={() => setRefusal(true)}
               onTap={() => setExpanded((v) => !v)}
             />
           </div>
@@ -413,9 +402,10 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
                 key={a.label}
                 type="button"
                 disabled={a.label === "mixed" && !allowsMixed(card.type)}
-                onClick={(e) => {
-                  // Blur: a focused button would turn a later Enter into a second decision.
-                  e.currentTarget.blur();
+                onClick={() => {
+                  // Focus moves to the next card, so Enter or Space on a
+                  // still-focused button cannot record a second decision.
+                  focusCard.current = true;
                   record(a.label);
                 }}
                 className={`flex flex-col items-center gap-0.5 rounded-md border border-zinc-300 bg-white py-2.5 text-sm font-medium text-zinc-800 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800 motion-safe:transition-colors motion-safe:duration-150 ${FOCUS_RING}`}
@@ -430,12 +420,13 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
               </button>
             ))}
           </div>
+          {refusal && <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">This card takes True or False only; Mixed is for the two partial-credit questions.</p>}
           <div className="mt-2 flex items-center justify-between">
             <button type="button" onClick={doUndo} disabled={state.history.length === 0} className={SECONDARY_BUTTON}>
               Undo (Z)
             </button>
             <button type="button" onClick={() => setExpanded((v) => !v)} className={`text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 ${FOCUS_RING}`}>
-              {expanded ? "Hide full source" : "Show full source"}
+              {expanded ? "Hide full text" : "Show full text"}
             </button>
           </div>
           {noteBar}
@@ -445,9 +436,11 @@ export default function CalibrateView(props: CalibrateViewProps): ReactElement {
         <CellEnd run={run} index={active} total={runs.length} onDownload={onDownload} onUndo={doUndo} onNext={() => onOpenCell(active + 1)} noteBar={noteBar} />
       )}
 
+      <p className="sr-only" aria-live="polite">
+        {announcement}
+      </p>
       <div
         role="status"
-        aria-live="polite"
         className={`pointer-events-none fixed inset-x-0 bottom-6 mx-auto w-fit rounded-md bg-zinc-900 px-3 py-1.5 text-sm text-zinc-50 shadow-sm dark:bg-zinc-100 dark:text-zinc-900 motion-safe:transition-opacity motion-safe:duration-200 ${
           toast ? "opacity-95" : "opacity-0"
         }`}
@@ -502,20 +495,23 @@ function CellEnd({
       </dl>
       {noteBar}
       <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" onClick={onDownload} className={PRIMARY_BUTTON}>
-          Download labels
-        </button>
-        <button type="button" onClick={onUndo} className={SECONDARY_BUTTON}>
-          Undo last
-        </button>
         {index < total - 1 && (
           <button type="button" onClick={onNext} className={PRIMARY_BUTTON}>
             Next cell
           </button>
         )}
+        <button type="button" onClick={onDownload} className={index < total - 1 ? SECONDARY_BUTTON : PRIMARY_BUTTON}>
+          Download labels
+        </button>
+        <button type="button" onClick={onUndo} className={SECONDARY_BUTTON}>
+          Undo last
+        </button>
       </div>
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-        Import on the Mac with <code>npx tsx tools/label-swipe/import-labels.mts &lt;file&gt;</code>.
+        {run.source === "account"
+          ? "Your labels are saved in your account. To fill the review sheet, open Calibrate on the Mac, download the labels, and run "
+          : "To fill the review sheet, download the labels and run "}
+        <code>npx tsx tools/label-swipe/import-labels.mts &lt;file&gt;</code>.
       </p>
     </section>
   );

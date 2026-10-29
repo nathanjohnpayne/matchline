@@ -267,6 +267,11 @@ emits the `FitBrief` fields, citing verbatim evidence quotes rather
 than line ids. It is eval-only: no callable, route, or persisted
 document uses it.
 
+### Evaluation objects
+
+- `CalibrationDeck { id, deck_id, cell_order, card_count, fingerprint, deck_json, uploaded_at }` (#636): one calibration cell uploaded from Calibrate, stored as the deck's JSON text so its cards are not indexed one by one. The id is `<owner_uid>__<deck_id>`; a re-upload replaces the deck. Decks hold résumé and JD text and are owner-only like every other collection.
+- `CalibrationSession { id, deck_id, fingerprint, session_id, state_json, updated_at }`: the labelling progress for a deck (order, decisions, notes, timings, undos), same id as its deck, saved after every decision so it resumes on another device. `fingerprint` is the deck's content hash: a session saved against different deck content is ignored. `firestore.rules` fixes both key sets, caps `deck_json` at 900,000 characters and `state_json` at 200,000, and keeps `deck_id` fixed on update.
+
 ### Invariants
 
 - `ExperienceUnit.user_approved == true` is required for the Unit to
@@ -617,7 +622,7 @@ evaluation of either (Calibrate).
    reloads until saved or cancelled. Saving creates the Role, even
    with only a title (#431), and opens its Role Detail. **Target**
    (PRD decision 7): Company and Source fields, persisted on the Role.
-7. **Calibrate** (`/calibrate`) — an evaluation tool, not part of the core loop: swipe through a calibration deck (#636) one judgment at a time (right True, left False, down Mixed where the review sheet takes `partial`, up Can't tell, which re-queues the card with its full source open), with undo, one-line notes, per-card timing and a per-cell summary, then download a labels file that `tools/label-swipe/import-labels.mts` writes back into the review sheet. Decks are opened from a file and kept in memory; the route reads and writes no Firestore data and calls no Cloud Function, and only item ids, labels, notes and timings persist, in the browser. It is the one screen laid out for phones, and the top navigation scrolls sideways at phone width.
+7. **Calibrate** (`/calibrate`) — an evaluation tool, not part of the core loop: swipe through a calibration deck (#636) one judgment at a time (right True, left False, down Mixed where the review sheet takes `partial`, up Can't tell, which re-queues the card with its full source open), with undo, one-line notes, per-card timing and a per-cell summary, then download a labels file that `tools/label-swipe/import-labels.mts` writes back into the review sheet. Decks are uploaded once from deck files into the owner's account (`CalibrationDeck`), listed with their progress, opened one at a time or all together, and removed with a confirmation; each decision saves the session to the account (`CalibrationSession`) and to the browser (ids, labels, notes, timings, seed, session id and content hash; never card text), and a session resumes from whichever copy has more history. A deck can also be opened from a file without uploading, for this device only. The route calls no Cloud Function. It is the one screen laid out for phones, and the top navigation scrolls sideways at phone width.
 
 **Target:** the navigation, dossier, Evidence (canonical resume and
 claim rules), Package, Process, Correspondence, and Scan surfaces in

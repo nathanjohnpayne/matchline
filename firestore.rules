@@ -231,6 +231,62 @@ service cloud.firestore {
         && request.resource.data.get('due_at', '') is string;
     }
 
+    // Calibration decks and labelling sessions (#636), stored so a deck
+    // uploaded once can be labelled on another device. Each is one JSON
+    // string plus a few scalar fields (src/services/calibration.ts); the
+    // fixed key set and the size caps keep these collections from turning
+    // into general storage. Owner-scoped like the CRM; `owner_uid`, `id`
+    // and `deck_id` cannot move on update.
+    match /calibrationDecks/{docId} {
+      function validDeck() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'id', 'owner_uid', 'deck_id', 'cell_order', 'card_count',
+            'fingerprint', 'deck_json', 'uploaded_at'
+          ])
+          && d.keys().hasAll([
+            'owner_uid', 'deck_id', 'cell_order', 'card_count',
+            'fingerprint', 'deck_json', 'uploaded_at'
+          ])
+          // The client converter stores the id only as the document id.
+          && d.get('id', docId) == docId
+          && d.deck_id is string && d.deck_id.size() > 0 && d.deck_id.size() <= 200
+          && d.cell_order is int
+          && d.card_count is int && d.card_count > 0
+          && d.fingerprint is string && d.fingerprint.size() <= 64
+          && d.deck_json is string && d.deck_json.size() <= 900000
+          && d.uploaded_at is string;
+      }
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner() && validDeck();
+      allow update: if canUpdateAsOwner() && validDeck()
+        && request.resource.data.deck_id == resource.data.deck_id;
+    }
+
+    match /calibrationSessions/{docId} {
+      function validSession() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'id', 'owner_uid', 'deck_id', 'fingerprint', 'session_id',
+            'state_json', 'updated_at'
+          ])
+          && d.keys().hasAll([
+            'owner_uid', 'deck_id', 'fingerprint', 'session_id',
+            'state_json', 'updated_at'
+          ])
+          && d.get('id', docId) == docId
+          && d.deck_id is string && d.deck_id.size() > 0 && d.deck_id.size() <= 200
+          && d.fingerprint is string && d.fingerprint.size() <= 64
+          && d.session_id is string && d.session_id.size() <= 100
+          && d.state_json is string && d.state_json.size() <= 200000
+          && d.updated_at is string;
+      }
+      allow read, delete: if isOwner();
+      allow create: if isCreatingAsOwner() && validSession();
+      allow update: if canUpdateAsOwner() && validSession()
+        && request.resource.data.deck_id == resource.data.deck_id;
+    }
+
     match /roles/{docId} {
       allow read, delete: if isOwner();
       allow create: if isCreatingAsOwner();

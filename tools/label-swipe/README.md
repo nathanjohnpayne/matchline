@@ -2,12 +2,13 @@
 
 Two scripts that connect a calibration packet (#636, corrections scaffolds #648) to the web app's **Calibrate** route (`/calibrate`), which turns the packet's owner columns into one swipe card per judgment. `build-deck.mts` turns the review sheets into decks, and `import-labels.mts` writes the labels downloaded from Calibrate back into the sheets. The swipe mechanics (100 px threshold, 10 px before a press becomes a drag, card stack and buttons) are adapted from swipewatch. Its analytics, coins and modes are not carried over.
 
-Calibrate works on a phone as well as a desktop. It reads decks in the browser and never uploads them: it calls no Firestore collection and no Cloud Function. The deck format and the session logic (shuffle, decisions, undo, export) live in `src/lib/labelDeck/`, which both the route and these scripts import.
+Calibrate works on a phone as well as a desktop. Decks are uploaded once into your own Matchline account (the `calibrationDecks` and `calibrationSessions` collections, owner-only under `firestore.rules`) and then open on any device you sign in on, with the labelling progress following you. A deck can also be opened from a file without uploading, for one device only. The deck format and the session logic (shuffle, decisions, undo, export) live in `src/lib/labelDeck/`, which both the route and these scripts import.
 
 ## Privacy rules
 
 - **Decks are private.** They contain résumé and JD text, extracted Units and owner labels. They live under `~/.matchline/eval-analysis/calibration-2a/decks/` and never in a repository. Both scripts refuse to write inside any git work tree.
-- Calibrate reads decks through a file picker. Card content stays in the tab's memory. `localStorage` keeps only item ids, labels, notes, timings, the seed, the session id and a hash of the deck's content (key `matchline:calibrate:v1:<deck_id>`), so a closed tab can resume where it stopped. Sessions are per browser: a cell started on the phone resumes on the phone. A rebuilt deck whose text changed under the same item ids does not match that hash and starts a fresh session. Clear site data to forget a session.
+- **Uploading puts the decks in your Firebase project.** Uploaded decks and their sessions are stored in Firestore under your account, readable and writable only by an allowlisted owner whose uid matches the document. **Remove** on a deck deletes it and its session. If a deck should never leave the device, use **Open a file without uploading** instead: the deck stays in the tab's memory.
+- On every device, `localStorage` also keeps only item ids, labels, notes, timings, the seed, the session id and a hash of the deck's content (key `matchline:calibrate:v1:<deck_id>`), so a closed tab can resume where it stopped. For an uploaded deck the session is also saved to your account after every decision, and on open the copy with more history wins, so a phone that was offline loses nothing. A rebuilt deck whose text changed under the same item ids does not match that hash and starts a fresh session. Clear site data to forget a session.
 - Downloaded `labels-*.json` files hold item ids (which include label ids such as `u_…` and `r_…`), labels and your notes. Treat them as private too, and keep them out of the repo.
 - Neither script opens `KEY.json`, and the cards show no scores, no `≥0.5?` flags, no `endpoints mapped` column, no model names and no extracted-Unit refs (A3, R2, …). Arms appear only in item ids, as "A"/"B", exactly as in the packet.
 - The only committed fixture, `fixtures/packet/`, is synthetic: every name and number in it is invented.
@@ -28,11 +29,11 @@ To try Calibrate without private data, build the synthetic deck into a scratch f
 npx tsx tools/label-swipe/build-deck.mts --packet tools/label-swipe/fixtures/packet --out /tmp/label-swipe-demo
 ```
 
-### 2. Open Calibrate
+### 2. Upload, then open Calibrate anywhere
 
-On a phone, copy the decks somewhere the Files app can reach (iCloud Drive, AirDrop to Files). They are private, so use a private location, not a shared folder. Then sign in to Matchline and open **Calibrate** in the top navigation (`/calibrate`; it also runs locally under `npm run dev`).
+On the Mac, sign in to Matchline, open **Calibrate** in the top navigation (`/calibrate`), click **Upload deck files…** and select the four decks in `~/.matchline/eval-analysis/calibration-2a/decks/`. Re-uploading a rebuilt deck replaces it; its old session no longer matches the new content and is not reused.
 
-Tap **Open deck files…** and select one or all four decks. Cells run in the packet README's order: the nathan cell first, then the others alphabetically (`cell_order` in each deck). Each cell ends on its own screen with counts, median time per card and undo count, a **Download labels** button and **Next cell**.
+On the phone, sign in, open **Calibrate**, and tap **Label all** (or **Start** / **Resume** on one deck). Cells run in the packet README's order: the nathan cell first, then the others alphabetically (`cell_order` in each deck). Each cell ends on its own screen with counts, median time per card and undo count, a **Download labels** button and **Next cell**.
 
 ### 3. Label
 
@@ -53,7 +54,7 @@ Tap **Open deck files…** and select one or all four decks. Cells run in the pa
 
 ### 4. Download
 
-**Download labels** (in the header at any time, or on the end screen) saves, on a phone into the Files app's Downloads, `labels-<deck_id>-<UTC timestamp>.json`:
+For an uploaded deck, download on the Mac: open Calibrate there, open the deck (**Review** once it is done), and use **Download labels**; the session is already in your account. **Download labels** (in the header at any time, or on the end screen) saves `labels-<deck_id>-<UTC timestamp>.json`:
 
 ```json
 {
@@ -75,7 +76,7 @@ Tap **Open deck files…** and select one or all four decks. Cells run in the pa
 npx tsx tools/label-swipe/import-labels.mts ~/Downloads/labels-<cell>-<timestamp>.json
 ```
 
-A file downloaded on a phone has to reach the Mac first (AirDrop, or iCloud Drive). It is private, like the deck.
+For a deck opened from a file on a phone, the labels file has to reach the Mac first (AirDrop, or iCloud Drive). It is private, like the deck.
 
 This writes Y / N / partial into the owner columns of `<packet>/<deck_id>.md` and the notes into each row's `note` column. When a row has two cards with notes, the note reads `fact: …; verbatim: …`. Catch cards are skipped. Every arm A Unit and requirement labelled False, Mixed or Can't tell, with its note, also goes into the `notes` field of `corrections/<deck_id>.json`, as one block:
 
@@ -117,7 +118,7 @@ Each deck mixes in up to four attention-check cards with known answers, built on
 
 ## Files
 
-- `src/routes/Calibrate/` (in the app): the swipe UI. `src/lib/labelDeck/`: the deck format and session reducer it shares with these scripts.
+- `src/routes/Calibrate/` (in the app): the swipe UI. `src/lib/labelDeck/`: the deck format and session reducer it shares with these scripts. `src/services/calibration.ts`: account storage for decks and sessions.
 - `build-deck.mts`, `import-labels.mts`: the two CLIs. `lib/sheet.mts` parses sheets, `lib/deck.mts` builds cards and catch cards, `lib/importer.mts` writes labels back, and `lib/cli.mts` holds the outside-the-repo guard.
 - `*.test.ts`: vitest suites, run by `npm test` and typechecked through `tsconfig.tests.json`.
 - `fixtures/packet/`: the synthetic sheet and scaffold the tests use.

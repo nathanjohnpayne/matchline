@@ -1,7 +1,8 @@
 /**
  * Browser smoke test for Calibrate (`/calibrate`, #636) at phone size:
- * open a deck from a file, label every card with drags and buttons,
- * re-queue one with Can't tell, undo, note, and download the labels file.
+ * upload a deck to the account, label every card with drags and buttons,
+ * re-queue one with Can't tell, undo, note, resume from the account with
+ * this browser's copy cleared, and download the labels file.
  *
  * The deck is built from the synthetic fixture packet in
  * `tools/label-swipe/fixtures/packet/` (invented names only), written to
@@ -29,7 +30,10 @@ async function shot(page: Page, name: string): Promise<void> {
 
 /** Drag the card like a finger: press, move in steps, release. */
 async function drag(page: Page, dx: number, dy: number): Promise<void> {
-  const box = await page.getByTestId("calibrate-card").boundingBox();
+  const card = page.getByTestId("calibrate-card");
+  // Opening the full text scrolls the page down to it; scroll back first.
+  await card.scrollIntoViewIfNeeded();
+  const box = await card.boundingBox();
   if (!box) throw new Error("no card");
   const x = box.x + box.width / 2;
   const y = box.y + 60;
@@ -58,7 +62,11 @@ test("a deck can be labelled end to end on a phone-sized screen", async ({ page 
   await expect(page.getByRole("heading", { name: "Calibrate" })).toBeVisible();
   await shot(page, "1-picker");
 
-  await page.getByLabel("Deck files").setInputFiles(deckPath);
+  await page.getByLabel("Upload deck files…").setInputFiles(deckPath);
+  await expect(page.getByText(deck.deck_id.split("__")[0], { exact: true })).toBeVisible();
+  await expect(page.getByText(`Not started · ${total} cards`)).toBeVisible();
+  await shot(page, "1b-decks");
+  await page.getByRole("button", { name: "Label all" }).click();
   await expect(labelled(page)).toHaveText(new RegExp(`0 of ${total} labelled`));
   await shot(page, "2-card");
 
@@ -87,6 +95,17 @@ test("a deck can be labelled end to end on a phone-sized screen", async ({ page 
   await page.getByTestId("calibrate-card").tap();
   await expect(page.getByRole("region", { name: "Full source" })).toBeVisible();
   await shot(page, "4-source");
+
+  // Progress lives in the account: with this browser's copy cleared, a
+  // reload resumes where the account says.
+  await drag(page, 180, 0);
+  await expect(labelled(page)).toHaveText(new RegExp(`1 of ${total}`));
+  await page.waitForTimeout(500); // let the session write land
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await expect(page.getByText(`1 of ${total} labelled · ${total} cards`)).toBeVisible();
+  await page.getByRole("button", { name: "Resume" }).click();
+  await expect(labelled(page)).toHaveText(new RegExp(`1 of ${total}`));
 
   // Label the rest: swipe right, or the True button, until the cell ends.
   for (let i = 0; i < total + 2 && !(await page.getByRole("region", { name: "Cell done" }).isVisible()); i += 1) {

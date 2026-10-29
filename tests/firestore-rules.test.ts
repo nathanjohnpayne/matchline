@@ -103,7 +103,42 @@ const OWNER_CRUD = (name: string): CollectionSpec => ({
   clientDelete: true,
 });
 
+/**
+ * A valid calibrationDecks payload as stored: buildDeckDoc's shape
+ * (src/services/calibration.ts) after the client converter drops `id`.
+ */
+const calibrationDeck = () => ({
+  deck_id: "demo-cell",
+  cell_order: 0,
+  card_count: 3,
+  fingerprint: "0badcafe:120",
+  deck_json: '{"format":"matchline-label-deck/1"}',
+  uploaded_at: "2026-10-29T00:00:00.000Z",
+});
+/** A valid calibrationSessions payload as stored (buildSessionDoc, minus `id`). */
+const calibrationSession = () => ({
+  deck_id: "demo-cell",
+  fingerprint: "0badcafe:120",
+  session_id: "s-1",
+  state_json: '{"queue":[]}',
+  updated_at: "2026-10-29T00:00:00.000Z",
+});
+
 const COLLECTIONS: readonly CollectionSpec[] = [
+  {
+    name: "calibrationDecks",
+    seed: calibrationDeck(),
+    create: calibrationDeck(),
+    update: { deck_json: '{"format":"matchline-label-deck/1","v":2}', uploaded_at: "2026-10-30T00:00:00.000Z" },
+    clientDelete: true,
+  },
+  {
+    name: "calibrationSessions",
+    seed: calibrationSession(),
+    create: calibrationSession(),
+    update: { state_json: '{"queue":["a"]}', updated_at: "2026-10-30T00:00:00.000Z" },
+    clientDelete: true,
+  },
   OWNER_CRUD("people"),
   OWNER_CRUD("companies"),
   OWNER_CRUD("roles"),
@@ -848,6 +883,63 @@ describe("rules: applications field limits", () => {
 });
 
 // -- unitMatches contradictory-shape guard (cursor #133 r4) --------------
+
+// -- calibrationDecks / calibrationSessions (#636) -------------------------
+
+describe("rules: calibration field limits", () => {
+  const deckRef = (uid: string) => doc(db(uid), "calibrationDecks", "d-1");
+  const sessionRef = (uid: string) => doc(db(uid), "calibrationSessions", "d-1");
+  const deck = { owner_uid: OWNER_UID, ...calibrationDeck() };
+  const session = { owner_uid: OWNER_UID, ...calibrationSession() };
+
+  it("ALLOWS the stored shapes, with or without an id equal to the doc id", async () => {
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), deck));
+    await assertSucceeds(setDoc(sessionRef(OWNER_UID), session));
+    await assertSucceeds(setDoc(deckRef(OWNER_UID), { ...deck, id: "d-1" }));
+  });
+
+  it("DENIES extra keys, missing keys, wrong types and an id that is not the doc id", async () => {
+    for (const bad of [
+      { ...deck, extra: true },
+      { ...deck, deck_json: undefined },
+      { ...deck, card_count: "3" },
+      { ...deck, cell_order: 1.5 },
+      { ...deck, card_count: 0 },
+      { ...deck, deck_id: "" },
+      { ...deck, id: "other" },
+    ]) {
+      const payload = Object.fromEntries(Object.entries(bad).filter(([, v]) => v !== undefined));
+      await assertFails(setDoc(deckRef(OWNER_UID), payload));
+    }
+    for (const bad of [
+      { ...session, notes: "x" },
+      { ...session, state_json: { queue: [] } },
+      { ...session, session_id: 7 },
+      { ...session, id: "other" },
+    ]) {
+      await assertFails(setDoc(sessionRef(OWNER_UID), bad));
+    }
+  });
+
+  it("DENIES a deck or session over its size cap", async () => {
+    await assertFails(setDoc(deckRef(OWNER_UID), { ...deck, deck_json: "x".repeat(900_001) }));
+    await assertFails(setDoc(sessionRef(OWNER_UID), { ...session, state_json: "x".repeat(200_001) }));
+  });
+
+  it("DENIES moving a deck or session to another deck_id", async () => {
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await seedDoc("calibrationSessions", "d-1", session);
+    await assertFails(updateDoc(deckRef(OWNER_UID), { deck_id: "other-cell" }));
+    await assertFails(updateDoc(sessionRef(OWNER_UID), { deck_id: "other-cell" }));
+  });
+
+  it("DENIES a signed-in stranger and another owner", async () => {
+    await assertFails(setDoc(deckRef(STRANGER_UID), { ...deck, owner_uid: STRANGER_UID }));
+    await seedDoc("calibrationDecks", "d-1", deck);
+    await assertFails(getDoc(deckRef(OTHER_UID)));
+    await assertFails(deleteDoc(deckRef(OTHER_UID)));
+  });
+});
 
 // -- tasks (#34) -----------------------------------------------------------
 

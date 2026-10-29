@@ -7,14 +7,11 @@
  */
 
 import type { Deck } from "../../lib/labelDeck/deck.ts";
-import { sessionMatchesDeck, type SessionState } from "../../lib/labelDeck/session.ts";
+import { sessionMatchesDeck, type StoredSession } from "../../lib/labelDeck/session.ts";
+
+export type { StoredSession };
 
 const PREFIX = "matchline:calibrate:v1:";
-
-export interface StoredSession {
-  session_id: string;
-  state: SessionState;
-}
 
 export function loadSession(deck: Deck, storage: Storage | undefined = globalThis.localStorage): StoredSession | null {
   try {

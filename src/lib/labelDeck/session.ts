@@ -32,6 +32,12 @@ export interface SessionState {
   counter: number;
 }
 
+/** A session plus the id its labels file carries. */
+export interface StoredSession {
+  session_id: string;
+  state: SessionState;
+}
+
 /** Small deterministic PRNG (mulberry32). */
 export function prng(seed: number): () => number {
   let a = seed >>> 0;

@@ -5,11 +5,13 @@
  * back. A press with no drag is a tap (opens the full source).
  *
  * Pointer events cover mouse, pen and touch alike; `touch-none` stops the
- * browser from turning a vertical swipe into a page scroll, which is why the
- * full source opens outside the card where it can scroll.
+ * browser from turning a vertical swipe into a page scroll. So that a tall
+ * card cannot trap a phone's screen, the card is capped at about half the
+ * viewport and fades out when clipped; the full text (claim, evidence and
+ * source) opens below the buttons, where the page scrolls normally.
  */
 
-import { useRef, useState, type PointerEvent, type ReactElement } from "react";
+import { forwardRef, useLayoutEffect, useRef, useState, type PointerEvent, type ReactElement } from "react";
 
 import type { Card, Field } from "../../lib/labelDeck/deck.ts";
 
@@ -83,32 +85,45 @@ export function CardFace({ card, secondLook }: { readonly card: Card; readonly s
 export const CARD_SURFACE =
   "rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900";
 
-export default function SwipeCard({ card, secondLook, mixedAllowed, reducedMotion, onSwipe, onMixedRefused, onTap }: SwipeCardProps): ReactElement {
+const SwipeCard = forwardRef<HTMLElement, SwipeCardProps>(function SwipeCard(
+  { card, secondLook, mixedAllowed, reducedMotion, onSwipe, onMixedRefused, onTap },
+  ref,
+): ReactElement {
   const [offset, setOffset] = useState<{ x: number; y: number } | null>(null);
-  const press = useRef<{ x: number; y: number; moved: boolean; last: { x: number; y: number } } | null>(null);
+  const [clipped, setClipped] = useState(false);
+  const body = useRef<HTMLDivElement | null>(null);
+  const press = useRef<{ id: number; x: number; y: number; moved: boolean; last: { x: number; y: number } } | null>(null);
+
+  // Show the fade only when the cap actually clips this card's text.
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (el) setClipped(el.scrollHeight > el.clientHeight + 1);
+  }, [card]);
 
   const onPointerDown = (e: PointerEvent<HTMLElement>) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest("button, a, input, textarea")) return;
-    press.current = { x: e.clientX, y: e.clientY, moved: false, last: { x: 0, y: 0 } };
+    // One finger only, and never from a control inside the card.
+    if (!e.isPrimary || e.button !== 0 || (e.target as HTMLElement).closest("button, a, input, textarea")) return;
+    press.current = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false, last: { x: 0, y: 0 } };
+    // Capture now, so a fast flick that leaves the card still ends here.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
   };
 
   const onPointerMove = (e: PointerEvent<HTMLElement>) => {
     const p = press.current;
-    if (!p) return;
+    if (!p || e.pointerId !== p.id) return;
     const next = { x: e.clientX - p.x, y: e.clientY - p.y };
     if (!p.moved) {
       if (Math.hypot(next.x, next.y) < DRAG_START_PX) return;
       p.moved = true;
-      e.currentTarget.setPointerCapture?.(e.pointerId);
     }
     p.last = next;
     setOffset(next);
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: PointerEvent<HTMLElement>) => {
     const p = press.current;
+    if (!p || e.pointerId !== p.id) return;
     press.current = null;
-    if (!p) return;
     if (!p.moved) {
       // A tap, unless the press selected text to copy.
       if (globalThis.getSelection?.()?.isCollapsed ?? true) onTap();
@@ -116,6 +131,9 @@ export default function SwipeCard({ card, secondLook, mixedAllowed, reducedMotio
     }
     const direction = swipeDirection(p.last.x, p.last.y);
     if (direction && (direction !== "down" || mixedAllowed)) {
+      // The card is replaced on the next render; clear the offset anyway, so
+      // a card that stays (a re-queued last card) does not stay dragged.
+      setOffset(null);
       onSwipe(direction, p.last);
       return;
     }
@@ -133,9 +151,11 @@ export default function SwipeCard({ card, secondLook, mixedAllowed, reducedMotio
 
   return (
     <article
+      ref={ref}
+      tabIndex={-1}
       data-testid="calibrate-card"
       aria-label={QUESTIONS[card.type].chip}
-      className={`relative cursor-grab touch-none select-none ${CARD_SURFACE} ${offset ? "cursor-grabbing" : ""} ${
+      className={`relative cursor-grab touch-none select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900 dark:focus-visible:ring-zinc-100 ${CARD_SURFACE} ${offset ? "cursor-grabbing" : ""} ${
         offset || reducedMotion ? "" : "transition-transform duration-150 ease-out"
       } ${reducedMotion ? "" : "calibrate-card-in"}`}
       style={offset ? { transform: reducedMotion ? `translate(${offset.x}px, ${offset.y}px)` : dragTransform(offset.x, offset.y) } : undefined}
@@ -154,8 +174,17 @@ export default function SwipeCard({ card, secondLook, mixedAllowed, reducedMotio
           {STAMPS[dir].text}
         </span>
       ))}
-      <CardFace card={card} secondLook={secondLook} />
-      <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">Tap the card, or press Space, for the full source.</p>
+      <div ref={body} className="relative max-h-[55svh] overflow-hidden sm:max-h-none">
+        <CardFace card={card} secondLook={secondLook} />
+        {clipped && (
+          <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white dark:from-zinc-900" />
+        )}
+      </div>
+      <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+        {clipped ? "Tap the card for the full text and source." : "Tap the card, or press Space, for the full source."}
+      </p>
     </article>
   );
-}
+});
+
+export default SwipeCard;

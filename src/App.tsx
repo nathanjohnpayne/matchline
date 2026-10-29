@@ -56,8 +56,8 @@ export default function App() {
         <div className="flex items-center justify-between gap-4">
           <Wordmark className="shrink-0 text-lg" />
           {/* Scrolls sideways on a phone rather than overflowing the
-              header; the faded left edge shows there is more. */}
-          <nav className="-mr-2 flex min-w-0 items-center gap-4 overflow-x-auto pr-2 pl-4 text-sm whitespace-nowrap [mask-image:linear-gradient(to_right,transparent,black_16px)] [scrollbar-width:none] sm:pl-0 sm:[mask-image:none]">
+              header; both edges fade so a cut-off link reads as "more". */}
+          <nav className="-mr-2 flex min-w-0 items-center gap-4 overflow-x-auto px-4 text-sm whitespace-nowrap [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)] [scrollbar-width:none] sm:px-0 sm:pr-2 sm:[mask-image:none]">
             {navItems.map((item) => (
               <NavLink
                 key={item.to}
