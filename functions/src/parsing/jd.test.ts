@@ -14,7 +14,7 @@ import { clearPromptVersionOverrides, loadPromptText, setPromptVersionOverrides 
 import { JdParsingResponseV1Schema } from "../prompts/parsing/jd.v1.schema.ts";
 
 import { JdParsingError } from "./errors.ts";
-import { parseJobRequirements } from "./jd.ts";
+import { attemptFailureNotice, parseJobRequirements, type JdAttemptFailureNotice } from "./jd.ts";
 
 function mockMessage(
   toolInput: unknown,
@@ -579,6 +579,156 @@ describe("parseJobRequirements — prompt version selection (#656)", () => {
       parseJobRequirements("JD text", CTX, { client, record: vi.fn<typeof RecordUsage>(async () => 0) }),
     ).rejects.toThrow(/Prompt file not found/);
     expect(vi.mocked(client.messages.create)).not.toHaveBeenCalled();
+  });
+
+  it("refuses a version whose prompt file loads but has no registered schema, before any request", async () => {
+    // A prompt jd.v3.md that exists on disk but was never added to
+    // jdResponseSchema.ts. The loader is swapped for this test only.
+    vi.resetModules();
+    vi.doMock("../prompts/loader.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../prompts/loader.ts")>()),
+      loadPromptText: () => ({ version: "v3", system: "System v3.", userFewShot: "Few-shot v3." }),
+    }));
+    try {
+      const { parseJobRequirements: parseWithV3 } = await import("./jd.ts");
+      const client = mockClient([mockMessage(VALID_RESPONSE)]);
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+      await expect(parseWithV3("JD text", CTX, { client, record })).rejects.toThrow(
+        /No JD parsing schema registered for version "v3"/,
+      );
+      expect(vi.mocked(client.messages.create)).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../prompts/loader.ts");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("parseJobRequirements onAttemptFailure (#656)", () => {
+  afterEach(() => {
+    clearPromptVersionOverrides();
+  });
+
+  const missingKey = {
+    requirements: [{ ...VALID_RESPONSE.requirements[0], category: "education", must_have: "yes" }],
+  };
+
+  it("reports a recovered schema failure's attempt, kind and issue codes and paths", async () => {
+    const notices: JdAttemptFailureNotice[] = [];
+    const client = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+
+    const reqs = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: (n) => notices.push(n),
+    });
+
+    expect(reqs).toHaveLength(2);
+    expect(notices).toHaveLength(1);
+    const [notice] = notices;
+    expect(notice).toMatchObject({ attempt: 0, kind: "schema_error" });
+    const issues = [...(notice!.issues ?? [])].sort((x, y) => x.path.join(".").localeCompare(y.path.join(".")));
+    expect(issues).toEqual([
+      { code: "invalid_value", path: ["requirements", 0, "category"] },
+      { code: "invalid_type", path: ["requirements", 0, "must_have"] },
+    ]);
+    // Codes and paths only: no message, expected value or model output.
+    for (const issue of issues) expect(Object.keys(issue).sort()).toEqual(["code", "path"]);
+    expect(JSON.stringify(notices)).not.toContain("education");
+  });
+
+  it("reports every failed attempt of an exhausted run, in order, with the same kinds as .failures", async () => {
+    const notices: JdAttemptFailureNotice[] = [];
+    const noTool = { ...mockMessage(VALID_RESPONSE), content: [{ type: "text", text: "no", citations: null }] } as Anthropic.Messages.Message;
+    const client = mockClient([mockMessage(missingKey), noTool, mockMessage(missingKey)]);
+
+    const err = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      onAttemptFailure: (n) => notices.push(n),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(JdParsingError);
+    expect(notices.map((n) => [n.attempt, n.kind])).toEqual([
+      [0, "schema_error"],
+      [1, "no_tool_use"],
+      [2, "schema_error"],
+    ]);
+    expect(notices.map((n) => n.kind)).toEqual(JdParsingFailures(err).map((f) => f.kind));
+    expect(notices[1]!.issues).toBeUndefined();
+  });
+
+  it("sends the same requests and returns the same result with or without the hook", async () => {
+    const withoutHook = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+    const withHook = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+    const a = await parseJobRequirements("JD text", CTX, {
+      client: withoutHook,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+    });
+    const b = await parseJobRequirements("JD text", CTX, {
+      client: withHook,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: () => undefined,
+    });
+
+    expect(b).toEqual(a);
+    expect(vi.mocked(withHook.messages.create).mock.calls).toEqual(vi.mocked(withoutHook.messages.create).mock.calls);
+  });
+
+  it("ignores a hook that throws, so the parse outcome is unchanged", async () => {
+    const client = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+
+    const reqs = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: () => {
+        throw new Error("sink broke");
+      },
+    });
+
+    expect(reqs).toHaveLength(2);
+    expect(vi.mocked(client.messages.create)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("attemptFailureNotice", () => {
+  it("keeps attempt, kind and each issue's code and path, and nothing else", () => {
+    expect(
+      attemptFailureNotice({
+        attempt: 1,
+        kind: "schema_error",
+        message: "model output here",
+        zodIssues: [
+          { code: "invalid_value", path: ["requirements", 3, "category"], message: "bad", values: ["tool"], input: "education" },
+        ],
+      }),
+    ).toEqual({ attempt: 1, kind: "schema_error", issues: [{ code: "invalid_value", path: ["requirements", 3, "category"] }] });
+  });
+
+  it("omits issues for a failure without Zod issues, or with an empty list", () => {
+    expect(attemptFailureNotice({ attempt: 0, kind: "transport_error", message: "x" })).toEqual({ attempt: 0, kind: "transport_error" });
+    expect(attemptFailureNotice({ attempt: 2, kind: "schema_error", message: "x", zodIssues: [] })).toEqual({ attempt: 2, kind: "schema_error" });
+  });
+
+  it("skips malformed issues and stringifies a symbol path segment", () => {
+    const sym = Symbol("k");
+    expect(
+      attemptFailureNotice({
+        attempt: 0,
+        kind: "schema_error",
+        message: "x",
+        zodIssues: [null, "str", { path: ["a"] }, { code: 7, path: [] }, { code: "custom" }, { code: "custom", path: ["a", sym, 0] }],
+      }).issues,
+    ).toEqual([
+      { code: "custom", path: [] },
+      { code: "custom", path: ["a", "Symbol(k)", 0] },
+    ]);
   });
 });
 

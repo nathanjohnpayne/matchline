@@ -233,7 +233,23 @@ describe("assertPromptSchemasCompatible", () => {
       expect(() => assertPromptSchemasCompatible(jdV2, {}, root)).not.toThrow();
       expect(() =>
         assertPromptSchemasCompatible([{ label: "jd-v3", promptVersions: { "parsing/jd": "v3" } }], {}, root),
-      ).toThrow(/parsing\/jd=v3 ships jd\.v3\.schema\.ts/);
+      ).toThrow(/parsing\/jd=v3 has no schema registered with its stage/);
+    });
+
+    it("refuses an unregistered version whose schema is byte-identical to v1's, or absent", () => {
+      // The stage throws for any version jdResponseSchemaFor does not know,
+      // so neither the file comparison's "identical" nor its "absent" pass
+      // may let the version through.
+      mkdirSync(join(root, "parsing"), { recursive: true });
+      writeFileSync(join(root, "parsing", "jd.v1.schema.ts"), "export const A = 1;\n");
+      writeFileSync(join(root, "parsing", "jd.v3.schema.ts"), "export const A = 1;\n");
+      const v3 = [{ label: "jd-v3", promptVersions: { "parsing/jd": "v3" } }];
+      expect(() => assertPromptSchemasCompatible(v3, {}, root)).toThrow(
+        /parsing\/jd=v3 has no schema registered with its stage \(registered: v1, v2/,
+      );
+      expect(() => assertPromptSchemasCompatible([], { "parsing/jd": "v4" }, root)).toThrow(
+        /parsing\/jd=v4 has no schema registered/,
+      );
     });
 
     it("does not extend the exemption to extraction/resume", () => {

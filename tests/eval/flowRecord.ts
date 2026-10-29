@@ -22,6 +22,12 @@
  * - `refusal`: the stage's thrown `failures` name a `refusal` at that
  *   attempt. Observable only when the flow failed, since `failures` is
  *   thrown only on exhaustion or refusal.
+ * - `failureKind` and `issues` (#656): set on a call whose attempt the
+ *   stage reported as failed through its per-attempt hook, recovered or
+ *   not. `issues` holds each Zod issue's `code` and `path` only, never a
+ *   message or the model's output. Only JD parsing reports through the
+ *   hook today, and a call replayed from the cache carries neither,
+ *   because a replay runs no attempt.
  *
  * Pure: no I/O.
  */
@@ -30,7 +36,7 @@ import { z } from "zod";
 
 import type { UsageRecord } from "../../functions/src/llm/cost.ts";
 
-import type { FlowTrace, TraceStep } from "./flowTrace.ts";
+import type { FlowTrace, TracedAttemptFailure, TraceStep } from "./flowTrace.ts";
 import type { RunForFixtureResult } from "./runForFixture.ts";
 
 export const FLOW_RECORD_SCHEMA_VERSION = 1;
@@ -62,6 +68,10 @@ export interface RecordedCall extends UsageRecord {
   readonly truncated: boolean;
   readonly retry: boolean;
   readonly refusal: boolean;
+  /** Kind of the failed attempt this call answered, when the stage reported one (#656). */
+  readonly failureKind?: string;
+  /** Zod issue codes and paths of that failed attempt (#656). */
+  readonly issues?: readonly { readonly code: string; readonly path: readonly (string | number)[] }[];
 }
 
 export interface FlowError {
@@ -195,15 +205,23 @@ function failureKindsAt(
   return kinds;
 }
 
-/** Add the derived `truncated` / `retry` / `refusal` flags to one traced call. */
+/**
+ * Add the derived `truncated` / `retry` / `refusal` flags to one traced
+ * call, and the failure kind and issue codes and paths the stage
+ * reported for the same step and attempt (#656).
+ */
 export function deriveCall(
   call: FlowTrace["calls"][number],
   failedStep: string | undefined,
   failures: readonly unknown[] | undefined,
+  attemptFailures?: readonly TracedAttemptFailure[],
 ): RecordedCall {
   const { usage } = call;
   const kinds =
     !call.replayed && failedStep === call.step ? failureKindsAt(failures, usage.attempt) : new Set<string>();
+  const reported = call.replayed
+    ? undefined
+    : attemptFailures?.find((f) => f.step === call.step && f.attempt === usage.attempt);
   return {
     step: call.step,
     replayed: call.replayed,
@@ -213,6 +231,8 @@ export function deriveCall(
       kinds.has("max_tokens_exceeded"),
     retry: (usage.attempt ?? 0) > 0,
     refusal: kinds.has("refusal"),
+    ...(reported !== undefined && { failureKind: reported.kind }),
+    ...(reported?.issues !== undefined && { issues: reported.issues }),
   };
 }
 
@@ -263,7 +283,7 @@ export function buildFlowRecord(
     cacheHits: result.cacheHits,
     cacheMisses: result.cacheMisses,
     stepCacheHits: { ...trace.stepCacheHits },
-    calls: trace.calls.map((c) => deriveCall(c, trace.failedStep, trace.failures)),
+    calls: trace.calls.map((c) => deriveCall(c, trace.failedStep, trace.failures, trace.attemptFailures)),
     failures: trace.failures ?? null,
     units,
     requirements,

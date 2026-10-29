@@ -64,10 +64,24 @@ export interface FlowTrace {
   errorName?: string;
   /** The stage's `failures` array, as thrown (ExtractionError / JdParsingError). */
   failures?: readonly unknown[];
+  /**
+   * Every failed attempt a stage reported through its per-attempt hook,
+   * recovered or not (#656): step, attempt, kind and Zod issue codes and
+   * paths only. Today only JD parsing reports here.
+   */
+  readonly attemptFailures?: TracedAttemptFailure[];
+}
+
+/** One failed attempt as a stage's hook reported it. No message or model output. */
+export interface TracedAttemptFailure {
+  readonly step: TraceStep;
+  readonly attempt: number;
+  readonly kind: string;
+  readonly issues?: readonly { readonly code: string; readonly path: readonly (string | number)[] }[];
 }
 
 export function newFlowTrace(): FlowTrace {
-  return { calls: [], stepCacheHits: {} };
+  return { calls: [], stepCacheHits: {}, attemptFailures: [] };
 }
 
 /** Name the step a stage call serves, and remember it as the current step. */
@@ -108,6 +122,32 @@ export function traceValue(trace: FlowTrace | undefined, stage: string, value: u
   if (trace === undefined || !Array.isArray(value)) return;
   if (stage === "extraction") trace.units = value;
   else if (stage === "requirement_parsing") trace.requirements = value;
+}
+
+/**
+ * Keep one failed attempt a stage reported (#656). Only the attempt,
+ * kind and each issue's code and path are copied, whatever else the
+ * caller's object carries.
+ */
+export function traceAttemptFailure(
+  trace: FlowTrace | undefined,
+  step: TraceStep,
+  failure: {
+    readonly attempt: number;
+    readonly kind: string;
+    readonly issues?: readonly { readonly code: string; readonly path: readonly (string | number)[] }[];
+  },
+): void {
+  if (trace?.attemptFailures === undefined) return;
+  trace.attemptFailures.push({
+    step,
+    attempt: failure.attempt,
+    kind: failure.kind,
+    ...(failure.issues !== undefined &&
+      failure.issues.length > 0 && {
+        issues: failure.issues.map((i) => ({ code: i.code, path: [...i.path] })),
+      }),
+  });
 }
 
 /** Record why the flow failed. Never throws, whatever was thrown. */

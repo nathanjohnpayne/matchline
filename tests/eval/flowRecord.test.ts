@@ -96,6 +96,49 @@ describe("deriveCall", () => {
   });
 });
 
+describe("deriveCall attempt failures (#656)", () => {
+  const parsing = (attempt: number) => usage({ stage: "requirement_parsing", attempt, promptVersion: "parsing/jd.v2" });
+  const reported = [
+    { step: "requirement_parsing", attempt: 0, kind: "schema_error", issues: [{ code: "invalid_value", path: ["requirements", 2, "category"] }] },
+    { step: "requirement_parsing", attempt: 1, kind: "no_tool_use" },
+  ] as const;
+
+  it("adds the reported kind and issues to the live call of the same step and attempt", () => {
+    expect(deriveCall({ step: "requirement_parsing", replayed: false, usage: parsing(0) }, undefined, undefined, reported)).toMatchObject({
+      failureKind: "schema_error",
+      issues: [{ code: "invalid_value", path: ["requirements", 2, "category"] }],
+      retry: false,
+    });
+    const second = deriveCall({ step: "requirement_parsing", replayed: false, usage: parsing(1) }, undefined, undefined, reported);
+    expect(second.failureKind).toBe("no_tool_use");
+    expect(second).not.toHaveProperty("issues");
+  });
+
+  it("leaves a call untagged when the attempt, the step or the replay flag does not match", () => {
+    for (const call of [
+      { step: "requirement_parsing", replayed: false, usage: parsing(2) },
+      { step: "extraction", replayed: false, usage: usage({ attempt: 0 }) },
+      { step: "requirement_parsing", replayed: true, usage: parsing(0) },
+    ] as const) {
+      const rec = deriveCall(call, undefined, undefined, reported);
+      expect(rec).not.toHaveProperty("failureKind");
+      expect(rec).not.toHaveProperty("issues");
+    }
+    expect(deriveCall({ step: "requirement_parsing", replayed: false, usage: parsing(0) }, undefined, undefined)).not.toHaveProperty("failureKind");
+  });
+
+  it("round-trips the tags through a flows.jsonl line", () => {
+    const trace = newFlowTrace();
+    trace.calls.push({ step: "requirement_parsing", replayed: false, usage: parsing(0) });
+    trace.calls.push({ step: "requirement_parsing", replayed: false, usage: parsing(1) });
+    trace.attemptFailures!.push(reported[0]);
+    trace.requirements = [];
+    const [flow] = parseFlowsJsonl(JSON.stringify(buildFlowRecord(CTX, RESULT, trace)), "f.jsonl");
+    expect(flow!.calls.map((c) => c.failureKind ?? null)).toEqual(["schema_error", null]);
+    expect(flow!.calls[0]!.issues).toEqual([{ code: "invalid_value", path: ["requirements", 2, "category"] }]);
+  });
+});
+
 describe("buildFlowRecord", () => {
   it("carries context, every usage field, full Units and Requirements, counts and costs", () => {
     const trace = newFlowTrace();

@@ -65,6 +65,57 @@ export interface JdParsingDeps {
    * done. See the check in the retry loop for why (#436).
    */
   readonly signal?: AbortSignal;
+  /**
+   * Optional per-attempt failure sink (#656). Called once for every
+   * failed attempt, including attempts a later retry recovers from,
+   * with the attempt number, the failure kind and, for a schema error,
+   * each Zod issue's code and path. Never a message, the model's answer
+   * or the JD text. The eval harness passes it so a recovered call's
+   * schema failure is recorded; production passes none, and the request,
+   * retries and result are the same with or without it.
+   */
+  readonly onAttemptFailure?: (failure: JdAttemptFailureNotice) => void;
+}
+
+/** One Zod issue reduced to what classifies it: its code and path. */
+export interface JdAttemptIssue {
+  readonly code: string;
+  readonly path: readonly (string | number)[];
+}
+
+/** What `JdParsingDeps.onAttemptFailure` receives for one failed attempt. */
+export interface JdAttemptFailureNotice {
+  readonly attempt: number;
+  readonly kind: JdParsingAttemptFailure["kind"];
+  /** Present only for a schema error that carried Zod issues. */
+  readonly issues?: readonly JdAttemptIssue[];
+}
+
+/**
+ * Reduce an attempt failure to its notice: attempt, kind and each Zod
+ * issue's `code` and `path`. Messages, `expected`/`received` values and
+ * anything else on an issue are dropped, so the notice never carries
+ * model output. A symbol path segment becomes its string form so the
+ * notice serializes; an issue without a string `code` is skipped. Pure.
+ */
+export function attemptFailureNotice(failure: JdParsingAttemptFailure): JdAttemptFailureNotice {
+  const issues: JdAttemptIssue[] = [];
+  for (const raw of failure.zodIssues ?? []) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { code, path } = raw as { code?: unknown; path?: unknown };
+    if (typeof code !== "string") continue;
+    const segments = Array.isArray(path)
+      ? path.map((seg: unknown) =>
+          typeof seg === "string" || typeof seg === "number" ? seg : String(seg),
+        )
+      : [];
+    issues.push({ code, path: segments });
+  }
+  return {
+    attempt: failure.attempt,
+    kind: failure.kind,
+    ...(issues.length > 0 && { issues }),
+  };
 }
 
 const MAX_ATTEMPTS = 3;
@@ -151,6 +202,18 @@ export async function parseJobRequirements(
   });
 
   const failures: JdParsingAttemptFailure[] = [];
+  // Every failed attempt goes through here, so the optional sink sees
+  // exactly what `failures` holds. A throwing sink is ignored: an eval
+  // hook must never change the parse outcome.
+  const noteFailure = (failure: JdParsingAttemptFailure): void => {
+    failures.push(failure);
+    if (deps.onAttemptFailure === undefined) return;
+    try {
+      deps.onAttemptFailure(attemptFailureNotice(failure));
+    } catch {
+      // Ignored by design; see above.
+    }
+  };
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Checked before EVERY attempt, including the first: the
@@ -189,7 +252,7 @@ export async function parseJobRequirements(
         stream: false,
       }, request.requestOptions);
     } catch (err) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
@@ -244,7 +307,7 @@ export async function parseJobRequirements(
     // `stop_reason: "refusal"`). Resending the same input declines the
     // same way, so stop here instead of spending the retry budget.
     if (response.stop_reason === "refusal") {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "refusal",
         message:
@@ -255,7 +318,7 @@ export async function parseJobRequirements(
     }
 
     if (response.stop_reason === "max_tokens") {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "max_tokens_exceeded",
         message:
@@ -271,7 +334,7 @@ export async function parseJobRequirements(
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
     );
     if (!toolUse) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "no_tool_use",
         message:
@@ -282,7 +345,7 @@ export async function parseJobRequirements(
 
     const parsed = responseSchema.safeParse(toolUse.input);
     if (!parsed.success) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "schema_error",
         message: parsed.error.message,

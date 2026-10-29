@@ -296,10 +296,22 @@ describe("jd.v2 prompt (#656)", () => {
   });
 
   it("sets the granularity: one Unit per ask, never one per listed example", () => {
-    expect(system).toMatch(/Emit one Unit per bullet or sentence that states an ask/);
-    expect(system).toMatch(/Never split a bullet into several Units because it lists several examples, tools, partners, or technologies/);
+    expect(system).toMatch(/Emit one Unit per stated ask: usually one per bullet/);
+    expect(system).toMatch(/a bullet with two sentences that each state their own ask gives one Unit per sentence/);
+    expect(system).toMatch(/Never split a single ask into several Units because it lists several examples, tools, partners, or technologies/);
     expect(system).toMatch(/It becomes its own `must_have: false` Unit when it names a different skill, tool, or domain/);
     expect(system).toMatch(/Prose that only describes the role, the team, or the company is not an ask/);
+  });
+
+  it("says the few-shot is abbreviated by exactly the one responsibility bullet it omits", () => {
+    expect(system).toMatch(/The example below is abbreviated and omits one responsibility bullet; a full answer would include it\./);
+    const input = fences(userFewShot, "")[0] ?? "";
+    const bullets = input.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    const units = (JSON.parse(fences(userFewShot, "json")[0]!) as { requirements: { raw_text: string; extracted_from: string }[] }).requirements;
+    const omitted = bullets.filter((b) => !units.some((u) => u.raw_text === b));
+    expect(omitted).toHaveLength(1);
+    const responsibilities = input.slice(input.indexOf("Responsibilities:"), input.indexOf("Qualifications:"));
+    expect(responsibilities).toContain(omitted[0]!);
   });
 
   it("numbers the hard rules 1 to 9 in order", () => {
