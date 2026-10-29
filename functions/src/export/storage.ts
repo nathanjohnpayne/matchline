@@ -27,7 +27,11 @@
  * "succeed" with a production URL for an object that only exists in
  * the emulator. Under the emulator the URL is the emulator's
  * GCS-style object URL, which serves the bytes without a token. It is
- * produced only when the emulator env is set.
+ * produced only when the emulator env is set AND the process is not a
+ * deployed runtime: a stray emulator host in a deployed function's env
+ * (say, a `functions/.env.<project>` entry) must never turn the download
+ * into an unsigned URL, so that combination throws instead (the callable
+ * maps it to `internal`).
  */
 
 import { getStorage } from "firebase-admin/storage";
@@ -69,7 +73,8 @@ export function defaultExportBucket(name?: string): ExportBucketLike {
 
 /**
  * `applications/{applicationId}/{assetId}.{extension}`. Callers pass
- * ids already validated to be non-empty and free of `/`.
+ * ids already validated against the callable's allow-list
+ * (`[A-Za-z0-9_-]{1,128}`), so no `/`, `.` or `..` segment reaches the path.
  */
 export function exportObjectPath(applicationId: string, assetId: string, extension: string): string {
   return `applications/${applicationId}/${assetId}.${extension}`;
@@ -105,6 +110,31 @@ export function storageEmulatorHost(env: Readonly<Record<string, string | undefi
   return null;
 }
 
+/**
+ * Thrown when a Storage emulator host is set inside what looks like a
+ * deployed Cloud Functions / Cloud Run runtime.
+ */
+export class StorageEmulatorInDeployedRuntime extends Error {
+  constructor() {
+    super(
+      "A Storage emulator host is set in a deployed runtime; refusing to return an unsigned download URL.",
+    );
+    this.name = "StorageEmulatorInDeployedRuntime";
+  }
+}
+
+/**
+ * True when the process runs on deployed Cloud Functions / Cloud Run and
+ * not under the Firebase emulator suite. The Functions emulator sets
+ * `FUNCTIONS_EMULATOR=true` (and may also set the Cloud Run markers);
+ * a deployed runtime sets `K_SERVICE`, `K_REVISION` or `FUNCTION_TARGET`
+ * without it. A test or script process sets none of them.
+ */
+export function isDeployedRuntime(env: Readonly<Record<string, string | undefined>>): boolean {
+  if (env.FUNCTIONS_EMULATOR === "true") return false;
+  return [env.K_SERVICE, env.K_REVISION, env.FUNCTION_TARGET].some((v) => (v?.trim() ?? "") !== "");
+}
+
 export interface DownloadUrlInput {
   readonly file: ExportFileLike;
   readonly bucketName: string;
@@ -118,7 +148,7 @@ export interface DownloadUrlInput {
 export interface DownloadUrl {
   readonly url: string;
   readonly expiresAt: string;
-  /** `signed` in production; `emulator` only when the emulator env is set. */
+  /** `signed` in production; `emulator` only when the emulator env is set outside a deployed runtime. */
   readonly kind: "signed" | "emulator";
 }
 
@@ -128,6 +158,7 @@ export async function downloadUrl(input: DownloadUrlInput): Promise<DownloadUrl>
   const expiresAt = new Date(expires).toISOString();
   const emulatorHost = storageEmulatorHost(input.env);
   if (emulatorHost !== null) {
+    if (isDeployedRuntime(input.env)) throw new StorageEmulatorInDeployedRuntime();
     const objectPath = input.path.split("/").map(encodeURIComponent).join("/");
     return {
       url: `http://${emulatorHost}/${encodeURIComponent(input.bucketName)}/${objectPath}`,

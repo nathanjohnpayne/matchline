@@ -284,11 +284,21 @@ function validateId(name: string, value: unknown): string {
     );
   }
   const trimmed = value.trim();
-  if (trimmed.includes("/")) {
-    throw new HttpsError("invalid-argument", `exportAsset.${name} must not contain "/".`);
+  // Allow-list, not deny-list: the id reaches a Firestore document path, the
+  // attestation id and the Storage object name. Firestore auto-ids and the
+  // generated asset ids (UUIDs) fit this shape; ".", "..", "\\", "%2F", "#",
+  // "?" and control characters do not.
+  if (!SAFE_ID.test(trimmed)) {
+    throw new HttpsError(
+      "invalid-argument",
+      `exportAsset.${name} must be 1-128 characters of letters, digits, "_" or "-".`,
+    );
   }
   return trimmed;
 }
+
+/** The id shape exportAsset accepts before any read. */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 // -- Default Firestore implementations --------------------------------------
 

@@ -163,7 +163,8 @@ const emulatorBase = (): string => `http://${process.env.FIREBASE_STORAGE_EMULAT
 /** Object names under a prefix, via the emulator's JSON API. */
 async function listObjects(prefix: string): Promise<string[]> {
   const res = await fetch(`${emulatorBase()}/storage/v1/b/${BUCKET}/o?prefix=${encodeURIComponent(prefix)}`);
-  if (!res.ok) return [];
+  // A failed list must fail the test: an empty result has to mean "no object", not "the list broke".
+  if (!res.ok) throw new Error(`Storage emulator list failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { items?: { name: string }[] };
   return (body.items ?? []).map((i) => i.name).sort();
 }
@@ -223,5 +224,6 @@ describe("exportAsset against the emulators", () => {
       exportAssetHandler(request({ applicationId: APP_ID, assetId: "asset-2", format: "txt" }), deps),
     ).rejects.toMatchObject({ code: "failed-precondition", details: { reason: "no-attestation" } });
     expect(await listObjects(`applications/${APP_ID}/asset-2`)).toEqual([]);
+    expect(await objectMetadata(`applications/${APP_ID}/asset-2.txt`)).toBeNull();
   });
 });

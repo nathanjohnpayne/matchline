@@ -244,6 +244,14 @@ describe("exportAssetHandler", () => {
       ["blank assetId", { applicationId: APP_ID, assetId: "  ", format: "txt" }],
       ["applicationId with a slash", { applicationId: "a/b", assetId: ASSET_ID, format: "txt" }],
       ["assetId with a slash", { applicationId: APP_ID, assetId: "../x", format: "txt" }],
+      ["assetId of ..", { applicationId: APP_ID, assetId: "..", format: "txt" }],
+      ["assetId of .", { applicationId: APP_ID, assetId: ".", format: "txt" }],
+      ["applicationId of ..", { applicationId: "..", assetId: ASSET_ID, format: "txt" }],
+      ["assetId with a backslash", { applicationId: APP_ID, assetId: "a\\b", format: "txt" }],
+      ["assetId with a control character", { applicationId: APP_ID, assetId: "a\u0007b", format: "txt" }],
+      ["assetId with an encoded slash", { applicationId: APP_ID, assetId: "a%2Fb", format: "txt" }],
+      ["assetId with # and ?", { applicationId: APP_ID, assetId: "a#b?c", format: "txt" }],
+      ["assetId over 128 characters", { applicationId: APP_ID, assetId: "a".repeat(129), format: "txt" }],
     ])("rejects %s with invalid-argument before any read", async (_label, data) => {
       const h = harness();
       const err = await callExpectingError(data as ExportAssetData | undefined, h);
@@ -434,6 +442,15 @@ describe("exportAssetHandler", () => {
       expect(out.url).toBe("http://127.0.0.1:9199/test-bucket/applications/app-1/asset-1.txt");
       expect(h.getSignedUrl).not.toHaveBeenCalled();
       expect(h.save).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses with internal, and returns no URL, when an emulator host leaks into a deployed runtime", async () => {
+      const h = harness({ env: { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199", K_SERVICE: "exportasset" } });
+      const err = await callExpectingError(VALID, h);
+      expect(err.code).toBe("internal");
+      expect(err.message).not.toMatch(/127\.0\.0\.1|http:/);
+      expect(h.getSignedUrl).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalled();
     });
 
     it("maps a Storage failure to internal without returning a URL", async () => {

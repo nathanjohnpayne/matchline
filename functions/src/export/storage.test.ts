@@ -9,6 +9,8 @@ import {
   downloadUrl,
   EXPORT_URL_TTL_MS,
   exportObjectPath,
+  isDeployedRuntime,
+  StorageEmulatorInDeployedRuntime,
   storageEmulatorHost,
   writeExport,
   type ExportFileLike,
@@ -127,10 +129,53 @@ describe("downloadUrl", () => {
     });
   });
 
+  it.each([
+    ["K_SERVICE", { K_SERVICE: "exportasset" }],
+    ["K_REVISION", { K_REVISION: "exportasset-00001-abc" }],
+    ["FUNCTION_TARGET", { FUNCTION_TARGET: "exportAsset" }],
+  ])("refuses the emulator branch when %s marks a deployed runtime", async (_marker, markers) => {
+    const file = stubFile();
+    await expect(
+      downloadUrl({ ...base, file, env: { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199", ...markers } }),
+    ).rejects.toBeInstanceOf(StorageEmulatorInDeployedRuntime);
+    expect(file.getSignedUrl).not.toHaveBeenCalled();
+    expect(file.makePublic).not.toHaveBeenCalled();
+  });
+
+  it("takes the emulator branch under the Functions emulator even with Cloud Run markers", async () => {
+    const file = stubFile();
+    const out = await downloadUrl({
+      ...base,
+      file,
+      env: { FIREBASE_STORAGE_EMULATOR_HOST: "127.0.0.1:9199", FUNCTIONS_EMULATOR: "true", K_SERVICE: "exportasset" },
+    });
+    expect(out.kind).toBe("emulator");
+    expect(file.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it("still signs in a deployed runtime with no emulator host", async () => {
+    const file = stubFile("https://signed.example/obj?sig=2");
+    const out = await downloadUrl({ ...base, file, env: { K_SERVICE: "exportasset" } });
+    expect(out).toMatchObject({ url: "https://signed.example/obj?sig=2", kind: "signed" });
+  });
+
   it("propagates a signing failure instead of falling back to an unsigned URL", async () => {
     const file = stubFile();
     file.getSignedUrl.mockRejectedValueOnce(new Error("Cannot sign data without `client_email`."));
     await expect(downloadUrl({ ...base, file, env: {} })).rejects.toThrow(/client_email/);
     expect(file.makePublic).not.toHaveBeenCalled();
+  });
+});
+
+describe("isDeployedRuntime", () => {
+  it("is false for a plain process and under the Functions emulator", () => {
+    expect(isDeployedRuntime({})).toBe(false);
+    expect(isDeployedRuntime({ FUNCTIONS_EMULATOR: "true", K_SERVICE: "x", FUNCTION_TARGET: "y" })).toBe(false);
+    expect(isDeployedRuntime({ K_SERVICE: "  " })).toBe(false);
+  });
+
+  it("is true when a Cloud Run / Functions marker is set without the emulator flag", () => {
+    expect(isDeployedRuntime({ K_SERVICE: "exportasset" })).toBe(true);
+    expect(isDeployedRuntime({ FUNCTION_TARGET: "exportAsset", FUNCTIONS_EMULATOR: "false" })).toBe(true);
   });
 });

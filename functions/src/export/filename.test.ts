@@ -52,6 +52,15 @@ describe("exportFilename", () => {
   });
 });
 
+describe("exportFilename with bidi characters", () => {
+  it("a company with U+202E yields a name without it, keeping the em dash", () => {
+    const name = exportFilename({ company: "Evil\u202Ecorp", title: "Senior PM", extension: "txt" });
+    expect(name).toBe(`Evilcorp ${EM_DASH} Senior PM ${EM_DASH} Resume.txt`);
+    expect(name).not.toContain("\u202E");
+    expect(contentDisposition(name)).not.toMatch(/%E2%80%AE/i);
+  });
+});
+
 describe("sanitizeFilenamePart", () => {
   it("replaces path and reserved characters with spaces and collapses whitespace", () => {
     expect(sanitizeFilenamePart('a/b\\c:d*e?f"g<h>i|j')).toBe("a b c d e f g h i j");
@@ -60,6 +69,18 @@ describe("sanitizeFilenamePart", () => {
 
   it("drops control characters", () => {
     expect(sanitizeFilenamePart("Ac\u0000me\u0007\u009f")).toBe("Acme");
+  });
+
+  it("drops bidi overrides, isolates, marks and zero-width characters", () => {
+    expect(sanitizeFilenamePart("Acme\u202Etxt.exe")).toBe("Acmetxt.exe");
+    for (const ch of ["\u061C", "\u200B", "\u200E", "\u200F", "\u202A", "\u202B", "\u202C", "\u202D", "\u2060", "\u2066", "\u2067", "\u2068", "\u2069", "\uFEFF"]) {
+      expect(sanitizeFilenamePart(`Ac${ch}me`)).toBe("Acme");
+    }
+  });
+
+  it("keeps ZWNJ and ZWJ, which scripts and emoji need", () => {
+    expect(sanitizeFilenamePart("\u0645\u06CC\u200C\u0634\u0648\u062F")).toBe("\u0645\u06CC\u200C\u0634\u0648\u062F");
+    expect(sanitizeFilenamePart("Team \u{1F469}\u200D\u{1F4BB}")).toBe("Team \u{1F469}\u200D\u{1F4BB}");
   });
 
   it("strips leading dots", () => {

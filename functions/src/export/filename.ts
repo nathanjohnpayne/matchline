@@ -27,12 +27,21 @@ export const MAX_FILENAME_PART_CODE_POINTS = 80;
 // C0 controls, DEL and C1 controls.
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
+// Bidi embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069),
+// direction marks (U+200E, U+200F, U+061C), zero-width space and word
+// joiner (U+200B, U+2060) and the BOM (U+FEFF). A U+202E in a Company name
+// would make "...Resume.txt" display reversed in Finder or Explorer, so
+// the name a third party sees could hide its real extension. ZWNJ and ZWJ
+// (U+200C, U+200D) are kept: Persian, Indic and emoji text needs them to
+// render as typed, and they cannot reorder the name.
+const INVISIBLE_FORMAT_CHARS = /[\u061c\u200b\u200e\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
 // Characters that are path separators or reserved on common file systems.
 const RESERVED_CHARS = /[/\\:*?"<>|]/g;
 
 /**
  * Make one name part safe to use in a filename on any common OS:
- * controls dropped, reserved characters turned into spaces, whitespace
+ * controls and bidi/zero-width format characters dropped, reserved
+ * characters turned into spaces, whitespace
  * collapsed, leading dots stripped (no hidden or relative names), and
  * the part cut to {@link MAX_FILENAME_PART_CODE_POINTS} code points.
  * Everything else, including non-ASCII letters and dashes, is kept as
@@ -42,6 +51,7 @@ export function sanitizeFilenamePart(value: string | null | undefined): string {
   if (typeof value !== "string") return "";
   const cleaned = value
     .replace(CONTROL_CHARS, "")
+    .replace(INVISIBLE_FORMAT_CHARS, "")
     .replace(RESERVED_CHARS, " ")
     .replace(/\s+/gu, " ")
     .trim()
