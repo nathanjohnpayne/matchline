@@ -21,6 +21,15 @@
  * over-claim, pointed the other way, that this whole panel
  * exists to prevent.
  *
+ * **A third kind: could not be evaluated (#602).** A must-have
+ * that names nothing the matcher could compare — no recognized
+ * skill, tool, domain or scope, and no seniority level it could
+ * check against any Unit — is neither met nor unmet: nothing was
+ * tested. It gets its own neutral block, so the user is not told
+ * they lack experience on a comparison that never happened (owner
+ * decision of 2026-10-21 on #433). It is still an uncovered
+ * must-have, so it still withholds the affirmative empty state.
+ *
  * Empty state: when there ARE no gaps (every must-have
  * has a qualifying match), render a brief affirmative
  * line so the panel doesn't visually disappear and confuse
@@ -202,6 +211,7 @@ export default function GapsView({
 }: GapsViewProps): ReactElement {
   const unmet = gaps.filter((g) => g.status === "unmet");
   const unverifiable = gaps.filter((g) => g.status === "unverifiable");
+  const notEvaluated = gaps.filter((g) => g.status === "not_evaluated");
 
   if (gaps.length === 0) {
     return (
@@ -229,12 +239,11 @@ export default function GapsView({
   // exact conflation this change exists to undo. Codex P2 on PR
   // #446: the visible heading was right and the label was not, so
   // the over-claim was audible only to assistive technology.
-  const label =
-    unmet.length > 0 && unverifiable.length > 0
-      ? "Unmet and unverified must-have requirements"
-      : unmet.length > 0
-        ? "Unmet must-have requirements"
-        : "Unverified must-have requirements";
+  const label = panelLabel(
+    unmet.length > 0,
+    unverifiable.length > 0,
+    notEvaluated.length > 0,
+  );
 
   return (
     <section
@@ -286,8 +295,59 @@ export default function GapsView({
         </section>
       )}
 
+      {notEvaluated.length > 0 && (
+        <section
+          className="space-y-2 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 p-3"
+          data-testid="gaps-not-evaluated"
+        >
+          <header>
+            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              Not evaluated · {notEvaluated.length} must-have requirement
+              {notEvaluated.length === 1 ? "" : "s"}
+            </h3>
+            <p className="text-xs text-zinc-700 dark:text-zinc-300 mt-0.5">
+              We couldn&apos;t evaluate{" "}
+              {notEvaluated.length === 1 ? "this requirement" : "these requirements"}.
+              Nothing in {notEvaluated.length === 1 ? "it" : "them"} could be
+              compared against your Experience Units: no skill, tool, domain or
+              scope the matcher recognizes, and no seniority level it could
+              check. {notEvaluated.length === 1 ? "It is" : "They are"} not
+              counted as covered, and this is not a finding about your
+              experience.
+            </p>
+          </header>
+          <ul className="space-y-2">
+            {notEvaluated.map((g) => (
+              <RequirementRow key={g.requirement.id} req={g.requirement} />
+            ))}
+          </ul>
+        </section>
+      )}
+
       <EvidenceNotice status={evidenceStatus} />
       <StrandedNotice count={strandedMatches} />
     </section>
   );
+}
+
+/**
+ * Accessible name naming exactly the kinds present. With one or
+ * two kinds it reads as before #602 ("Unmet must-have
+ * requirements", "Unmet and unverified must-have requirements").
+ */
+function panelLabel(
+  hasUnmet: boolean,
+  hasUnverifiable: boolean,
+  hasNotEvaluated: boolean,
+): string {
+  const kinds = [
+    hasUnmet ? "unmet" : null,
+    hasUnverifiable ? "unverified" : null,
+    hasNotEvaluated ? "not evaluated" : null,
+  ].filter((k): k is string => k !== null);
+  const joined =
+    kinds.length <= 1
+      ? (kinds[0] ?? "")
+      : `${kinds.slice(0, -1).join(", ")} and ${kinds[kinds.length - 1]}`;
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)} must-have requirements`;
 }

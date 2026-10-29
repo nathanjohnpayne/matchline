@@ -362,6 +362,7 @@ Acceptance criteria:
   plausible-but-unfounded generated claims downstream. Such matches
   still rank and still render — see the non-goals below — they simply
   cannot silently satisfy a hard requirement.
+- An uncovered must-have Requirement on which no structural axis was applicable for any of its matches is reported as **could not be evaluated**, distinct from **unmet** (evaluated, and no Unit meets it) and from **unverifiable** (below). Telling the user nothing qualifies would be a claim about their experience that was never tested. The decision reads the persisted `component_applicability`; a Requirement with any match lacking it keeps its prior classification, and one with no matches at all is unmet. Rejected matches count toward whether the Requirement was evaluated, never toward coverage. It is still uncovered, so it still withholds the affirmative "every must-have is covered" statement.
 - Structural evidence for a record that lacks it is **derived on
   read**, never backfilled by a write. The derivation recomputes the
   five structural axes from the ID-linked Unit and Requirement, which

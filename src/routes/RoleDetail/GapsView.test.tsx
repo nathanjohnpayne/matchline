@@ -255,3 +255,75 @@ describe("GapsView: stranded matches (#446)", () => {
     expect(html).toContain("1 match point");
   });
 });
+
+describe("GapsView: could not be evaluated (#602)", () => {
+  const notEvaluated: Gap = {
+    requirement: makeReq("r-blank"),
+    status: "not_evaluated",
+    reasons: [],
+  };
+
+  it("renders a not-evaluated requirement in its own block with plain-language copy, not as unmet", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[notEvaluated]} />);
+    expect(html).toContain('data-testid="gaps-not-evaluated"');
+    expect(html).toContain("We couldn&#x27;t evaluate this requirement");
+    expect(html).toContain("Not evaluated · 1 must-have requirement");
+    expect(html).toContain("r-blank normalized");
+    expect(html).toContain("not counted as covered");
+    expect(html).not.toContain("unmet must-have requirement");
+    expect(html).not.toContain("No Experience Unit qualifies");
+    expect(html).not.toContain("gaps-unverifiable");
+  });
+
+  it("an evaluated, unmet requirement still renders as an unmet gap alongside it, counted separately", () => {
+    const html = renderToStaticMarkup(
+      <GapsView gaps={[unmet, notEvaluated, { ...notEvaluated, requirement: makeReq("r-blank-2") }]} />,
+    );
+    expect(html).toContain("1 unmet must-have requirement");
+    expect(html).toContain("Not evaluated · 2 must-have requirements");
+    expect(html).toContain("We couldn&#x27;t evaluate these requirements");
+    // The unmet requirement is not inside the not-evaluated block.
+    const block = html.slice(html.indexOf('data-testid="gaps-not-evaluated"'));
+    expect(block).not.toContain("r-unmet normalized");
+    expect(block).toContain("r-blank-2 normalized");
+  });
+
+  it("does not show the affirmative empty state when only not-evaluated requirements remain", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[notEvaluated]} />);
+    expect(html).not.toContain("gaps-view-empty");
+    expect(html).not.toContain("Every must-have requirement has a qualifying match");
+  });
+
+  it("names the kinds present in the accessible label", () => {
+    expect(renderToStaticMarkup(<GapsView gaps={[notEvaluated]} />)).toContain(
+      'aria-label="Not evaluated must-have requirements"',
+    );
+    expect(
+      renderToStaticMarkup(<GapsView gaps={[unmet, notEvaluated]} />),
+    ).toContain('aria-label="Unmet and not evaluated must-have requirements"');
+    expect(
+      renderToStaticMarkup(
+        <GapsView gaps={[unmet, unverifiable, notEvaluated]} />,
+      ),
+    ).toContain(
+      'aria-label="Unmet, unverified and not evaluated must-have requirements"',
+    );
+  });
+
+  it("styles the block for both light and dark themes", () => {
+    const html = renderToStaticMarkup(<GapsView gaps={[notEvaluated]} />);
+    const start = html.indexOf('data-testid="gaps-not-evaluated"');
+    const tagStart = html.lastIndexOf("<section", start);
+    const tag = html.slice(tagStart, html.indexOf(">", start));
+    for (const pair of [
+      ["border-zinc-200", "dark:border-zinc-700"],
+      ["bg-zinc-50", "dark:bg-zinc-900"],
+    ]) {
+      expect(tag).toContain(pair[0]);
+      expect(tag).toContain(pair[1]);
+    }
+    const block = html.slice(start);
+    expect(block).toContain("text-zinc-900 dark:text-zinc-100");
+    expect(block).toContain("text-zinc-700 dark:text-zinc-300");
+  });
+});
