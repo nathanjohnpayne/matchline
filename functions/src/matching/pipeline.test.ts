@@ -7,6 +7,7 @@ import type {
 } from "../types/capability.ts";
 
 import {
+  MATCH_SCHEMA_VERSION,
   matchDocId,
   runMatchingPipeline,
   type RunMatchingContext,
@@ -85,6 +86,15 @@ function makeScoreResult(final_score: number): ScoreResult {
       seniority_alignment: 0,
       scope_alignment: 0,
       recency: 0,
+    },
+    effective_weights: {
+      semantic_similarity: 0.3,
+      skill_overlap: 0.2,
+      domain_overlap: 0.15,
+      tool_overlap: 0.1,
+      seniority_alignment: 0.1,
+      scope_alignment: 0.1,
+      recency: 0.05,
     },
     rule_score: final_score,
     semantic_score: 1,
@@ -548,5 +558,71 @@ describe("runMatchingPipeline", () => {
     expect(order.indexOf("reqs-start")).toBeLessThan(
       order.indexOf("units-end"),
     );
+  });
+});
+
+describe("runMatchingPipeline: renormalized scoring (#601)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("persists the scorer's effective_weights and stamps schema_version 2", async () => {
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(
+      CTX,
+      {
+        listUnits: async () => [
+          makeUnit({ id: "u1", skills: ["product strategy"] }),
+        ],
+        listRequirements: async () => [
+          makeRequirement({ id: "r1", keywords: ["product strategy"] }),
+        ],
+        persistBatch,
+      },
+      { asOf },
+    );
+    expect(MATCH_SCHEMA_VERSION).toBe(2);
+    const m = result[0]!;
+    expect(m.schema_version).toBe(2);
+    expect(m.effective_weights).toBeDefined();
+    const ew = m.effective_weights!;
+    const sum = Object.values(ew).reduce((a, b) => a + b, 0);
+    expect(sum).toBeCloseTo(1, 9);
+    let weighted = 0;
+    for (const k of Object.keys(ew) as (keyof typeof ew)[]) {
+      weighted += ew[k] * m.components![k];
+    }
+    expect(Math.abs(weighted - m.rule_score)).toBeLessThan(1e-9);
+    // The persisted copy is a plain object, not the scorer's
+    // frozen instance (Firestore serialization takes a copy).
+    expect(Object.isFrozen(ew)).toBe(false);
+  });
+
+  it("a pair with no applicable structural axis is still persisted, scores 0, and sorts last", async () => {
+    const persistBatch = vi.fn(async () => {});
+    const result = await runMatchingPipeline(
+      CTX,
+      {
+        listUnits: async () => [
+          makeUnit({ id: "u1", skills: ["product strategy"] }),
+        ],
+        listRequirements: async () => [
+          makeRequirement({ id: "r-credential", category: "credential" }),
+          makeRequirement({ id: "r-skill", keywords: ["product strategy"] }),
+        ],
+        persistBatch,
+      },
+      { asOf },
+    );
+    expect(result).toHaveLength(2);
+    const last = result[1]!;
+    expect(last.job_requirement_unit_id).toBe("r-credential");
+    expect(last.rule_score).toBe(0);
+    expect(last.final_score).toBe(0);
+    expect(Object.values(last.effective_weights!).every((w) => w === 0)).toBe(
+      true,
+    );
+    // Still a full row: semantics, applicability and a rationale.
+    expect(last.semantic_score).toBeGreaterThan(0);
+    expect(last.component_applicability).toBeDefined();
+    expect(last.rationale.length).toBeGreaterThan(0);
   });
 });

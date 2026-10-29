@@ -200,6 +200,27 @@ describe("upsertMatch — contradictory-shape guard (cursor #133 r4)", () => {
     expect(setDoc).not.toHaveBeenCalled();
   });
 
+  it("REJECTS a client-supplied effective_weights (#601) before writing", async () => {
+    // `effective_weights` is the pipeline's record of how
+    // `rule_score` was computed; a client-set copy would let a
+    // forged row pass as renormalized.
+    await expect(
+      upsertMatch({
+        ...makeMatchInput(),
+        effective_weights: {
+          semantic_similarity: 1,
+          skill_overlap: 0,
+          domain_overlap: 0,
+          tool_overlap: 0,
+          seniority_alignment: 0,
+          scope_alignment: 0,
+          recency: 0,
+        },
+      }),
+    ).rejects.toThrow(/effective_weights/);
+    expect(setDoc).not.toHaveBeenCalled();
+  });
+
   it("ACCEPTS each of the 3 valid flag pairs", async () => {
     for (const [a, r] of [
       [false, false],

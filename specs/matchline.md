@@ -198,7 +198,7 @@ client access to it, and it records an optional camel-case `ownerUid`
 - `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, rejected?, flagged?, reembed_pending?, embedding?, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
 - `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from, embedding? }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, role_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, schema_version?, created_at }`
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, role_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, effective_weights?, rationale, surface_evidence, approved_for_use, user_rejected, schema_version?, created_at }`
   - `components`, `structural_evidence` and `component_applicability`
     are **optional**: records written before those fields existed carry
     none of them, and the coverage gate depends on being able to
@@ -219,6 +219,7 @@ client access to it, and it records an optional camel-case `ownerUid`
     existed but carrying `component_applicability` are also
     trustworthy; that bridge is explicit and ends once every Role has
     been re-matched.
+    Version 2 additionally means `rule_score` was renormalized over the pair's applicable axes and the record carries `effective_weights` (see `## Matching engine`). The rationale floor stays at version 1, which a version-2 record clears.
   - `component_applicability` records, per axis, whether the engine
     actually evaluated it for this pair. A `false` axis means the
     corresponding value in `components` is a no-constraint neutral, and
@@ -226,6 +227,7 @@ client access to it, and it records an optional camel-case `ownerUid`
     renders it as unavailable rather than as a score. When the field is
     absent, readers must assume nothing was measured: pre-existing
     records store the same neutrals without marking them.
+  - `effective_weights` records the weight each component actually carried in this record's `rule_score`: `0` on an axis `component_applicability` marks false, and the applicable axes' relative weights scaled to sum to 1, or all `0` when no structural axis applied. On a record that has it, the weights sum to 0 or 1 and `Σ effective_weights × components = rule_score`. **Its presence is the marker that distinguishes a renormalized record from a legacy fixed-weight one.** It is optional: a record without it was scored with the fixed weights below and is read unchanged; a rerun of matching writes it. Clients cannot write it.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
 
 ### Dossier objects (Target)
@@ -289,18 +291,25 @@ document uses it.
 ## Matching engine
 
 ```
-final_score = confidence_score × (
-  0.30 × semantic_similarity +
-  0.20 × skill_overlap       +
-  0.15 × domain_overlap      +
-  0.10 × tool_overlap        +
-  0.10 × seniority_alignment +
-  0.10 × scope_alignment     +
-  0.05 × recency
-)
+WEIGHTS = {
+  semantic_similarity: 0.30,  skill_overlap:       0.20,
+  domain_overlap:      0.15,  tool_overlap:        0.10,
+  seniority_alignment: 0.10,  scope_alignment:     0.10,
+  recency:             0.05,
+}
+
+applicable(k)        = component_applicability[k] for this pair
+effective_weights[k] = applicable(k) ? WEIGHTS[k] / Σ_{applicable j} WEIGHTS[j] : 0
+                       (all 0 when no structural axis is applicable)
+rule_score           = Σ_k effective_weights[k] × components[k]
+final_score          = confidence_score × rule_score
 ```
 
 Acceptance criteria:
+
+- `rule_score` is computed only over the axes the engine evaluated for the pair (`component_applicability`), with their weights renormalized to sum to 1. An inapplicable axis contributes nothing, so a no-constraint neutral is never paid as score, and two Requirements that differ only in how many axes they constrain produce comparable scores for the same Unit-side match.
+- A pair on which none of the five structural axes (skill, domain, tool, seniority, scope) is applicable gets `rule_score = 0` and `final_score = 0`. Renormalizing over semantic similarity and recency alone would be a semantics-only score, which is ruled out: such a Requirement is reported as **could not be evaluated** instead (owner decision, 2026-10-21, #433). The match is still persisted with its `semantic_score`, `components` and rationale, and still renders.
+- Records written before renormalization keep the fixed-weight `rule_score` they were written with; they are not migrated (see `effective_weights` above).
 
 - Each component is normalized to `[0, 1]` before weighting.
 - Seniority alignment is a penalty function, not a similarity score:

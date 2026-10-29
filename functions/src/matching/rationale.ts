@@ -157,6 +157,14 @@ export function generateRationale(input: RationaleInput): RationaleResult {
  *
  * `semantic_similarity` is always applicable, so the filter can
  * never empty the candidate set.
+ *
+ * Fixed `WEIGHTS` rather than the pair's `effectiveWeights` (#601)
+ * on purpose: renormalization scales every applicable weight by
+ * the same constant, so the argmax and the tie-break are
+ * identical either way, and this function keeps working for a
+ * pair with no applicable structural axis (all effective weights
+ * 0), where it still names the semantic axis as before. Pinned in
+ * rationale.test.ts.
  */
 function pickDrivingComponent(
   components: ScoreComponents,

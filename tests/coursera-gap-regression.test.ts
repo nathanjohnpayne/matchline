@@ -40,7 +40,10 @@ import {
   requirementAxes,
   score,
 } from "../functions/src/matching/score.js";
-import { computeGaps } from "../src/routes/RoleDetail/computeGaps.ts";
+import {
+  computeGaps,
+  GAP_THRESHOLD,
+} from "../src/routes/RoleDetail/computeGaps.ts";
 import type {
   ExperienceUnit,
   JobRequirementUnit,
@@ -240,20 +243,86 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
     }
   });
 
-  it("does NOT report every must-have as unmet — the #430 failure", () => {
-    // The reported bug in one assertion. Before #435, all five
-    // must-haves were gaps because an unrecognized Requirement side
-    // hard-zeroed skill + domain + tool (0.45 of the weight),
-    // capping final_score below GAP_THRESHOLD for every pair.
-    expect(gapIds.size).toBeLessThan(mustHaves.length);
+  it("does NOT cap every must-have below the threshold — the #430 failure", () => {
+    // The reported bug was structural. Before #435, an
+    // unrecognized Requirement side hard-zeroed skill + domain +
+    // tool (0.45 of the weight), capping final_score below
+    // GAP_THRESHOLD for EVERY pair whatever the Unit brought.
+    //
+    // Since #601 the weights are renormalized over the applicable
+    // axes, so no axis the Requirement leaves unconstrained can
+    // cap the score: a Unit matching every constrained axis
+    // reaches the confidence ceiling. This asserted
+    // `gapIds.size < mustHaves.length` before #601; that held only
+    // because unconstrained axes paid neutral credit (see the
+    // calibration pin below), so it is restated as the structural
+    // property #430 was actually about.
+    for (const spec of mustHaves) {
+      const req = requirements.find((r) => r.id === spec.id)!;
+      const perfect = score(
+        {
+          ...units[0]!,
+          skills: [...req.keywords],
+          domains: [...req.domains],
+          embedding: [1, 0],
+        },
+        { ...req, embedding: [1, 0] },
+        { asOf: AS_OF },
+      );
+      expect(perfect.rule_score, spec.id).toBeCloseTo(1, 9);
+      expect(perfect.final_score, spec.id).toBeGreaterThanOrEqual(
+        GAP_THRESHOLD,
+      );
+    }
   });
 
   it("grounds zero-to-launch, which the corpus genuinely evidences", () => {
     // Four Units carry `0-to-1 product` / `0-to-1 product launch`,
     // and the JD's "zero to launch" canonicalizes onto the same
-    // entry — real shared vocabulary, not neutral credit. If this
-    // regresses to a gap the engine has drifted back toward #430.
-    expect(gapIds.has("r-zero-to-launch")).toBe(false);
+    // entry — real shared vocabulary, not neutral credit. The
+    // evidenced Units must outrank every unevidenced one on this
+    // Requirement. If they don't, the engine has drifted back
+    // toward #430.
+    const forReq = matches
+      .filter((m) => m.job_requirement_unit_id === "r-zero-to-launch")
+      .sort((a, b) => b.final_score - a.final_score);
+    const evidenced = forReq.filter((m) => m.structural_evidence === true);
+    expect(evidenced.length).toBeGreaterThanOrEqual(4);
+    const lowestEvidenced = Math.min(...evidenced.map((m) => m.final_score));
+    const highestUnevidenced = Math.max(
+      ...forReq
+        .filter((m) => m.structural_evidence !== true)
+        .map((m) => m.final_score),
+    );
+    expect(lowestEvidenced).toBeGreaterThan(highestUnevidenced);
+  });
+
+  it("calibration pin (#601): at the 0.4 threshold, zero-to-launch's evidence no longer clears", () => {
+    // Honest pin of a known shift, owned by #39 / #177 (score
+    // calibration), not by matching. Before #601 the best
+    // evidenced pair scored 0.85 × 0.55 ≈ 0.47: semantic 0.45,
+    // skill 1/3, recency 1, PLUS 0.325 of neutral credit from the
+    // unconstrained domain, tool, seniority and scope axes. With
+    // that credit removed it scores 0.85 × (0.30·0.45 + 0.20·⅓ +
+    // 0.05·1) / 0.55 ≈ 0.389, just under GAP_THRESHOLD, so every
+    // must-have on this fixture now reads as a gap.
+    //
+    // The fix is to recalibrate the threshold on the renormalized
+    // scale, not to re-inflate the score. If this starts failing
+    // because the threshold moved, update it with the new
+    // calibration; if it fails because the score rose without new
+    // evidence in the corpus, the score is being inflated again.
+    const best = Math.max(
+      ...matches
+        .filter((m) => m.job_requirement_unit_id === "r-zero-to-launch")
+        .map((m) => m.final_score),
+    );
+    expect(best).toBeCloseTo(
+      CONFIDENCE * (0.3 * SEMANTIC + 0.2 / 3 + 0.05) / 0.55,
+      9,
+    );
+    expect(best).toBeLessThan(GAP_THRESHOLD);
+    expect(gapIds.has("r-zero-to-launch")).toBe(true);
   });
 
   it("reports the PM-craft Requirements as gaps — an extraction finding, not a matching one", () => {
@@ -339,6 +408,16 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
     // still be a gap. (A Requirement can hold BOTH kinds of
     // match — zero-to-launch does — and is legitimately covered
     // by the evidenced ones.)
+    //
+    // Since #601 the score itself no longer pays that credit: on
+    // this fixture no unevidenced must-have match reaches the
+    // threshold at all, which is the stronger form of the same
+    // claim. The gate is still pinned on a synthetic pair in
+    // functions/src/matching/score.test.ts, where semantics alone
+    // clear 0.4. Before #601 this test asserted that at least one
+    // Requirement exercised the gate here; that path no longer
+    // exists on this fixture, so the vacuity guard below now
+    // asserts its absence instead.
     let gatedSomething = false;
     for (const spec of mustHaves) {
       const forReq = matches.filter(
@@ -356,9 +435,18 @@ describe("Coursera Staff PM × nathan-2026 (regression for #430)", () => {
         expect(gapIds.has(spec.id)).toBe(true);
       }
     }
-    // And at least one Requirement actually exercised that path,
-    // so this test can't pass vacuously.
-    expect(gatedSomething).toBe(true);
+    // Neutral credit can no longer lift an unevidenced match over
+    // the threshold on this fixture. Not vacuous: the loop above
+    // ran over every must-have, and the assertion below fails if
+    // any unevidenced match clears.
+    expect(gatedSomething).toBe(false);
+    const unevidencedClearing = matches.filter(
+      (m) =>
+        mustHaves.some((s) => s.id === m.job_requirement_unit_id) &&
+        m.structural_evidence !== true &&
+        m.final_score >= GAP_THRESHOLD,
+    );
+    expect(unevidencedClearing).toEqual([]);
   });
 
   it("puts both sides in a shared canonical space — real skill overlap, not neutral credit", () => {

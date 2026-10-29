@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { generateRationale, type RationaleInput } from "./rationale.js";
-import type { ScoreComponents } from "./score.js";
+import {
+  effectiveAxes,
+  effectiveWeights,
+  hasApplicableStructuralAxis,
+  WEIGHTS,
+  type ScoreComponents,
+} from "./score.js";
 
 /**
  * Tests for the deterministic rationale generator (#100).
@@ -1124,5 +1130,111 @@ describe("recencyTemplate: partial date ranges (CodeRabbit on #435)", () => {
       }),
     );
     expect(r.surface_evidence).toBe("2021-01-01 (ongoing)");
+  });
+});
+
+describe("generateRationale: renormalized weights do not move the driving axis (#601)", () => {
+  // Renormalization (#601) scales every applicable weight by the
+  // same constant, so the argmax of weight × component — and its
+  // tie-break — is the same under `effectiveWeights` as under the
+  // fixed WEIGHTS that `pickDrivingComponent` reads.
+  const ORDER = [
+    "semantic_similarity",
+    "skill_overlap",
+    "domain_overlap",
+    "tool_overlap",
+    "seniority_alignment",
+    "scope_alignment",
+    "recency",
+  ] as const;
+
+  function argmaxEffective(input: RationaleInput): keyof ScoreComponents {
+    const axes = effectiveAxes(input.unit, input.requirement);
+    // A pair with no applicable structural axis has all-zero
+    // effective weights; compare on the fixed weights' ratios
+    // among the still-applicable axes, which is what the
+    // generator does.
+    const ew = hasApplicableStructuralAxis(axes)
+      ? effectiveWeights(axes)
+      : WEIGHTS;
+    let best: keyof ScoreComponents = ORDER[0];
+    let bestValue = ew[best] * input.components[best];
+    for (const k of ORDER) {
+      if (!axes[k]) continue;
+      const v = ew[k] * input.components[k];
+      if (v > bestValue) {
+        best = k;
+        bestValue = v;
+      }
+    }
+    return best;
+  }
+
+  const requirement = {
+    normalized_requirement: "Senior PM, streaming, jira",
+    category: "skill" as const,
+    keywords: ["product strategy"],
+    tools: ["jira"],
+    domains: ["streaming video"],
+    seniority_level: "senior" as const,
+  };
+  const unit = {
+    normalized_summary: "Led streaming PM",
+    skills: ["product strategy"],
+    tools: ["jira"],
+    domains: ["streaming video"],
+    seniority_signals: ["led"],
+    scope_signals: [],
+    date_range: { start: "2021-01-01" },
+  };
+
+  const cases: Partial<ScoreComponents>[] = [
+    { semantic_similarity: 0.4, skill_overlap: 0.7 },
+    { semantic_similarity: 0.9, skill_overlap: 0.2, tool_overlap: 1 },
+    { domain_overlap: 1, tool_overlap: 1, seniority_alignment: 1 },
+    // Exact tie on weighted contribution: 0.30·0.5 = 0.15·1.0.
+    { semantic_similarity: 0.5, domain_overlap: 1 },
+    { recency: 1, seniority_alignment: 0.5 },
+    // scope is inapplicable here (non-scope category), so a high
+    // placeholder must not drive under either weighting.
+    { scope_alignment: 1, semantic_similarity: 0.1 },
+  ];
+
+  for (const c of cases) {
+    it(`same driving axis for ${JSON.stringify(c)}`, () => {
+      const input = makeInput({
+        components: makeComponents(c),
+        unit,
+        requirement,
+      });
+      expect(generateRationale(input).driving_component).toBe(
+        argmaxEffective(input),
+      );
+    });
+  }
+
+  it("a pair with no applicable structural axis still narrates on semantics", () => {
+    const input = makeInput({
+      components: makeComponents({
+        semantic_similarity: 0.8,
+        skill_overlap: 0.5,
+        tool_overlap: 0.5,
+        domain_overlap: 0.5,
+        seniority_alignment: 1,
+        scope_alignment: 1,
+        recency: 1,
+      }),
+      unit,
+      requirement: {
+        normalized_requirement: "BS in CS",
+        category: "credential",
+        keywords: [],
+        tools: [],
+        domains: [],
+      },
+    });
+    expect(generateRationale(input).driving_component).toBe(
+      "semantic_similarity",
+    );
   });
 });
