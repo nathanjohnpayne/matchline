@@ -62,6 +62,8 @@ export interface ImportResult {
   written: number;
   unchanged: number;
   unknown: string[];
+  /** Whether the corrections scaffold's notes changed. */
+  scaffoldChanged: boolean;
 }
 
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -85,11 +87,21 @@ function subsets<T>(xs: T[]): T[][] {
   return out;
 }
 
-/** ` (<id prefix>)` of the scaffold item a ref names: A<n> is units[n-1], R<n> requirements[n-1]. */
-function scaffoldId(scaffold: Scaffold | null, ref: string): string {
-  const list = scaffold?.[ref.startsWith("A") ? "units" : "requirements"];
-  const entry = Array.isArray(list) ? (list[Number(ref.slice(1)) - 1] as { id?: unknown } | undefined) : undefined;
-  return typeof entry?.id === "string" ? ` (${entry.id.slice(0, 8)})` : "";
+/**
+ * ` (<id>)` for a scaffold note line, read from the sheet row itself: the
+ * extraction and unmatched cells carry it as `A1 (aaaa0001)`. A section-b
+ * requirement row carries none, so its id is taken from the scaffold entry
+ * whose `normalized_requirement` equals the parsed text, or left out.
+ */
+function rowId(section: string, cells: string[], headers: string[], scaffold: Scaffold | null): string {
+  const cell =
+    section === "extraction" ? cells[column(headers, "extracted `raw_text`")] : section === "requirements" ? "" : section === "matches" ? "" : cells[0];
+  const inCell = /^[A-Z]\d+ \(([^)]+)\)/.exec(cell ?? "")?.[1];
+  if (inCell) return ` (${inCell})`;
+  if (section !== "requirements" || !Array.isArray(scaffold?.requirements)) return "";
+  const parsed = cells[column(headers, "parsed `normalized_requirement`")].replace(/^R\d+:\s*/, "");
+  const match = (scaffold.requirements as { id?: unknown; normalized_requirement?: unknown }[]).find((r) => r.normalized_requirement === parsed);
+  return typeof match?.id === "string" ? ` (${match.id.slice(0, 8)})` : "";
 }
 
 /** The packet's item ref (A3, B12, R2) a row is about, if any. */
@@ -168,7 +180,7 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
       for (const item of items) {
         if (item.label === "true") continue;
         const note = noteText(item);
-        scaffoldLines.push(`${ref}${scaffoldId(scaffold, ref)} ${item.type}: ${sheetValue(item.label) || "can't tell"}${note && item.label !== "unsure" ? ` — ${note}` : ""}`);
+        scaffoldLines.push(`${ref}${rowId(row.section, row.cells, row.headers, scaffold)} ${item.type}: ${sheetValue(item.label) || "can't tell"}${note && item.label !== "unsure" ? ` — ${note}` : ""}`);
       }
     }
   }
@@ -183,8 +195,12 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
       if (existing[0] !== block) {
         // A block from this same session is this import's own earlier,
         // partial write; replacing it is not a conflict.
+        // Only a superset counts: an older, smaller download of the same
+        // session, or a hand edit inside the block, would lose lines.
         const sameSession = existing[0].startsWith(`[label-swipe deck=${labels.deck_id} session=${labels.session_id}]`);
-        if (!sameSession && !options.force) conflicts.push("corrections notes");
+        const kept = new Set(block.split("\n"));
+        const superset = existing[0].split("\n").every((line) => kept.has(line));
+        if (!(sameSession && superset) && !options.force) conflicts.push("corrections notes");
         notes = (notes.slice(0, existing.index) + block + notes.slice(existing.index + existing[0].length)).trim();
       }
     } else if (block) {
@@ -194,5 +210,5 @@ export function importLabels(sheetText: string, scaffold: Scaffold | null, label
   }
 
   if (conflicts.length) throw new ImportConflictError(conflicts);
-  return { sheet: lines.join("\n"), scaffold: nextScaffold, written, unchanged, unknown };
+  return { sheet: lines.join("\n"), scaffold: nextScaffold, written, unchanged, unknown, scaffoldChanged: (nextScaffold?.notes ?? "") !== (scaffold?.notes ?? "") };
 }

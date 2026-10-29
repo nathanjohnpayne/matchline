@@ -75,11 +75,16 @@ describe("importLabels", () => {
     expect(notes.split("\n")).toEqual([
       "[label-swipe deck=riley-demo-2026__acme-widgets-pm-2026 session=session-a]",
       "A1 (aaaa0001) fact-correct: partial — wrong year",
-      "A2 fact-correct: N — invented metric",
-      "A2 verbatim: N — paraphrased",
+      "A2 (aaaa0002) fact-correct: N — invented metric",
+      "A2 (aaaa0002) verbatim: N — paraphrased",
       "R1 (cccc0001) requirement-equivalent: partial — drops consumer hardware",
       "[/label-swipe]",
     ]);
+  });
+
+  it("names a section-b requirement's id only when the scaffold text matches", () => {
+    const other = { ...scaffold, requirements: [{ id: "zzzz9999", normalized_requirement: "Something else." }] };
+    expect(importLabels(sheet, other, LABELS).scaffold?.notes).toContain("\nR1 requirement-equivalent: partial");
   });
 
   it("is idempotent", () => {
@@ -88,6 +93,8 @@ describe("importLabels", () => {
     expect(twice.sheet).toBe(once.sheet);
     expect(twice.scaffold).toEqual(once.scaffold);
     expect(twice.written).toBe(0);
+    expect(twice.scaffoldChanged).toBe(false);
+    expect(once.scaffoldChanged).toBe(true);
   });
 
   it("refuses to overwrite a filled cell without force, and overwrites with it", () => {
@@ -109,6 +116,8 @@ describe("importLabels", () => {
     const full = importLabels(first.sheet, first.scaffold, LABELS);
     expect(cell(full.sheet, "ext:u_sprocket_api:A", "note")).toBe("fact: invented metric; verbatim: paraphrased");
     expect(full.scaffold?.notes).toBe(importLabels(sheet, scaffold, LABELS).scaffold?.notes);
+    // Re-importing the older, smaller download would drop block lines: a conflict.
+    expect(() => importLabels(full.sheet, full.scaffold, partial)).toThrow(ImportConflictError);
     // A different session's block is still a conflict.
     expect(() => importLabels(first.sheet, first.scaffold, { ...LABELS, session_id: "session-b" })).toThrow(ImportConflictError);
   });

@@ -162,6 +162,7 @@
       session = { session_id: Core.newSessionId(), state: Core.initState(deck, Core.randomUint32()) };
       save();
     }
+    closeNoteForm();
     hideNoteBar();
     els.download.hidden = false;
     els.progressWrap.hidden = false;

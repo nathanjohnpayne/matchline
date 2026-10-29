@@ -250,10 +250,11 @@ export function falsifyNumber(line: string): string | null {
  * A summary-like rewrite of a catch line, so a catch card's summary is not
  * a copy of its raw_text (real cards never have that). It keeps the facts:
  * the line up to its last clause boundary when that leaves 30+ characters,
- * otherwise the line without articles; never a trailing period.
+ * otherwise (or with `keepAll`) the line without articles; never a
+ * trailing period.
  */
-export function summarize(line: string): string {
-  const cut = Math.max(line.lastIndexOf(", "), line.lastIndexOf(" — "), line.lastIndexOf("; "));
+export function summarize(line: string, keepAll = false): string {
+  const cut = keepAll ? -1 : Math.max(line.lastIndexOf(", "), line.lastIndexOf(" — "), line.lastIndexOf("; "));
   const text = cut >= 30 ? line.slice(0, cut) : line.replace(/\b(the|a|an) /gi, "");
   return text.replace(/[.\s]+$/, "");
 }
@@ -302,7 +303,9 @@ export function buildCatchCards(deckId: string, resume: string, jd: string): Car
       "false",
       [
         { label: "Extracted raw_text", text: wrong },
-        { label: "Extracted normalized_summary", text: summarize(wrong) },
+        // keepAll: the changed number must stay in the summary too, or the
+        // card reads as partly right and Mixed would be a fair answer.
+        { label: "Extracted normalized_summary", text: summarize(wrong, true) },
       ],
       [{ label: "Résumé line", text: numbered.text }],
       "resume",

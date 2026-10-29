@@ -54,7 +54,7 @@ function main(): void {
   const packet = resolve(String(flags.get("packet") ?? DEFAULT_PACKET));
   try {
     const r = importIntoPacket(resolve(positional[0]), packet, { force: flags.has("force"), dryRun: flags.has("dry-run"), allowUnknown: flags.has("allow-unknown") });
-    console.log(`${flags.has("dry-run") ? "[dry run] " : ""}${r.written} cell(s) written, ${r.unchanged} already up to date.`);
+    console.log(`${flags.has("dry-run") ? "[dry run] " : ""}${r.written} cell(s) written, ${r.unchanged} already up to date${r.scaffoldChanged ? "; corrections notes updated" : ""}.`);
     if (r.unknown.length) console.warn(`${r.unknown.length} item(s) did not match a sheet row: ${r.unknown.join(", ")}`);
   } catch (error) {
     if (error instanceof ImportConflictError || error instanceof UnknownItemsError) {

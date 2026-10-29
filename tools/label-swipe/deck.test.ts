@@ -131,6 +131,10 @@ describe("deck helpers", () => {
     expect(buildCatchCards("x", resume, jd)).toEqual(buildCatchCards("x", resume, jd));
     const falsified = buildCatchCards("x", resume, jd).find((c) => c.expected === "false" && c.type === "fact-correct");
     expect(falsified?.claim[0].text).not.toBe(falsified?.evidence[0].text);
+    // The false catch's summary keeps the changed number, so the card is wholly false, not partial.
+    const changed = /\d+/.exec(falsified?.claim[0].text.replace(/[^\d\s]+/g, " ") ?? "");
+    expect(falsified?.claim[1].text).toBe(summarize(falsified?.claim[0].text ?? "", true));
+    expect(changed).not.toBeNull();
     // A catch card's summary is never a copy of its raw_text (a real card's never is).
     for (const c of buildCatchCards("x", resume, jd).filter((c) => c.type === "fact-correct")) {
       expect(c.claim[1].text).not.toBe(c.claim[0].text);
