@@ -879,6 +879,42 @@ describe("ApplicationEditorView", () => {
     expect(html).toContain("Export is not available yet.");
   });
 
+  it("renders Export as a closed menu button (#523): aria-haspopup=menu, collapsed, no menu in the markup", () => {
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={passed}
+        units={[]}
+        attestation={attestFor(passed)}
+        onExport={() => undefined}
+      />,
+    );
+    expect(html).toMatch(/<button[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"[^>]*data-testid="export-button"/);
+    expect(html).toContain('data-export-busy="false"');
+    expect(html).not.toContain('data-testid="export-menu"');
+    expect(html).not.toContain('data-testid="export-error"');
+    expect(html).toContain("Export");
+  });
+
+  it("accepts a format-aware export handler (the container's exportAndDownload signature)", () => {
+    const passed = asset({ validation_status: "passed", validation_flags: [] });
+    const html = renderToStaticMarkup(
+      <ApplicationEditorView
+        status="ready"
+        application={application()}
+        asset={passed}
+        units={[]}
+        attestation={attestFor(passed)}
+        onExport={async (format) => {
+          expect(format).toBe("txt");
+        }}
+      />,
+    );
+    expect(html).toContain('data-export-enabled="true"');
+  });
+
   it("hides Remove on the popover when onRemoveBullet handler is absent (no silent no-ops)", () => {
     // A bullet/skill/education flag could be rendered without a
     // wired onRemoveBullet (legacy view callers). The popover must
