@@ -314,6 +314,7 @@ export MATCHLINE_PRIVATE_CORPUS=/path/outside/this/repo
 npm run eval:fit-brief -- --model claude-sonnet-5-5 --dry-run            # validate, print the plan, no API calls
 npm run eval:fit-brief -- --model claude-sonnet-5-5 --effort medium --max-usd 10
 npm run eval:fit-brief -- --model claude-opus-5-5 --evidence units --split test --samples 2 --max-usd 15
+npm run eval:fit-brief -- --model claude-opus-5-5 --effort high --prompt-version v2 --dry-run   # v2 plan, with the claim-rule check count
 ```
 
 Each brief is scored on:
@@ -330,6 +331,28 @@ The printed aggregate names every failure with one of a closed set of categories
 `--max-usd` is required for a paid run. Every paid request checks the bound first, including retries inside generation, judging and extraction. A run that reaches the bound stops and reports itself as incomplete; a request already in flight still completes, and the report states any overrun. Errors that could quote the corpus (pair ids, manifest paths) are withheld from the terminal unless `FIT_BRIEF_VERBOSE=1` is set.
 
 The claim gate is model-graded rather than reusing the claim-extraction and traceability validators. Those validators assume every claim is about the candidate, as in a résumé bullet. A fit brief also states facts about the role and gives advice, and traceability would flag those as fabrications.
+
+#### Prompt versions: `--prompt-version v1|v2` (#655)
+
+`--prompt-version` picks the generator prompt: `v1` (the default, `functions/src/prompts/generation/fitBrief.v1.md`, sent exactly as in the Phase 3 matrix) or `v2` (`fitBrief.v2.md` with `fitBrief.v2.schema.ts`). The generator is eval-only, so no production default changes; `PROMPT_CONFIG` still names v1. The version is recorded in every artifact's `config.generatorPrompt` and in the report header (`prompts generation/fitBrief.v2 (request sha256:…)`), and the request fingerprint is computed per version, so a v1 run and a v2 run never share one. A v2 run's config and header also carry `claimRuleChecks`, the number of numbered checks its request carried; v1 configs keep their Phase 3 shape, without that key.
+
+v2 keeps v1's inputs and hard rules 1, 3, 4, 6, 7 and 8 verbatim and changes three things. Every strength and exposure cites the résumé or inventory span it rests on before the point is written (an exposure's `evidence` may be empty only when the sources are silent on the clause). Each claim rule becomes an explicit numbered check. A closing self-audit narrows or drops any point whose span does not support it or that breaks a check, returns the dropped points in `dropped_points` (kind, clause, point, cited spans, reason `span_does_not_support`, `no_span` or `claim_rule` with the check number) and confirms every check in `rule_audit`, one entry per check in order. The generator retries a response whose `rule_audit` does not list checks 1 to N exactly once (`incomplete_audit`), within the same three attempts.
+
+The claim rules reach v2 the same way they reach v1: the manifest's rules file, unchanged, in the same `Claim rules (obey every one):` section. v2 then adds one check per rule, `Check k of N`, quoting the rule exactly (`claimRuleChecks` and `renderClaimRuleChecks` in `functions/src/generation/fitBrief.ts`). The split is line-based and errs toward more checks: each list item is one rule (a bullet glyph is dropped, a number is kept, and indented, nested or directly following lines stay with it), each paragraph is one rule, and headings and a paragraph ending in `:` that introduces a list are shown as the rule's `Context:`, never as rules. Rules text with no rule line is refused before any spend. A v2 run writes the exact split to `claim-rule-checks.json` in its private `--out`, and the plan line (including `--dry-run`) prints only the check count, so the owner can confirm the count against the frozen rules file without the rule text reaching the terminal. The rule text and the judge prompt are never edited; either would break comparability with the matrix of record.
+
+Both gates still ground on the canonical résumé and inventory, never on the generator's citations. The evidence gate checks every cited span, now including exposure spans, so the v2 gate is slightly stricter than v1's and a v2-minus-v1 gate difference is conservative. The judge reads the v2 brief projected to v1's exact shape (no exposure spans, `rule_audit` or `dropped_points`), with the same sources and rules as in v1, so the unchanged judge grades the same kind of object in both arms. Dropped points are neither gated nor judged; they are counted, and a v2 report prints one line per split, `Self-audit dropped (dev): X point(s) in Y brief(s) (span_does_not_support a, no_span b, claim_rule c).`, so recall lost to the audit stays visible. Their text stays in the private artifacts.
+
+`comparable(a, b)` in `fitBrief/score.ts` says whether two runs' configs may be read as one comparison. A matrix may vary the generator model, its effort and the evidence mode; it refuses different generator prompts (so v1 against v2 is refused), a different judge model, effort or prompt, different corpus inputs, a changed request fingerprint for the same model and effort, a different claim-rule check count, and units-mode runs on different evidence. It always lists every differing key, so the declared v2-minus-v1 contrast can show it differs only in `generatorPrompt`, `generatorRequest` and `claimRuleChecks`.
+
+Paired rerun plan (not yet run; the projection is posted on #495 before any paid call). Two cells on v2, the top two v1 dev cells: Opus 5.5 at effort high and Sonnet 5.5 at effort medium, `--prompt-version v2 --evidence resume --split dev --samples 2` (5 dev pairs × 2 samples, 10 briefs per cell), the default judge unchanged (Opus 5.5 high, `judge sha256:5b48bb3edeed`) and the same staged corpus, so `corpus` matches the v1 cells:
+
+```bash
+npm run eval:fit-brief -- --model claude-opus-5-5 --effort high --prompt-version v2 --evidence resume --split dev --samples 2 --dry-run
+npm run eval:fit-brief -- --model claude-opus-5-5 --effort high --prompt-version v2 --evidence resume --split dev --samples 2 --max-usd <bound>
+npm run eval:fit-brief -- --model claude-sonnet-5-5 --effort medium --prompt-version v2 --evidence resume --split dev --samples 2 --max-usd <bound>
+```
+
+Cost is about $7 at the measured rates: the two v1 cells cost $7.75 together, judge included ($5.04 and $2.71). v2 sends a longer request and a longer tool call, so the #495 projection sets each cell's `--max-usd` with headroom above its v1 cost. Before the paid runs, the owner confirms the dry-run's check count against the frozen rules file. The report gives v2 minus v1 per cell, aggregates only: gates passed, unsupported-claim and claim-rule briefs (items), evidence-quote (now including exposure spans), recall, precision, verdict agreement, dropped points by reason, and cost, with `comparable(v1, v2)`'s refusal and its differences stated as the precondition. It carries the owner-curated-input disclosure, and notes that judge calls are unverified until the calibration review (#636): v2 minus v1 under the same judge is a fair paired comparison, but neither number is a verified share of correct claims.
 
 ### Generation and validation-subtask suites (#488, #489)
 

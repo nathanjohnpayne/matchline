@@ -1,9 +1,24 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
 
-import { FitBriefError, fitBriefRequestFingerprint, generateFitBrief } from "./fitBrief.ts";
+import {
+  _clearCacheForTests,
+  clearPromptVersionOverrides,
+  setPromptVersionOverrides,
+} from "../prompts/loader.ts";
+
+import {
+  auditProblem,
+  claimRuleChecks,
+  FitBriefError,
+  fitBriefPromptLabel,
+  fitBriefRequestFingerprint,
+  generateFitBrief,
+  isFitBriefPromptVersion,
+  renderClaimRuleChecks,
+} from "./fitBrief.ts";
 
 const BRIEF = {
   bottom_line: "Strong platform fit.",
@@ -207,5 +222,297 @@ describe("fitBriefRequestFingerprint", () => {
     // The resolved per-model request shape is part of it.
     expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).not.toBe(fitBriefRequestFingerprint("claude-sonnet-4-6"));
     expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).not.toBe(fitBriefRequestFingerprint("claude-sonnet-5-5", "high"));
+  });
+});
+
+// -- v2 (#655) ----------------------------------------------------------------
+
+const BRIEF_V2 = {
+  ...BRIEF,
+  exposures: [
+    {
+      jd_clause: "twelve product teams",
+      evidence: ["Owned the checkout API used by four storefront teams."],
+      gap: "Four teams, not twelve.",
+      handling: "Say four plainly.",
+    },
+  ],
+  rule_audit: [{ check: 1, outcome: "obeyed" }],
+  dropped_points: [],
+};
+
+/** Collapse whitespace, so verbatim checks ignore only line breaks and indentation. */
+const squash = (text: string) => text.replace(/\s+/g, " ").trim();
+
+describe("claimRuleChecks", () => {
+  it("makes each bullet one check, glyph dropped, in order", () => {
+    const checks = claimRuleChecks("- First rule.\n* Second rule.\n+ Third rule.\n• Fourth rule.");
+    expect(checks).toEqual([
+      { number: 1, text: "First rule." },
+      { number: 2, text: "Second rule." },
+      { number: 3, text: "Third rule." },
+      { number: 4, text: "Fourth rule." },
+    ]);
+  });
+
+  it("keeps a numbered item's own number, since it can carry the rule's identity", () => {
+    expect(claimRuleChecks("1. Never A.\n2) Never B.").map((c) => c.text)).toEqual(["1. Never A.", "2) Never B."]);
+  });
+
+  it("treats headings and a lead-in ending in ':' as context, never as rules", () => {
+    const checks = claimRuleChecks("# Titles\n\nNever claim:\n\n- Director.\n- VP.\n\n## Scale\n\n- Say four teams.");
+    expect(checks).toEqual([
+      { number: 1, text: "Director.", context: "Titles › Never claim:" },
+      { number: 2, text: "VP.", context: "Titles › Never claim:" },
+      { number: 3, text: "Say four teams.", context: "Scale" },
+    ]);
+  });
+
+  it("reads an underlined heading as a heading", () => {
+    expect(claimRuleChecks("Titles\n======\n\n- Never Director.")).toEqual([
+      { number: 1, text: "Never Director.", context: "Titles" },
+    ]);
+  });
+
+  it("makes a plain paragraph its own check, and a ':' paragraph with no list after it too", () => {
+    expect(claimRuleChecks("Never claim a certification.\n\nAlways say:").map((c) => c.text)).toEqual([
+      "Never claim a certification.",
+      "Always say:",
+    ]);
+  });
+
+  it("joins indented, nested and lazy continuation lines to their rule", () => {
+    const checks = claimRuleChecks("- Never claim X\n  unless Y.\n  - Exception: Z.\n- Never claim W\nbecause V.");
+    expect(checks.map((c) => c.text)).toEqual(["Never claim X\nunless Y.\n- Exception: Z.", "Never claim W\nbecause V."]);
+  });
+
+  it("handles CRLF, ignores horizontal rules, and ends a lead-in at one", () => {
+    const checks = claimRuleChecks("Never claim:\r\n- A.\r\n\r\n---\r\n\r\n- B.\r\n***\r\n- C.");
+    expect(checks).toEqual([
+      { number: 1, text: "A.", context: "Never claim:" },
+      { number: 2, text: "B." },
+      { number: 3, text: "C." },
+    ]);
+  });
+
+  it("never rewords: every check is a contiguous run of the source, in source order", () => {
+    const source = [
+      "# Rules",
+      "",
+      "These rules bind every document.",
+      "",
+      "Never claim:",
+      "",
+      '- F1. A certification of any kind, including "PCI certified".',
+      "- F2. Ownership of the platform roadmap",
+      "  before 2023.",
+      "",
+      "1. S1. Say \"four storefront teams\", never \"multiple teams\".",
+      "",
+      "Use the job title exactly as the offer letter states it.",
+    ].join("\n");
+    const checks = claimRuleChecks(source);
+    expect(checks).toHaveLength(5);
+    let from = 0;
+    const flat = squash(source);
+    for (const c of checks) {
+      const at = flat.indexOf(squash(c.text), from);
+      expect(at, c.text).toBeGreaterThanOrEqual(from);
+      from = at + squash(c.text).length;
+    }
+  });
+
+  it("has no checks for absent or blank text (boundary)", () => {
+    expect(claimRuleChecks(undefined)).toEqual([]);
+    expect(claimRuleChecks("")).toEqual([]);
+    expect(claimRuleChecks("  \n\t\n")).toEqual([]);
+  });
+
+  it("refuses text that is not blank but holds no rule (failure)", () => {
+    expect(() => claimRuleChecks("# Claim rules\n\n---\n")).toThrow(/no rule lines/);
+  });
+});
+
+describe("renderClaimRuleChecks", () => {
+  it("numbers every check k of N, in order, with the rule text verbatim and context only when present", () => {
+    const checks = claimRuleChecks('# Scale\n\n- Say "four teams".\n\nNever claim a certification.');
+    const out = renderClaimRuleChecks(checks);
+    expect(out).toContain('Check 1 of 2\nContext: Scale\nRule: Say "four teams".');
+    expect(out).toContain("Check 2 of 2\nContext: Scale\nRule: Never claim a certification.");
+    expect(out.indexOf("Check 1 of 2")).toBeLessThan(out.indexOf("Check 2 of 2"));
+    expect(out.startsWith("Claim-rule checks: the 2 rules above")).toBe(true);
+  });
+
+  it("renders a single rule and no checks", () => {
+    expect(renderClaimRuleChecks(claimRuleChecks("Never claim X."))).toMatch(/the 1 rule above[\s\S]*Check 1 of 1\nRule: Never claim X\.$/);
+    expect(renderClaimRuleChecks([])).toBe("");
+  });
+});
+
+describe("auditProblem", () => {
+  const dropped = (check?: number) => ({
+    kind: "strength" as const,
+    jd_clause: "c",
+    point: "p",
+    evidence: [],
+    reason: check === undefined ? ("no_span" as const) : ("claim_rule" as const),
+    ...(check !== undefined && { check }),
+  });
+  const audit = (...checks: number[]) => checks.map((check) => ({ check, outcome: "obeyed" as const }));
+
+  it("accepts checks 1..N in order, and an empty audit for no checks", () => {
+    expect(auditProblem({ rule_audit: audit(1, 2, 3), dropped_points: [dropped(3)] }, 3)).toBeUndefined();
+    expect(auditProblem({ rule_audit: [], dropped_points: [dropped()] }, 0)).toBeUndefined();
+  });
+
+  it("rejects a missing, out-of-order, duplicated or extra check", () => {
+    expect(auditProblem({ rule_audit: audit(1), dropped_points: [] }, 2)).toMatch(/checks 1 to 2.*got \[1\]/);
+    expect(auditProblem({ rule_audit: audit(2, 1), dropped_points: [] }, 2)).toMatch(/got \[2, 1\]/);
+    expect(auditProblem({ rule_audit: audit(1, 1), dropped_points: [] }, 2)).toBeDefined();
+    expect(auditProblem({ rule_audit: audit(1), dropped_points: [] }, 0)).toMatch(/no claim rules/);
+  });
+
+  it("rejects a dropped point naming a check that was not sent", () => {
+    expect(auditProblem({ rule_audit: audit(1), dropped_points: [dropped(2)] }, 1)).toMatch(/check\(s\) 2/);
+  });
+});
+
+describe("generateFitBrief prompt versions (#655)", () => {
+  afterEach(() => {
+    clearPromptVersionOverrides();
+    _clearCacheForTests();
+  });
+
+  const body = (c: Anthropic, call = 0) =>
+    vi.mocked(c.messages.create).mock.calls[call]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+
+  it("sends v1 by default, unchanged, and tags the result v1", async () => {
+    const c = client([message(BRIEF)]);
+    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) });
+    expect(result.promptVersion).toBe("v1");
+    const user = String(body(c).messages[0]!.content);
+    expect(user.endsWith("Claim rules (obey every one):\n\nNever claim PCI certification.")).toBe(true);
+    expect(user).not.toContain("Claim-rule checks");
+    const schema = body(c).tools![0]! as Anthropic.Messages.Tool;
+    expect(Object.keys((schema.input_schema as { properties: object }).properties)).not.toContain("rule_audit");
+  });
+
+  it("sends v2's system, schema and numbered checks after the rules as written", async () => {
+    const rules = "- Never claim PCI certification.\n- Say \"four storefront teams\".";
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const c = client([message({ ...BRIEF_V2, rule_audit: [{ check: 1, outcome: "obeyed" }, { check: 2, outcome: "not_applicable" }] })]);
+    const result = await generateFitBrief(
+      { ...INPUT, claimRulesText: rules },
+      { model: "claude-sonnet-4-6", client: c, record, promptVersion: "v2" },
+    );
+    expect(result.promptVersion).toBe("v2");
+    expect(result.brief).toMatchObject({ dropped_points: [], exposures: [{ evidence: [expect.any(String)] }] });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "generation/fitBrief.v2" }));
+    expect(String(body(c).system)).toMatch(/Self-audit/);
+    const user = String(body(c).messages[0]!.content);
+    // The rules as written, byte for byte, then the checks quoting each one.
+    const rawBlock = `Claim rules (obey every one):\n\n${rules}`;
+    const checksBlock = renderClaimRuleChecks(claimRuleChecks(rules));
+    expect(user).toContain(`${rawBlock}\n\n---\n\n${checksBlock}\n\n---\n\nRun the self-audit, then call the tool.`);
+    expect(checksBlock).toContain("Check 1 of 2\nRule: Never claim PCI certification.");
+    expect(checksBlock).toContain('Check 2 of 2\nRule: Say "four storefront teams".');
+    const props = Object.keys(((body(c).tools![0]! as Anthropic.Messages.Tool).input_schema as { properties: object }).properties);
+    expect(props.slice(-2)).toEqual(["rule_audit", "dropped_points"]);
+  });
+
+  it("sends no checks block for v2 without claim rules", async () => {
+    const c = client([message({ ...BRIEF_V2, rule_audit: [] })]);
+    await generateFitBrief(
+      { jdText: INPUT.jdText, resumeText: INPUT.resumeText },
+      { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0), promptVersion: "v2" },
+    );
+    // The few-shot shows an example rules section; the role's part has none.
+    const user = String(body(c).messages[0]!.content).split("Now write the brief for this role.")[1]!;
+    expect(user).not.toContain("Claim-rule checks");
+    expect(user).not.toContain("Claim rules (obey every one)");
+    expect(user.endsWith("Run the self-audit, then call the tool.")).toBe(true);
+  });
+
+  it("follows a runtime override when no version is passed", async () => {
+    setPromptVersionOverrides({ "generation/fitBrief": "v2" });
+    const c = client([message(BRIEF_V2)]);
+    const result = await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) });
+    expect(result.promptVersion).toBe("v2");
+  });
+
+  it("refuses an unknown version before any request", async () => {
+    setPromptVersionOverrides({ "generation/fitBrief": "v9" });
+    const c = client([message(BRIEF)]);
+    await expect(
+      generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0) }),
+    ).rejects.toThrow(/Unknown fit-brief prompt version v9/);
+    expect(vi.mocked(c.messages.create)).not.toHaveBeenCalled();
+  });
+
+  it("refuses v2 rules text with no rule line before any request", async () => {
+    const c = client([message(BRIEF_V2)]);
+    await expect(
+      generateFitBrief(
+        { ...INPUT, claimRulesText: "# Claim rules\n" },
+        { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0), promptVersion: "v2" },
+      ),
+    ).rejects.toThrow(/no rule lines/);
+    expect(vi.mocked(c.messages.create)).not.toHaveBeenCalled();
+  });
+
+  it("retries an incomplete self-audit with a reminder, then accepts a complete one", async () => {
+    const c = client([message({ ...BRIEF_V2, rule_audit: [] }), message(BRIEF_V2)]);
+    const result = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: c,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      promptVersion: "v2",
+    });
+    expect(result.promptVersion).toBe("v2");
+    expect(String(body(c, 1).system)).toMatch(/self-audit did not match[\s\S]*checks 1 to 1/);
+  });
+
+  it("gives up after three incomplete audits", async () => {
+    const bad = message({ ...BRIEF_V2, rule_audit: [{ check: 2, outcome: "obeyed" }] });
+    const err = await generateFitBrief(INPUT, {
+      model: "claude-sonnet-4-6",
+      client: client([bad, bad, bad]),
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      promptVersion: "v2",
+    }).catch((e: unknown) => e);
+    expect((err as FitBriefError).failures.map((f) => f.kind)).toEqual(["incomplete_audit", "incomplete_audit", "incomplete_audit"]);
+  });
+
+  it("validates v2 against v2's schema: a v1-shaped brief fails it", async () => {
+    const c = client([message(BRIEF), message(BRIEF_V2)]);
+    await generateFitBrief(INPUT, { model: "claude-sonnet-4-6", client: c, record: vi.fn<typeof RecordUsage>(async () => 0), promptVersion: "v2" });
+    expect(String(body(c, 1).system)).toMatch(/failed schema validation[\s\S]*rule_audit/);
+  });
+});
+
+describe("fitBriefRequestFingerprint versions (#655)", () => {
+  it("pins v1 to the fingerprints of the Phase 3 matrix of record, so v1 can never drift", () => {
+    expect(fitBriefRequestFingerprint("claude-opus-5-5", "high")).toBe("sha256:8f9a1d6d6a59");
+    expect(fitBriefRequestFingerprint("claude-sonnet-5-5", "medium")).toBe("sha256:35ab6febcd95");
+    expect(fitBriefRequestFingerprint("claude-sonnet-4-6")).toBe("sha256:f5ef37065d95");
+    expect(fitBriefRequestFingerprint("claude-opus-5-5", "high", "v1")).toBe("sha256:8f9a1d6d6a59");
+  });
+
+  it("gives v2 its own stable fingerprint for every model and effort", () => {
+    for (const [model, effort] of [["claude-opus-5-5", "high"], ["claude-sonnet-5-5", "medium"], ["claude-sonnet-4-6", undefined]] as const) {
+      const v2 = fitBriefRequestFingerprint(model, effort, "v2");
+      expect(v2).toMatch(/^sha256:[0-9a-f]{12}$/);
+      expect(v2).not.toBe(fitBriefRequestFingerprint(model, effort, "v1"));
+      expect(v2).toBe(fitBriefRequestFingerprint(model, effort, "v2"));
+    }
+    expect(fitBriefRequestFingerprint("claude-opus-5-5", "high", "v2")).not.toBe(fitBriefRequestFingerprint("claude-opus-5-5", "medium", "v2"));
+  });
+
+  it("labels versions and recognizes only v1 and v2", () => {
+    expect(fitBriefPromptLabel("v2")).toBe("generation/fitBrief.v2");
+    expect(isFitBriefPromptVersion("v1")).toBe(true);
+    expect(isFitBriefPromptVersion("v2")).toBe(true);
+    expect(isFitBriefPromptVersion("V2")).toBe(false);
+    expect(isFitBriefPromptVersion("v3")).toBe(false);
   });
 });

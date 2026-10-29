@@ -162,7 +162,21 @@ export function loadPromptText<S extends PromptStage, N extends PromptName<S>>(
   stage: S,
   name: N,
 ): LoadedPrompt {
-  const version = resolvePromptVersion(stage, name);
+  return loadPromptTextVersion(stage, name, resolvePromptVersion(stage, name));
+}
+
+/**
+ * Load one named version of a prompt's Markdown body, ignoring both the
+ * runtime overrides and `PROMPT_CONFIG`. For callers that choose the
+ * version per call (the fit-brief eval's `--prompt-version`), so a run
+ * never has to set module-wide overrides. Shares `loadPromptText`'s
+ * cache, keyed by version.
+ */
+export function loadPromptTextVersion<S extends PromptStage, N extends PromptName<S>>(
+  stage: S,
+  name: N,
+  version: string,
+): LoadedPrompt {
   const cacheKey = `${String(stage)}/${String(name)}/${String(version)}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;

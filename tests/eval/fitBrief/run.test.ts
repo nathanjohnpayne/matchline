@@ -12,8 +12,15 @@ import type { FitBriefCorpus } from "./corpus.ts";
 import type { JudgeResult } from "./judge.ts";
 import type { AnthropicClient as Anthropic } from "../../../functions/src/llm/anthropic.ts";
 
+import { fitBriefRequestFingerprint, type FitBriefResult } from "../../../functions/src/generation/fitBrief.ts";
+import type { FitBriefResponseV2 } from "../../../functions/src/prompts/generation/fitBrief.v2.schema.ts";
+
+import { judgeRequestFingerprint } from "./judge.ts";
+import { comparable } from "./score.ts";
 import {
   BudgetReachedError,
+  CLAIM_RULE_CHECKS_FILE,
+  formatPlan,
   guardClient,
   parseArgs,
   preflight,
@@ -66,6 +73,7 @@ const OPTIONS: FitBriefEvalOptions = {
   judgeModel: "claude-opus-5-5",
   judgeEffort: "high",
   evidence: "resume",
+  promptVersion: "v1",
   split: "dev",
   samples: 1,
   maxUsd: 100,
@@ -89,7 +97,7 @@ function deps(over: Partial<FitBriefEvalDeps> = {}): FitBriefEvalDeps & { files:
     files,
     generate: vi.fn(async (_input, record) => {
       await record(usage("fit_brief"));
-      return { brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+      return { promptVersion: "v1" as const, brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
     }),
     judge: vi.fn(async (_args, record) => {
       await record(usage("fit_brief_judge"));
@@ -340,7 +348,7 @@ describe("runFitBriefEval", () => {
           guard();
           await record(usage("fit_brief"));
         }
-        return { brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+        return { promptVersion: "v1" as const, brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
       }),
     });
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, maxUsd: 1.5 }, d);
@@ -605,7 +613,7 @@ describe("evidence failure classes in the run (units mode)", () => {
       extractUnits: vi.fn(async () => [{ raw_text: PARAPHRASE }]),
       generate: vi.fn(async (_input, record) => {
         await record(usage("fit_brief"));
-        return { brief: quoting([PARAPHRASE, "Ran payroll for a bank."]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+        return { promptVersion: "v1" as const, brief: quoting([PARAPHRASE, "Ran payroll for a bank."]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
       }),
     });
     const out = await runFitBriefEval(CORPUS, { ...OPTIONS, evidence: "units" }, d);
@@ -630,7 +638,7 @@ describe("evidence failure classes in the run (units mode)", () => {
     const d = deps({
       generate: vi.fn(async (_input, record) => {
         await record(usage("fit_brief"));
-        return { brief: quoting([PARAPHRASE]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+        return { promptVersion: "v1" as const, brief: quoting([PARAPHRASE]), inputTokens: 0, outputTokens: 0, latencyMs: 0 };
       }),
     });
     const out = await runFitBriefEval(CORPUS, OPTIONS, d);
@@ -647,12 +655,194 @@ describe("evidence failure classes in the run (units mode)", () => {
         n += 1;
         if (n === 2) throw new Error("boom");
         await record(usage("fit_brief"));
-        return { brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
+        return { promptVersion: "v1" as const, brief: BRIEF, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
       }),
     });
     const out = await runFitBriefEval(CORPUS, OPTIONS, d);
     expect(out.report).toContain("| dev | 2 | 1/2 | 0 (0) | 0 (0) | 0 (0) | 0 (0) | 1 (1) |");
     const failedArtifact = [...d.files.values()].map((v) => JSON.parse(v)).find((a) => a.error !== undefined);
     expect(failedArtifact.failureCategories).toEqual(["unscored"]);
+  });
+});
+
+// -- prompt v2 (#655) -----------------------------------------------------------
+
+const RULES_V2 = "# Claim rules\n\n- Never claim PCI certification.\n- Say four storefront teams, never multiple teams.";
+
+const BRIEF_V2: FitBriefResponseV2 = {
+  ...BRIEF,
+  exposures: [{ jd_clause: "twelve teams", evidence: ["Owned the checkout API used by four storefront teams."], gap: "g", handling: "h" }],
+  rule_audit: [
+    { check: 1, outcome: "obeyed" },
+    { check: 2, outcome: "obeyed" },
+  ],
+  dropped_points: [
+    { kind: "strength", jd_clause: "writing", point: "SECRET dropped point", evidence: ["Wrote the SECRET policy."], reason: "span_does_not_support" },
+  ],
+};
+
+const v2Result = (brief: FitBriefResponseV2 = BRIEF_V2): FitBriefResult => ({
+  promptVersion: "v2",
+  brief,
+  inputTokens: 0,
+  outputTokens: 0,
+  latencyMs: 0,
+});
+
+function depsV2(brief: FitBriefResponseV2 = BRIEF_V2) {
+  return deps({
+    generate: vi.fn(async (_input, record) => {
+      await record(usage("fit_brief"));
+      return v2Result(brief);
+    }),
+  });
+}
+
+const CORPUS_V2: FitBriefCorpus = { ...CORPUS, claimRulesText: RULES_V2 };
+const OPTIONS_V2: FitBriefEvalOptions = { ...OPTIONS, promptVersion: "v2" };
+const artifacts = (files: Map<string, string>) =>
+  [...files.entries()].filter(([k]) => !k.endsWith(CLAIM_RULE_CHECKS_FILE)).map(([, v]) => JSON.parse(v));
+
+describe("--prompt-version", () => {
+  const now = new Date("2026-10-29T12:00:00Z");
+  const base = ["--model", "claude-sonnet-5-5", "--max-usd", "10"];
+
+  it("defaults to v1 and accepts v2 in either flag form", () => {
+    expect(parseArgs(base, now).promptVersion).toBe("v1");
+    expect(parseArgs([...base, "--prompt-version", "v2"], now).promptVersion).toBe("v2");
+    expect(parseArgs([...base, "--prompt-version=v2"], now).promptVersion).toBe("v2");
+    expect(parseArgs([...base, "--prompt-version", "v1"], now).promptVersion).toBe("v1");
+  });
+
+  it("rejects an unknown, miscased, missing or repeated version", () => {
+    expect(() => parseArgs([...base, "--prompt-version", "v3"], now)).toThrow(/--prompt-version must be v1\|v2/);
+    expect(() => parseArgs([...base, "--prompt-version", "V2"], now)).toThrow(/--prompt-version must be v1\|v2/);
+    expect(() => parseArgs([...base, "--prompt-version"], now)).toThrow(/--prompt-version requires a value/);
+    expect(() => parseArgs([...base, "--prompt-version", "v1", "--prompt-version=v2"], now)).toThrow(/more than once/);
+  });
+});
+
+describe("runFitBriefEval with prompt v2 (#655)", () => {
+  it("records v2, its own request fingerprint and the check count in the header and every artifact", async () => {
+    const d = depsV2();
+    const out = await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    const v2Request = fitBriefRequestFingerprint(OPTIONS.model, OPTIONS.effort, "v2");
+    expect(v2Request).not.toBe(fitBriefRequestFingerprint(OPTIONS.model, OPTIONS.effort, "v1"));
+    expect(out.report.split("\n")[0]).toContain(`prompts generation/fitBrief.v2 (request ${v2Request})`);
+    expect(out.report.split("\n")[0]).toMatch(/claim-rule checks 2$/);
+    const written = artifacts(d.files);
+    expect(written).toHaveLength(2);
+    for (const a of written) {
+      expect(a.config).toMatchObject({ generatorPrompt: "generation/fitBrief.v2", generatorRequest: v2Request, claimRuleChecks: 2 });
+    }
+  });
+
+  it("keeps a v1 run's config exactly as before: v1 label and fingerprint, no claimRuleChecks key", async () => {
+    const d = deps();
+    const out = await runFitBriefEval(CORPUS, OPTIONS, d);
+    expect(out.report.split("\n")[0]).toContain(`prompts generation/fitBrief.v1 (request ${fitBriefRequestFingerprint(OPTIONS.model, OPTIONS.effort)})`);
+    expect(out.report).not.toMatch(/claim-rule checks|Self-audit/);
+    for (const a of artifacts(d.files)) {
+      expect(a.config.generatorPrompt).toBe("generation/fitBrief.v1");
+      expect("claimRuleChecks" in a.config).toBe(false);
+    }
+    expect([...d.files.keys()].some((k) => k.endsWith(CLAIM_RULE_CHECKS_FILE))).toBe(false);
+  });
+
+  it("produces configs comparable() refuses to read against each other", async () => {
+    const d1 = deps();
+    await runFitBriefEval(CORPUS_V2, OPTIONS, d1);
+    const d2 = depsV2();
+    await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d2);
+    const [v1Config, v2Config] = [artifacts(d1.files)[0].config, artifacts(d2.files)[0].config];
+    const result = comparable(v1Config, v2Config);
+    expect(result).toMatchObject({ ok: false, reason: expect.stringMatching(/fitBrief\.v1 vs generation\/fitBrief\.v2/) });
+    expect(result.differences).toEqual(["generatorPrompt", "generatorRequest", "claimRuleChecks"]);
+    // Two v1 runs of the same cell stay comparable.
+    const d3 = deps();
+    await runFitBriefEval(CORPUS_V2, OPTIONS, d3);
+    expect(comparable(v1Config, artifacts(d3.files)[0].config).ok).toBe(true);
+  });
+
+  it("sends the raw rules to the generator and judge, and the judge only a v1-shaped brief", async () => {
+    const d = depsV2();
+    await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    expect(vi.mocked(d.generate).mock.calls[0]![0].claimRulesText).toBe(RULES_V2);
+    const judged = vi.mocked(d.judge).mock.calls[0]![0];
+    expect(judged.claimRulesText).toBe(RULES_V2);
+    expect(Object.keys(judged.generated)).not.toContain("rule_audit");
+    expect(Object.keys(judged.generated)).not.toContain("dropped_points");
+    expect(judged.generated.exposures).toEqual([{ jd_clause: "twelve teams", gap: "g", handling: "h" }]);
+    // The judge's sources are the canonical résumé, not the generator's citations.
+    expect(judged.sourcesText).toBe(CORPUS.resumeText);
+  });
+
+  it("gates on the canonical sources only: an exposure span not in the résumé fails, a dropped span is never gated", async () => {
+    const d = depsV2({
+      ...BRIEF_V2,
+      exposures: [{ jd_clause: "x", evidence: ["Ran the SECRET payroll."], gap: "g", handling: "h" }],
+    });
+    const out = await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    const a = artifacts(d.files)[0];
+    expect(a.evidence.unsupported).toEqual(["Ran the SECRET payroll."]);
+    expect(a.evidence.total).toBe(2);
+    expect(a.score.failureCategories).toEqual(["evidence-quote"]);
+    expect(out.rows.every((r) => r.score?.gatesPass === false)).toBe(true);
+  });
+
+  it("keeps the full v2 brief privately and prints dropped-point counts, never their text", async () => {
+    const d = depsV2();
+    const out = await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    expect(artifacts(d.files)[0].brief.dropped_points[0].point).toBe("SECRET dropped point");
+    expect(out.report).toContain("Self-audit dropped (dev): 2 point(s) in 2 brief(s) (span_does_not_support 2, no_span 0, claim_rule 0).");
+    expect(out.report).not.toContain("SECRET");
+    expect(out.report).not.toContain("Never claim PCI");
+  });
+
+  it("writes the claim-rule split privately under --out", async () => {
+    const d = depsV2();
+    await runFitBriefEval(CORPUS_V2, OPTIONS_V2, d);
+    const split = JSON.parse(d.files.get(`/private/out/${CLAIM_RULE_CHECKS_FILE}`)!);
+    expect(split).toEqual([
+      { number: 1, text: "Never claim PCI certification.", context: "Claim rules" },
+      { number: 2, text: "Say four storefront teams, never multiple teams.", context: "Claim rules" },
+    ]);
+  });
+
+  it("refuses rules text with no rule line before any generation", async () => {
+    const d = depsV2();
+    await expect(runFitBriefEval({ ...CORPUS, claimRulesText: "# Claim rules\n" }, OPTIONS_V2, d)).rejects.toThrow(/no rule lines/);
+    expect(d.generate).not.toHaveBeenCalled();
+  });
+
+  it("scores nothing from a brief of the other version: the sample is unscored and never judged", async () => {
+    const d = depsV2();
+    const out = await runFitBriefEval(CORPUS, OPTIONS, d); // a v1 run whose generator answers v2
+    expect(d.judge).not.toHaveBeenCalled();
+    expect(out.rows.every((r) => r.score === null)).toBe(true);
+    const a = artifacts(d.files)[0];
+    expect(a.failureCategories).toEqual(["unscored"]);
+    expect(a.error).toMatch(/returned a v2 brief for a v1 run/);
+  });
+});
+
+describe("formatPlan", () => {
+  const options = { ...OPTIONS, model: "claude-opus-5-5", effort: "high" as const };
+
+  it("names the prompt version, and for v2 the check count, with no corpus text", () => {
+    const v1 = formatPlan(options, 5, undefined, false);
+    expect(v1).toBe(
+      "5 brief(s): 5 dev pair(s) × 1 sample(s); generator claude-opus-5-5 (effort high), prompt generation/fitBrief.v1, " +
+        "judge claude-opus-5-5 (effort high), evidence resume. Output: /private/out",
+    );
+    const v2 = formatPlan({ ...options, promptVersion: "v2", samples: 2 }, 5, [{ number: 1, text: "SECRET rule" }], true);
+    expect(v2).toMatch(/^10 brief\(s\).*prompt generation\/fitBrief\.v2 \(1 claim-rule check\(s\)\),.*evidence resume \(frozen Units\)/);
+    expect(v2).not.toContain("SECRET");
+  });
+});
+
+describe("judge unchanged by #655", () => {
+  it("keeps the judge request fingerprint of the Phase 3 matrix of record", () => {
+    expect(judgeRequestFingerprint("claude-opus-5-5", "high")).toBe("judge sha256:5b48bb3edeed");
   });
 });

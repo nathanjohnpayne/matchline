@@ -14,6 +14,10 @@
  *                         resume: brief reads the canonical résumé (+ inventory).
  *                         units: brief reads Experience Units extracted from the
  *                         résumé by the current extraction pin.
+ *   --prompt-version v1|v2
+ *                         generator prompt, default v1. v2 (#655) adds the claim
+ *                         rules as numbered checks, a cited span per point and
+ *                         a self-audit; a v1 and a v2 run are never comparable.
  *   --split dev|test|all  default dev
  *   --samples <n>         briefs per pair, default 1
  *   --max-usd <n>         spend bound for this invocation (required unless --dry-run)
@@ -53,9 +57,14 @@ import { isEffort, profileFor, type Effort } from "../../../functions/src/llm/mo
 import { rateFor } from "../../../functions/src/llm/rates.ts";
 import { loadPromptText } from "../../../functions/src/prompts/loader.ts";
 import {
+  claimRuleChecks,
+  fitBriefPromptLabel,
   fitBriefRequestFingerprint,
   generateFitBrief,
+  isFitBriefPromptVersion,
+  type ClaimRuleCheck,
   type FitBriefInput,
+  type FitBriefPromptVersion,
   type FitBriefResult,
 } from "../../../functions/src/generation/fitBrief.ts";
 
@@ -65,8 +74,10 @@ import {
   aggregate,
   checkEvidence,
   formatAggregate,
+  judgedBrief,
   scoreBrief,
   type BriefScore,
+  type FitBriefRunConfig,
 } from "./score.ts";
 
 export interface FitBriefEvalOptions {
@@ -75,6 +86,8 @@ export interface FitBriefEvalOptions {
   readonly judgeModel: string;
   readonly judgeEffort?: Effort;
   readonly evidence: "resume" | "units";
+  /** The generator prompt; recorded in every artifact and the report header. */
+  readonly promptVersion: FitBriefPromptVersion;
   readonly split: "dev" | "test" | "all";
   readonly samples: number;
   readonly maxUsd: number;
@@ -369,11 +382,16 @@ export async function runFitBriefEval(
   // A frozen extraction is reported as the pin that produced it, not
   // the current one.
   const extractionLabel = options.frozenUnits?.extraction ?? deps.extractionConfig ?? "unrecorded";
-  const runConfig = {
+  // v2 sends one numbered check per claim rule. Split once, before any
+  // spend: rules text with no rule line throws here.
+  const checks = options.promptVersion === "v2" ? claimRuleChecks(corpus.claimRulesText) : undefined;
+  const runConfig: FitBriefRunConfig = {
     model: options.model,
     ...(generatorEffort !== undefined && { effort: generatorEffort }),
-    generatorPrompt: promptVersionLabel(loadPromptText("generation", "fitBrief")),
-    generatorRequest: fitBriefRequestFingerprint(options.model, options.effort),
+    generatorPrompt: fitBriefPromptLabel(options.promptVersion),
+    // Changes with the prompt version, so a v1 and a v2 run never share a
+    // request fingerprint (#655).
+    generatorRequest: fitBriefRequestFingerprint(options.model, options.effort, options.promptVersion),
     judgeModel: options.judgeModel,
     ...(judgeEffort !== undefined && { judgeEffort }),
     judgePrompt: judgeRequestFingerprint(options.judgeModel, options.judgeEffort),
@@ -395,13 +413,21 @@ export async function runFitBriefEval(
       unitsFormat: UNITS_FORMAT_FINGERPRINT,
       unitsSource: options.frozenUnits ? "frozen" : "extracted",
     }),
+    // v2 only, so v1 configs keep exactly their Phase 3 shape.
+    ...(checks !== undefined && { claimRuleChecks: checks.length }),
   };
   // Set once the Units are known: a hash of exactly what the generator
   // read, so two runs can be checked for identical evidence.
   let unitsSha256: string | undefined;
-  const config = () => ({ ...runConfig, ...(unitsSha256 !== undefined && { unitsSha256 }) });
+  const config = (): FitBriefRunConfig => ({ ...runConfig, ...(unitsSha256 !== undefined && { unitsSha256 }) });
   const report = (rows: readonly { split: string; score: BriefScore | null }[]) =>
     formatAggregate(aggregate(rows), { ...config(), spentUsd, maxUsd: options.maxUsd, incomplete });
+
+  // v2: the exact split, privately, so the owner can confirm every rule
+  // became one check without the rules ever reaching stdout.
+  if (checks !== undefined) {
+    writeFile(join(options.outDir, CLAIM_RULE_CHECKS_FILE), JSON.stringify(checks, null, 2));
+  }
 
   // A bound already reached (for example --max-usd 0) must stop before
   // the first paid call, including units-mode extraction (Codex P2, #581).
@@ -474,6 +500,12 @@ export async function runFitBriefEval(
           record,
           guard,
         );
+        // A brief from another prompt version would be scored as this run's.
+        if (generated.promptVersion !== options.promptVersion) {
+          throw new Error(
+            `The generator returned a ${generated.promptVersion} brief for a ${options.promptVersion} run.`,
+          );
+        }
         // Recheck before the second paid stage (Codex P1 on #581): a
         // generation that reaches the bound must not start the judge.
         if (overBudget()) {
@@ -492,7 +524,9 @@ export async function runFitBriefEval(
           {
             jdText: pair.jdText,
             referenceText: pair.referenceText,
-            generated: generated.brief,
+            // v1's shape in both versions: the judge never sees the
+            // generator's citations on exposures or its self-audit (#655).
+            generated: judgedBrief(generated),
             sourcesText: sources.join("\n\n"),
             ...(corpus.claimRulesText !== undefined && { claimRulesText: corpus.claimRulesText }),
           },
@@ -504,7 +538,12 @@ export async function runFitBriefEval(
           sources,
           unitTexts,
         );
-        const score = scoreBrief({ evidence, judge: judgement, generatedVerdict: generated.brief.verdict });
+        const score = scoreBrief({
+          evidence,
+          judge: judgement,
+          generatedVerdict: generated.brief.verdict,
+          ...(generated.promptVersion === "v2" && { dropped: generated.brief.dropped_points }),
+        });
         rows.push({ split: pair.split, score });
         writeFile(
           file,
@@ -565,9 +604,12 @@ function flag(argv: readonly string[], name: string): string | undefined {
 }
 
 const KNOWN_FLAGS = new Set([
-  "--model", "--effort", "--judge-model", "--judge-effort", "--evidence",
+  "--model", "--effort", "--judge-model", "--judge-effort", "--evidence", "--prompt-version",
   "--split", "--samples", "--max-usd", "--out", "--units-from", "--dry-run",
 ]);
+
+/** v2 runs write their claim-rule split here, inside --out. */
+export const CLAIM_RULE_CHECKS_FILE = "claim-rule-checks.json";
 
 /** Boolean flags take no value; `--dry-run=true` is rejected, not silently ignored (Codex P2, #581). */
 const BOOLEAN_FLAGS = new Set(["--dry-run"]);
@@ -613,6 +655,8 @@ export function parseArgs(
   }
   const evidence = flag(argv, "--evidence") ?? "resume";
   if (evidence !== "resume" && evidence !== "units") throw new Error("--evidence must be resume|units");
+  const promptVersion = flag(argv, "--prompt-version") ?? "v1";
+  if (!isFitBriefPromptVersion(promptVersion)) throw new Error("--prompt-version must be v1|v2");
   const split = flag(argv, "--split") ?? "dev";
   if (split !== "dev" && split !== "test" && split !== "all") throw new Error("--split must be dev|test|all");
   const samples = Number(flag(argv, "--samples") ?? "1");
@@ -631,6 +675,7 @@ export function parseArgs(
     judgeModel,
     ...(judgeEffortRaw !== undefined && { judgeEffort: judgeEffortRaw as Effort }),
     evidence,
+    promptVersion,
     split,
     samples,
     maxUsd,
@@ -700,6 +745,31 @@ function effortLabel(effort: Effort | undefined): string {
   return effort === undefined ? "" : ` (effort ${effort})`;
 }
 
+/**
+ * The plan printed before any spend (and by --dry-run). Configuration and
+ * counts only: for v2 it gives the number of claim-rule checks, never
+ * their text, so the owner can confirm it against the rules file.
+ */
+export function formatPlan(
+  options: Pick<
+    FitBriefEvalOptions,
+    "model" | "effort" | "judgeModel" | "judgeEffort" | "evidence" | "promptVersion" | "split" | "samples" | "outDir"
+  >,
+  pairCount: number,
+  checks: readonly ClaimRuleCheck[] | undefined,
+  frozenUnits: boolean,
+): string {
+  return (
+    `${pairCount * options.samples} brief(s): ${pairCount} ${options.split} pair(s) × ${options.samples} sample(s); ` +
+    `generator ${options.model}${effortLabel(resolvedEffort(options.model, options.effort))}, ` +
+    `prompt ${fitBriefPromptLabel(options.promptVersion)}` +
+    `${checks !== undefined ? ` (${checks.length} claim-rule check(s))` : ""}, ` +
+    `judge ${options.judgeModel}${effortLabel(resolvedEffort(options.judgeModel, options.judgeEffort))}, ` +
+    `evidence ${options.evidence}${frozenUnits ? " (frozen Units)" : ""}. ` +
+    `Output: ${options.outDir}`
+  );
+}
+
 async function main(): Promise<number> {
   const options = parseArgs(process.argv.slice(2));
   const corpusDir = process.env.MATCHLINE_PRIVATE_CORPUS;
@@ -713,14 +783,9 @@ async function main(): Promise<number> {
     frozenUnits = parseFrozenUnits(readFileSync(options.unitsFrom, "utf8"), corpus.resumeText);
   }
   const pairs = selectPairs(corpus, options.split);
-  const calls = pairs.length * options.samples;
-  console.log(
-    `${calls} brief(s): ${pairs.length} ${options.split} pair(s) × ${options.samples} sample(s); ` +
-      `generator ${options.model}${effortLabel(resolvedEffort(options.model, options.effort))}, ` +
-      `judge ${options.judgeModel}${effortLabel(resolvedEffort(options.judgeModel, options.judgeEffort))}, ` +
-      `evidence ${options.evidence}${frozenUnits ? " (frozen Units)" : ""}. ` +
-      `Output: ${options.outDir}`,
-  );
+  // v2: a rules file with no rule line is refused here, before any spend.
+  const checks = options.promptVersion === "v2" ? claimRuleChecks(corpus.claimRulesText) : undefined;
+  console.log(formatPlan(options, pairs.length, checks, frozenUnits !== undefined));
   if (options.dryRun) return 0;
 
   prepareOutDir(options.outDir);
@@ -730,6 +795,7 @@ async function main(): Promise<number> {
       generateFitBrief(input, {
         model: options.model,
         ...(options.effort !== undefined && { effort: options.effort }),
+        promptVersion: options.promptVersion,
         client: guardClient(client, guard),
         record,
         runId: options.runId,

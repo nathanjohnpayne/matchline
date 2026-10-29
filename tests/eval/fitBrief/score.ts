@@ -14,9 +14,24 @@
  *
  * Aggregates are printed; per-pair rows are written only to the private
  * output directory, never to stdout.
+ *
+ * Prompt v2 (#655) adds cited spans on exposures, which the evidence gate
+ * checks like any other quote, and a self-audit's dropped points, which
+ * are counted but never judged or gated. `comparable()` says whether two
+ * runs' configurations may be read side by side.
  */
 
-import type { FitBriefResponseV1 } from "../../../functions/src/prompts/generation/fitBrief.v1.schema.ts";
+import type { FitBriefResult } from "../../../functions/src/generation/fitBrief.ts";
+import {
+  FitBriefResponseV1Schema,
+  type FitBriefResponseV1,
+} from "../../../functions/src/prompts/generation/fitBrief.v1.schema.ts";
+import {
+  DROPPED_POINT_REASONS,
+  type DroppedPointReason,
+  type FitBriefDroppedPointV2,
+  type FitBriefResponseV2,
+} from "../../../functions/src/prompts/generation/fitBrief.v2.schema.ts";
 
 import type { JudgeResult } from "./judge.ts";
 
@@ -86,13 +101,13 @@ export type FailureCategory = (typeof FAILURE_CATEGORIES)[number];
  * claim gate against the canonical sources.
  */
 export function checkEvidence(
-  brief: FitBriefResponseV1,
+  brief: FitBriefResponseV1 | FitBriefResponseV2,
   sources: readonly string[],
   /** Units mode: the `raw_text` of each Unit the generator read, to classify failures. */
   unitTexts?: readonly string[],
 ): EvidenceCheck {
   const units = sources.flatMap(evidenceUnits);
-  const quotes = brief.strengths.flatMap((s) => s.evidence);
+  const quotes = briefQuotes(brief);
   const supported = (q: string): boolean => {
     const needle = normalizeForMatch(q);
     return units.some((unit) => containsAtWordBoundaries(unit, needle));
@@ -103,6 +118,54 @@ export function checkEvidence(
     unsupported,
     ...(unitTexts !== undefined && classifyUnsupportedQuotes(unsupported, unitTexts)),
   };
+}
+
+/**
+ * Every span a brief cites as evidence: each strength's and, in v2, each
+ * exposure's. A citation is the generator's claim, never proof: the gate
+ * checks each one against the canonical sources. Dropped points are not
+ * in the brief, so their spans are never gated.
+ */
+export function briefQuotes(brief: FitBriefResponseV1 | FitBriefResponseV2): string[] {
+  return [
+    ...brief.strengths.flatMap((s) => s.evidence),
+    ...brief.exposures.flatMap((e) => ("evidence" in e ? e.evidence : [])),
+  ];
+}
+
+/**
+ * The brief the judge reads, in v1's exact shape for either version, so
+ * the unchanged judge sees the same kind of object in both arms and grades
+ * claims against the canonical sources rather than the generator's own
+ * citations or self-audit. v1 passes through untouched; v2 loses its
+ * exposure spans, `rule_audit` and `dropped_points`, keys in v1 order.
+ */
+export function judgedBrief(result: FitBriefResult): FitBriefResponseV1 {
+  if (result.promptVersion === "v1") return result.brief;
+  const b = result.brief;
+  return FitBriefResponseV1Schema.parse({
+    bottom_line: b.bottom_line,
+    strengths: b.strengths.map((s) => ({ jd_clause: s.jd_clause, evidence: s.evidence, argument: s.argument })),
+    exposures: b.exposures.map((e) => ({ jd_clause: e.jd_clause, gap: e.gap, handling: e.handling })),
+    positioning: b.positioning,
+    ...(b.level_strategy !== undefined && { level_strategy: b.level_strategy }),
+    homework: b.homework,
+    questions_to_ask: b.questions_to_ask,
+    does_not_claim: b.does_not_claim,
+    verdict: b.verdict,
+  });
+}
+
+/** Points a v2 self-audit removed, by reason. Counts only. */
+export interface DroppedPointCount {
+  readonly items: number;
+  readonly byReason: Readonly<Record<DroppedPointReason, number>>;
+}
+
+export function countDroppedPoints(dropped: readonly FitBriefDroppedPointV2[]): DroppedPointCount {
+  const byReason = Object.fromEntries(DROPPED_POINT_REASONS.map((r) => [r, 0])) as Record<DroppedPointReason, number>;
+  for (const d of dropped) byReason[d.reason] += 1;
+  return { items: dropped.length, byReason };
 }
 
 /**
@@ -201,12 +264,19 @@ export interface BriefScore {
   readonly verdictAgrees: boolean | null;
   /** Both hard gates passed. */
   readonly gatesPass: boolean;
+  /**
+   * v2 only: what the self-audit dropped. Outside the failure categories:
+   * a dropped point is recall the brief gave up, not a gate failure.
+   */
+  readonly droppedPoints?: DroppedPointCount;
 }
 
 export function scoreBrief(args: {
   readonly evidence: EvidenceCheck;
   readonly judge: JudgeResult;
   readonly generatedVerdict: FitBriefResponseV1["verdict"];
+  /** v2 only: the brief's `dropped_points`. */
+  readonly dropped?: readonly FitBriefDroppedPointV2[];
 }): BriefScore {
   const { evidence, judge } = args;
   const refs = judge.reference_points;
@@ -236,6 +306,7 @@ export function scoreBrief(args: {
     verdictAgrees:
       judge.reference_verdict === "unclear" ? null : judge.reference_verdict === args.generatedVerdict,
     gatesPass: evidence.unsupported.length === 0 && unsupportedClaims === 0 && claimRuleViolations === 0,
+    ...(args.dropped !== undefined && { droppedPoints: countDroppedPoints(args.dropped) }),
   };
 }
 
@@ -259,6 +330,8 @@ export interface AggregateRow {
   readonly meanRecall: number | null;
   readonly meanPrecision: number | null;
   readonly verdictAgreement: number | null;
+  /** v2 only: briefs with a dropped point, dropped items, and items by reason. */
+  readonly droppedPoints?: DroppedPointCount & { readonly briefs: number };
 }
 
 function mean(values: readonly (number | null)[]): number | null {
@@ -277,6 +350,7 @@ export function aggregate(
     const sum = (f: (s: BriefScore) => number) => scored.reduce((a, s) => a + f(s), 0);
     const verdicts = scored.map((s) => s.verdictAgrees).filter((v): v is boolean => v !== null);
     const failed = inSplit.length - scored.length;
+    const withAudit = scored.map((s) => s.droppedPoints).filter((d): d is DroppedPointCount => d !== undefined);
     const count = (cat: FailureCategory, items: (s: BriefScore) => number): CategoryCount => ({
       briefs: scored.filter((s) => s.failureCategories.includes(cat)).length,
       items: sum(items),
@@ -300,6 +374,15 @@ export function aggregate(
       meanPrecision: mean(scored.map((s) => s.precision)),
       verdictAgreement:
         verdicts.length === 0 ? null : verdicts.filter(Boolean).length / verdicts.length,
+      ...(withAudit.length > 0 && {
+        droppedPoints: {
+          briefs: withAudit.filter((d) => d.items > 0).length,
+          items: withAudit.reduce((a, d) => a + d.items, 0),
+          byReason: Object.fromEntries(
+            DROPPED_POINT_REASONS.map((r) => [r, withAudit.reduce((a, d) => a + d.byReason[r], 0)]),
+          ) as Record<DroppedPointReason, number>,
+        },
+      }),
     };
   });
 }
@@ -334,6 +417,8 @@ export function formatAggregate(
     readonly unitsSource?: string;
     /** Units mode: hash of exactly the evidence the generator read. */
     readonly unitsSha256?: string;
+    /** v2 only: how many numbered claim-rule checks the request carried. */
+    readonly claimRuleChecks?: number;
     readonly spentUsd: number;
     readonly maxUsd?: number;
     readonly incomplete: boolean;
@@ -359,7 +444,8 @@ export function formatAggregate(
           ]
             .filter(Boolean)
             .join(", ")}`
-        : ""),
+        : "") +
+      (meta.claimRuleChecks !== undefined ? `, claim-rule checks ${meta.claimRuleChecks}` : ""),
     "",
     `| split | briefs | gates passed | ${FAILURE_CATEGORIES.join(" | ")} | recall* | precision* | verdict agreement |`,
     `|---|---|---|${FAILURE_CATEGORIES.map(() => "---").join("|")}|---|---|---|`,
@@ -369,6 +455,14 @@ export function formatAggregate(
         `| ${r.split} | ${r.briefs} | ${r.gatesPassed}/${r.briefs} | ` +
         `${FAILURE_CATEGORIES.map((c) => `${r.categories[c].briefs} (${r.categories[c].items})`).join(" | ")} | ` +
         `${pct(r.meanRecall)} | ${pct(r.meanPrecision)} | ${pct(r.verdictAgreement)} |`,
+    ),
+    ...rows.flatMap((r) =>
+      r.droppedPoints === undefined
+        ? []
+        : [
+            `Self-audit dropped (${r.split}): ${r.droppedPoints.items} point(s) in ${r.droppedPoints.briefs} brief(s) ` +
+              `(${DROPPED_POINT_REASONS.map((reason) => `${reason} ${r.droppedPoints!.byReason[reason]}`).join(", ")}).`,
+          ],
     ),
     "",
     "Failure columns: briefs failing on the category (failing items). gates passed counts every brief, so an unscored brief is a gate failure.",
@@ -387,4 +481,93 @@ export function formatAggregate(
         : ""),
   ];
   return lines.join("\n");
+}
+
+/**
+ * Everything that decides what a fit-brief run measured: the `config`
+ * every artifact records and the report header prints.
+ */
+export interface FitBriefRunConfig {
+  readonly model: string;
+  readonly effort?: string;
+  /** e.g. generation/fitBrief.v1. */
+  readonly generatorPrompt: string;
+  /** `fitBriefRequestFingerprint` for the model, effort and prompt version. */
+  readonly generatorRequest: string;
+  readonly judgeModel: string;
+  readonly judgeEffort?: string;
+  readonly judgePrompt: string;
+  readonly corpus: string;
+  readonly evidenceMode: string;
+  readonly extraction?: string;
+  readonly unitsFormat?: string;
+  readonly unitsSource?: string;
+  readonly unitsSha256?: string;
+  /** v2 only: how many numbered claim-rule checks the request carried. */
+  readonly claimRuleChecks?: number;
+}
+
+export type Comparability =
+  | { readonly ok: true; readonly differences: readonly string[] }
+  | { readonly ok: false; readonly reason: string; readonly differences: readonly string[] };
+
+const RUN_CONFIG_KEYS = [
+  "model",
+  "effort",
+  "generatorPrompt",
+  "generatorRequest",
+  "judgeModel",
+  "judgeEffort",
+  "judgePrompt",
+  "corpus",
+  "evidenceMode",
+  "extraction",
+  "unitsFormat",
+  "unitsSource",
+  "unitsSha256",
+  "claimRuleChecks",
+] as const satisfies readonly (keyof FitBriefRunConfig)[];
+
+/**
+ * Whether two runs may be read as one comparison. A matrix varies the
+ * generator model, its effort and the evidence mode; everything else must
+ * match. Refused, first match giving the reason:
+ *
+ * 1. different generator prompts (a v1 run and a v2 run are different
+ *    experiments, #655);
+ * 2. a different judge model, effort or prompt;
+ * 3. different corpus inputs;
+ * 4. the same model and effort with a different request fingerprint (the
+ *    template changed in place);
+ * 5. a different number of claim-rule checks;
+ * 6. two units-mode runs on different extractions or evidence.
+ *
+ * `differences` always lists every key whose value differs, so a declared
+ * contrast (v2 minus v1) can show it differs only where intended.
+ */
+export function comparable(a: FitBriefRunConfig, b: FitBriefRunConfig): Comparability {
+  const differences = RUN_CONFIG_KEYS.filter((k) => a[k] !== b[k]);
+  const differs = (k: (typeof RUN_CONFIG_KEYS)[number]) => differences.includes(k);
+  const refuse = (reason: string): Comparability => ({ ok: false, reason, differences });
+  if (differs("generatorPrompt")) {
+    return refuse(
+      `different generator prompts (${a.generatorPrompt} vs ${b.generatorPrompt}): runs on different prompt versions are different experiments`,
+    );
+  }
+  if (differs("judgeModel") || differs("judgeEffort") || differs("judgePrompt")) {
+    return refuse("different judge (model, effort or prompt): judged measures are not on one scale");
+  }
+  if (differs("corpus")) return refuse("different corpus inputs");
+  if (!differs("model") && !differs("effort") && differs("generatorRequest")) {
+    return refuse("same model and effort but a different request fingerprint: the request template changed");
+  }
+  if (differs("claimRuleChecks")) return refuse("different claim-rule check counts: the rules were split differently");
+  if (
+    a.evidenceMode === "units" &&
+    b.evidenceMode === "units" &&
+    (differs("extraction") || differs("unitsFormat") || differs("unitsSha256"))
+  ) {
+    return refuse("units-mode runs on different extractions or evidence");
+  }
+  return { ok: true, differences };
 }
