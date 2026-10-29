@@ -188,7 +188,7 @@ describe("runFixedInputs", () => {
 });
 
 describe("runFixedInputs with owner corrections", () => {
-  function correctionsFile(name: string, sample: number, items: ReturnType<typeof savedItems>): string {
+  function correctionsFile(name: string, sample: number, items: ReturnType<typeof savedItems>, opts: { add?: boolean } = {}): string {
     const body = {
       resumeId: RESUME,
       jdId: JD,
@@ -205,6 +205,7 @@ describe("runFixedInputs with owner corrections", () => {
       })),
       notes: `sample ${sample}`,
     };
+    if (opts.add) body.units.push({ owner_verdict: "add", raw_text: "A missed fact.", normalized_summary: "A missed fact about launches", skills: ["launch"] } as never);
     const path = join(base, name);
     writeFileSync(path, JSON.stringify(body, null, 2));
     return path;
@@ -217,7 +218,7 @@ describe("runFixedInputs with owner corrections", () => {
   }
 
   it("runs the source flow only, names the set by hash and lists the corrected items", async () => {
-    const file = correctionsFile("c.json", 1, savedItems(1, { dropReqs: 2 }));
+    const file = correctionsFile("c.json", 1, savedItems(1, { dropReqs: 2 }), { add: true });
     const outcome = await runFixedInputs(
       parseFixedInputArgs(argv("--units", file, "--requirements", file)),
       deps({ manifestPath: manifest(file) }),
@@ -238,6 +239,13 @@ describe("runFixedInputs with owner corrections", () => {
     ]);
     expect(outcome.stdout).toContain("## Corrected items");
     expect(outcome.stdout).toContain(`sha256 ${sha256File(file)}`);
+    expect(result.corrections[0]!.provenance.added).toEqual([
+      expect.objectContaining({ id: "added_1", confidence_score: 0.9, confidence_from: "source median", date_range: null, seniority_signals: [] }),
+    ]);
+    expect(outcome.stdout).toContain(
+      'added_1 "A missed fact about launches" (confidence_score 0.9 from source median; date_range none; seniority_signals none)',
+    );
+    // One saved Unit dropped, one added.
     expect(result.flows[0]!.unitCount).toBe(savedItems(1).units.length);
   });
 

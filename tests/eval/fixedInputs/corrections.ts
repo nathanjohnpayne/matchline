@@ -42,9 +42,24 @@
  * since only `fix` changes an item.
  * - `add` (Units only): a Unit the extractor missed, with at least
  *   `raw_text`, `normalized_summary` and `skills`. It gets the id
- *   `added_<n>` and, for every field it does not set, the gold-Unit
- *   constants (confidence 1, no signals, no outcomes or metrics, no date
- *   range).
+ *   `added_<n>`. The owner may also set `confidence_score` (a number in
+ *   [0, 1]), `date_range` (`{start, end?}`) and `seniority_signals`.
+ *   Every other field it does not set takes the gold-Unit constants (no
+ *   scope signals, no outcomes or metrics, evidence `verified`).
+ *
+ *   Added-Unit defaults are NOT ranking-neutral beside extracted Units.
+ *   The gold constants are neutral only when every Unit carries them
+ *   (the `gold` input); here an added Unit sits next to kept and fixed
+ *   extracted Units. Every scorer multiplies by `confidence_score`, so
+ *   the default confidence is the median `confidence_score` of the
+ *   source flow's kept and fixed Units (of all its saved Units when none
+ *   is kept or fixed; 1 when it saved none), not 1. Without
+ *   `seniority_signals` the seniority term measures 0 on a Requirement
+ *   that sets a seniority level, and without `date_range` the current
+ *   scorer pays the neutral 0.5 for recency where dated Units get a real
+ *   value; the owner sets both to avoid that. Each added Unit's
+ *   effective `confidence_score` (and where it came from), `date_range`
+ *   and `seniority_signals` are recorded in the provenance and printed.
  *
  * Every owner-review field (`owner_*` other than the item's own
  * `owner_uid`) is stripped. The result is a plain Units or
@@ -66,7 +81,7 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-import type { ExperienceUnit, JobRequirementUnit } from "../../../functions/src/types/capability.ts";
+import type { DateRange, ExperienceUnit, JobRequirementUnit } from "../../../functions/src/types/capability.ts";
 
 import type { FlowRecord } from "../flowRecord.ts";
 
@@ -166,7 +181,18 @@ export interface SideProvenance {
   readonly kept: readonly string[];
   readonly fixed: readonly { readonly id: string; readonly fields: readonly string[] }[];
   readonly dropped: readonly string[];
-  readonly added: readonly { readonly id: string; readonly normalized_summary: string }[];
+  readonly added: readonly AddedUnitProvenance[];
+}
+
+/** What the matcher was given for an owner-added Unit. */
+export interface AddedUnitProvenance {
+  readonly id: string;
+  readonly normalized_summary: string;
+  readonly confidence_score: number;
+  /** `owner`: set in the file; `source median`: the median rule (see the module docs). */
+  readonly confidence_from: "owner" | "source median";
+  readonly date_range: DateRange | null;
+  readonly seniority_signals: readonly string[];
 }
 
 const UNIT_VERDICTS = ["keep", "fix", "drop", "add"] as const;
@@ -202,6 +228,34 @@ function changedFields(before: Record<string, unknown>, after: Record<string, un
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+
+function median(values: readonly number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+function isDateRange(v: unknown): v is DateRange {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  const r = v as Record<string, unknown>;
+  const keysOk = Object.keys(r).every((k) => k === "start" || k === "end");
+  return keysOk && nonEmpty(r.start) && (r.end === undefined || nonEmpty(r.end));
+}
+
+/** Check the fields an owner may set on an added Unit beyond the required three. */
+function checkAddedFields(item: Record<string, unknown>, at: string): void {
+  const c = item.confidence_score;
+  if (c !== undefined && (typeof c !== "number" || !Number.isFinite(c) || c < 0 || c > 1)) {
+    throw new Error(`${at}: an added Unit's confidence_score must be a number in [0, 1] (got ${JSON.stringify(c)})`);
+  }
+  if (item.date_range !== undefined && !isDateRange(item.date_range)) {
+    throw new Error(`${at}: an added Unit's date_range must be {start, end?} with non-empty date strings`);
+  }
+  if (item.seniority_signals !== undefined && !isStringArray(item.seniority_signals)) {
+    throw new Error(`${at}: an added Unit's seniority_signals must be a list of strings`);
+  }
+}
 
 interface Applied<T> {
   readonly items: T[];
@@ -241,7 +295,9 @@ export function applyUnitCorrections(
   const kept: string[] = [];
   const fixed: { id: string; fields: string[] }[] = [];
   const dropped: string[] = [];
-  const added: { id: string; normalized_summary: string }[] = [];
+  // Added Units are completed after the loop, once the kept and fixed
+  // Units that set the default confidence are known.
+  const pendingAdds: { index: number; id: string; ownerConfidence: boolean }[] = [];
   items.forEach((item, i) => {
     const at = `${where}: units[${i}]`;
     const verdict = item.owner_verdict;
@@ -253,7 +309,8 @@ export function applyUnitCorrections(
       if (!nonEmpty(item.raw_text) || !nonEmpty(item.normalized_summary) || !isStringArray(item.skills)) {
         throw new Error(`${at}: an added Unit needs raw_text, normalized_summary and skills`);
       }
-      const id = `added_${added.length + 1}`;
+      checkAddedFields(item, at);
+      const id = `added_${pendingAdds.length + 1}`;
       const unit = {
         owner_uid: GOLD_OWNER_UID,
         source_type: "resume",
@@ -266,15 +323,14 @@ export function applyUnitCorrections(
         business_outcomes: [],
         metrics: [],
         evidence_type: "verified",
-        confidence_score: 1,
         user_approved: true,
         created_at: "",
         updated_at: "",
         ...stripOwner(item),
         id,
       } as unknown as ExperienceUnit;
+      pendingAdds.push({ index: out.length, id, ownerConfidence: item.confidence_score !== undefined });
       out.push(unit);
-      added.push({ id, normalized_summary: unit.normalized_summary });
       return;
     }
     const id = item.id;
@@ -314,6 +370,23 @@ export function applyUnitCorrections(
     fixed.push({ id, fields });
   });
   checkCoverage(where, "units", listed, bySource);
+  const addedIds = new Set(pendingAdds.map((a) => a.id));
+  const baseline =
+    median(out.filter((u) => !addedIds.has(u.id)).map((u) => u.confidence_score)) ??
+    median(source.map((u) => u.confidence_score)) ??
+    1;
+  const added: AddedUnitProvenance[] = pendingAdds.map(({ index, id, ownerConfidence }) => {
+    const unit = ownerConfidence ? out[index]! : { ...out[index]!, confidence_score: baseline };
+    out[index] = unit;
+    return {
+      id,
+      normalized_summary: unit.normalized_summary,
+      confidence_score: unit.confidence_score,
+      confidence_from: ownerConfidence ? "owner" : "source median",
+      date_range: unit.date_range ?? null,
+      seniority_signals: unit.seniority_signals,
+    };
+  });
   return { items: out, provenance: { kept, fixed, dropped, added } };
 }
 

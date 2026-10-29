@@ -87,12 +87,80 @@ describe("applyUnitCorrections", () => {
     expect(out.every((u) => Object.keys(u).every((k) => !isReviewField(k)))).toBe(true);
     expect(out[0]).toEqual(source[0]);
     expect(out[1]).toMatchObject({ id: source[1]!.id, raw_text: "Corrected raw text.", normalized_summary: "Corrected summary of the work", skills: ["new skill"] });
-    expect(out.at(-1)).toMatchObject({ id: "added_1", confidence_score: 1, seniority_signals: [], metrics: [], normalized_summary: "A missed fact about launches" });
+    expect(out.at(-1)).toMatchObject({ id: "added_1", confidence_score: 0.9, seniority_signals: [], metrics: [], normalized_summary: "A missed fact about launches" });
     expect(out.at(-1)).not.toHaveProperty("date_range");
     expect(provenance.kept).toEqual(source.filter((_, i) => i !== 1 && i !== 2).map((u) => u.id));
     expect(provenance.fixed).toEqual([{ id: source[1]!.id, fields: ["normalized_summary", "raw_text", "skills"] }]);
     expect(provenance.dropped).toEqual([source[2]!.id]);
-    expect(provenance.added).toEqual([{ id: "added_1", normalized_summary: "A missed fact about launches" }]);
+    expect(provenance.added).toEqual([
+      {
+        id: "added_1",
+        normalized_summary: "A missed fact about launches",
+        confidence_score: 0.9,
+        confidence_from: "source median",
+        date_range: null,
+        seniority_signals: [],
+      },
+    ]);
+  });
+
+  it("defaults an added Unit's confidence to the source flow's kept and fixed median; an owner value overrides it", () => {
+    expect(source.every((u) => u.confidence_score === 0.9)).toBe(true);
+    const s = scaffold(items);
+    // The added Unit comes first, before the kept Units that set its default.
+    s.units.unshift({ owner_verdict: "add", raw_text: "Missed.", normalized_summary: "A missed fact", skills: ["a"] });
+    s.units.push({
+      owner_verdict: "add",
+      raw_text: "Also missed.",
+      normalized_summary: "Another missed fact",
+      skills: ["b"],
+      confidence_score: 0.7,
+      date_range: { start: "2020-01", end: "2022-06" },
+      seniority_signals: ["led a team of 6"],
+    });
+    const { items: out, provenance } = applyUnitCorrections(s.units, source, "c");
+    expect(out[0]).toMatchObject({ id: "added_1", confidence_score: 0.9 });
+    expect(out.at(-1)).toMatchObject({
+      id: "added_2",
+      confidence_score: 0.7,
+      date_range: { start: "2020-01", end: "2022-06" },
+      seniority_signals: ["led a team of 6"],
+    });
+    expect(provenance.added.map((a) => [a.id, a.confidence_score, a.confidence_from, a.date_range, a.seniority_signals])).toEqual([
+      ["added_1", 0.9, "source median", null, []],
+      ["added_2", 0.7, "owner", { start: "2020-01", end: "2022-06" }, ["led a team of 6"]],
+    ]);
+
+    // The median is over the kept and fixed Units only, not dropped ones.
+    const mixed = source.map((u, i) => ({ ...u, confidence_score: [0.95, 0.85, 0.5][i % 3]! }));
+    const m = { ...scaffold(items), units: mixed.map((u) => ({ ...u, owner_verdict: "keep", owner_corrected_raw_text: null })) as Record<string, unknown>[] };
+    const lowIdx = mixed.map((u, i) => [u.confidence_score, i] as const).filter(([c]) => c === 0.5).map(([, i]) => i);
+    for (const i of lowIdx) m.units[i]!.owner_verdict = "drop";
+    m.units.push({ owner_verdict: "add", raw_text: "x.", normalized_summary: "A third missed fact", skills: [] });
+    const kept = mixed.filter((u) => u.confidence_score !== 0.5).map((u) => u.confidence_score).sort((a, b) => a - b);
+    const mid = Math.floor(kept.length / 2);
+    const expected = kept.length % 2 === 1 ? kept[mid]! : (kept[mid - 1]! + kept[mid]!) / 2;
+    expect(applyUnitCorrections(m.units, mixed, "c").provenance.added[0]!.confidence_score).toBe(expected);
+
+    // With nothing kept or fixed, the default falls back to every saved Unit.
+    const allDropped = { ...scaffold(items) };
+    allDropped.units = allDropped.units.map((u) => ({ ...u, owner_verdict: "drop" }));
+    allDropped.units.push({ owner_verdict: "add", raw_text: "y.", normalized_summary: "Only fact", skills: [] });
+    expect(applyUnitCorrections(allDropped.units, source, "c").items).toEqual([expect.objectContaining({ id: "added_1", confidence_score: 0.9 })]);
+  });
+
+  it("refuses malformed owner-set confidence, date_range or seniority_signals on an added Unit", () => {
+    const add = (extra: Record<string, unknown>) => {
+      const s = scaffold(items);
+      s.units.push({ owner_verdict: "add", raw_text: "x", normalized_summary: "y", skills: [], ...extra });
+      return () => applyUnitCorrections(s.units, source, "c");
+    };
+    expect(add({ confidence_score: 1.5 })).toThrow(/confidence_score must be a number in \[0, 1\]/);
+    expect(add({ confidence_score: "0.9" })).toThrow(/confidence_score must be a number/);
+    expect(add({ date_range: { end: "2020" } })).toThrow(/date_range must be \{start, end\?\}/);
+    expect(add({ date_range: { start: "2020", until: "2021" } })).toThrow(/date_range must be/);
+    expect(add({ seniority_signals: "senior" })).toThrow(/seniority_signals must be a list of strings/);
+    expect(add({ confidence_score: 0 })).not.toThrow();
   });
 
   it("accepts a fix that changes only normalized_summary or skills without restating raw_text", () => {

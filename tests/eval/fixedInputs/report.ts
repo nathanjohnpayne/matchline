@@ -172,7 +172,18 @@ function formatProvenance(c: CorrectionReport): string {
     `- Dropped (${p.dropped.length}): ${p.dropped.join(", ") || "none"}.`,
   ];
   if (c.side === "units") {
-    lines.push(`- Added (${p.added.length}): ${p.added.map((a) => `${a.id} "${a.normalized_summary}"`).join("; ") || "none"}.`);
+    lines.push(
+      `- Added (${p.added.length}): ${
+        p.added
+          .map(
+            (a) =>
+              `${a.id} "${a.normalized_summary}" (confidence_score ${a.confidence_score} from ${a.confidence_from}; ` +
+              `date_range ${a.date_range === null ? "none" : `${a.date_range.start} to ${a.date_range.end ?? "open"}`}; ` +
+              `seniority_signals ${a.seniority_signals.length === 0 ? "none" : `[${a.seniority_signals.join(", ")}]`})`,
+          )
+          .join("; ") || "none"
+      }.`,
+    );
   }
   for (const o of c.overrides ?? []) {
     const parts = [
