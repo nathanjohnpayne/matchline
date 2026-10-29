@@ -33,6 +33,8 @@ a follow-on ticket.
    reason, never a commit-message afterthought. CI enforces this via
    `scripts/ci/` checks.
 
+**LLM-stage evaluations.** A change to a validation subtask or to generation (prompt, schema, model, effort or output cap) keeps its mocked-provider unit tests and, when it claims a quality or cost effect, cites an `npm run eval:subtasks` run (`tests/eval/README.md` § Generation and validation-subtask suites). Start with `--dry-run`, which needs no keys; a paid run needs `--max-usd` and a projection posted on #495 first. Labeled cases and snapshots are immutable for a comparison: a relabel bumps `label_version`, updates `tests/fixtures/eval-labels.lock.json`, and lands as its own reviewed PR.
+
 ## Spec alignment
 
 Every spec file under `specs/` must have a corresponding test file

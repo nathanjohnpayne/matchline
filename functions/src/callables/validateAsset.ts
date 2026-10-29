@@ -9,8 +9,9 @@
  * callable also rejects unauthorized calls up front (defense in
  * depth, same shape as parseJobRequirements / runMatching).
  *
- * No LLM secrets are scoped explicitly here — the underlying
- * checks call modelFor("validation") and use the existing
+ * No LLM secrets are scoped explicitly here — each underlying
+ * check calls modelFor for its own stage (`claim_extraction`,
+ * `traceability` or `specificity`, #489) and uses the existing
  * anthropic() factory which reads from the standard secret.
  */
 

@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "id": "vc-14-adversarial-fabrication",
+  "category": "adversarial_fabrication",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "nathan-2026",
+    "derived_from": "expected-asset-traces/adversarial-fabrication.json"
+  },
+  "units": [
+    {
+      "id": "u_kepler",
+      "raw_text": "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV's Android stack with a native Linux-based OS. Ported all three NCP apps, hit the September 2025 announcement, shipped on-time in October with zero negative impact to engagement metrics. Fire TV is Disney's fourth-largest living room platform (~18M monthly active devices).",
+      "normalized_summary": "Led Amazon Kepler launch — ground-up rewrite replacing Fire TV Android stack with native Linux-based OS",
+      "unit_type": "project",
+      "skills": [
+        "platform launch",
+        "partner integration",
+        "device certification",
+        "cross-team leadership",
+        "release engineering"
+      ],
+      "tools": [
+        "NCP",
+        "Fire TV",
+        "Kepler",
+        "Linux"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "connected devices"
+      ],
+      "metrics": []
+    },
+    {
+      "id": "u_platform_health",
+      "raw_text": "Ran NCP plus ADK platform health reporting across Conviva, Sentry, and Datadog. Weekly exec-format narration, Q2/Q3 KPI tracking (FPS, Glimpse attribution, DataDog migration, AI PR cycle time), and automation to port Sentry dashboards to Datadog ahead of the July 2026 cutover.",
+      "normalized_summary": "Ran NCP and ADK platform health reporting across Conviva, Sentry, Datadog with weekly exec narration and Sentry-to-DataDog cutover automation",
+      "unit_type": "ownership",
+      "skills": [
+        "platform observability",
+        "executive reporting",
+        "KPI tracking",
+        "cross-tool migration"
+      ],
+      "tools": [
+        "Conviva",
+        "Sentry",
+        "DataDog"
+      ],
+      "domains": [
+        "streaming video infrastructure",
+        "platform observability"
+      ],
+      "metrics": []
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Drove the multi-year roadmap for x86/Arm hybrid CPU architectures at hyperscale, shipping 12 new SKUs into a 100-million-VM fleet and increasing per-instance throughput by 40% on SAP HANA workloads. Negotiated $400M in three-year cloud-migration contracts with VPs at five Fortune-50 enterprises, displacing AWS in two of them.",
+    "source_unit_ids": [
+      "u_kepler",
+      "u_platform_health"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Drove the multi-year roadmap for x86/Arm hybrid CPU architectures at hyperscale.",
+        "required_terms": [
+          "x86/Arm",
+          "CPU"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      },
+      {
+        "id": "a2",
+        "text": "Shipped 12 new SKUs into a 100-million-VM fleet.",
+        "required_terms": [
+          [
+            "100-million-VM",
+            "100 million"
+          ]
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      },
+      {
+        "id": "a3",
+        "text": "Increased per-instance throughput by 40% on SAP HANA workloads.",
+        "required_terms": [
+          "40%",
+          "SAP HANA"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      },
+      {
+        "id": "a4",
+        "text": "Negotiated $400M in cloud-migration contracts, displacing AWS in two of them.",
+        "required_terms": [
+          "$400M",
+          "AWS"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Verdicts and status come from the owner-labeled file (nathanjohnpayne, 2026-04-26); only the cited Units and required_terms are drafts."
+}

@@ -29,7 +29,8 @@ import { createHash } from "node:crypto";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
-import { modelFor } from "../llm/config.js";
+import { effortFor, modelFor, type ValidationStage } from "../llm/config.js";
+import { toolCallRequest } from "../llm/modelProfile.js";
 import {
   anthropicUsageFields,
   promptVersionLabel,
@@ -49,6 +50,9 @@ import {
   ClaimExtractionError,
   type ValidationAttemptFailure,
 } from "./errors.js";
+
+/** This module's separately configurable model stage (#489). */
+const STAGE: ValidationStage = "claim_extraction";
 
 /** Output-token budget per attempt; also recorded on each usage record. */
 const MAX_OUTPUT_TOKENS = 2048;
@@ -155,12 +159,23 @@ export async function extractClaims(
   }
 
   const prompt = loadPromptText("validation", "claimExtraction");
-  const { provider, model } = modelFor("validation");
+  const { provider, model } = modelFor(STAGE);
   if (provider !== "anthropic") {
     throw new Error(
-      `Validation stage expects an Anthropic model; modelFor("validation") returned provider=${provider}. Update config.ts.`,
+      `Validation stage "${STAGE}" expects an Anthropic model; modelFor("${STAGE}") returned provider=${provider}. Update config.ts.`,
     );
   }
+  // Model-specific request shape, built once before the retry loop so an
+  // unsupported effort refuses before any request (modelProfile.ts, #579).
+  // Never sends a manual `thinking` field: forced tool choice only where the
+  // model accepts it, otherwise `auto` plus the suffix; a text answer is the
+  // existing `no_tool_use` failure and retries (#489).
+  const request = toolCallRequest({
+    model,
+    toolName: TOOL_NAME,
+    baseMaxTokens: MAX_OUTPUT_TOKENS,
+    effort: effortFor(STAGE),
+  });
 
   const toolSchema = zodToToolSchema(ClaimExtractionResponseV1Schema);
 
@@ -171,14 +186,14 @@ export async function extractClaims(
     // e.g. after a backoff that `sleep` cut short (Codex on #621).
     ctx.signal?.throwIfAborted();
     const start = Date.now();
-    const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
+    const systemWithReminder = prompt.system + request.systemSuffix + (RETRY_REMINDERS[attempt] ?? "");
     const userContent = buildUserContent(prompt.userFewShot, bullet, ctx);
 
     let response: Anthropic.Messages.Message;
     try {
       response = await client.messages.create({
         model,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: request.max_tokens,
         system: systemWithReminder,
         tools: [
           {
@@ -188,10 +203,11 @@ export async function extractClaims(
             input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
           },
         ],
-        tool_choice: { type: "tool", name: TOOL_NAME },
+        tool_choice: request.tool_choice,
+        ...(request.output_config !== undefined && { output_config: request.output_config }),
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      }, { signal: ctx.signal });
+      }, { signal: ctx.signal, ...request.requestOptions });
     } catch (err) {
       // An abort is the orchestrator's decision, not a transport
       // fault: no retry, no backoff.
@@ -223,11 +239,12 @@ export async function extractClaims(
         stage: "validation",
         provider: "anthropic",
         model,
-        subtask: "claim_extraction",
+        subtask: STAGE,
         ...anthropicUsageFields(response),
         promptVersion: promptVersionLabel(prompt),
         attempt,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: request.max_tokens,
+        ...(request.effort !== undefined && { effort: request.effort }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
         ...(ctx.applicationId !== undefined && { applicationId: ctx.applicationId }),

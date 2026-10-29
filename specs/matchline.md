@@ -448,6 +448,8 @@ Traceability reads each candidate Unit through the formatter generation uses (`f
 
 The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. This `stale` means the asset changed since its last validation run, and it blocks export; it is unrelated to staleness against the canonical, which is a non-blocking warning. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
 
+Each validation subtask (claim extraction, traceability, specificity) is a separately configured model stage (#489), and `npm run eval:subtasks` evaluates each one in isolation against labeled cases, plus generation followed by validation pinned to production defaults (#488; see `tests/eval/README.md`). Its labeled cases and generation snapshots are drafts until the owner reviews them, so no result from them is a comparison of record.
+
 ## AI pipeline
 
 Async (cached):
@@ -468,20 +470,14 @@ Real-time:
 
 Model strategy:
 
-- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6
-  for extraction and validation; Claude Haiku 4.5 for requirement
-  parsing and generation. Embeddings use OpenAI
-  `text-embedding-3-small`. Match rationales make no LLM call: they
-  come from a deterministic template (`generateRationale()` in
-  `functions/src/matching/rationale.ts`, #100). The config's
-  `rationale` entry (Sonnet 4.6) is set but unused.
+- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6 for extraction and for each validation subtask, configured separately as `claim_extraction`, `traceability` and `specificity` (#489); Claude Haiku 4.5 for requirement parsing and generation. Embeddings use OpenAI `text-embedding-3-small`. Match rationales make no LLM call: they come from a deterministic template (`generateRationale()` in `functions/src/matching/rationale.ts`, #100). The config's `rationale` entry is reserved and never read (see the comment in `config.ts`). Each validation usage record keeps `stage: "validation"` and names its subtask. A default changes only through a measured, approved PR.
 - The Claude 5.5 models are wired for evaluation runs only (#579). A
   production default changes only through its own approved change,
   informed by #495.
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
 
-The eval harness does not yet sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing). The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
+The corpus sweep (`npm run eval`) does not sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing); `npm run eval:subtasks -- --suite generation` does. The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
 
 ## Streaming progress
 
