@@ -82,6 +82,37 @@ describe("ReplayStore", () => {
     expect(got?.message.content[0]).toMatchObject({ type: "tool_use" });
   });
 
+  it("treats a truncated or non-JSON replay entry as a miss and records the read error", () => {
+    const fs = memFs();
+    const writer = new ReplayStore({ dir: "/r", mode: "fresh", fs });
+    const key = replayKey(BASE);
+    writer.put("traceability", key, STORED);
+    const [path] = [...fs.files.keys()];
+    fs.files.set(path!, fs.files.get(path!)!.slice(0, 40)); // a put interrupted mid-write
+    const reader = new ReplayStore({ dir: "/r", mode: "replay", fs });
+    expect(reader.get("traceability", key)).toBeNull();
+    expect(reader.readErrors).toHaveLength(1);
+    expect(reader.readErrors[0]!.path).toBe(path);
+    fs.files.set(path!, JSON.stringify({ not: "a stored response" }));
+    expect(reader.get("traceability", key)).toBeNull();
+    expect(reader.readErrors).toHaveLength(2);
+    expect(reader.readErrors[1]!.message).toMatch(/not a StoredResponse/);
+    fs.files.set(path!, JSON.stringify(STORED));
+    expect(reader.get("traceability", key)?.producedByRunId).toBe("eval-run-1");
+    expect(reader.readErrors).toHaveLength(2);
+  });
+
+  it("treats an unreadable replay entry as a miss and records the read error", () => {
+    const fs = memFs();
+    const writer = new ReplayStore({ dir: "/r", mode: "fresh", fs });
+    const key = replayKey(BASE);
+    writer.put("traceability", key, STORED);
+    const broken: MiniFs = { ...fs, readFileSync: () => { throw new Error("EIO: i/o error"); } };
+    const reader = new ReplayStore({ dir: "/r", mode: "replay", fs: broken });
+    expect(reader.get("traceability", key)).toBeNull();
+    expect(reader.readErrors[0]!.message).toMatch(/EIO/);
+  });
+
   it("bypass neither reads nor writes", () => {
     const fs = memFs();
     const store = new ReplayStore({ mode: "bypass", fs, dir: "/r" });

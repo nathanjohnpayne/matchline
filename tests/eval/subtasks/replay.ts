@@ -71,6 +71,13 @@ export interface MiniFs {
 
 export class ReplayStore {
   readonly mode: ReplayMode;
+  /**
+   * Entries `get` could not read: a file truncated by an interrupted `put`,
+   * or one that is not JSON. Each is treated as a miss so a `--replay` run
+   * sends that request live (with a key) or fails offline on it, instead of
+   * dying on a parse error; the run reports the count.
+   */
+  readonly readErrors: { readonly path: string; readonly message: string }[] = [];
   private readonly dir: string;
   private readonly fs: MiniFs;
 
@@ -92,7 +99,24 @@ export class ReplayStore {
     if (this.mode !== "replay") return null;
     const p = this.path(stage, key);
     if (!this.fs.existsSync(p)) return null;
-    return JSON.parse(this.fs.readFileSync(p, "utf8")) as StoredResponse;
+    let raw: string;
+    try {
+      raw = this.fs.readFileSync(p, "utf8");
+    } catch (err) {
+      this.readErrors.push({ path: p, message: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed === null || typeof parsed !== "object" || !("message" in parsed)) {
+        throw new Error("stored entry is not a StoredResponse object");
+      }
+      return parsed as StoredResponse;
+    } catch (err) {
+      // A truncated or foreign file reads as a miss, never as a crash.
+      this.readErrors.push({ path: p, message: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
   }
 
   /** Store an HTTP-successful response; a no-op in `bypass` mode. */
