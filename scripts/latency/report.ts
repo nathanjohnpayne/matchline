@@ -6,7 +6,9 @@
  * here; `load.ts` holds that query so the emulator suite can test it.
  *
  * Two views:
- *   - per stage / subtask: n, p50, p95, max of `latencyMs`;
+ *   - per stage / subtask: n, p50, p95, max of `latencyMs`, and how
+ *     many calls the stage recovered before validation (`recovered`,
+ *     #650);
  *   - per application run: calls that share an `applicationId`
  *     (generation and validation tag it), with the call count, the
  *     sum of call latency, and the wall-clock span from the first call's
@@ -35,6 +37,8 @@ export interface CallRow {
   readonly runId?: string;
   readonly attempt?: number;
   readonly costUsd?: number;
+  /** Recovery the stage applied before validating, e.g. `units-string` (#650). */
+  readonly recovered?: string;
 }
 
 export interface LatencyStats {
@@ -49,6 +53,8 @@ export interface StageRow extends LatencyStats {
   readonly subtask: string;
   readonly models: readonly string[];
   readonly costUsd: number;
+  /** Calls carrying a `recovered` kind: output repaired instead of retried. */
+  readonly recovered: number;
 }
 
 export interface RunRow {
@@ -97,6 +103,7 @@ export function byStage(rows: readonly CallRow[]): StageRow[] {
       subtask: list[0].subtask ?? "",
       models: [...new Set(list.map((r) => r.model))].sort(),
       costUsd: list.reduce((s, r) => s + (r.costUsd ?? 0), 0),
+      recovered: list.filter((r) => r.recovered !== undefined).length,
       ...stats(list.map((r) => r.latencyMs)),
     }))
     .sort((a, b) => b.p95Ms - a.p95Ms);
@@ -187,10 +194,14 @@ export function renderMarkdown(
       `${product.length} product calls; ${evalCount} eval-harness calls (with a \`runId\`) excluded. ` +
       "Model-call latency only: callable, Firestore and network time are not in `llm_calls`.",
   );
-  out.push("", "| Stage | Subtask | Models | n | p50 | p95 | max |", "|---|---|---|---:|---:|---:|---:|");
+  out.push(
+    "",
+    "| Stage | Subtask | Models | n | p50 | p95 | max | recovered |",
+    "|---|---|---|---:|---:|---:|---:|---:|",
+  );
   for (const s of byStage(product)) {
     out.push(
-      `| ${s.stage} | ${s.subtask || "-"} | ${s.models.join(", ")} | ${s.n} | ${secs(s.p50Ms)} | ${secs(s.p95Ms)} | ${secs(s.maxMs)} |`,
+      `| ${s.stage} | ${s.subtask || "-"} | ${s.models.join(", ")} | ${s.n} | ${secs(s.p50Ms)} | ${secs(s.p95Ms)} | ${secs(s.maxMs)} | ${s.recovered} |`,
     );
   }
   const runs = byRun(product);

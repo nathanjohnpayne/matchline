@@ -31,7 +31,7 @@ export async function loadCallRows(
     .collection(LLM_CALLS_COLLECTION)
     .where("createdAt", ">=", new Date(window.sinceMs))
     .where("createdAt", "<", new Date(window.untilMs))
-    .select("stage", "subtask", "model", "latencyMs", "createdAt", "applicationId", "runId", "attempt", "costUsd")
+    .select("stage", "subtask", "model", "latencyMs", "createdAt", "applicationId", "runId", "attempt", "costUsd", "recovered")
     .get();
 
   const rows: CallRow[] = [];
@@ -49,6 +49,7 @@ export async function loadCallRows(
       runId: typeof d.runId === "string" ? d.runId : undefined,
       attempt: typeof d.attempt === "number" ? d.attempt : undefined,
       costUsd: typeof d.costUsd === "number" ? d.costUsd : undefined,
+      recovered: typeof d.recovered === "string" ? d.recovered : undefined,
     });
   }
   return rows;

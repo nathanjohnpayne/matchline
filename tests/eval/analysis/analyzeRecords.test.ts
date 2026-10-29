@@ -329,6 +329,39 @@ describe("analyzeRecords", () => {
     expect(md).not.toContain("SECRET-UNIT-TEXT");
   });
 
+  it("counts recovered live calls by kind beside the error kinds, in the Arms table and the JSON (#650)", () => {
+    seq = 0;
+    const flows = [
+      flow("inc", "r1", [GOOD], { calls: [call({ recovered: "units-string" })] }),
+      // A replayed call repeats one measured earlier, so its recovery is not counted again.
+      flow("inc", "r1", [GOOD], { calls: [call({ recovered: "units-string" }), call({ replayed: true, recovered: "units-string" })] }),
+      // Unrecovered: a string that did not decode failed all three attempts.
+      flow("inc", "r2", null, {
+        ok: false,
+        error: { kind: "schema_error", name: "ExtractionError", message: "failed", step: "extraction" },
+        calls: [call(), call({ attempt: 1, retry: true }), call({ attempt: 2, retry: true })],
+      }),
+      flow("cand", "r1", [GOOD]),
+      flow("cand", "r2", [GOOD]),
+    ];
+
+    const r = analyzeRecords(flows, { task: "extraction", incumbent: "inc", labels: LABELS, resamples: 200 });
+
+    expect(r.arms[0]).toMatchObject({ label: "inc", failedFlows: 1, errorKinds: { schema_error: 1 }, recoveries: { "units-string": 2 } });
+    expect(r.arms[1]).toMatchObject({ label: "cand", errorKinds: {}, recoveries: {} });
+    const md = formatAnalysisMarkdown(r);
+    expect(md).toContain("| refusals | error kinds | recoveries | task outputs |");
+    // flows, failed, failed in the task step, refusals, error kinds, recoveries.
+    expect(md).toMatch(/\| inc \| 3 \| 1 \| 1 \| 0 \| schema_error 1 \| units-string 2 \|/);
+    expect(md).toMatch(/\| cand \| 2 \| 0 \| 0 \| 0 \| — \| — \|/);
+    // Every Arms row has as many cells as the header.
+    const armsRows = md.split("\n").filter((l) => l.startsWith("| inc |") || l.startsWith("| cand |") || l.startsWith("| arm | flows"));
+    const cells = (l: string) => l.split(" | ").length;
+    expect(new Set(armsRows.slice(0, 3).map(cells)).size).toBe(1);
+    // `analysis-<task>.json` is this result serialized.
+    expect(JSON.parse(JSON.stringify(r)).arms[0].recoveries).toEqual({ "units-string": 2 });
+  });
+
   describe("a cell both arms ran but one arm has no values in (guard ran-cell-no-values)", () => {
     const refused = { ok: false, matchAccuracy: null, requirements: null, error: { kind: "refusal", name: null, message: "", step: "requirement_parsing" } };
     function dropCell(candR2: "refused" | "answered"): FlowRecord[] {

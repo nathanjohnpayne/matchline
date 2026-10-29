@@ -113,6 +113,13 @@ export interface ArmSummary {
   /** Flows that replayed both extraction and requirement parsing with a counted flow's outputs; their match accuracy is left out. */
   readonly repeatedMatchReplays: number;
   readonly errorKinds: Readonly<Record<string, number>>;
+  /**
+   * Live records whose stage recovered the model's output before
+   * validating it, by recovery kind (the usage record's `recovered`
+   * field, e.g. extraction's `units-string`, #650). A recovered call did
+   * not fail, so it never shows in `errorKinds`.
+   */
+  readonly recoveries: Readonly<Record<string, number>>;
   /** Live (non-replayed) usage records. */
   readonly records: number;
   readonly replayedRecords: number;
@@ -353,6 +360,10 @@ function summarizeArm(
     errorKinds[kind] = (errorKinds[kind] ?? 0) + 1;
   }
   const live = liveCalls(flows);
+  const recoveries: Record<string, number> = {};
+  for (const c of live) {
+    if (typeof c.recovered === "string") recoveries[c.recovered] = (recoveries[c.recovered] ?? 0) + 1;
+  }
   const replayed = flows.reduce((n, f) => n + f.calls.filter((c) => c.replayed).length, 0);
 
   const cellIds = [...new Set(flows.map((f) => f.cell))].sort();
@@ -411,6 +422,7 @@ function summarizeArm(
     repeatedReplays: scoredArm.repeatedReplays,
     repeatedMatchReplays: scoredArm.repeatedMatchReplays,
     errorKinds,
+    recoveries,
     records: live.length,
     replayedRecords: replayed,
     retryShare: live.length === 0 ? null : live.filter((c) => c.retry).length / live.length,
@@ -583,14 +595,15 @@ export function formatAnalysisMarkdown(result: AnalysisResult): string {
 
   lines.push("", "## Arms", "");
   lines.push(
-    "| arm | flows | failed | in task step | refusals | error kinds | task outputs | replayed task outputs | repeated replays dropped | repeated match replays dropped | " +
+    "| arm | flows | failed | in task step | refusals | error kinds | recoveries | task outputs | replayed task outputs | repeated replays dropped | repeated match replays dropped | " +
       "live records | retry share | truncations | replayed records | invocations | configs | modeled $/flow |",
   );
-  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+  const counts = (byKind: Readonly<Record<string, number>>): string =>
+    Object.entries(byKind).sort(([x], [y]) => x.localeCompare(y)).map(([k, n]) => `${k} ${n}`).join(", ") || "—";
   for (const a of result.arms) {
-    const kinds = Object.entries(a.errorKinds).sort(([x], [y]) => x.localeCompare(y)).map(([k, n]) => `${k} ${n}`).join(", ") || "—";
     lines.push(
-      `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.taskStepFailures} | ${a.refusals} | ${kinds} | ` +
+      `| ${a.label} | ${a.flows} | ${a.failedFlows} | ${a.taskStepFailures} | ${a.refusals} | ${counts(a.errorKinds)} | ${counts(a.recoveries)} | ` +
         `${a.taskOutputFlows} | ${a.replayedTaskFlows} | ${a.repeatedReplays} | ${a.repeatedMatchReplays} | ${a.records} | ${fmtShare(a.retryShare)} | ` +
         `${a.truncations} | ${a.replayedRecords} | ${a.invocations.length} | ${a.configs} | ` +
         `${a.modeledCostPerFlowUsd === null ? "—" : `$${a.modeledCostPerFlowUsd.toFixed(4)}`} |`,
