@@ -149,13 +149,20 @@ function comparablePath(path: string): string {
   return process.platform === "darwin" || process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-/** Something is at `path`, a dangling symlink included (`existsSync` follows links, so it misses one). */
+/**
+ * Something is at `path`, a dangling symlink included (`existsSync` follows
+ * links, so it misses one). Only a missing entry or a non-directory parent
+ * means absent; any other error (permissions, a loop, a path too long) is
+ * rethrown so `prepare` cannot proceed as though the path were free.
+ */
 function entryExists(path: string): boolean {
   try {
     lstatSync(path);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw err;
   }
 }
 
