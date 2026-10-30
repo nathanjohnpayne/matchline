@@ -95,8 +95,9 @@ When you return from a temporary machine, tell your agent:
 cd ~/Documents/GitHub
 for repo in friends-and-family-billing device-platform-reporting device-source-of-truth swipewatch nathanpaynedotcom overridebroadway matchline; do
   cd "$repo"
-  # Push any local config changes to 1Password
-  ./scripts/bootstrap.sh --sync
+  # Do not edit generated env files as the source of truth. If secret
+  # values changed, update the referenced 1Password item fields directly.
+  # If the shape changed, commit the matching .env.tpl update.
   # Ensure all code changes are committed and pushed
   git status
   cd ..
@@ -115,16 +116,11 @@ for repo in friends-and-family-billing device-platform-reporting device-source-o
 done
 ```
 
-The `--force` flag overwrites existing `.env.local` files with freshly resolved
-values from 1Password. This ensures you pick up any secrets that were updated
-on the temporary machine via `--sync`.
+The `--force` flag overwrites existing generated env files with freshly resolved values from 1Password. This ensures you pick up any secret values that were updated directly in 1Password.
 
 ### Conflict resolution
 
-If both machines modified the same 1Password item:
-- 1Password keeps the latest write (last-writer-wins)
-- The `.env.tpl` templates are in git, so structural changes merge normally
-- For true conflicts, compare with `op item get <id>` and resolve manually
+If two machines need different template structure, resolve it like normal source code: commit the `.env.tpl` change on one branch and merge/rebase. Secret values themselves should be edited directly in 1Password, not synced from generated local files.
 
 ---
 
