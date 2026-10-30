@@ -8,5 +8,7 @@
 #   2. Copy the item ID and add an entry below.
 
 BOOTSTRAP_FILES=(
-  # "item_id:.env.local"
+  # "Matchline Local Config (.env.local)": Firebase web config plus the
+  # GA4 measurement ID and PostHog token (#665). All browser-public values.
+  "4cycd542bjldo45lb65epoq7ni:.env.local"
 )
