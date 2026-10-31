@@ -232,6 +232,15 @@ const FAKE_SCORE: () => ScoreResult = () => ({
     scope_alignment: true,
     recency: true,
   },
+  effective_weights: {
+    semantic_similarity: 0.3,
+    skill_overlap: 0.2,
+    domain_overlap: 0.15,
+    tool_overlap: 0.1,
+    seniority_alignment: 0.1,
+    scope_alignment: 0.1,
+    recency: 0.05,
+  },
   rule_score: 0.5,
   semantic_score: 1,
   final_score: 0.5,
@@ -264,6 +273,52 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
       expect(m.role_id).toBe("role-1");
       expect(m.owner_uid).toBe(ALICE);
     }
+  });
+
+  it("effective_weights round-trips through the replace (#601), and a legacy row without it still reads", async () => {
+    await seedRole("role-1", ALICE);
+    // A pre-#601 row in a different Role: no effective_weights,
+    // schema_version 1. The rerun below must not touch it.
+    await db().collection("unitMatches").doc("legacy-match").set({
+      id: "legacy-match",
+      owner_uid: ALICE,
+      role_id: "role-legacy",
+      experience_unit_id: "u-old",
+      job_requirement_unit_id: "r-old",
+      semantic_score: 0.7,
+      rule_score: 0.6,
+      final_score: 0.5,
+      schema_version: 1,
+      rationale: "Matched on semantic similarity.",
+      surface_evidence: "",
+      approved_for_use: false,
+      user_rejected: false,
+      created_at: "2026-01-01T00:00:00.000Z",
+    });
+    await seedUnits([makeUnit("u1", ALICE)]);
+    await seedRequirements([makeRequirement("r1", ALICE, "role-1")]);
+
+    await runMatchingPipeline(
+      { ownerUid: ALICE, roleId: "role-1" },
+      { score: FAKE_SCORE },
+    );
+
+    const snap = await db()
+      .collection("unitMatches")
+      .where("owner_uid", "==", ALICE)
+      .where("role_id", "==", "role-1")
+      .get();
+    expect(snap.docs).toHaveLength(1);
+    const fresh = snap.docs[0]!.data() as UnitMatch;
+    expect(fresh.effective_weights).toEqual(FAKE_SCORE().effective_weights);
+    expect(fresh.schema_version).toBe(2);
+
+    const legacy = (
+      await db().collection("unitMatches").doc("legacy-match").get()
+    ).data() as UnitMatch;
+    expect(legacy.effective_weights).toBeUndefined();
+    expect(legacy.schema_version).toBe(1);
+    expect(legacy.rule_score).toBe(0.6);
   });
 
   it("re-running matching atomically replaces the prior set (no union, no leftovers)", async () => {
@@ -461,6 +516,7 @@ describe("runMatchingPipeline replace-by-(role, owner)", () => {
           scope_alignment: true,
           recency: true,
         },
+        effective_weights: FAKE_SCORE().effective_weights,
         rule_score: v,
         semantic_score: 1,
         final_score: v,

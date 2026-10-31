@@ -611,3 +611,183 @@ describe("computeGaps: stranded matches are counted, not dropped (#446)", () => 
     expect(report.strandedMatches).toBe(1);
   });
 });
+
+describe("computeGaps: could not be evaluated vs unmet (#602)", () => {
+  type Axes = NonNullable<UnitMatch["component_applicability"]>;
+  // Only semantics and recency applied: the shape `effectiveAxes`
+  // produces for a Requirement whose keywords, tools and domains
+  // canonicalize to nothing, with no recognized seniority level
+  // and no scope keywords.
+  const NONE: Axes = {
+    semantic_similarity: true,
+    skill_overlap: false,
+    domain_overlap: false,
+    tool_overlap: false,
+    seniority_alignment: false,
+    scope_alignment: false,
+    recency: true,
+  };
+  const SKILL: Axes = { ...NONE, skill_overlap: true };
+
+  function unevaluable(
+    id: string,
+    reqId: string,
+    score: number,
+    overrides: Partial<UnitMatch> = {},
+  ): UnitMatch {
+    return makeMatch(id, reqId, score, {
+      structural_evidence: false,
+      component_applicability: NONE,
+      ...overrides,
+    });
+  }
+
+  it("AC1: a must-have no structural axis applied to is not_evaluated — not unmet, not covered", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [unevaluable("m1", "r1", 0), unevaluable("m2", "r1", 0)],
+    );
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]!.status).toBe("not_evaluated");
+    expect(gaps[0]!.reasons).toEqual([]);
+  });
+
+  it("is not covered even by a high-scoring match (legacy-scale score, no applicable axis)", () => {
+    // A score alone cannot cover it, whatever produced the score.
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [unevaluable("m1", "r1", 0.9)],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["not_evaluated"]);
+  });
+
+  it("AC2: an evaluated must-have that no Unit meets is still unmet", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [
+        makeMatch("m1", "r1", 0.2, {
+          structural_evidence: false,
+          component_applicability: SKILL,
+        }),
+      ],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["unmet"]);
+  });
+
+  it("one evaluated pair among unevaluable ones makes it evaluated (unmet)", () => {
+    // The seniority-only case: one Unit's signals were unmapped,
+    // another Unit's were measurable.
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [
+        unevaluable("m1", "r1", 0),
+        makeMatch("m2", "r1", 0.1, {
+          structural_evidence: false,
+          component_applicability: { ...NONE, seniority_alignment: true },
+        }),
+      ],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["unmet"]);
+  });
+
+  it("a rejected evaluated pair still counts toward evaluability, not toward coverage", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [
+        unevaluable("m1", "r1", 0),
+        makeMatch("m2", "r1", 0.9, {
+          structural_evidence: true,
+          component_applicability: SKILL,
+          user_rejected: true,
+        }),
+      ],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["unmet"]);
+  });
+
+  it("a rejected unevaluable pair alone still reads as not_evaluated", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [unevaluable("m1", "r1", 0, { user_rejected: true })],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["not_evaluated"]);
+  });
+
+  it("an evaluated, evidenced match above threshold still covers (no change)", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [
+        unevaluable("m1", "r1", 0),
+        makeMatch("m2", "r1", 0.6, {
+          structural_evidence: true,
+          component_applicability: SKILL,
+        }),
+      ],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("legacy: any match without component_applicability keeps today's classification", () => {
+    // Legacy row with a stored `false` → unmet, as before #602.
+    const legacyFalse = computeGaps(
+      [makeReq("r1")],
+      [
+        unevaluable("m1", "r1", 0),
+        makeMatch("m2", "r1", 0.2, { structural_evidence: false }),
+      ],
+    );
+    expect(legacyFalse.gaps.map((g) => g.status)).toEqual(["unmet"]);
+    // Legacy row the derivation could not verify → unverifiable,
+    // as before #602, even alongside an unevaluable current row.
+    const legacyDoubt = computeGaps(
+      [makeReq("r1")],
+      [unevaluable("m1", "r1", 0), makeMatch("m2", "r1", 0.6)],
+      new Map([["m2", ev("unverifiable", "unit_missing")]]),
+    );
+    expect(legacyDoubt.gaps.map((g) => g.status)).toEqual(["unverifiable"]);
+    expect(legacyDoubt.gaps[0]!.reasons).toEqual(["unit_missing"]);
+  });
+
+  it("no matches at all stays unmet", () => {
+    const { gaps } = computeGaps([makeReq("r1")], []);
+    expect(gaps.map((g) => g.status)).toEqual(["unmet"]);
+  });
+
+  it("a stranded match does not make a surviving Requirement not_evaluated", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1")],
+      [unevaluable("m1", "r-gone", 0)],
+    );
+    expect(gaps.map((g) => g.status)).toEqual(["unmet"]);
+  });
+
+  it("never lists a non-must-have, evaluable or not", () => {
+    const { gaps } = computeGaps(
+      [makeReq("r1", { must_have: false })],
+      [unevaluable("m1", "r1", 0)],
+    );
+    expect(gaps).toEqual([]);
+  });
+
+  it("preserves input order across mixed statuses", () => {
+    const { gaps } = computeGaps(
+      [makeReq("a"), makeReq("b"), makeReq("c"), makeReq("d")],
+      [
+        unevaluable("m-a", "a", 0),
+        makeMatch("m-b", "b", 0.1, {
+          structural_evidence: false,
+          component_applicability: SKILL,
+        }),
+        unevaluable("m-c", "c", 0),
+        makeMatch("m-d", "d", 0.6),
+      ],
+      new Map([["m-d", ev("unverifiable", "unit_unapproved")]]),
+    );
+    expect(gaps.map((g) => [g.requirement.id, g.status])).toEqual([
+      ["a", "not_evaluated"],
+      ["b", "unmet"],
+      ["c", "not_evaluated"],
+      ["d", "unverifiable"],
+    ]);
+  });
+});

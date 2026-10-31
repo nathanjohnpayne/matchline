@@ -76,7 +76,11 @@ export interface BreakdownRow {
   readonly label: string;
   /** Sub-score in [0, 1]. */
   readonly value: number;
-  /** This component's contribution to `rule_score`. */
+  /**
+   * The weight this component carried in `rule_score`: the row's
+   * persisted `effective_weights[key]` on a renormalized row
+   * (#601), the fixed `COMPONENT_WEIGHTS[key]` on a legacy row.
+   */
   readonly weight: number;
   /** `value × weight` — what this row contributes to the final number. */
   readonly contribution: number;
@@ -115,15 +119,26 @@ export interface BreakdownRow {
  * aren't persisted on the match (legacy pre-#131 row); the
  * tooltip can render a "breakdown unavailable, rerun
  * matching" hint instead.
+ *
+ * `effectiveWeights` is the row's persisted `effective_weights`
+ * (#601). When present, each row's weight and contribution use
+ * it, so the evaluated rows' contributions sum to `rule_score`
+ * and an inapplicable axis contributes 0. When absent (a legacy
+ * fixed-weight row) the fixed `COMPONENT_WEIGHTS` are used and
+ * the rows render exactly as before #601.
  */
 export function buildBreakdownRows(
   components: ScoreComponents | undefined,
   applicability?: Readonly<Record<keyof ScoreComponents, boolean>>,
+  effectiveWeights?: Readonly<Record<keyof ScoreComponents, number>>,
 ): readonly BreakdownRow[] | null {
   if (components === undefined) return null;
   return COMPONENT_DISPLAY_ORDER.map((key) => {
     const value = components[key];
-    const weight = COMPONENT_WEIGHTS[key];
+    const weight =
+      effectiveWeights !== undefined
+        ? effectiveWeights[key]
+        : COMPONENT_WEIGHTS[key];
     return {
       key,
       label: COMPONENT_LABELS[key],
@@ -133,4 +148,18 @@ export function buildBreakdownRows(
       evaluated: applicability?.[key] ?? false,
     };
   });
+}
+
+/**
+ * True for a renormalized row (#601) whose effective weights are
+ * all 0: no structural axis applied to the pair, so it has no
+ * score (the 2026-10-21 owner decision on #433). False for a
+ * legacy row (no `effective_weights`) and for every evaluated
+ * pair, whose weights sum to 1.
+ */
+export function isNotScored(
+  effectiveWeights: Readonly<Record<keyof ScoreComponents, number>> | undefined,
+): boolean {
+  if (effectiveWeights === undefined) return false;
+  return COMPONENT_DISPLAY_ORDER.every((key) => effectiveWeights[key] === 0);
 }

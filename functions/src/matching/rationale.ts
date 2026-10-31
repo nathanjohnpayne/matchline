@@ -29,6 +29,7 @@ import {
 } from "./normalize.js";
 import {
   effectiveAxes,
+  hasApplicableStructuralAxis,
   WEIGHTS,
   type RequirementAxes,
   type ScoreComponents,
@@ -94,6 +95,14 @@ const TIE_BREAKER_ORDER: readonly (keyof ScoreComponents)[] = [
 
 const SUMMARY_TRUNCATE_AT = 200;
 
+/**
+ * Rationale for a pair with no applicable structural axis, which
+ * scores 0 (#601). Exported so the tests and any reader pin the
+ * same sentence.
+ */
+export const NOT_SCORED_RATIONALE =
+  "Not scored: nothing in this requirement could be compared against this Experience Unit.";
+
 export function generateRationale(input: RationaleInput): RationaleResult {
   // Only axes the Requirement actually constrains may drive the
   // rationale. Applicability is derived from `input.requirement`
@@ -118,6 +127,21 @@ export function generateRationale(input: RationaleInput): RationaleResult {
   // information offered as the reason for the match. Codex P2
   // on #435.
   const drivingComponent = pickDrivingComponent(input.components, axes);
+  // A pair with no applicable structural axis scores 0 (#601, the
+  // 2026-10-21 owner decision on #433). "Matched on semantic
+  // similarity" beside a 0.0 score would claim a match the score
+  // denies, so such a pair gets a neutral sentence instead, with
+  // no surface_evidence (nothing was compared, so nothing on the
+  // Unit supports it). The wording covers both ways this happens:
+  // the Requirement names nothing recognizable, or it names only
+  // a seniority level this Unit carries no mapped signal for.
+  if (!hasApplicableStructuralAxis(axes)) {
+    return {
+      rationale: NOT_SCORED_RATIONALE,
+      surface_evidence: "",
+      driving_component: drivingComponent,
+    };
+  }
   switch (drivingComponent) {
     case "semantic_similarity":
       return semanticTemplate(input, drivingComponent);
@@ -157,6 +181,15 @@ export function generateRationale(input: RationaleInput): RationaleResult {
  *
  * `semantic_similarity` is always applicable, so the filter can
  * never empty the candidate set.
+ *
+ * Fixed `WEIGHTS` rather than the pair's `effectiveWeights` (#601)
+ * on purpose: renormalization scales every applicable weight by
+ * the same constant, so the argmax and the tie-break are
+ * identical either way. For a pair with no applicable structural
+ * axis (all effective weights 0) it still returns the semantic or
+ * recency axis as `driving_component`, but `generateRationale`
+ * emits `NOT_SCORED_RATIONALE` instead of that axis's template.
+ * Pinned in rationale.test.ts.
  */
 function pickDrivingComponent(
   components: ScoreComponents,
