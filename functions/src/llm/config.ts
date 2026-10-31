@@ -47,7 +47,13 @@ export function isStage(value: string): value is Stage {
 
 const defaults: Record<Stage, ModelConfig> = {
   // Frontier class — extraction quality is the foundation of the product.
-  extraction: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  // Selected by the #495 comparison (round 2a, rule 4) and confirmed on
+  // current main (rule 9, 2026-10-29): +5.3 points extraction accuracy over
+  // claude-sonnet-4-6 with every guard holding, no failed flows, and about
+  // half the p50 extraction latency. Effort follows the model profile
+  // default (high) unless `effort.extraction` is overridden. Proposal PR per
+  // #632; the owner approves before this merges.
+  extraction: { provider: "anthropic", model: "claude-sonnet-5-5" },
   requirement_parsing: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
   // Reserved; never read. Match rationales are produced by the
   // deterministic `generateRationale()` template (`matching/rationale.ts`,
