@@ -119,14 +119,15 @@ jobs:
     # requirements.md § Phase 2): the real app in Chromium against the
     # Auth + Firestore emulators for the offline demo-matchline-e2e
     # project. One Node version: the unit and rules jobs already cover
-    # the engines matrix, and this job tests browser behavior.
+    # the engines matrix, and this job tests browser behavior. It runs
+    # the local dev Node from .nvmrc (24, the Cloud Functions runtime).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node 22.12.0
+      - name: Setup Node 24
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22.12.0'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
