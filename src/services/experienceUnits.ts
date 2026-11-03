@@ -35,7 +35,7 @@ const ref = (id: string) => typedDoc<ExperienceUnit>(PATH, id);
 /**
  * Default `id` factory used by `manualInsert`. Browser-native crypto
  * is universally supported on modern browsers and in node 19+ (vitest
- * runs node 20). Tests can inject a deterministic factory via the
+ * runs node 22+). Tests can inject a deterministic factory via the
  * optional `deps` arg.
  */
 function defaultId(): string {
