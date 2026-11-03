@@ -5,12 +5,14 @@ Agent instructions are organized into focused sub-files under `docs/agents/`. Re
 ## Sections
 
 1. **[Repository Overview](docs/agents/repository-overview.md)** --- Project description, tech stack, agent role
-2. **[Agent Operating Rules](docs/agents/operating-rules.md)** --- Reading order, conflict resolution, PR-body and CI verification requirements
-3. **[Code Modification Rules](docs/agents/code-modification-rules.md)** --- File creation, duplication, directory constraints
-4. **[Documentation Rules](docs/agents/documentation-rules.md)** --- When and what to update
-5. **[Testing Requirements](docs/agents/testing-requirements.md)** --- Coverage expectations, test deletion policy
-6. **[Deployment Process](docs/agents/deployment-process.md)** --- Build/deploy flow, 1Password-backed auth
-7. **[UI Design Guidance](docs/design/ui-guidance.md)** --- Attio-inspired direction for every `src/routes/**` surface; read before any UI PR
+2. **[Shared Agent Operating Rules](docs/agents/shared-operating-rules.md)** --- Rules shared across every repository: 1Password failures, bug fix escalation, secret handling, feedback rollup, PR and issue conventions
+3. **[Agent Operating Rules](docs/agents/operating-rules.md)** --- This repo's local overlay: reading order, conflict resolution, PR-body and CI verification requirements, worktree lifecycle
+4. **[Code Modification Rules](docs/agents/code-modification-rules.md)** --- File creation, duplication, directory constraints
+5. **[Documentation Rules](docs/agents/documentation-rules.md)** --- When and what to update
+6. **[Testing Requirements](docs/agents/testing-requirements.md)** --- Coverage expectations, test deletion policy
+7. **[Deployment Process](docs/agents/deployment-process.md)** --- Build/deploy flow, 1Password-backed auth
+8. **[Code Review Requirements](docs/agents/code-review-requirements.md)** --- Pointer to the repository-wide review policy in REVIEW_POLICY.md
+9. **[UI Design Guidance](docs/design/ui-guidance.md)** --- Attio-inspired direction for every `src/routes/**` surface; read before any UI PR
 
 ## Code Review Policy
 
@@ -25,7 +27,7 @@ This repository uses a multi-identity AI agent code review system. The full poli
 
 ### Workflow Summary
 
-Use [REVIEW_POLICY.md § Workflow](REVIEW_POLICY.md#workflow) for credential preflight, author/reviewer identities, review rounds and merge gates. The [agent operating rules](docs/agents/operating-rules.md) and [testing requirements](docs/agents/testing-requirements.md) cover local execution details.
+Use [REVIEW_POLICY.md § Workflow](REVIEW_POLICY.md#workflow) for credential preflight, author/reviewer identities, review rounds and merge gates. The [shared operating rules](docs/agents/shared-operating-rules.md), this repo's [local operating rules](docs/agents/operating-rules.md) and [testing requirements](docs/agents/testing-requirements.md) cover local execution details.
 
 1. Author as `nathanjohnpayne`, file the PR through `scripts/gh-as-author.sh`, and include the required `Authoring-Agent:` and `## Self-Review` body fields.
 2. Review under a registered reviewer identity. Resolve eligible bot conversations and registered agent-reviewer conversations after that reviewer accepts the fix; stop for real-human conversations unless the human explicitly directs otherwise. Follow the policy's complete-history feedback accounting before merging.

@@ -57,7 +57,7 @@ export default function ResumeEditor({
       // (Codex P2 on #267.)
       //
       // --- Serialization-layer scope + justification ---
-      // (docs/agents/operating-rules.md §"Serialization layer review
+      // (docs/agents/shared-operating-rules.md §"Serialization layer review
       // requirement".) This editor is a Markdown (de)serialization layer:
       // pasted text is parsed into the StarterKit schema and re-serialized
       // via getMarkdown() for the route's TEXT-ONLY extraction call. Scope:
