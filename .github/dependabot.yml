@@ -50,3 +50,12 @@ updates:
       # peer allows 7. Hit on #378, which had to hold typescript at ~6.0.3.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # jsdom majors pinned out while the Node floor is ^20.19.0 || >=22.12.0.
+      # jsdom 30 declares engines.node "^22.22.2 || ^24.15.0 || >=26.0.0" and its
+      # bundled undici crashes the vitest jsdom pool on the 20.19.0 and 22.12.0
+      # CI legs ("Cannot read properties of undefined (reading 'bind')" in
+      # undici/lib/interceptor/decompress.js); jsdom 29 already excludes 22.12.0.
+      # Hit on #673. Remove this ignore when the engines floor and the test.yml
+      # matrix move to versions jsdom supports.
+      - dependency-name: "jsdom"
+        update-types: ["version-update:semver-major"]
