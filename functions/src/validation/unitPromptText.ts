@@ -70,7 +70,7 @@ type FieldRole = "rendered" | `excluded: ${string}`;
  * A compile-time drift guard: adding a field to `ExperienceUnit` fails
  * typecheck here until someone decides whether generation and the
  * validator read it. The reasons are the serialization-layer review's
- * losslessness answer (`docs/agents/operating-rules.md`). Tests check
+ * losslessness answer (`docs/agents/shared-operating-rules.md` § Bug fix escalation policy, Serialization layer review requirement). Tests check
  * that each `rendered` field changes the text and each excluded field
  * does not.
  */
