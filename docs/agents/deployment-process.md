@@ -13,7 +13,7 @@ If the project uses Firebase or Google Cloud, prefer the canonical
   `external_account` source credential
 - Do not introduce long-lived service account keys into repo docs,
   scripts, or secret stores unless a project explicitly requires them
-- If credential preflight was run at session start (`scripts/op-preflight.sh --mode all`),
-  deploy credentials are already cached in `GOOGLE_APPLICATION_CREDENTIALS`. No additional
-  biometric prompt is needed for deployment.
+- Do not use `scripts/op-preflight.sh --mode all` for builds or deployment. Acquire deploy
+  credentials only after build and artifact verification, and inject them only into the deploy
+  subprocess, as defined in [shared-operating-rules.md](shared-operating-rules.md#build-and-deploy-isolation).
 - If an `op` command fails with a sign-in or biometric error during deploy, follow the pause-and-prompt procedure in [shared-operating-rules.md](shared-operating-rules.md#1password-cli-authentication-failures). Do not retry or work around the failure without the human present.
