@@ -6,6 +6,15 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    groups:
+      # Every other minor and patch update shares one PR. Majors open as
+      # individual PRs (mergepath#1802).
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "ci"
 
@@ -18,14 +27,34 @@ updates:
     groups:
       # Peer-coupled family (scripts/ci/dependabot-coupled-families.json,
       # mergepath#2162). Keep it first so its members move together.
+      typescript-toolchain:
+        patterns:
+          - "typescript"
+          - "typescript-eslint"
+          - "@typescript-eslint/*"
+      # Peer-coupled family (scripts/ci/dependabot-coupled-families.json,
+      # mergepath#2162). Keep it first so its members move together.
+      vite-toolchain:
+        patterns:
+          - "vite"
+          - "vitest"
+          - "@vitest/*"
+          - "@vitejs/*"
+          - "vite-plugin-pwa"
+      # Peer-coupled family (scripts/ci/dependabot-coupled-families.json,
+      # mergepath#2162). Keep it first so its members move together.
       firebase-sdk:
         patterns:
           - "firebase"
           - "@firebase/*"
-      dev-dependencies:
-        dependency-type: "development"
-      production-dependencies:
-        dependency-type: "production"
+      # Every other minor and patch update shares one PR. Majors open as
+      # individual PRs (mergepath#1802).
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "deps"
     # eslint / @eslint/js majors pinned out until eslint-plugin-react supports
