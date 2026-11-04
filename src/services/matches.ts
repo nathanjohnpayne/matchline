@@ -165,6 +165,16 @@ export async function upsertMatch(
         "boundary; this is the clearer error at the call site.",
     );
   }
+  if (match.effective_weights !== undefined) {
+    throw new Error(
+      "upsertMatch: refusing to write `effective_weights`. It records " +
+        "the weights the matching pipeline actually used for " +
+        "`rule_score` (#601), and its presence marks the row as " +
+        "renormalized. A scoring record a client can set attests " +
+        "nothing. `firestore.rules` is the boundary; this is the " +
+        "clearer error at the call site.",
+    );
+  }
   if (match.approved_for_use && match.user_rejected) {
     throw new Error(
       "upsertMatch: refusing to write the contradictory " +
