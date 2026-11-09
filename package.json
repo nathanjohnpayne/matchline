@@ -23,10 +23,10 @@
     "test:e2e": "scripts/firebase/with-java.sh firebase emulators:exec --only auth,firestore --project demo-matchline-e2e 'playwright test'"
   },
   "dependencies": {
-    "@tiptap/extension-placeholder": "^3.32.1",
-    "@tiptap/pm": "^3.32.1",
-    "@tiptap/react": "^3.32.1",
-    "@tiptap/starter-kit": "^3.32.1",
+    "@tiptap/extension-placeholder": "^3.33.0",
+    "@tiptap/pm": "^3.33.0",
+    "@tiptap/react": "^3.33.0",
+    "@tiptap/starter-kit": "^3.33.0",
     "firebase": "^13.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
