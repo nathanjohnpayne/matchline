@@ -47,6 +47,19 @@ updates:
         patterns:
           - "firebase"
           - "@firebase/*"
+      # Repo-local peer-coupled families, not yet in the canonical list.
+      # react-dom requires the matching react major, and @tiptap/react
+      # requires the exact @tiptap/pm version, so a lone major bump of either
+      # half fails npm ci with ERESOLVE. Keep them ahead of the fallback.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      tiptap:
+        patterns:
+          - "@tiptap/*"
       # Every other minor and patch update shares one PR. Majors open as
       # individual PRs (mergepath#1802).
       minor-and-patch:
