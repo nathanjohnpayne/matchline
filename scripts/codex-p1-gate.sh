@@ -73,6 +73,25 @@
 #       on current HEAD — gate blocks.
 #   2   Usage / config error. Error message on stderr.
 #
+# Pending verdict (#2618, extending #2247's treatment of Merge clearance gate):
+# exit 1 also covers a head whose only blocker is a NON-blocking finding (for
+# example a Codex P2 or a CodeRabbit Minor) still awaiting its disposition.
+# Every caller keeps treating that as exit 1. A caller that needs to tell it
+# apart sets MERGEPATH_GATE_VERDICT_FILE to a path it owns. Only then, when
+# feedback accounting answers "unaccounted", the script classifies every
+# undispositioned finding (accounting_missing_nonblocking below), and when all
+# of them are non-blocking it does NOT stop there: it goes on through the
+# head-drift fence and the legacy current-HEAD blocking-tier thread scan, and
+# writes exactly `pending` to the file only when both found nothing. Any
+# blocking-tier finding (p0, p1, or a tier the gate or the governing policy
+# requires), an unknown tier, a malformed accounting answer, or a read or API
+# error leaves the file untouched, so an absent, empty or different file means
+# "not pending" and the caller must fail as before. Without the variable the
+# script stops at the accounting failure exactly as it always has. With it, a
+# drift or scan read error after a non-blocking accounting failure exits 2
+# rather than 1; both fail every caller. Only the event-driven job of
+# codex-p1-gate.yml asks, through scripts/workflow/codex-p1-snapshot-retry.py.
+#
 # Design notes:
 #   - Read-only. Only GETs against the GitHub API.
 #   - bash 3.2 portable (`#!/usr/bin/env bash`, no associative arrays
@@ -143,65 +162,32 @@ fi
 # shellcheck source=lib/gh-api-scalar.sh
 . "$__P1_GATE_DIR/lib/gh-api-scalar.sh"
 
-# Read a scalar field nested inside `codex:` `<sub_block>:` `<field>:`.
-# Same state-machine awk pattern as codex-review-check.sh, but tracks
-# nesting one level deeper for the `p1_gate` sub-block.
-codex_p1_gate_field() {
-  local field=$1
-  [ -f "$CONFIG" ] || return 0
-  awk -v field="$field" '
-    /^codex:/ { in_codex=1; in_p1_gate=0; next }
-    in_codex && /^[^[:space:]#]/ { in_codex=0; in_p1_gate=0 }
-    in_codex && /^[[:space:]]+p1_gate:/ { in_p1_gate=1; next }
-    in_p1_gate && /^[[:space:]]{0,3}[^[:space:]#]/ { in_p1_gate=0 }
-    in_p1_gate && $1 == field":" {
-      sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
-      # Strip BOTH single and double quotes (#536, unified here by #817).
-      # This reader was double-quote-only, so `enabled: '"'"'true'"'"'` came back
-      # with its quotes intact, reached P1_GATE_ENABLED below, and tripped
-      # the true|false validator — a required gate deadlocked by a benign
-      # YAML quoting choice. \047 is the octal escape for a single quote
-      # inside the awk character class, matching codex-review-check.sh:253.
-      gsub(/^["\047]/, "", $0)
-      gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
-      gsub(/[[:space:]]*#.*$/, "", $0)
-      sub(/[[:space:]]+$/, "", $0)
-      print
-      exit
-    }
-  ' "$CONFIG"
-}
+# The policy, parsed once (#2913). The earlier line-oriented awk readers
+# matched only an unquoted, block-style `field:` key, so a quoted key or a flow
+# mapping (`codex: {p1_gate: {enabled: true}}`) read as unset and took the
+# default, and a custom bot_login was missed. A missing file keeps the
+# defaults; a file that cannot be parsed is a config error (exit 2).
+P1_POLICY_JSON=""
+if [ -f "$CONFIG" ]; then
+  P1_POLICY_JSON=$(policy_yaml_to_json "$CONFIG") && [ -n "$P1_POLICY_JSON" ] || {
+    echo "ERROR: $CONFIG could not be parsed; codex.* settings are unknown" >&2
+    exit 2
+  }
+fi
 
-# Read a scalar field from the codex: block. Mirrors codex-review-check.sh.
+# codex_field <dotted.field> <kind> -- one field under codex: (`bot_login`,
+# `p1_gate.enabled`). Prints nothing when the key, an enclosing block or the
+# file is absent; returns 1 with a reason on stderr for a value not of <kind>.
 codex_field() {
-  local field=$1
-  [ -f "$CONFIG" ] || return 0
-  awk -v field="$field" '
-    /^codex:/ {in_block=1; next}
-    in_block && /^[^[:space:]#]/ {in_block=0}
-    in_block && $1 == field":" {
-      sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
-      # Strip BOTH single and double quotes (#536, unified here by #817).
-      # This reader was double-quote-only, so a single-quoted bot_login came
-      # back with its quotes intact and matched zero comments — the gate then
-      # passed on an empty finding set instead of blocking. That direction is
-      # a soundness defect, not just a nuisance. Same form as
-      # codex-review-check.sh:253.
-      gsub(/^["\047]/, "", $0)
-      gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
-      gsub(/[[:space:]]*#.*$/, "", $0)
-      sub(/[[:space:]]+$/, "", $0)
-      print
-      exit
-    }
-  ' "$CONFIG"
+  [ -n "$P1_POLICY_JSON" ] || return 0
+  policy_json_field "$P1_POLICY_JSON" "codex.$1" "$2"
 }
 
 # Legacy thread-gate knob: codex.p1_gate.enabled. Default false everywhere
 # except mergepath itself. It controls only the current-HEAD required-tier
 # thread scan; complete-history feedback accounting is independent and
 # default-on in every consumer (#1000).
-P1_GATE_ENABLED=$(codex_p1_gate_field enabled)
+P1_GATE_ENABLED=$(codex_field p1_gate.enabled bool) || exit 2
 P1_GATE_ENABLED=${P1_GATE_ENABLED:-false}
 case "$P1_GATE_ENABLED" in
   true|false) ;;
@@ -243,7 +229,7 @@ if [ -z "$REPO" ]; then
   fi
 fi
 
-BOT_LOGIN=$(codex_field bot_login)
+BOT_LOGIN=$(codex_field bot_login string) || exit 2
 BOT_LOGIN=${BOT_LOGIN:-"chatgpt-codex-connector[bot]"}
 
 # Resolve the BLOCKING tier set from the feedback_policy block (#577). Absent
@@ -288,6 +274,63 @@ die() {
   exit "$code"
 }
 
+# accounting_missing_nonblocking <accounting JSON>: exit 0 ONLY when the
+# answer is a well-formed "unaccounted" result and EVERY undispositioned
+# finding in it is non-blocking (#2618). A finding is non-blocking only when
+# its tier is p2, p3 or nitpick, the tier is not in this gate's own blocking
+# set (REQUIRED_TIERS, from the trusted config), and the governing policy the
+# accounting resolved does not require it (address-all requires every tier).
+# p0 and p1 always block. A missing, unknown or non-string tier, an unknown
+# finding kind or policy mode, a count that disagrees with the list, or JSON
+# that does not parse is not non-blocking, so the caller fails as before.
+accounting_missing_nonblocking() {
+  local answer=$1 tiers tier
+  tiers=$(printf '%s' "$answer" | jq -r '
+    if type == "object"
+       and .status == "unaccounted"
+       and (.missing | type) == "array"
+       and (.missing | length) > 0
+       and .missing_count == (.missing | length)
+       and ((.feedback_policy // {}) | type) == "object"
+       and (((.feedback_policy // {}).mode // "by-priority") as $mode
+         | $mode == "by-priority" or $mode == "address-all")
+       and ((.feedback_policy // {}).mode // "by-priority") != "address-all"
+       and all(.missing[];
+         type == "object"
+         and (.kind | type) == "string"
+         and (.kind as $k | ["inline", "inline-archive", "review-body",
+           "review-body-archive", "issue-comment", "issue-comment-archive"]
+           | index($k)) != null
+         and (.tier | type) == "string")
+    then
+      (.feedback_policy // {}) as $policy
+      | .missing[]
+      | .tier as $tier
+      | if (["p2", "p3", "nitpick"] | index($tier)) != null
+           and (($policy.priorities // {})[$tier] // "") != "required"
+        then $tier
+        else "BLOCKING"
+        end
+    else "MALFORMED"
+    end
+  ' 2>/dev/null) || return 1
+  [ -n "$tiers" ] || return 1
+  while IFS= read -r tier; do
+    case "$tier" in
+      p2|p3|nitpick) ;;
+      *) return 1 ;;
+    esac
+    ! tier_is_required "$tier" || return 1
+  done <<< "$tiers"
+  return 0
+}
+
+# Set when a caller asked for the pending distinction and accounting failed
+# only on non-blocking findings; the rest of the gate then still runs, and
+# finish_clear/finish_blocked decide (#2618).
+ACCOUNTING_PENDING=false
+ACCOUNTING_OUTPUT=""
+
 run_feedback_accounting_gate() {
   local gate output rc=0
   gate="${MERGEPATH_REVIEW_FEEDBACK_ACCOUNTING_CMD:-$__P1_GATE_DIR/review-feedback-accounting.sh}"
@@ -297,6 +340,13 @@ run_feedback_accounting_gate() {
   case "$rc" in
     0) log "review feedback accounting clear" ;;
     1)
+      if [ -n "${MERGEPATH_GATE_VERDICT_FILE:-}" ] \
+         && accounting_missing_nonblocking "$output"; then
+        log "review feedback is unaccounted, but only on non-blocking findings; ruling out blocking-tier findings before reporting pending (#2618)"
+        ACCOUNTING_PENDING=true
+        ACCOUNTING_OUTPUT=$output
+        return 0
+      fi
       printf '%s\n' "$output"
       die 1 "review feedback is unaccounted; disposition every finding before merge"
       ;;
@@ -305,6 +355,27 @@ run_feedback_accounting_gate() {
       die 2 "review feedback accounting gate failed with exit $rc"
       ;;
   esac
+}
+
+# The two ends of an evaluation once accounting has spoken. Without a pending
+# accounting result they are the gate's historical exits. With one, nothing
+# else blocked: report the accounting failure exactly as before (same stdout
+# and die message), and write `pending` only on the clear end (#2618).
+finish_clear() {
+  if [ "$ACCOUNTING_PENDING" = true ]; then
+    printf 'pending\n' 2>/dev/null >"$MERGEPATH_GATE_VERDICT_FILE" || true
+    printf '%s\n' "$ACCOUNTING_OUTPUT"
+    die 1 "review feedback is unaccounted; disposition every finding before merge"
+  fi
+  exit 0
+}
+
+finish_blocked() {
+  if [ "$ACCOUNTING_PENDING" = true ]; then
+    printf '%s\n' "$ACCOUNTING_OUTPUT"
+    log "ERROR: review feedback is unaccounted; disposition every finding before merge"
+  fi
+  exit 1
 }
 
 run_feedback_accounting_gate
@@ -322,6 +393,10 @@ if [ -n "${CODEX_P1_EXPECTED_HEAD_SHA:-}" ]; then
 fi
 
 if [ "$P1_GATE_ENABLED" != "true" ]; then
+  if [ "$ACCOUNTING_PENDING" = true ]; then
+    log "codex.p1_gate.enabled=false — no legacy current-HEAD thread scan to rule out"
+    finish_clear
+  fi
   echo "[codex-p1-gate] feedback accounting clear; codex.p1_gate.enabled=false — skipping legacy current-HEAD thread scan"
   echo "Codex blocking-tier unresolved: 0"
   exit 0
@@ -409,7 +484,7 @@ log "found $BLOCKING_COUNT blocking-tier comment(s) on HEAD"
 
 if [ "$BLOCKING_COUNT" -eq 0 ]; then
   echo "Codex blocking-tier unresolved: 0"
-  exit 0
+  finish_clear
 fi
 
 # --- fetch review-thread resolution state via GraphQL ----------------------
@@ -593,6 +668,6 @@ fi
 echo "Codex blocking-tier unresolved: $UNRESOLVED_COUNT"
 
 if [ "$UNRESOLVED_COUNT" -gt 0 ]; then
-  exit 1
+  finish_blocked
 fi
-exit 0
+finish_clear

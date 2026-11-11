@@ -5,11 +5,17 @@
  * caller; the user had no way to create a Role without writing
  * to Firestore directly.
  *
- * V1 scope: single-page form at `/roles/new`. Title + JD text
- * required; URL, location, remote policy, comp range optional.
- * Submit calls `upsertRole`; on success, redirects to
- * `/roles/:newRoleId` so the user can move to Requirements →
- * Matches → Generate.
+ * Single-page form at `/roles/new`. Only Title is required (#431):
+ * the JD often arrives after the role is spotted, so a Role can be
+ * saved as a lead and its JD pasted later on Role Detail. URL,
+ * location, remote policy, comp range and JD are optional. Submit
+ * calls `upsertRole`; on success, redirects to `/roles/:newRoleId`
+ * so the user can move to Requirements → Matches → Generate.
+ *
+ * The in-progress form is persisted to `localStorage` as the user
+ * types (`src/lib/formDraft.ts`) and restored on mount, so a reload
+ * or accidental navigation does not cost the typing (#431). A
+ * successful create or an explicit Cancel discards it.
  *
  * `company_id` is required by the `Role` type but there's no
  * Company UI yet (Phase 2). V1 stamps a fresh placeholder UUID;
@@ -31,33 +37,28 @@ import { useNavigate } from "react-router-dom";
 
 import { upsertRole } from "../services/roles.ts";
 import { beginAppBusy, beginUnsavedWork } from "../lib/appBusy.ts";
-import type { RemotePolicy } from "../types/crm.ts";
+import {
+  clearFormDraft,
+  loadFormDraft,
+  saveFormDraft,
+} from "../lib/formDraft.ts";
+import {
+  REMOTE_POLICIES,
+  ROLE_NEW_DRAFT_KEY,
+  canSubmitRoleNew,
+  isRoleNewFormDirty,
+  restoreRoleNewForm,
+  submitRoleNewForm,
+  type RoleNewFormState as FormState,
+} from "./roleNewForm.ts";
 
 export type RoleNewStatus = "editing" | "saving" | "error";
 
-const REMOTE_POLICIES: readonly RemotePolicy[] = ["onsite", "hybrid", "remote"];
-
-interface FormState {
-  readonly title: string;
-  readonly jdRaw: string;
-  readonly jdUrl: string;
-  readonly location: string;
-  readonly remotePolicy: RemotePolicy | "";
-  readonly compRange: string;
-}
-
-const EMPTY_FORM: FormState = {
-  title: "",
-  jdRaw: "",
-  jdUrl: "",
-  location: "",
-  remotePolicy: "",
-  compRange: "",
-};
-
 export default function RoleNew(): ReactElement {
   const navigate = useNavigate();
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [form, setForm] = useState<FormState>(() =>
+    restoreRoleNewForm(loadFormDraft(ROLE_NEW_DRAFT_KEY)),
+  );
   const [status, setStatus] = useState<RoleNewStatus>("editing");
   const [error, setError] = useState<Error | null>(null);
 
@@ -66,12 +67,24 @@ export default function RoleNew(): ReactElement {
   // that reload behind a confirmation (#456). Distinct from the create
   // lease below: that one suppresses the prompt outright while the
   // write is in flight, this one only asks first.
+  //
+  // The lease stays even with the draft persisted below: storage can be
+  // unavailable (private mode, quota), and then the form is back to
+  // living only in React state.
   useEffect(() => {
-    const dirty = Object.values(form).some(
-      (v) => typeof v === "string" && v.trim() !== "",
-    );
-    if (!dirty) return;
+    if (!isRoleNewFormDirty(form)) return;
     return beginUnsavedWork("roleNew.form");
+  }, [form]);
+
+  // Persist the draft on every change; an all-blank form clears it so
+  // a stale draft does not come back after the user empties the fields
+  // (#431).
+  useEffect(() => {
+    if (isRoleNewFormDirty(form)) {
+      saveFormDraft(ROLE_NEW_DRAFT_KEY, form);
+    } else {
+      clearFormDraft(ROLE_NEW_DRAFT_KEY);
+    }
   }, [form]);
 
   const onChange =
@@ -88,14 +101,9 @@ export default function RoleNew(): ReactElement {
   const onSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     if (status === "saving") return;
-    if (form.title.trim().length === 0) {
+    if (!canSubmitRoleNew(form)) {
       setStatus("error");
       setError(new Error("Title is required."));
-      return;
-    }
-    if (form.jdRaw.trim().length === 0) {
-      setStatus("error");
-      setError(new Error("Paste the job description text first."));
       return;
     }
     setStatus("saving");
@@ -106,32 +114,12 @@ export default function RoleNew(): ReactElement {
     // released in the finally below.
     const releaseBusy = beginAppBusy("roleNew.create");
     try {
-      const id = globalThis.crypto.randomUUID();
-      // Build the role payload with CONDITIONAL SPREADS for the
-      // optional fields. Writing `undefined` values would be
-      // rejected by Firestore — this client doesn't set
-      // `ignoreUndefinedProperties` (same quirk that bit PR #198
-      // on `validation_flags`). Omitting the key entirely is the
-      // documented way to express "absent" on a setDoc write.
-      // Codex P1 on PR #205.
-      const trimmedUrl = form.jdUrl.trim();
-      const trimmedLocation = form.location.trim();
-      const trimmedComp = form.compRange.trim();
-      await upsertRole({
-        id,
-        // Phase 2 will introduce a real Company link UI; for now
-        // stamp a placeholder per-Role UUID. Each Role gets its
-        // own placeholder; the future "merge into Company X"
-        // flow can rewrite this field.
-        company_id: globalThis.crypto.randomUUID(),
-        title: form.title.trim(),
-        jd_raw: form.jdRaw,
-        discovered_at: new Date().toISOString(),
-        ...(trimmedUrl !== "" && { jd_url: trimmedUrl }),
-        ...(trimmedLocation !== "" && { location: trimmedLocation }),
-        ...(form.remotePolicy !== "" && { remote_policy: form.remotePolicy }),
-        ...(trimmedComp !== "" && { comp_range: trimmedComp }),
+      const id = await submitRoleNewForm(form, {
+        upsertRole,
+        newId: () => globalThis.crypto.randomUUID(),
+        now: () => new Date(),
       });
+      clearFormDraft(ROLE_NEW_DRAFT_KEY);
       navigate(`/roles/${id}`);
     } catch (err) {
       setStatus("error");
@@ -142,6 +130,9 @@ export default function RoleNew(): ReactElement {
   };
 
   const onCancel = (): void => {
+    // Cancel is a deliberate discard, unlike a reload or a stray
+    // navigation, so it drops the persisted draft (#431).
+    clearFormDraft(ROLE_NEW_DRAFT_KEY);
     // Prefer router-back so the user lands where they came from
     // (e.g., the Pipeline view, an existing Role detail). When
     // there's no history (the user landed here via a direct URL
@@ -167,9 +158,9 @@ export default function RoleNew(): ReactElement {
           New Role
         </h1>
         <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Paste a JD to start tracking a Role. The next step parses the
-          requirements + matches them against your approved Experience
-          Units.
+          Start tracking a Role with just a title. Paste the JD now or
+          later: once it&apos;s in, the next step parses the requirements +
+          matches them against your approved Experience Units.
         </p>
       </header>
 
@@ -210,16 +201,15 @@ export default function RoleNew(): ReactElement {
             className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400"
           >
             Job description{" "}
-            <span className="text-red-600 dark:text-red-400">*</span>
+            <span className="text-zinc-400 dark:text-zinc-600">(optional)</span>
           </label>
           <textarea
             id="role-new-jd"
             value={form.jdRaw}
             onChange={onChange("jdRaw")}
             disabled={saving}
-            required
             rows={12}
-            placeholder="Paste the full JD as plain text."
+            placeholder="Paste the full JD as plain text, or add it later from the Role page."
             data-testid="role-new-jd"
             className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-zinc-100"
           />
@@ -328,11 +318,7 @@ export default function RoleNew(): ReactElement {
           </button>
           <button
             type="submit"
-            disabled={
-              saving ||
-              form.title.trim().length === 0 ||
-              form.jdRaw.trim().length === 0
-            }
+            disabled={saving || !canSubmitRoleNew(form)}
             data-action="role-new-submit"
             className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-50 hover:bg-zinc-800 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >

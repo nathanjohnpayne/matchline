@@ -1,0 +1,23 @@
+{
+  "resumeId": "riley-demo-2026",
+  "jdId": "acme-widgets-pm-2026",
+  "units": [
+    {
+      "id": "aaaa0001",
+      "raw_text": "Launched the Gizmo 3 widget line to 40 retailers in 2024, growing revenue 12%.",
+      "owner_verdict": null,
+      "owner_corrected_raw_text": null
+    }
+  ],
+  "requirements": [
+    {
+      "id": "cccc0001",
+      "normalized_requirement": "5+ years product management experience.",
+      "must_have": true,
+      "owner_verdict": null,
+      "owner_corrected_text": null,
+      "owner_must_have": null
+    }
+  ],
+  "notes": ""
+}

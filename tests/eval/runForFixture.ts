@@ -22,21 +22,35 @@
  * The orchestrator is dep-injectable: real Anthropic +
  * OpenAI clients in the production CLI run, mocked clients
  * in `runForFixture.test.ts`.
+ *
+ * Extraction-only path (`npm run eval -- --extraction-only`,
+ * `runExtractionForFixture`):
+ *
+ *   resume.txt + expected-units.json
+ *     → extractFromResume     (same stage, cache key and cost plumbing)
+ *     → unitSetAccuracy
+ *
+ * No JD is read, nothing is embedded, parsed or matched, and the OpenAI
+ * client is never touched. The JD id is the sentinel
+ * `EXTRACTION_ONLY_JD_ID`.
  */
 
 import { createHash } from "node:crypto";
 
 import { extractFromResume } from "../../functions/src/extraction/resume.ts";
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
-import { EMBEDDING_MODEL, modelFor } from "../../functions/src/llm/config.ts";
+import { EMBEDDING_MODEL, effortFor, modelFor, type Stage } from "../../functions/src/llm/config.ts";
 import {
-  priceFor,
+  priceUsage,
   type UsageRecord,
 } from "../../functions/src/llm/cost.ts";
 import { embedMany } from "../../functions/src/llm/embeddings.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
 import { runMatchingPipeline } from "../../functions/src/matching/pipeline.ts";
-import { parseJobRequirements } from "../../functions/src/parsing/jd.ts";
+import {
+  parseJobRequirements,
+  type JdAttemptFailureNotice,
+} from "../../functions/src/parsing/jd.ts";
 import type { PromptName, PromptStage } from "../../functions/src/prompts/config.ts";
 import { loadPromptText, resolvePromptVersion } from "../../functions/src/prompts/loader.ts";
 import type {
@@ -46,6 +60,18 @@ import type {
 } from "../../functions/src/types/capability.ts";
 
 import { StageCache, sumUsageCost, type CacheKeyInput } from "./cache.ts";
+// --record hook (per-flow recorder): see flowTrace.ts.
+import {
+  traceAttemptFailure,
+  traceCacheOutcome,
+  traceCall,
+  traceEnterStep,
+  traceFailure,
+  traceStepDone,
+  traceStepFor,
+  traceValue,
+  type FlowTrace,
+} from "./flowTrace.ts";
 import {
   loadExpectedMatches,
   loadExpectedUnits,
@@ -113,6 +139,14 @@ export interface RunForFixtureDeps {
    * only re-pay for identical vectors — see the call sites.
    */
   readonly cacheDiscriminators?: Readonly<Record<string, string | number>>;
+  /**
+   * --record hook (per-flow recorder). A fresh collector from
+   * `newFlowTrace()` that this run fills with every usage record
+   * (tagged by step, replayed or live), the extracted Units, the
+   * parsed Requirements, and the failure detail. The result object is
+   * unchanged; omit it and nothing is collected.
+   */
+  readonly trace?: FlowTrace;
 }
 
 export interface RunForFixtureInput {
@@ -133,7 +167,7 @@ export interface RunForFixtureResult {
    * Total cost in USD across every LLM call in this
    * fixture's run (extraction + Unit embeddings + parsing
    * + Requirement embeddings). Computed via the pure
-   * `priceFor` from `functions/src/llm/cost.ts` against
+   * `priceUsage` from `functions/src/llm/cost.ts` against
    * each call's token counts; the harness binds a
    * closure-scoped recorder to the pipeline deps so cost
    * accumulates without Firestore writes.
@@ -150,7 +184,7 @@ export interface RunForFixtureResult {
    * cache warms — correct for the projection guard, useless for
    * ranking models. `modeledCostUsd` prices every stage's usage
    * records (replayed from cache on a hit) through the same
-   * `priceFor` production uses, so the model sweep ranks on a number
+   * `priceUsage` production uses, so the model sweep ranks on a number
    * that doesn't move with cache state.
    *
    * On a fully cold run the two are equal.
@@ -182,6 +216,60 @@ export async function runForFixture(
   input: RunForFixtureInput,
   deps: RunForFixtureDeps,
 ): Promise<RunForFixtureResult> {
+  return runFlowShell(input, deps, runForFixtureInner);
+}
+
+/**
+ * The JD id an extraction-only flow carries (`cell` =
+ * `<resumeId>__extraction-only`). No fixture of that name may exist:
+ * `extractionOnly.ts` refuses to run if one does. Hyphenated, not
+ * underscored, because downstream tools split cells on `__`.
+ */
+export const EXTRACTION_ONLY_JD_ID = "extraction-only";
+
+/**
+ * Extraction only (`--extraction-only`): load the résumé and its
+ * labelled Units, run the extraction stage exactly as `runForFixture`
+ * does (same cache key, discriminators, cost and trace plumbing), and
+ * score `unitSetAccuracy`. No JD, embedding, parsing or matching, so
+ * the OpenAI client is never touched and no `expected-matches` label is
+ * needed. Conforms to `FlowRunner`, so `recordingRunner` can wrap it.
+ *
+ * `matchAccuracy`, `parsedRequirementCount` and `matchCount` are 0 in
+ * the result (the type has no null); the recorder's extraction-only
+ * adjust writes them as null.
+ */
+export async function runExtractionForFixture(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+): Promise<RunForFixtureResult> {
+  if (input.jdFixtureId !== EXTRACTION_ONLY_JD_ID) {
+    throw new Error(
+      `runExtractionForFixture: jdFixtureId must be ${JSON.stringify(EXTRACTION_ONLY_JD_ID)} (got ${JSON.stringify(input.jdFixtureId)})`,
+    );
+  }
+  return runFlowShell(input, deps, runExtractionInner);
+}
+
+type FlowInner = (
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  start: number,
+  recordCost: (usage: UsageRecord) => Promise<number>,
+  getCostAccum: () => number,
+  tally: StageTally,
+) => Promise<RunForFixtureResult>;
+
+/**
+ * The outer shell both flows share: cost accumulation that survives a
+ * throw, the modeled-usage and cache tally, and the always-return
+ * failure result.
+ */
+async function runFlowShell(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  inner: FlowInner,
+): Promise<RunForFixtureResult> {
   const start = Date.now();
   // costAccum lives in the outer scope so partial cost
   // accumulation from successful API calls surfaces even
@@ -194,7 +282,7 @@ export async function runForFixture(
   const recordCost = async (usage: UsageRecord): Promise<number> => {
     let cost = 0;
     try {
-      cost = priceFor(usage.model, usage);
+      cost = priceUsage(usage).costUsd;
     } catch {
       // Same fallback as production `recordUsage`: pricing
       // failures (unknown model) → 0 contribution. Don't
@@ -215,10 +303,11 @@ export async function runForFixture(
     modeledUsage,
     hits: 0,
     misses: 0,
+    trace: deps.trace, // --record hook
   };
 
   try {
-    return await runForFixtureInner(
+    return await inner(
       input,
       deps,
       start,
@@ -227,6 +316,7 @@ export async function runForFixture(
       tally,
     );
   } catch (err) {
+    traceFailure(deps.trace, err); // --record hook
     return {
       resumeFixtureId: input.resumeFixtureId,
       jdFixtureId: input.jdFixtureId,
@@ -333,6 +423,8 @@ interface StageTally {
   readonly modeledUsage: UsageRecord[];
   hits: number;
   misses: number;
+  /** --record hook: per-flow collector, when the caller asked for one. */
+  readonly trace?: FlowTrace;
 }
 
 /**
@@ -355,13 +447,18 @@ async function runStage<T>(
   liveRecord: (usage: UsageRecord) => Promise<number>,
   compute: (record: (usage: UsageRecord) => Promise<number>) => Promise<T>,
 ): Promise<T> {
+  const step = traceStepFor(tally.trace, keyInput.stage); // --record hook
   if (cache === undefined) {
     // No cache: the live recorder both prices into `costAccum` and
     // needs to land in `modeledUsage`. Wrap it.
-    return compute(async (usage) => {
+    const value = await compute(async (usage) => { // --record hook
       tally.modeledUsage.push(usage);
+      traceCall(tally.trace, step, usage, false); // --record hook
       return liveRecord(usage);
     });
+    traceValue(tally.trace, keyInput.stage, value); // --record hook
+    traceStepDone(tally.trace); // --record hook
+    return value;
   }
 
   // Codex P2 round 1: modeled usage used to be copied out of
@@ -385,6 +482,7 @@ async function runStage<T>(
       (cacheRecord) =>
         compute(async (usage) => {
           tally.modeledUsage.push(usage);
+          traceCall(tally.trace, step, usage, false); // --record hook
           await cacheRecord(usage);
           return liveRecord(usage);
         }),
@@ -393,9 +491,13 @@ async function runStage<T>(
     if (outcome.hit) {
       tally.hits += 1;
       tally.modeledUsage.push(...outcome.usage);
+      for (const usage of outcome.usage) traceCall(tally.trace, step, usage, true); // --record hook
     } else {
       tally.misses += 1;
     }
+    traceCacheOutcome(tally.trace, step, outcome.hit); // --record hook
+    traceValue(tally.trace, keyInput.stage, outcome.value); // --record hook
+    traceStepDone(tally.trace); // --record hook
     return outcome.value;
   } catch (err) {
     // Count the attempt so a failed stage still shows as a miss
@@ -405,46 +507,39 @@ async function runStage<T>(
   }
 }
 
-async function runForFixtureInner(
-  input: RunForFixtureInput,
+/**
+ * The real-spend recorder for the Anthropic-served stages. Codex P2: they
+ * must not add to `costAccum` when `anthropicClient` is a subscription
+ * CLI adapter, because real spend there is $0. `modeledUsage` still gets
+ * every usage record (via `runStage`'s own tracking), so
+ * `modeledCostUsd` is unaffected and still ranks the CLI source
+ * correctly against `api`.
+ */
+function anthropicCostRecorder(
   deps: RunForFixtureDeps,
-  start: number,
   recordCost: (usage: UsageRecord) => Promise<number>,
-  getCostAccum: () => number,
-  tally: StageTally,
-): Promise<RunForFixtureResult> {
-  const { cache, cacheDiscriminators, anthropicIsMetered = true } = deps;
-  // Codex P2: the Anthropic-served stages (extraction, parsing) must
-  // not add to `costAccum` when `anthropicClient` is a subscription
-  // CLI adapter — real spend there is $0. `modeledUsage` still gets
-  // every usage record regardless (via `runStage`'s own tracking), so
-  // `modeledCostUsd` is unaffected and still ranks the CLI source
-  // correctly against `api`.
-  const recordAnthropicCost = anthropicIsMetered
-    ? recordCost
-    : async (): Promise<number> => 0;
-  const extractionModel = modelFor("extraction");
-  const parsingModel = modelFor("requirement_parsing");
-  // 1. Load fixtures.
-  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
-  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
-  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
-    input.resumeFixtureId,
-    deps.fixturePaths,
-  );
-  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
-    input.resumeFixtureId,
-    input.jdFixtureId,
-    deps.fixturePaths,
-  );
+): (usage: UsageRecord) => Promise<number> {
+  return (deps.anthropicIsMetered ?? true) ? recordCost : async (): Promise<number> => 0;
+}
 
-  // 2. Extract Units (Anthropic). Keyed on the resume text — the
-  //    only input that can change the output — so the 10×10 corpus
-  //    runs 10 extractions instead of 100 (#389).
-  const extractedUnits = await runStage(
+/**
+ * The extraction stage, shared by the full flow and the extraction-only
+ * path (#648) so both use one cache key, one set of discriminators and
+ * one metering rule, and therefore share cache entries. Keyed on the
+ * résumé text, the only input that can change the output, so the 10×10
+ * corpus runs 10 extractions instead of 100 (#389).
+ */
+function runExtractionStage(
+  resumeText: string,
+  deps: RunForFixtureDeps,
+  recordAnthropicCost: (usage: UsageRecord) => Promise<number>,
+  tally: StageTally,
+): Promise<ExperienceUnit[]> {
+  const extractionModel = modelFor("extraction");
+  return runStage(
     tally,
-    cache,
-    cacheDiscriminators,
+    deps.cache,
+    withEffort(deps.cacheDiscriminators, "extraction"),
     {
       stage: "extraction",
       provider: extractionModel.provider,
@@ -460,6 +555,54 @@ async function runForFixtureInner(
         { client: deps.anthropicClient, record },
       ),
   );
+}
+
+/**
+ * Extraction accuracy: `unitSetAccuracy` over `normalizedSummary` +
+ * `skills`, converting the label and Unit shapes.
+ */
+function extractionAccuracyFor(
+  expected: ExpectedUnitFile,
+  units: readonly Pick<ExperienceUnit, "normalized_summary" | "skills">[],
+): number {
+  return unitSetAccuracy(
+    expected.expected_units.map((e) => ({
+      normalizedSummary: e.normalized_summary,
+      skills: e.skills,
+    })),
+    units.map((u) => ({
+      normalizedSummary: u.normalized_summary,
+      skills: u.skills,
+    })),
+  );
+}
+
+async function runForFixtureInner(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  start: number,
+  recordCost: (usage: UsageRecord) => Promise<number>,
+  getCostAccum: () => number,
+  tally: StageTally,
+): Promise<RunForFixtureResult> {
+  const { cache, cacheDiscriminators } = deps;
+  const recordAnthropicCost = anthropicCostRecorder(deps, recordCost);
+  const parsingModel = modelFor("requirement_parsing");
+  // 1. Load fixtures.
+  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
+  const jdText = loadJdText(input.jdFixtureId, deps.fixturePaths);
+  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
+    input.resumeFixtureId,
+    deps.fixturePaths,
+  );
+  const expectedMatchesFile: ExpectedMatchesFile = loadExpectedMatches(
+    input.resumeFixtureId,
+    input.jdFixtureId,
+    deps.fixturePaths,
+  );
+
+  // 2. Extract Units (Anthropic), keyed on the resume text.
+  const extractedUnits = await runExtractionStage(resumeText, deps, recordAnthropicCost, tally);
 
   // 3. Embed Units (OpenAI). Attach embedding to each Unit
   //    in-place so the matching pipeline's filter for
@@ -515,7 +658,7 @@ async function runForFixtureInner(
   const parsedRequirements = await runStage(
     tally,
     cache,
-    cacheDiscriminators,
+    withEffort(cacheDiscriminators, "requirement_parsing"),
     {
       stage: "requirement_parsing",
       provider: parsingModel.provider,
@@ -528,7 +671,16 @@ async function runForFixtureInner(
       parseJobRequirements(
         jdText,
         { ownerUid: EVAL_OWNER_UID, roleId: EVAL_ROLE_ID },
-        { client: deps.anthropicClient, record },
+        {
+          client: deps.anthropicClient,
+          record,
+          // --record hook (#656): keep each failed attempt's kind and Zod
+          // issue codes and paths, including attempts a retry recovered.
+          ...(tally.trace !== undefined && {
+            onAttemptFailure: (failure: JdAttemptFailureNotice) =>
+              traceAttemptFailure(tally.trace, "requirement_parsing", failure),
+          }),
+        },
       ),
   );
 
@@ -561,6 +713,7 @@ async function runForFixtureInner(
   }));
 
   // 6. Run matching with in-memory deps (no Firestore).
+  traceEnterStep(tally.trace, "matching"); // --record hook
   const matches = await runMatchingPipeline(
     { ownerUid: EVAL_OWNER_UID, roleId: EVAL_ROLE_ID },
     {
@@ -570,18 +723,9 @@ async function runForFixtureInner(
     },
   );
 
-  // 7. Score extraction. unitSetAccuracy uses
-  //    `normalizedSummary` + `skills`; convert our shapes.
-  const extractionAccuracy = unitSetAccuracy(
-    expectedUnitsFile.expected_units.map((e) => ({
-      normalizedSummary: e.normalized_summary,
-      skills: e.skills,
-    })),
-    embeddedUnits.map((u) => ({
-      normalizedSummary: u.normalized_summary,
-      skills: u.skills,
-    })),
-  );
+  traceEnterStep(tally.trace, "scoring"); // --record hook
+  // 7. Score extraction.
+  const extractionAccuracy = extractionAccuracyFor(expectedUnitsFile, embeddedUnits);
 
   // 8. Score matches. Build mnemonic-ID maps; convert
   //    actual matches to composite strings; topKOverlap.
@@ -615,4 +759,58 @@ async function runForFixtureInner(
     ok: true,
     error: null,
   };
+}
+
+async function runExtractionInner(
+  input: RunForFixtureInput,
+  deps: RunForFixtureDeps,
+  start: number,
+  recordCost: (usage: UsageRecord) => Promise<number>,
+  getCostAccum: () => number,
+  tally: StageTally,
+): Promise<RunForFixtureResult> {
+  const resumeText = loadResumeText(input.resumeFixtureId, deps.fixturePaths);
+  const expectedUnitsFile: ExpectedUnitFile = loadExpectedUnits(
+    input.resumeFixtureId,
+    deps.fixturePaths,
+  );
+  // The full flow's extraction stage: same key, so the two share cache entries.
+  const extractedUnits = await runExtractionStage(
+    resumeText,
+    deps,
+    anthropicCostRecorder(deps, recordCost),
+    tally,
+  );
+  traceEnterStep(tally.trace, "scoring"); // --record hook
+  const extractionAccuracy = extractionAccuracyFor(expectedUnitsFile, extractedUnits);
+  return {
+    resumeFixtureId: input.resumeFixtureId,
+    jdFixtureId: input.jdFixtureId,
+    extractionAccuracy,
+    matchAccuracy: 0,
+    latencyMs: Date.now() - start,
+    costUsd: getCostAccum(),
+    modeledCostUsd: sumUsageCost(tally.modeledUsage),
+    cacheHits: tally.hits,
+    cacheMisses: tally.misses,
+    extractedUnitCount: extractedUnits.length,
+    parsedRequirementCount: 0,
+    matchCount: 0,
+    ok: true,
+    error: null,
+  };
+}
+
+/**
+ * A stage's cache discriminators plus its effort override, when one is
+ * set (#495). An effort changes the output, so it must be part of the
+ * key; leaving it out when unset keeps every pre-existing cache entry
+ * valid.
+ */
+export function withEffort(
+  base: Readonly<Record<string, string | number>> | undefined,
+  stage: Stage,
+): Readonly<Record<string, string | number>> | undefined {
+  const effort = effortFor(stage);
+  return effort === undefined ? base : { ...base, effort };
 }

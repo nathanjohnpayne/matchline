@@ -163,6 +163,192 @@ eq "p0"             "$(resolve_required_tiers "$CFG_NO_MODE")"               "re
 expect_rc 2 "resolve: malformed mode -> rc 2" -- resolve_required_tiers "$CFG_BAD_MODE"
 expect_rc 2 "resolve: malformed tier -> rc 2" -- resolve_required_tiers "$CFG_BAD_TIER"
 
+# --- resolve_tiers_by_disposition (#1672) ----------------------------------
+# Exact stdout bytes matter: eq normalizes newlines and expect_rc drops output.
+disposition_result() {
+  local want_rc=$1 want_stdout=$2 label=$3 rc=0
+  shift 3
+  "$@" > "$WORKDIR/disposition.out" 2> "$WORKDIR/disposition.err" || rc=$?
+  printf '%s' "$want_stdout" > "$WORKDIR/disposition.expected"
+  if [ "$rc" -eq "$want_rc" ] && cmp -s "$WORKDIR/disposition.expected" "$WORKDIR/disposition.out"; then
+    pass "$label"
+  else
+    fail "$label (expected rc=$want_rc and exact stdout, got rc=$rc)"
+  fi
+}
+
+DISP_CFG_5="$WORKDIR/disposition-empty-block.yml"
+cat > "$DISP_CFG_5" <<'YAML'
+feedback_policy:
+YAML
+
+DISP_CFG_6="$WORKDIR/disposition-partial.yml"
+cat > "$DISP_CFG_6" <<'YAML'
+feedback_policy:
+  priorities:
+    p1: required
+    p2: ignore
+YAML
+
+DISP_CFG_7="$WORKDIR/disposition-mixed.yml"
+cat > "$DISP_CFG_7" <<'YAML'
+feedback_policy:
+  mode: "by-priority" # existing normalization
+  priorities:
+    p0: "ignore"
+    p1: required
+    p2: discretionary
+    p3: ignore
+    nitpick: required
+YAML
+
+DISP_CFG_8="$WORKDIR/disposition-address-all-ignored-valid-priorities.yml"
+cat > "$DISP_CFG_8" <<'YAML'
+feedback_policy:
+  mode: address-all
+  priorities:
+    p0: ignore
+    p1: discretionary
+YAML
+
+DISP_CFG_9="$WORKDIR/disposition-late-bad-tier.yml"
+cat > "$DISP_CFG_9" <<'YAML'
+feedback_policy:
+  mode: by-priority
+  priorities:
+    p0: required
+    p1: discretionary
+    p2: ignore
+    p3: required
+    nitpick: mandatory
+YAML
+
+disposition_result 0 $'p0\np1\n' $'disposition: absent-file/required' \
+  resolve_tiers_by_disposition $'required' "$WORKDIR/does-not-exist.yml"
+disposition_result 0 $'p2\np3\nnitpick\n' $'disposition: absent-file/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$WORKDIR/does-not-exist.yml"
+disposition_result 0 $'' $'disposition: absent-file/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$WORKDIR/does-not-exist.yml"
+disposition_result 0 $'p0\np1\n' $'disposition: no-block/required' \
+  resolve_tiers_by_disposition $'required' "$CFG_NO_BLOCK"
+disposition_result 0 $'p2\np3\nnitpick\n' $'disposition: no-block/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$CFG_NO_BLOCK"
+disposition_result 0 $'' $'disposition: no-block/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$CFG_NO_BLOCK"
+
+# A transport/read error is not evidence that the block is absent. Inject
+# grep's documented error status without relying on host file permissions.
+disposition_read_error() (
+  grep() { return 2; }
+  resolve_tiers_by_disposition "$@"
+)
+for disposition in required discretionary ignore; do
+  disposition_result 2 '' "disposition: unreadable policy/$disposition" \
+    disposition_read_error "$disposition" "$CFG_BYPRI"
+done
+
+disposition_field_read_error() (
+  local rc=0
+  set +o pipefail
+  awk() { return 2; }
+  resolve_tiers_by_disposition "$@" || rc=$?
+  [[ ! -o pipefail ]] || return 97
+  return "$rc"
+)
+for disposition in required discretionary ignore; do
+  disposition_result 2 '' "disposition: field read error without caller pipefail/$disposition" \
+    disposition_field_read_error "$disposition" "$CFG_BYPRI"
+done
+disposition_result 0 $'' $'disposition: empty-block/required' \
+  resolve_tiers_by_disposition $'required' "$DISP_CFG_5"
+disposition_result 0 $'p0\np1\np2\np3\nnitpick\n' $'disposition: empty-block/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$DISP_CFG_5"
+disposition_result 0 $'' $'disposition: empty-block/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$DISP_CFG_5"
+disposition_result 0 $'p0\np1\n' $'disposition: hub-defaults/required' \
+  resolve_tiers_by_disposition $'required' "$CFG_BYPRI"
+disposition_result 0 $'p2\np3\nnitpick\n' $'disposition: hub-defaults/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$CFG_BYPRI"
+disposition_result 0 $'' $'disposition: hub-defaults/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$CFG_BYPRI"
+disposition_result 0 $'p1\n' $'disposition: partial/required' \
+  resolve_tiers_by_disposition $'required' "$DISP_CFG_6"
+disposition_result 0 $'p0\np3\nnitpick\n' $'disposition: partial/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$DISP_CFG_6"
+disposition_result 0 $'p2\n' $'disposition: partial/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$DISP_CFG_6"
+disposition_result 0 $'p1\nnitpick\n' $'disposition: mixed/required' \
+  resolve_tiers_by_disposition $'required' "$DISP_CFG_7"
+disposition_result 0 $'p2\n' $'disposition: mixed/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$DISP_CFG_7"
+disposition_result 0 $'p0\np3\n' $'disposition: mixed/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$DISP_CFG_7"
+disposition_result 0 $'p0\np1\np2\np3\nnitpick\n' $'disposition: address-all/required' \
+  resolve_tiers_by_disposition $'required' "$CFG_ALL"
+disposition_result 0 $'' $'disposition: address-all/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$CFG_ALL"
+disposition_result 0 $'' $'disposition: address-all/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$CFG_ALL"
+disposition_result 0 $'p0\np1\np2\np3\nnitpick\n' $'disposition: address-all-ignored-valid-priorities/required' \
+  resolve_tiers_by_disposition $'required' "$DISP_CFG_8"
+disposition_result 0 $'' $'disposition: address-all-ignored-valid-priorities/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$DISP_CFG_8"
+disposition_result 0 $'' $'disposition: address-all-ignored-valid-priorities/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$DISP_CFG_8"
+disposition_result 2 $'' $'disposition: bad-mode/required' \
+  resolve_tiers_by_disposition $'required' "$CFG_BAD_MODE"
+disposition_result 2 $'' $'disposition: bad-mode/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$CFG_BAD_MODE"
+disposition_result 2 $'' $'disposition: bad-mode/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$CFG_BAD_MODE"
+disposition_result 2 $'' $'disposition: late-bad-tier/required' \
+  resolve_tiers_by_disposition $'required' "$DISP_CFG_9"
+disposition_result 2 $'' $'disposition: late-bad-tier/discretionary' \
+  resolve_tiers_by_disposition $'discretionary' "$DISP_CFG_9"
+disposition_result 2 $'' $'disposition: late-bad-tier/ignore' \
+  resolve_tiers_by_disposition $'ignore' "$DISP_CFG_9"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'\'/no-block' \
+  resolve_tiers_by_disposition $'' "$CFG_NO_BLOCK"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'\'/hub-defaults' \
+  resolve_tiers_by_disposition $'' "$CFG_BYPRI"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'Required\'/no-block' \
+  resolve_tiers_by_disposition $'Required' "$CFG_NO_BLOCK"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'Required\'/hub-defaults' \
+  resolve_tiers_by_disposition $'Required' "$CFG_BYPRI"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'unknown\'/no-block' \
+  resolve_tiers_by_disposition $'unknown' "$CFG_NO_BLOCK"
+disposition_result 2 $'' $'disposition: invalid-disposition/\'unknown\'/hub-defaults' \
+  resolve_tiers_by_disposition $'unknown' "$CFG_BYPRI"
+
+# A missing argument is distinct from an explicit invalid value under nounset.
+disposition_result 2 '' 'disposition: missing argument' resolve_tiers_by_disposition
+disposition_result 0 $'p2\np3\nnitpick\n' 'disposition: actual hub discretionary set' \
+  resolve_tiers_by_disposition discretionary "$ROOT/.github/review-policy.yml"
+# Pin intentional absent-block divergence; do not migrate the legacy gates.
+disposition_result 0 $'p1\n' 'legacy: absent block remains p1 only' \
+  resolve_required_tiers "$CFG_NO_BLOCK"
+disposition_result 0 $'p1\n' 'legacy: absent file remains p1 only' \
+  resolve_required_tiers "$WORKDIR/does-not-exist.yml"
+
+# Scope CONFIG/cwd within subprocesses; keep PASS/FAIL accounting in this shell.
+disposition_with_config() (
+  CONFIG="$CFG_NO_BLOCK"
+  resolve_tiers_by_disposition "$@"
+)
+disposition_result 0 $'p0\np1\n' 'disposition: CONFIG default' \
+  disposition_with_config required
+disposition_result 0 $'p0\np1\np2\np3\nnitpick\n' 'disposition: explicit cfg overrides CONFIG' \
+  disposition_with_config required "$CFG_ALL"
+mkdir -p "$WORKDIR/disposition-default/.github"
+cp "$CFG_BYPRI" "$WORKDIR/disposition-default/.github/review-policy.yml"
+disposition_in_default_dir() (
+  unset CONFIG
+  cd "$WORKDIR/disposition-default"
+  resolve_tiers_by_disposition "$@"
+)
+disposition_result 0 $'p2\np3\nnitpick\n' 'disposition: relative default cfg' \
+  disposition_in_default_dir discretionary
+
 # --- codex_tier_of ---------------------------------------------------------
 eq "p0" "$(codex_tier_of '![P0 Badge] Critical: nullptr deref')" "codex_tier_of: P0 badge"
 eq "p1" "$(codex_tier_of 'foo ![P1 Badge] bar')"                 "codex_tier_of: P1 badge"
@@ -187,6 +373,119 @@ eq ""        "$(coderabbit_tier_of 'This is a Minor cleanup note, not a CodeRabb
 eq ""        "$(coderabbit_tier_of 'This is Trivial, no finding badge.')"                    "cr_tier_of: bare titlecase Trivial prose -> empty (#581 4b F2)"
 eq "p2"      "$(coderabbit_tier_of '_📐 Maintainability_ | _🟡 Minor_: This cleanup is Trivial but visible')" "cr_tier_of: Minor badge beats Trivial-in-prose -> p2 (#581 4b F2)"
 eq "p3 p1 p2" "$(coderabbit_tiers_of '🔵 Trivial first, 🟠 Major second, 🟡 Minor third')" "cr_tiers_of: emits every canonical marker in document order"
+
+# #1407: these exact provider section headings describe a container, while
+# the nested comment carries its own severity. Test both tier entry points:
+# the gate grades individual lines and accounting extracts all body markers.
+for heading in \
+  '<summary>⚠️ Outside diff range comments (1)</summary>' \
+  '<summary>Outside diff range comments (1)</summary><blockquote>' \
+  '**⚠️ Outside diff range comments (1)**' \
+  '> **⚠️ Outside diff range comments (1)**' \
+  '> **Outside diff range comments (12)**'; do
+  eq "" "$(coderabbit_tier_of "$heading")" "cr_heading: structural line has no tier: $heading"
+  eq "" "$(coderabbit_tiers_of "$heading")" "cr_headings: structural line has no markers: $heading"
+  body="$heading
+> <details>
+> <summary><strong>🟡 Minor</strong> · Restrict Phase 0 preflight to local sessions.</summary><blockquote>
+> **🟡 Minor** Real finding.
+> </blockquote></details>"
+  eq p2 "$(coderabbit_tier_of "$body")" "cr_heading: nested Minor keeps p2: $heading"
+  eq "p2 p2" "$(coderabbit_tiers_of "$body")" "cr_headings: only nested Minor markers remain: $heading"
+  eq p1 "$(coderabbit_tier_of "$body
+_🟠 Major_ Real required finding in the same container.")" "cr_heading: nested Major still requires disposition: $heading"
+done
+eq p3 "$(coderabbit_tier_of 'Outside diff range: standalone category finding')" "cr_heading: existing category marker remains gradeable"
+eq p3 "$(coderabbit_tier_of '<summary>⚠️ Outside diff range comments (1)</summary>
+_🔵 Trivial_ Real nested finding.')" "cr_heading: nested Trivial keeps its actual tier"
+for near_miss in \
+  '**⚠️ Outside diff range comments (1)** _🟠 Major_ real finding on same line' \
+  '<summary>⚠️ Outside diff range comments (1): investigate this</summary>' \
+  '**⚠️ Outside diff range comments (unknown)**'; do
+  eq p1 "$(coderabbit_tier_of "$near_miss")" "cr_heading: nonexact heading remains classified: $near_miss"
+done
+
+# #2560: CodeRabbit prefixes a finding it could not verify with a status
+# banner, `⚠️ **Unverified finding**`. The banner is a verification status,
+# not a severity, so its bare warning glyph must not grade a finding
+# CodeRabbit badged 🟡 Minor as p1. Only the complete banner line is excluded
+# (blockquoted or not); a real `⚠️ Potential issue` under it keeps grading p1.
+UNVERIFIED_MINOR='`17-17`: **📐 Maintainability & Code Quality** | **🟡 Minor** | **⚡ Quick win**
+
+⚠️ **Unverified finding**
+Verification ran but could not confirm this finding. It is shown for review, not as a verified issue.
+
+Consider renaming the local for clarity.'
+eq p2   "$(coderabbit_tier_of "$UNVERIFIED_MINOR")"  "cr_banner: Unverified finding banner + Minor badge grades p2 (#2560)"
+eq "p2" "$(coderabbit_tiers_of "$UNVERIFIED_MINOR")" "cr_banner: Unverified finding banner contributes no marker (#2560)"
+for banner in \
+  '⚠️ **Unverified finding**' \
+  '> ⚠️ **Unverified finding**' \
+  '**⚠️ Unverified finding**' \
+  '> **⚠️ Unverified finding**' \
+  '⚠️ Unverified finding'; do
+  eq "" "$(coderabbit_tier_of "$banner")"  "cr_banner: banner alone has no tier: $banner"
+  eq "" "$(coderabbit_tiers_of "$banner")" "cr_banner: banner alone has no markers: $banner"
+  eq p2 "$(coderabbit_tier_of "$banner
+**🟡 Minor** Real finding under the banner.")" "cr_banner: Minor under the banner keeps p2: $banner"
+  eq p1 "$(coderabbit_tier_of "$banner
+**⚠️ Potential issue** Real required finding under the banner.")" "cr_banner: Potential issue under the banner stays p1: $banner"
+done
+# #2927: CodeRabbit's icon-label inline severity (late October 2026) carries
+# no emoji. These are the verbatim leading lines of mergepath#2963 comments
+# 4451423418 (Major) and 4451315353 (Minor); before #2927 both graded empty, so
+# a new-format Major never blocked the required gate.
+CR_ICON='<picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/major-16.svg" width="16" height="16" align="absmiddle" alt=""></picture>'
+CR_AMBER='<picture><img src="https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/amber-16.svg" width="16" height="16" align="absmiddle" alt=""></picture>'
+eq p1 "$(coderabbit_tier_of "<!-- coderabbit-ai-generated:v1 -->
+
+**$CR_ICON Major** · **Data Integrity & Integration** · **Heavy lift**
+
+**Route child creation through the documented author wrapper.**")" "cr_icon: icon-label Major grades p1 (#2927)"
+eq p2 "$(coderabbit_tier_of "<!-- coderabbit-ai-generated:v1 -->
+
+**$CR_AMBER Minor** · **Functional Correctness** · **Quick win**
+
+**Allow an unresolved route to remain unset.**")" "cr_icon: icon-label Minor grades p2 (#2927)"
+eq p1 "$(coderabbit_tier_of "**$CR_ICON Critical** · **Security & Privacy** · **Heavy lift**")" "cr_icon: icon-label Critical grades p1 (#2927)"
+eq p1 "$(coderabbit_tier_of "**$CR_ICON Major** · **Functional Correctness** · **Quick win**
+
+The fix is a Minor edit.")" "cr_icon: icon-label Major beats Minor-in-prose -> p1 (#2927)"
+eq "" "$(coderabbit_tier_of 'This is a **Major** concern in prose, not a badge.')" "cr_icon: bold Major prose without the icon stays empty (#2927)"
+eq "" "$(coderabbit_tier_of "$CR_ICON Major without the bold close")" "cr_icon: icon without the bold close stays empty (#2927)"
+eq "" "$(coderabbit_tier_of "**$CR_ICON Refactor** · **Maintainability**")" "cr_icon: unknown icon label stays empty (#2927)"
+eq p3 "$(coderabbit_tier_of "\`329-336\`: **$CR_ICON Trivial** · **Functional Correctness** · **Quick win**")" "cr_icon: icon-label Trivial grades p3 (#2927)"
+# Ungraded severity rows are unclassified findings, never zero findings.
+eq 1 "$(coderabbit_unclassified_severity_rows "**$CR_ICON Severe** · **Security & Privacy** · **Quick win**")" "cr_unclassified: unknown icon label row counts (#2927)"
+eq 1 "$(coderabbit_unclassified_severity_rows "> \`12-14\`: **🔒 Security & Privacy** | **🟣 Severe** | **⚡ Quick win**")" "cr_unclassified: blockquoted unknown emoji row counts (#2927)"
+eq 0 "$(coderabbit_unclassified_severity_rows "> **$CR_ICON Major** · **Security & Privacy** · **Quick win**")" "cr_unclassified: blockquoted icon-label Major row is graded (#2927)"
+eq 0 "$(coderabbit_unclassified_severity_rows "\`17-17\`: **📐 Maintainability & Code Quality** | **🟡 Minor** | **⚡ Quick win**")" "cr_unclassified: legacy emoji row is graded (#2927)"
+# shellcheck disable=SC2016 # Literal Markdown backticks in a CodeRabbit body.
+eq 0 "$(coderabbit_unclassified_severity_rows '`3-3`: LGTM!
+
+<!-- cr-comment:v1:1d0917d279ece1649e83f86d -->')" "cr_unclassified: LGTM additional comment has no row (#2927)"
+eq 0 "$(coderabbit_unclassified_severity_rows '| **File** | **Change** |')" "cr_unclassified: Markdown table row is not a severity row (#2927)"
+eq 0 "$(coderabbit_unclassified_severity_rows '**Actionable comments posted: 0**')" "cr_unclassified: a single bold span is not a severity row (#2927)"
+eq p1 "$(coderabbit_unclassified_tier "**$CR_ICON Severe** · **Security & Privacy** · **Quick win**")" "cr_unclassified: unclassified row grades p1 (#2927)"
+eq "" "$(coderabbit_unclassified_tier "**$CR_ICON Minor** · **Security & Privacy** · **Quick win**")" "cr_unclassified: graded row adds no tier (#2927)"
+for near_miss in \
+  '⚠️ **Unverified finding** _🟠 Major_ real finding on the same line' \
+  '⚠️ **Unverified finding**: investigate this'; do
+  eq p1 "$(coderabbit_tier_of "$near_miss")" "cr_banner: nonexact banner line remains classified: $near_miss"
+done
+
+# A failed heading read must discard partial output just like marker extraction.
+for classifier in coderabbit_tiers_of coderabbit_tier_of; do
+  if (
+    awk() { printf '_🟠 Major_\n'; return 2; }
+    rc=0; out=$("$classifier" '_🟠 Major_') || rc=$?
+    [ "$rc" = 2 ] && [ -z "$out" ]
+  ); then
+    pass "$classifier: failed heading read discards partial output"
+  else
+    fail "$classifier: failed heading read became a classification or absence"
+  fi
+done
 
 # A failed marker read is neither absence nor a usable partial classification.
 for partial in '' '🟠 Major'; do
@@ -432,6 +731,68 @@ printf 'code_scanning: {bot_login: "unterminated\n' > "$CFG_BROKEN"
 BROKEN_RC=0
 policy_block_field_parsed code_scanning bot_login "$CFG_BROKEN" >/dev/null 2>&1 || BROKEN_RC=$?
 eq 1 "$BROKEN_RC" "policy_block_field_parsed: unparseable YAML is rc 1 (unknown), not a silent empty"
+
+# The preferred yq branch must reject an entire multi-document stream before
+# emitting any JSON, including a valid first document followed by invalid YAML.
+if command -v yq >/dev/null 2>&1 && yq --version 2>/dev/null | grep -qi mikefarah; then
+  YQ_JSON=$(policy_yaml_to_json "$CFG_FLOW")
+  eq custom-ghas\[bot\] "$(printf '%s' "$YQ_JSON" | jq -r '.code_scanning.bot_login')" \
+    "yq preferred parser preserves a valid flow mapping"
+  for suffix in 'code_scanning: {}' '[broken' ''; do
+    printf 'code_scanning: {}\n---\n%s\n' "$suffix" > "$WORKDIR/yq-multiple.yml"
+    YQ_RC=0
+    YQ_JSON=$(policy_yaml_to_json "$WORKDIR/yq-multiple.yml") || YQ_RC=$?
+    eq 1 "$YQ_RC" "yq preferred parser rejects additional YAML documents: $suffix"
+    eq '' "$YQ_JSON" "yq preferred parser emits no partial document: $suffix"
+  done
+  printf 'code_scanning:\n  bot_login: |\n    ---\n' > "$WORKDIR/yq-block-scalar.yml"
+  YQ_JSON=$(policy_yaml_to_json "$WORKDIR/yq-block-scalar.yml")
+  eq '---' "$(printf '%s' "$YQ_JSON" | jq -r '.code_scanning.bot_login')" \
+    "yq counts parsed documents, not separator text inside a scalar"
+else
+  echo 'SKIP: mikefarah yq is unavailable for preferred-parser controls'
+fi
+
+# A conversion error after successful document counting must not leak a
+# partial value either. This shim isolates that second command's failure.
+YQ_FAIL_BIN="$WORKDIR/yq-conversion-failure-bin"
+mkdir -p "$YQ_FAIL_BIN"
+cat > "$YQ_FAIL_BIN/yq" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  --version) echo 'yq mikefarah test fixture' ;;
+  eval-all) echo 1 ;;
+  eval) printf '{"partial":'; exit 1 ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$YQ_FAIL_BIN/yq"
+YQ_RC=0
+YQ_JSON=$(PATH="$YQ_FAIL_BIN:$PATH" policy_yaml_to_json "$CFG_FLOW") || YQ_RC=$?
+eq 1 "$YQ_RC" "yq conversion failure is nonzero after successful document counting"
+eq '' "$YQ_JSON" "yq conversion failure emits no partial JSON"
+
+# Exercise the actual optional Ruby branch independently of whichever parser
+# this runner normally selects. Parsing only document1 must not discard later
+# policy documents before a caller can reject them.
+if ruby -ryaml -rjson -e 'YAML.safe_load("codex: {}")' >/dev/null 2>&1; then
+  RUBY_ONLY="$WORKDIR/ruby-only-bin"
+  mkdir -p "$RUBY_ONLY"
+  for parser in yq python3; do
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$RUBY_ONLY/$parser"
+    chmod +x "$RUBY_ONLY/$parser"
+  done
+  RUBY_JSON=$(PATH="$RUBY_ONLY:$PATH" policy_yaml_to_json "$CFG_FLOW")
+  eq custom-ghas\[bot\] "$(printf '%s' "$RUBY_JSON" | jq -r '.code_scanning.bot_login')" \
+    "Ruby fallback preserves a valid flow mapping"
+  for suffix in 'code_scanning: {}' '[broken'; do
+    printf 'code_scanning: {}\n---\n%s\n' "$suffix" > "$WORKDIR/ruby-multiple.yml"
+    RUBY_RC=0
+    RUBY_JSON=$(PATH="$RUBY_ONLY:$PATH" policy_yaml_to_json "$WORKDIR/ruby-multiple.yml") || RUBY_RC=$?
+    eq 1 "$RUBY_RC" "Ruby fallback rejects additional YAML documents: $suffix"
+    eq '' "$RUBY_JSON" "Ruby fallback emits no partial document: $suffix"
+  done
+fi
 
 # ---------------------------------------------------------------------------
 echo

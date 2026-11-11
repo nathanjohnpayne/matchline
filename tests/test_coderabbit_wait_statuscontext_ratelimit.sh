@@ -96,6 +96,10 @@ SUMMARY_BODY_WITH_RATE_LIMIT_STANZA='<!-- This is an auto-generated comment: sum
 CodeRabbit is an incremental review system.
 ```'
 
+PROCESSING_ERROR_BODY='> [!WARNING]
+> ## Something unexpected happened
+>
+> We could not process this pull request right now. Please try again later.'
 LEGACY_RATE_LIMIT_BODY='Rate limit exceeded
 
 Please wait before requesting another review.'
@@ -378,6 +382,31 @@ make_case() {
 
   mkdir -p "$dir/scripts/lib" "$dir/.github" "$dir/bin" "$dir/state"
   cp "$ROOT/scripts/coderabbit-wait.sh" "$dir/scripts/coderabbit-wait.sh"
+  # Name the two selected-comment caller sites in the fixture copy only. The
+  # awk shim can then inject at either caller directly, regardless of how many
+  # unrelated structural reads happen first.
+  # shellcheck disable=SC2016 # literal sed search and replacement expressions
+  sed -i.bak \
+    's/CLASS=$(crw_classify_selected_comment "$COMMENT_BODY")/CLASS=$(CODERABBIT_TEST_STRUCTURAL_SITE=main_poll crw_classify_selected_comment "$COMMENT_BODY")/' \
+    "$dir/scripts/coderabbit-wait.sh"
+  python3 - "$dir/scripts/coderabbit-wait.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+code = p.read_text()
+old = '''    class=$(crw_classify_selected_comment "$body") || {
+      log "post-probe terminal-review check: the selected comment could not be structurally classified — leaving the advisory timeout in place"
+'''
+new = '''    class=$(CODERABBIT_TEST_STRUCTURAL_SITE=post_probe crw_classify_selected_comment "$body") || {
+      log "post-probe terminal-review check: the selected comment could not be structurally classified — leaving the advisory timeout in place"
+'''
+assert code.count(old) == 1, "post-probe selected-comment call site was not unique"
+p.write_text(code.replace(old, new, 1))
+PY
+  grep -Fq 'CODERABBIT_TEST_STRUCTURAL_SITE=main_poll crw_classify_selected_comment' "$dir/scripts/coderabbit-wait.sh" \
+    || { fail "$name: could not tag main-loop selected-comment classifier in fixture copy"; return 1; }
+  grep -Fq 'CODERABBIT_TEST_STRUCTURAL_SITE=post_probe crw_classify_selected_comment' "$dir/scripts/coderabbit-wait.sh" \
+    || { fail "$name: could not tag post-probe selected-comment classifier in fixture copy"; return 1; }
   cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$dir/scripts/lib/gh-token-resolver.sh"
   cp "$ROOT/scripts/lib/reviewers-helpers.sh" "$dir/scripts/lib/reviewers-helpers.sh"
   # Hard-required by coderabbit-wait.sh since #1008: both fetch wrappers
@@ -387,7 +416,7 @@ make_case() {
   # grades findings with the shared coderabbit_tier_of.
   cp "$ROOT/scripts/lib/feedback-policy-helpers.sh" "$dir/scripts/lib/feedback-policy-helpers.sh"
   # #1178: hard-sourced by the waiter, so the fixture must carry it too.
-  cp "$ROOT/scripts/lib/coderabbit-fence.sh" "$dir/scripts/lib/coderabbit-fence.sh"
+  cp "${CODERABBIT_TEST_DESCRIPTION_HELPER_SOURCE:-$ROOT/scripts/lib/coderabbit-fence.sh}" "$dir/scripts/lib/coderabbit-fence.sh"
   chmod +x "$dir/scripts/coderabbit-wait.sh"
 
   printf '%s' "$comment_body" >"$dir/state/comment-body.txt"
@@ -434,8 +463,27 @@ EOF
   cat >"$dir/bin/awk" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# Caller-targeted failure scans argv because awk consumers may place -v
+# options before the program. Keep legacy ordinal injection on its original
+# first-argument match so adding a named-site control cannot shift old counts.
+if [ -n "${CODERABBIT_TEST_FAIL_STRUCTURAL_SITE:-}" ] \
+  && [ "${CODERABBIT_TEST_STRUCTURAL_SITE:-}" = "$CODERABBIT_TEST_FAIL_STRUCTURAL_SITE" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      *'function fence_info'*)
+        printf '%s\n' "$CODERABBIT_TEST_STRUCTURAL_SITE" \
+          >"${CODERABBIT_TEST_STATE_DIR:?}/structural-awk-failure-site"
+        echo "simulated structural reader failure at selected-comment site $CODERABBIT_TEST_STRUCTURAL_SITE" >&2
+        exit 44
+        ;;
+    esac
+  done
+fi
 case "${1:-}" in
   *'function fence_info'*)
+    # Preserve the count-targeted injector for existing tests whose intended
+    # failure is in a different structural consumer (not the selected-comment
+    # classifier addressed by #1341).
     if [ -n "${CODERABBIT_TEST_FAIL_STRUCTURAL_ON:-}" ]; then
       count_file=${CODERABBIT_TEST_STATE_DIR:?}/structural-awk-count
       count=0
@@ -488,15 +536,19 @@ case "\$endpoint" in
     if [ "\${1:-}" = "--jq" ]; then printf '%s\n' "\$head_time"
     else printf '{"commit":{"committer":{"date":"%s"}}}\n' "\$head_time"; fi ;;
   repos/owner/repo/commits/$head_sha/statuses)
+    if [ -f "\$state_dir/late-refusal-enabled" ]; then
+      status_description='Review in progress'
+      [ ! -f "\$state_dir/selection-done" ] || status_description='Review rate limited'
+    fi
     # An EMPTY status_description omits the key entirely — the shape every
     # pre-#891 fixture modelled, and the one the description guard must keep
     # clearing so the #221 fast path survives.
     if [ -n "\$status_description" ]; then
       jq -cn --arg bot "\$bot" --arg t "\$status_time" --arg d "\$status_description" \
-        '[{context:"CodeRabbit",creator:{login:\$bot},state:"success",created_at:\$t,description:\$d}]'
+        '[{id:1,context:"CodeRabbit",creator:{login:\$bot},state:"success",created_at:\$t,description:\$d}]'
     else
       jq -cn --arg bot "\$bot" --arg t "\$status_time" \
-        '[{context:"CodeRabbit",creator:{login:\$bot},state:"success",created_at:\$t}]'
+        '[{id:1,context:"CodeRabbit",creator:{login:\$bot},state:"success",created_at:\$t}]'
     fi ;;
   repos/owner/repo/issues/999/timeline) printf '[]\n' ;;
   repos/owner/repo/pulls/999/reviews)
@@ -637,13 +689,31 @@ run_case() {
       CODERABBIT_TEST_STATE_DIR="$dir/state" \
       CODERABBIT_TEST_REVIEWS_AFTER_FIRST_JSON="${CODERABBIT_TEST_REVIEWS_AFTER_FIRST_JSON:-}" \
       CODERABBIT_TEST_FAIL_REVIEWS_AFTER="${CODERABBIT_TEST_FAIL_REVIEWS_AFTER:-}" \
+      CODERABBIT_TEST_FAIL_STRUCTURAL_SITE="${CODERABBIT_TEST_FAIL_STRUCTURAL_SITE:-}" \
       CODERABBIT_TEST_FAIL_STRUCTURAL_ON="${CODERABBIT_TEST_FAIL_STRUCTURAL_ON:-}" \
       CODERABBIT_WAIT_CODEX_REQUEST_CMD="$dir/bin/codex-request-stub.sh" \
       CODEX_STUB_LOG="$dir/state/codex-stub.log" \
-      ./scripts/coderabbit-wait.sh 999 owner/repo \
+      ./scripts/coderabbit-wait.sh ${CRW_TEST_PROBE:+--probe} 999 owner/repo \
       >"$dir/out.json" 2>"$dir/err.log"
   ) || rc=$?
   printf '%s\n' "$rc"
+}
+
+# #2752: replace one processing-error latch consult in a fixture copy with a
+# no-op, so a case can show that the edge it names is what withholds
+# clearance. The label is the edge argument the waiter passes to
+# crw_processing_error_latch_permits_clearance.
+neutralize_latch_edge() {
+  local dir=$1 label=$2
+  python3 - "$dir/scripts/coderabbit-wait.sh" "$label" <<'PY2'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+code = p.read_text()
+old = 'crw_processing_error_latch_permits_clearance "' + sys.argv[2] + '"'
+assert code.count(old) == 1, "latch edge %r is not a unique call site" % sys.argv[2]
+p.write_text(code.replace(old, 'true "' + sys.argv[2] + '"', 1))
+PY2
 }
 
 jqf() { jq -r "$2" "$1/out.json"; }
@@ -726,7 +796,10 @@ test_refusal_run_is_revalidated_before_clearance() {
   dir=$(make_case "headref-stable-review-run" "$RATE_LIMIT_BODY_HEADREF" "2026-06-04T02:00:00Z")
   rc=$(CODERABBIT_TEST_REVIEWS_JSON="$clean" CODERABBIT_TEST_REVIEWS_AFTER_FIRST_JSON="$clean" run_case "$dir")
   [ "$rc" = "0" ] || fail "3b0 stable: unchanged selected review should clear, got $rc; err=$(tail -5 "$dir/err.log")"
-  [ "$(cat "$dir/state/reviews-read-count")" = "2" ] || fail "3b0 stable: expected selector revalidation read"
+  # Read 1 is the fast path's shared snapshot (refusal grading and the #2752
+  # latch), read 2 the revalidation, and reads 3-4 the latch at the verdict
+  # edge and at the emitter backstop.
+  [ "$(cat "$dir/state/reviews-read-count")" = "4" ] || fail "3b0 stable: expected selector revalidation read plus the two #2752 latch reads, got $(cat "$dir/state/reviews-read-count")"
 
   dir=$(make_case "headref-superseded-review-run" "$RATE_LIMIT_BODY_HEADREF" "2026-06-04T02:00:00Z")
   rc=$(CODERABBIT_TEST_REVIEWS_JSON="$clean" CODERABBIT_TEST_REVIEWS_AFTER_FIRST_JSON="$superseding" run_case "$dir")
@@ -742,7 +815,9 @@ test_refusal_run_is_revalidated_before_clearance() {
 
   dir=$(make_case "headref-unread-revalidation" "$RATE_LIMIT_BODY_HEADREF" "2026-06-04T02:00:00Z")
   rc=$(CODERABBIT_TEST_REVIEWS_JSON="$clean" CODERABBIT_TEST_FAIL_REVIEWS_AFTER=1 run_case "$dir")
-  [ "$rc" = "5" ] || fail "3b0 unread: unread revalidation must withhold clearance, got $rc; err=$(tail -6 "$dir/err.log")"
+  # The published-refusal route now performs a fresh strict reviews read
+  # before substitution. Its unreadable follow-up is infrastructure failure.
+  [ "$rc" = "3" ] || fail "3b0 unread: unread strict refresh must fail closed, got $rc; err=$(tail -6 "$dir/err.log")"
   [ "$(jqf "$dir" '.status')" != "cleared" ] || fail "3b0 unread: unread revalidation cleared"
   grep -q 'could not be re-read before clearance' "$dir/err.log" || fail "3b0 unread: expected re-read failure log"
   [ "$FAIL" -ne "$before" ] || pass "3b0: #956 revalidates a stable clean run and withholds clearance when its id or body changes or becomes unread"
@@ -854,7 +929,7 @@ test_legacy_one_line_refusal_quote_and_fence_stay_nonprovider() {
 
 test_legacy_refusal_classifier_unit() {
   local snip="$WORKDIR/legacy-refusal-classifier.sh" body class bad="" before=$FAIL
-  eval "$(grep -E '^(RATE_LIMIT_MARKER|PAUSED_MARKER|IN_PROGRESS_MARKER)=' \
+  eval "$(grep -E '^(RATE_LIMIT_MARKER|PAUSED_MARKER|IN_PROGRESS_MARKER|SUMMARY_MARKER)=' \
     "$ROOT/scripts/coderabbit-wait.sh")"
   # shellcheck source=../scripts/lib/coderabbit-fence.sh
   . "$ROOT/scripts/lib/coderabbit-fence.sh"
@@ -897,20 +972,69 @@ test_markerless_refusal_does_not_clear_at_terminal_probe() {
 }
 
 test_selected_comment_structural_failure_fails_closed() {
-  local dir rc before=$FAIL
+  local dir rc before=$FAIL fixture_path_env
 
   dir=$(make_case "selected-comment-structural-failure-main" "$REVIEW_BODY_CLEAN")
+  fixture_path_env="PATH=$dir/bin:$PATH"
   sed -i.bak 's/trust_status_context_for_clearance: true/trust_status_context_for_clearance: false/' "$dir/.github/review-policy.yml"
-  rc=$(CODERABBIT_TEST_FAIL_STRUCTURAL_ON=3 run_case "$dir")
+  rc=$(CODERABBIT_TEST_FAIL_STRUCTURAL_SITE=main_poll run_case "$dir")
   [ "$rc" = "3" ] || fail "3b6b main: structural classification failure must stop polling with infra, got $rc; err=$(tail -6 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status')" != "cleared" ] || fail "3b6b main: unread selected comment was reported as cleared"
+  [ "$(stub_calls "$dir")" = 0 ] || fail "3b6b main: unread selected comment triggered Codex"
   grep -q 'could not structurally classify the latest CodeRabbit comment' "$dir/err.log" || fail "3b6b main: expected fail-closed structural-classification diagnostic"
+  [ "$(cat "$dir/state/structural-awk-failure-site" 2>/dev/null)" = main_poll ] || fail "3b6b main: injection did not reach the selected-comment main-loop classifier"
+
+  # Negative control: run the real feedback-policy structural consumer from
+  # the copied fixture. Its awk calls must resolve through the fixture shim,
+  # while the caller-specific selector stays unset because this is not either
+  # selected-comment call site in the copied waiter.
+  mkdir -p "$dir/state/unrelated"
+  printf '%s' "$REVIEW_BODY_SUMMARY_ONLY_MARKER" >"$dir/state/unrelated/comment-body.txt"
+  cat >"$dir/state/unrelated-structural-control.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$1"
+# shellcheck disable=SC1091 # helper is copied into the isolated fixture
+source scripts/lib/feedback-policy-helpers.sh
+body=$(cat state/unrelated/comment-body.txt)
+tier=$(coderabbit_tier_of "$body")
+[ "$tier" = p1 ]
+scanned=$(coderabbit_finding_scan "$body")
+case "$scanned" in *'🟠 Major'*) ;; *) exit 1 ;; esac
+EOF
+  fixture_path_env="PATH=$dir/bin:$PATH"
+  if ! env "$fixture_path_env" \
+    CODERABBIT_TEST_FAIL_STRUCTURAL_SITE=main_poll \
+    CODERABBIT_TEST_STATE_DIR="$dir/state/unrelated" \
+    bash "$dir/state/unrelated-structural-control.sh" "$dir"; then
+    fail "3b6b control: real unrelated coderabbit_tier_of consumer failed or returned the wrong tier"
+  fi
+  [ ! -f "$dir/state/unrelated/structural-awk-failure-site" ] \
+    || fail "3b6b control: real unrelated structural consumer consumed the selected-comment injection"
+
+  # Harness sensitivity: tag the real helper as main_poll deliberately. Its
+  # awk program receives -v arguments before the program, so the named-site
+  # matcher must still detect it and write the site marker.
+  mkdir -p "$dir/state/unrelated-tagged"
+  if env "$fixture_path_env" \
+    CODERABBIT_TEST_FAIL_STRUCTURAL_SITE=main_poll \
+    CODERABBIT_TEST_STRUCTURAL_SITE=main_poll \
+    CODERABBIT_TEST_STATE_DIR="$dir/state/unrelated-tagged" \
+    bash "$dir/state/unrelated-structural-control.sh" "$dir" 2>>"$dir/err.log"; then
+    fail "3b6b control mutation: tagged real structural consumer did not detect the injected shim failure"
+  fi
+  [ "$(cat "$dir/state/unrelated-tagged/structural-awk-failure-site" 2>/dev/null)" = main_poll ] \
+    || fail "3b6b control mutation: deliberate caller tag did not reach the real helper's awk shim"
 
   dir=$(make_case "selected-comment-structural-failure-terminal" "$REVIEW_BODY_CLEAN")
   sed -i.bak 's/trust_status_context_for_clearance: true/trust_status_context_for_clearance: false/' "$dir/.github/review-policy.yml"
   sed -i.bak 's/max_wait_seconds: 300/max_wait_seconds: 0/' "$dir/.github/review-policy.yml"
-  rc=$(CODERABBIT_TEST_FAIL_STRUCTURAL_ON=3 run_case "$dir")
+  rc=$(CODERABBIT_TEST_FAIL_STRUCTURAL_SITE=post_probe run_case "$dir")
   [ "$rc" = "4" ] || fail "3b6b terminal: structural classification failure must preserve advisory timeout, got $rc; err=$(tail -6 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status')" = "timeout" ] || fail "3b6b terminal: unread selected comment changed the advisory timeout verdict"
+  [ "$(stub_calls "$dir")" = 0 ] || fail "3b6b terminal: unread selected comment triggered Codex"
   grep -q 'could not be structurally classified' "$dir/err.log" || fail "3b6b terminal: expected suppressed terminal-upgrade diagnostic"
+  [ "$(cat "$dir/state/structural-awk-failure-site" 2>/dev/null)" = post_probe ] || fail "3b6b terminal: injection did not reach the selected-comment post-probe classifier"
   [ "$FAIL" -ne "$before" ] || pass "3b6b: selected-comment structural reader failure stops polling and suppresses terminal clearance"
 }
 
@@ -1250,14 +1374,14 @@ test_ratelimited_description_without_notice_never_clears() {
   rc=$(run_case "$dir")
   [ "$rc" != "0" ] || fail "6: FALSE-CLEARED (exit 0) on a 'Review rate limited' success with no notice comment; err=$(tail -4 "$dir/err.log")"
   [ "$(jqf "$dir" '.status')" != "cleared" ] || fail "6: status=cleared on a head CodeRabbit declined to review"
-  [ "$rc" = "5" ] || fail "6: expected exit 5 (notice-less rate-limit stall at timeout), got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$rc" = "5" ] || fail "6: expected exit 5 (immediate notice-less rate-limit substitution), got $rc; err=$(tail -4 "$dir/err.log")"
   grep -q 'does not name a completed review' "$dir/err.log" || fail "6: expected the description-guard log line; err=$(grep -i statuscontext "$dir/err.log" | tail -2)"
   [ "$(jqf "$dir" '.codex_failover_requested')" = true ] || fail "6: notice-less refusal did not engage failover"
   [ "$(stub_calls "$dir")" = 1 ] || fail "6: expected one failover request"
-  [ "$(cat "$dir/state/fake-time")" = 2000000300 ] || fail "6: refusal changed the existing 300s wait"
+  [ "$(cat "$dir/state/fake-time")" = 2000000000 ] || fail "6: notice-less refusal waited instead of substituting Codex immediately"
   [ "$(jqf "$dir" '.review.created_at')" = "$STATUS_TIME" ] || fail "6: source status timestamp was lost"
   [ "$(jqf "$dir" '.rate_limit_retries')" = 0 ] || fail "6: invented a retry without a published window"
-  [ "$FAIL" -ne "$before" ] || pass "6: #940 — notice-less refusal stalls and requests Codex once at the existing timeout"
+  [ "$FAIL" -ne "$before" ] || pass "6: #2139 — notice-less refusal requests Codex immediately without sleeping"
 }
 
 # --- Test 7: description guard — an UNRECOGNIZED non-empty description ------
@@ -1276,6 +1400,524 @@ test_unknown_description_does_not_clear() {
 # --- Test 8: control — 'Review completed' still clears ----------------------
 # The #912 capture of a genuine run (af8496f @03:06:48Z). Guarding the
 # description must not cost the #221 fast path.
+# --- #2657: a processing-error notice beside a success status never clears ---
+test_processing_error_with_success_status_does_not_clear() {
+  local dir rc before=$FAIL
+  dir=$(make_case "processing-error" "$PROCESSING_ERROR_BODY" "$STATUS_TIME" "Review completed")
+  rc=$(run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE: the fast path cleared over CodeRabbit's processing-error notice; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status' 2>/dev/null)" != "cleared" ] || fail "PE: status=cleared over a processing-error notice"
+  [ "$(stub_calls "$dir")" = "0" ] || fail "PE: a processing error fired the rate-limit failover"
+  [ "$FAIL" -ne "$before" ] || pass "PE: #2657 — a success StatusContext beside a processing-error notice never clears (rc=$rc status=$(jqf "$dir" '.status' 2>/dev/null))"
+}
+
+# --- #2657 control: a body-bearing current-HEAD run still releases it ---------
+test_processing_error_with_actual_head_review_clears() {
+  local dir rc before=$FAIL reviews
+  dir=$(make_case "processing-error-review" "$PROCESSING_ERROR_BODY" "2026-06-04T02:00:00Z" "Review completed")
+  reviews='[{"id":8802,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T01:59:59Z","body":"Review completed. No actionable comments."}]'
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] || fail "PE2: expected exit 0 with a body-bearing current-HEAD review, got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status')" = "cleared" ] || fail "PE2: status=$(jqf "$dir" '.status'), expected cleared"
+  [ "$FAIL" -ne "$before" ] || pass "PE2: #2657 — a body-bearing review run pinned to HEAD releases the processing-error refusal"
+}
+
+# --- #2657: a current-HEAD run whose body IS the notice cannot release it -----
+test_processing_error_review_body_does_not_release() {
+  local dir rc before=$FAIL reviews
+  dir=$(make_case "processing-error-run" "$PROCESSING_ERROR_BODY" "2026-06-04T02:00:00Z" "Review completed")
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" '[{"id":8803,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T01:59:59Z","body":$b}]')
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE3: a review run whose body is the processing-error notice released the refusal; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status' 2>/dev/null)" != "cleared" ] || fail "PE3: status=cleared from a processing-error review body"
+  [ "$FAIL" -ne "$before" ] || pass "PE3: #2657 — a current-HEAD run whose body is the processing-error notice cannot release it (rc=$rc status=$(jqf "$dir" '.status' 2>/dev/null))"
+}
+
+# --- #2657: an older clean run cannot release a NEWER processing-error notice --
+test_processing_error_older_run_does_not_release() {
+  local dir rc before=$FAIL reviews
+  dir=$(make_case "processing-error-older-run" "$PROCESSING_ERROR_BODY" "2026-06-04T02:01:00Z" "Review completed" "2026-06-04T02:00:30Z")
+  reviews='[{"id":8804,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T01:59:59Z","body":"Review completed. No actionable comments."}]'
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE4: a clean run older than the processing-error notice released it; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status' 2>/dev/null)" != "cleared" ] || fail "PE4: status=cleared from a run that predates the notice"
+  grep -q 'no later review run or head-naming summary supersedes it' "$dir/err.log" || fail "PE4: expected the processing-error latch refusal log (#2752)"
+  [ "$FAIL" -ne "$before" ] || pass "PE4: #2657 — a current-HEAD run older than the processing-error notice cannot release it"
+}
+
+# --- #2657: a processing-error notice published only as the review object -----
+test_processing_error_review_object_only_does_not_clear() {
+  local dir rc before=$FAIL reviews
+  # No CodeRabbit issue comment at all: the notice exists only as the review.
+  dir=$(make_case "processing-error-review-only" "" "$STATUS_TIME" "Review completed")
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" '[{"id":8805,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":$b}]')
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE5: a processing-error review object beside a completed status cleared; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status' 2>/dev/null)" != "cleared" ] || fail "PE5: status=cleared from a processing-error review object"
+  [ "$FAIL" -ne "$before" ] || pass "PE5: #2657 — a processing-error notice published only as the review object never clears (rc=$rc)"
+}
+
+# --- #2657 / #2769: an unreadable processing-error notice fails closed --------
+# The injection targets the latch's own structural read of each bot body, by a
+# site tag in the fixture copy rather than by an awk call ordinal, so the case
+# cannot pass on a read that never happened. The fixture carries a clean
+# current-HEAD run newer than the notice, so the CONTROL run (no injection)
+# clears: the non-cleared result under injection is caused by the injection.
+tag_latch_structural_site() {
+  python3 - "$1/scripts/coderabbit-wait.sh" <<'PY2'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+code = p.read_text()
+start = code.index("# BEGIN coderabbit_processing_error_latch\n")
+end = code.index("# END coderabbit_processing_error_latch\n", start)
+block = code[start:end]
+old = 'crw_is_processing_error_notice "$body" || pe_rc=$?'
+assert block.count(old) == 1, "latch processing-error read is not a unique call site"
+block = block.replace(old, 'CODERABBIT_TEST_STRUCTURAL_SITE=pe_latch crw_is_processing_error_notice "$body" || pe_rc=$?', 1)
+p.write_text(code[:start] + block + code[end:])
+PY2
+}
+
+test_processing_error_unreadable_fails_closed() {
+  local dir rc before=$FAIL reviews
+  reviews='[{"id":8812,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:03Z","body":"Review completed. No actionable comments."}]'
+  dir=$(make_case "processing-error-unreadable-control" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed")
+  tag_latch_structural_site "$dir" || { fail "PE6: could not tag the latch read in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] && [ "$(jqf "$dir" '.status')" = cleared ] \
+    || fail "PE6 control: a clean run newer than the notice should clear without injection, got rc=$rc; err=$(tail -4 "$dir/err.log")"
+  [ ! -f "$dir/state/structural-awk-failure-site" ] || fail "PE6 control: an injection fired with none requested"
+  dir=$(make_case "processing-error-unreadable" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed")
+  tag_latch_structural_site "$dir" || { fail "PE6: could not tag the latch read in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_FAIL_STRUCTURAL_SITE=pe_latch CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$(cat "$dir/state/structural-awk-failure-site" 2>/dev/null)" = pe_latch ] \
+    || fail "PE6: the injected latch read failure was never observed, so the result below proves nothing"
+  [ "$rc" != "0" ] || fail "PE6: an unreadable processing-error notice cleared; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.status' 2>/dev/null)" != "cleared" ] || fail "PE6: status=cleared from an unreadable processing-error notice"
+  grep -q 'the processing-error latch could not be read' "$dir/err.log" || fail "PE6: expected the latch's fail-closed log"
+  [ "$FAIL" -ne "$before" ] || pass "PE6: #2657/#2769 — the same fixture clears without injection and fails closed (rc=$rc) when the latch cannot read the notice"
+}
+
+# --- #2752: the processing-error latch, unit ----------------------------------
+# Driven directly from the sentinel block, because its three return codes are
+# the whole contract: 0 set, 1 clear, 3 unreadable.
+test_processing_error_latch_unit() {
+  local bad="" snip="$WORKDIR/pe-latch-unit.sh" mut="$WORKDIR/pe-latch-unit-mut.sh"
+  local h=f9c7847139881a1004e796d4ab8967b23e083baa summary
+  {
+    grep -E '^(CR_SUMMARY_BENIGN_STANZA_RE|CR_PRE_MERGE_BLOCK_START|CR_PRE_MERGE_BLOCK_END|SUMMARY_MARKER|RATE_LIMIT_MARKER|PAUSED_MARKER|IN_PROGRESS_MARKER)=' "$ROOT/scripts/coderabbit-wait.sh"
+    for b in coderabbit_comment_classifier coderabbit_summary_helpers coderabbit_processing_error_latch; do
+      awk -v b="$b" '$0 == "# BEGIN " b {f=1; next} $0 == "# END " b {f=0} f' "$ROOT/scripts/coderabbit-wait.sh"
+    done
+  } >"$snip"
+  summary="<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+
+**Actionable comments posted: 0**
+
+Reviewing files that changed from the base of the PR and between $BASE_SHA_40 and $h."
+  # latch_case <want-rc> <name> <issue-comments> <reviews> [<snippet>]
+  latch_case() {
+    local want=$1 name=$2 got=0
+    (
+      set -euo pipefail
+      # shellcheck source=../scripts/lib/feedback-policy-helpers.sh
+      . "$ROOT/scripts/lib/feedback-policy-helpers.sh"
+      # shellcheck source=../scripts/lib/coderabbit-fence.sh
+      . "$ROOT/scripts/lib/coderabbit-fence.sh"
+      # shellcheck disable=SC1090
+      . "${5:-$snip}"
+      crw_processing_error_latch_from "$3" "$4" 'coderabbitai[bot]' "$h" >/dev/null
+    ) || got=$?
+    [ "$got" = "$want" ] || bad="$bad $name(rc=$got,want=$want)"
+  }
+  ic() { jq -cn --arg t "$1" --arg b "$2" '{id:1,user:{login:"coderabbitai[bot]"},created_at:$t,updated_at:$t,body:$b}'; }
+  rv() { jq -cn --arg t "$1" --arg s "$2" --arg b "$3" '{id:2,user:{login:"coderabbitai[bot]"},commit_id:$s,submitted_at:$t,body:$b}'; }
+  local t0=2026-06-04T00:00:00Z t5=2026-06-04T00:00:05Z
+  latch_case 1 empty '[]' '[]'
+  latch_case 0 comment-notice "[$(ic $t0 "$PROCESSING_ERROR_BODY")]" '[]'
+  latch_case 0 review-notice '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 1 review-notice-other-commit '[]' "[$(rv $t0 other "$PROCESSING_ERROR_BODY")]"
+  latch_case 1 human-notice "[$(ic $t0 "$PROCESSING_ERROR_BODY" | jq -c '.user.login = "someone"')]" '[]'
+  # #2751: a later head-naming summary supersedes; the same second does not,
+  # and an earlier one does not.
+  latch_case 1 later-summary "[$(ic $t5 "$summary")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 0 same-second-summary "[$(ic $t0 "$summary")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 0 earlier-summary "[$(ic $t0 "$summary")]" "[$(rv $t5 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 0 later-summary-other-head "[$(ic $t5 "${summary/$h/$PREV_HEAD_SHA_40}")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  # A later run supersedes a notice only when pinned to this head, whether the
+  # notice is a comment or a head-pinned object: a run on an older commit that
+  # finishes after this head's failed attempt reviewed nothing here (4b round 3
+  # on #2857).
+  latch_case 1 comment-notice-later-head-run "[$(ic $t0 "$PROCESSING_ERROR_BODY")]" "[$(rv $t5 $h "Review completed. No actionable comments.")]"
+  latch_case 0 comment-notice-later-other-run "[$(ic $t0 "$PROCESSING_ERROR_BODY")]" "[$(rv $t5 other "Review completed. No actionable comments.")]"
+  latch_case 1 review-notice-later-head-run '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "Review completed. No actionable comments.")]"
+  latch_case 0 review-notice-later-other-run '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 other "Review completed. No actionable comments.")]"
+  # An ordinary later reply is not a review (#2752 polling false clearance).
+  latch_case 0 later-chat-reply "[$(ic $t0 "$PROCESSING_ERROR_BODY"),$(ic $t5 "Thanks for the feedback.")]" '[]'
+  # Unreadable inputs fail closed.
+  latch_case 3 comments-not-array '{}' '[]'
+  latch_case 3 reviews-not-array '[]' 'null'
+  latch_case 3 bad-timestamp "[$(ic nope "$PROCESSING_ERROR_BODY")]" '[]'
+  latch_case 3 non-string-body '[{"id":1,"user":{"login":"coderabbitai[bot]"},"created_at":"2026-06-04T00:00:00Z","body":5}]' '[]'
+  # A record whose author cannot be read could be the notice (CodeRabbit on
+  # #2857): a non-object, or an object with no string login, is unreadable.
+  latch_case 3 comment-non-object '[42]' '[]'
+  latch_case 3 review-non-object '[]' '[42]'
+  latch_case 3 comment-no-login "[$(ic $t0 "$PROCESSING_ERROR_BODY" | jq -c 'del(.user)')]" '[]'
+  latch_case 3 review-null-login '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY" | jq -c '.user.login = null')]"
+  # A body that cannot be structurally read is unreadable, not "no notice".
+  # The body carries the notice's sentence, so the early exit cannot answer
+  # for it and the structural reader must.
+  { cat "$snip"; printf '%s\n' 'crw_unfenced_body() { return 3; }'; } >"$mut"
+  latch_case 3 structural-read-failure "[$(ic $t0 "$PROCESSING_ERROR_BODY")]" '[]' "$mut"
+  # MUTATION: collapse both unreadable-row branches (the upfront check and the
+  # loop's) into "skip", and the non-string body must read as clear. That is
+  # the false clearance the fail-closed branches exist to prevent.
+  sed -e 's/\[ "\$row" != UNREADABLE \] || return 3/[ "$row" != UNREADABLE ] || continue/' \
+    -e 's/^  ! grep -qx UNREADABLE <<<"\$rows" || return 3$/  :/' "$snip" >"$mut"
+  grep -q 'UNREADABLE \] || continue' "$mut" || bad="$bad mutation-not-applied"
+  ! grep -q 'grep -qx UNREADABLE' "$mut" || bad="$bad upfront-mutation-not-applied"
+  latch_case 1 mutant-non-string-body-reads-clear '[{"id":1,"user":{"login":"coderabbitai[bot]"},"created_at":"2026-06-04T00:00:00Z","body":5}]' '[]' "$mut"
+  # A later summary or run reporting a FAILED publication supersedes nothing:
+  # `review` is the classifier's fallback, not proof of completion (4b P1 on
+  # #2857). The benign summarize/release-notes stanzas still supersede (above).
+  local fail_stanza='<!-- This is an auto-generated comment: failure by coderabbit.ai -->
+> Review failed.
+<!-- end of auto-generated comment: failure by coderabbit.ai -->'
+  latch_case 0 later-summary-failure-stanza "[$(ic $t5 "$summary
+$fail_stanza")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 0 later-run-failure-stanza '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "$fail_stanza")]"
+  # With no body line that could be the notice's sentence, the latch is clear
+  # without classifying any run (Codex P2 on #2857: a long history cost ~54 s
+  # per read). A classifier that always fails proves which path ran: the
+  # notice-free history still reads clear, and a history with the notice
+  # still reaches the classifier and fails closed.
+  { cat "$snip"; printf '%s\n' 'crw_classify_selected_comment() { return 3; }'; } >"$mut"
+  latch_case 1 no-candidate-skips-classifier "[$(ic $t0 "$summary"),$(ic $t5 "we could not process this pull request")]" "[$(rv $t0 $h "Review completed. No actionable comments."),$(rv $t5 $h "Review completed. No actionable comments.")]" "$mut"
+  latch_case 3 candidate-reaches-classifier '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "Review completed. No actionable comments.")]" "$mut"
+  # MUTATION (production side): without the early exit the notice-free
+  # history reaches the failing classifier, so the case above is what pins it.
+  awk '/^  case "\$grep_rc" in$/{print "  grep_rc=0"} {print}' "$snip" >"$mut.noprefilter"
+  grep -q '^  grep_rc=0$' "$mut.noprefilter" || bad="$bad prefilter-mutation-not-applied"
+  { cat "$mut.noprefilter"; printf '%s\n' 'crw_classify_selected_comment() { return 3; }'; } >"$mut"
+  latch_case 3 mutant-no-prefilter-classifies "[$(ic $t0 "$summary")]" "[$(rv $t0 $h "Review completed. No actionable comments.")]" "$mut"
+  # A review notice pinned to another commit can never set the latch, so it
+  # does not defeat the early exit either (4b P2 on #2857).
+  { cat "$snip"; printf '%s\n' 'crw_classify_selected_comment() { return 3; }'; } >"$mut"
+  latch_case 1 other-commit-notice-skips-classifier '[]' "[$(rv $t0 other "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "Review completed. No actionable comments.")]" "$mut"
+  # An in-place edit to a summary posted BEFORE the notice is not a later
+  # review: ticking a checkbox bumps updated_at (4b P1 on #2857). Only a
+  # summary posted after the notice supersedes it.
+  local t4=2026-06-04T00:00:04Z t6=2026-06-04T00:00:06Z
+  latch_case 0 earlier-summary-edited-later "[$(ic $t0 "$summary" | jq -c --arg u "$t6" '.updated_at = $u')]" "[$(rv $t4 $h "$PROCESSING_ERROR_BODY")]"
+  latch_case 3 summary-created-unreadable "[$(ic $t5 "$summary" | jq -c 'del(.created_at)')]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]"
+  # A grep that errors (exit 2) is unread, never "no match" (4b round 3 on
+  # #2857). The fault is injected only for the two supersession greps, keyed
+  # on their patterns, so the candidate scan and the notice predicate still
+  # run: an errored stanza check must not let a failure-only run supersede,
+  # and an errored notice-sentence check must not let a summary supersede.
+  {
+    cat "$snip"
+    printf '%s\n' 'grep() { case "$*" in *"auto-generated comment: "*) [ "${CRW_GREP_FAULT:-}" = stanza ] && return 2 ;; esac; case "$*" in *"we could not process this pull request"*) if [ "${CRW_GREP_FAULT_ARMED:-}" = 1 ]; then unset CRW_GREP_FAULT_ARMED; return 2; fi ;; esac; command grep "$@"; }'
+  } >"$mut"
+  latch_case 1 grep-fault-control '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "Review completed. No actionable comments.")]" "$mut"
+  CRW_GREP_FAULT=stanza latch_case 3 grep-fault-stanza '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "$fail_stanza")]" "$mut"
+  CRW_GREP_FAULT=stanza latch_case 3 grep-fault-stanza-clean-run '[]' "[$(rv $t0 $h "$PROCESSING_ERROR_BODY"),$(rv $t5 $h "Review completed. No actionable comments.")]" "$mut"
+  # The sentence fault is one-shot and arms only once summary_names_head has
+  # accepted the summary, so the candidate scan and the notice predicate (which
+  # share the pattern) read normally and only the summary check's grep errors.
+  {
+    cat "$mut"
+    printf '%s\n' 'eval "orig_$(declare -f summary_names_head)"' 'summary_names_head() { local r=0; orig_summary_names_head "$@" || r=$?; [ "$r" = 0 ] && [ "${CRW_GREP_FAULT:-}" = sentence ] && CRW_GREP_FAULT_ARMED=1; return "$r"; }'
+  } >"$mut.sentence"
+  CRW_GREP_FAULT=sentence latch_case 3 grep-fault-summary-sentence "[$(ic $t5 "$summary")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]" "$mut.sentence"
+  latch_case 1 grep-fault-summary-control "[$(ic $t5 "$summary")]" "[$(rv $t0 $h "$PROCESSING_ERROR_BODY")]" "$mut.sentence"
+  # A long history is read, not unreadable (Codex P2 on #2857): ~1.5 MiB of
+  # comments is past both Linux's 128 KiB per-argument limit and macOS's 1 MiB
+  # ARG_MAX, so passing the lists on argv would fail E2BIG and read as rc 3.
+  local big
+  big=$(jq -cn '[range(30) | {id: ., user: {login: "someone"}, created_at: "2026-06-04T00:00:00Z", body: ("x" * 50000)}]')
+  latch_case 1 large-history-reads-clear "$big" "$big"
+  if [ -z "$bad" ]; then
+    pass "PE-latch: #2752 — the latch is set by a comment or head-pinned notice, superseded only by a strictly later run or head-naming summary (#2751), and every unreadable input fails closed"
+  else
+    fail "PE-latch unit:$bad"
+  fi
+}
+
+# --- #2752: every clearance emit site consults the latch ----------------------
+# The edges are enumerated here so a new `cleared` or `reported` emit cannot be
+# added without one. Each must be preceded, within its own block, by the latch
+# consult; the emitter backstop is asserted separately.
+test_processing_error_latch_edges_enumerated() {
+  local bad="" sites
+  sites=$(python3 - "$ROOT/scripts/coderabbit-wait.sh" <<'PY'
+import re, sys
+lines = open(sys.argv[1]).read().split("\n")
+out = []
+for i, line in enumerate(lines):
+    if re.search(r'emit_json_and_exit "(cleared|reported)" 0', line) and not line.lstrip().startswith("#"):
+        window = "\n".join(lines[max(0, i - 12):i])
+        ok = ("crw_processing_error_latch_permits_clearance" in window
+              or "crw_probe_withhold_on_processing_error" in window
+              or "PE_LATCH_RC" in window)
+        out.append("%d:%s" % (i + 1, "ok" if ok else "MISSING"))
+print(" ".join(out))
+PY
+)
+  [ "$(wc -w <<<"$sites" | tr -d ' ')" = 5 ] || bad="$bad expected-5-clearance-emits(got:$sites)"
+  case " $sites " in *MISSING*) bad="$bad unguarded-emit($sites)" ;; esac
+  local label
+  for label in '"StatusContext fast path"' '"$verdict_label"' '"polling review arm"' \
+               '"post-probe terminal-review check"' '"probe reported verdict"' \
+               '"probe rc-7 evidence"' '"clearance emitter"'; do
+    [ "$(grep -cF "crw_processing_error_latch_permits_clearance $label" "$ROOT/scripts/coderabbit-wait.sh")" = 1 ] \
+      || bad="$bad edge-$label-not-unique"
+  done
+  [ "$(grep -c 'crw_probe_withhold_on_processing_error "' "$ROOT/scripts/coderabbit-wait.sh")" = 2 ] \
+    || bad="$bad probe-reported-sites"
+  # The per-path #2660 checks are gone. The four callers are the classifier,
+  # the latch, the fast path's grading-only classification of a superseded
+  # notice comment (Codex P1 on #2857), and the refusal arm's rule that a
+  # notice-only object is no releasing run (4b P1 on #2857). Neither of the
+  # last two decides a clearance the latch withholds.
+  [ "$(grep -c 'crw_is_processing_error_notice "' "$ROOT/scripts/coderabbit-wait.sh")" = 4 ] \
+    || bad="$bad per-path-processing-error-checks-remain"
+  if [ -z "$bad" ]; then
+    pass "PE-edges: #2752 — all five clearance emits, the fast path, rc-7 evidence and the emitter backstop consult the one latch"
+  else
+    fail "PE-edges:$bad"
+  fi
+}
+
+# --- #2752: polling arm and post-probe upgrade withhold over a notice-only run --
+# The second Codex P1 on #2660: an ordinary bot reply above a processing-error
+# review object reaches the polling review arm, whose fallback rung permits on
+# the success status the failed attempt left. Before the latch this cleared.
+test_processing_error_polling_and_terminal_edges_withhold() {
+  local dir rc before=$FAIL reviews
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" '[{"id":8806,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":$b}]')
+  dir=$(make_case "pe-polling-edge" "Thanks for the feedback." "2026-06-04T00:00:05Z" "Review completed")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "4" ] || fail "PE-poll: expected the advisory timeout (4), got $rc; err=$(tail -4 "$dir/err.log")"
+  grep -q 'StatusContext fast path: clearance withheld' "$dir/err.log" || fail "PE-poll: the fast path did not consult the latch"
+  grep -q 'polling review arm: clearance withheld' "$dir/err.log" || fail "PE-poll: the polling review arm did not consult the latch"
+  grep -q 'post-probe terminal-review check: clearance withheld' "$dir/err.log" || fail "PE-poll: the post-probe terminal upgrade did not consult the latch"
+  # Each edge is what withholds: neutralized, the next guard is the emitter
+  # backstop, which stops with infra rather than clearing.
+  dir=$(make_case "pe-polling-edge-mut" "Thanks for the feedback." "2026-06-04T00:00:05Z" "Review completed")
+  neutralize_latch_edge "$dir" "polling review arm" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "3" ] && grep -q 'reached the emitter' "$dir/err.log" \
+    || fail "PE-poll mutation: without the polling edge the backstop should stop with 3, got $rc"
+  dir=$(make_case "pe-terminal-edge-mut" "Thanks for the feedback." "2026-06-04T00:00:05Z" "Review completed")
+  neutralize_latch_edge "$dir" "post-probe terminal-review check" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "3" ] && grep -q 'reached the emitter' "$dir/err.log" \
+    || fail "PE-terminal mutation: without the post-probe edge the backstop should stop with 3, got $rc"
+  # And with the edge and the backstop both gone, the fixture clears: the case
+  # reaches the clearance it guards.
+  dir=$(make_case "pe-polling-edge-mut2" "Thanks for the feedback." "2026-06-04T00:00:05Z" "Review completed")
+  neutralize_latch_edge "$dir" "polling review arm" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  neutralize_latch_edge "$dir" "clearance emitter" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] || fail "PE-poll control: with the edge and backstop removed the fixture should clear (proving it reaches the edge), got $rc"
+  [ "$FAIL" -ne "$before" ] || pass "PE-poll: #2752 — the polling review arm and the post-probe upgrade withhold over a notice-only review object, and each edge is load-bearing"
+}
+
+# --- #2752: the fast-path verdict emitter consults the latch too --------------
+test_processing_error_verdict_edge_withholds() {
+  local dir rc before=$FAIL reviews
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" '[{"id":8807,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":$b}]')
+  dir=$(make_case "pe-verdict-edge" "" "$STATUS_TIME" "Review completed")
+  neutralize_latch_edge "$dir" "StatusContext fast path" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "4" ] || fail "PE-verdict: expected the advisory timeout (4) with the fast-path guard removed, got $rc; err=$(tail -4 "$dir/err.log")"
+  grep -q 'StatusContext success: clearance withheld' "$dir/err.log" || fail "PE-verdict: emit_status_context_verdict did not consult the latch"
+  dir=$(make_case "pe-verdict-edge-mut" "" "$STATUS_TIME" "Review completed")
+  neutralize_latch_edge "$dir" "StatusContext fast path" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  neutralize_latch_edge "$dir" '$verdict_label' || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "3" ] && grep -q 'reached the emitter' "$dir/err.log" \
+    || fail "PE-verdict mutation: without both fast-path edges the backstop should stop with 3, got $rc"
+  [ "$FAIL" -ne "$before" ] || pass "PE-verdict: #2752 — emit_status_context_verdict withholds on the latch independently of the fast-path refusal"
+}
+
+# --- #2752: --probe rc-7 evidence over a notice-only review object ------------
+# The first Codex P1 on #2660: a processing-error review object, no issue
+# comments, and a success status updated after it. The probe emitted rc 7
+# observed=awaiting-summary with context_state=success, which the Phase 4b
+# barrier accepts as reported.
+test_processing_error_probe_evidence_withholds() {
+  local dir rc before=$FAIL reviews
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" '[{"id":8808,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":$b}]')
+  dir=$(make_case "pe-probe-evidence" "" "2026-06-04T00:00:05Z" "Review completed")
+  rc=$(CRW_TEST_PROBE=1 CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "7" ] || fail "PE-probe: expected rc 7, got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$(jqf "$dir" '.probe.observed')" = processing_error ] || fail "PE-probe: observed=$(jqf "$dir" '.probe.observed'), expected processing_error"
+  [ "$(jqf "$dir" '.probe.context_state')" = null ] || fail "PE-probe: context_state=$(jqf "$dir" '.probe.context_state') still carries barrier evidence"
+  dir=$(make_case "pe-probe-evidence-mut" "" "2026-06-04T00:00:05Z" "Review completed")
+  neutralize_latch_edge "$dir" "probe rc-7 evidence" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CRW_TEST_PROBE=1 CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = 7 ] && [ "$(jqf "$dir" '.probe.observed')" = awaiting-summary ] && [ "$(jqf "$dir" '.probe.context_state')" = success ] \
+    || fail "PE-probe mutation: without the rc-7 edge the fixture should emit the barrier-opening evidence, got rc=$rc observed=$(jqf "$dir" '.probe.observed')"
+  [ "$FAIL" -ne "$before" ] || pass "PE-probe: #2752 — --probe reports observed=processing_error, not barrier-opening awaiting-summary evidence, over a notice-only review object"
+}
+
+# --- #2752: the probe's two clean `reported` verdicts ------------------------
+test_processing_error_probe_reported_withholds() {
+  local dir rc before=$FAIL reviews
+  # Review-object branch: a clean run, its summary, then the notice.
+  reviews='[{"id":8809,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":"Review completed. No actionable comments."}]'
+  dir=$(make_case "pe-probe-reported-run" "$REVIEW_BODY_CLEAN" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:03Z" 999999999 "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:04Z")
+  rc=$(CRW_TEST_PROBE=1 CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = 7 ] && [ "$(jqf "$dir" '.probe.observed')" = processing_error ] \
+    || fail "PE-probe-run: expected rc 7 observed=processing_error, got rc=$rc observed=$(jqf "$dir" '.probe.observed' 2>/dev/null); err=$(tail -4 "$dir/err.log")"
+  dir=$(make_case "pe-probe-reported-run-mut" "$REVIEW_BODY_CLEAN" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:03Z" 999999999 "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:04Z")
+  neutralize_latch_edge "$dir" "probe reported verdict" || { fail "${FUNCNAME[0]}: could not neutralize a latch edge in the fixture copy"; return 0; }
+  rc=$(CRW_TEST_PROBE=1 CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = 3 ] && grep -q 'reached the emitter' "$dir/err.log" \
+    || fail "PE-probe-run mutation: without the reported edge the backstop should stop with 3, got $rc"
+  # No-review-object branch: a head-naming summary, then the notice.
+  dir=$(make_case "pe-probe-reported-summary" "$SUMMARY_NAMES_CURRENT_HEAD" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:03Z" 999999999 "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:04Z" "$HEAD_SHA_40")
+  rc=$(CRW_TEST_PROBE=1 run_case "$dir")
+  [ "$rc" = 7 ] && [ "$(jqf "$dir" '.probe.observed')" = processing_error ] \
+    || fail "PE-probe-summary: expected rc 7 observed=processing_error, got rc=$rc observed=$(jqf "$dir" '.probe.observed' 2>/dev/null); err=$(tail -4 "$dir/err.log")"
+  [ "$FAIL" -ne "$before" ] || pass "PE-probe-reported: #2752 — neither probe 'reported' verdict is emitted beneath a newer processing-error notice"
+}
+
+# --- #2751: a later clean summary supersedes a processing-error review object --
+# CodeRabbit's clean incremental retry on an unchanged SHA updates only its
+# summary and status. The summary is outside the freshness window by the time
+# the status lands; it must still release the notice.
+test_processing_error_superseded_by_later_summary_clears() {
+  local dir rc before=$FAIL reviews
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" --arg h "$HEAD_SHA_40" '[{"id":8810,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2033-05-18T02:50:00Z","body":$b}]')
+  dir=$(make_case "pe-superseded-summary" "$SUMMARY_NAMES_CURRENT_HEAD" "$STATUS_AFTER_NOTICE" "Review completed" "$SUMMARY_AGED_TIME" 1800 "" "$HEAD_TIME" "$HEAD_SHA_40")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] && [ "$(jqf "$dir" '.status')" = cleared ] \
+    || fail "PE-2751: a later head-naming summary should supersede the notice and clear, got rc=$rc; err=$(tail -4 "$dir/err.log")"
+  # The same summary BEFORE the notice is the failed attempt's predecessor.
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" --arg h "$HEAD_SHA_40" '[{"id":8811,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2033-05-18T03:00:00Z","body":$b}]')
+  dir=$(make_case "pe-earlier-summary" "$SUMMARY_NAMES_CURRENT_HEAD" "$STATUS_AFTER_NOTICE" "Review completed" "$SUMMARY_AGED_TIME" 1800 "" "$HEAD_TIME" "$HEAD_SHA_40")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE-2751 control: a summary older than the notice released it"
+  # Issue-comment direction: a notice comment, then a later head-naming summary.
+  dir=$(make_case "pe-comment-superseded-summary" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:10Z" "Review completed" "$HEAD_TIME" 999999999 "$SUMMARY_NAMES_CURRENT_HEAD" "2026-06-04T00:00:05Z" "$HEAD_SHA_40")
+  rc=$(run_case "$dir")
+  [ "$rc" = "0" ] || fail "PE-2751 comment: a later head-naming summary should supersede a notice comment, got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$FAIL" -ne "$before" ] || pass "PE-2751: #2751 — a strictly later head-naming summary supersedes a processing-error notice (review object or comment), an earlier one does not"
+}
+
+# --- Codex P1 on #2857: the run that supersedes a notice is still graded -------
+# A notice comment at T, a current-head review carrying `_🟠 Major_` at T+3, and
+# the success status at T+5. The latch is clear (the run supersedes the
+# comment), but the run is not therefore clean: its body must still be graded
+# by the fast path's refusal arm, or the head clears over a blocking finding.
+test_processing_error_recovery_run_is_graded() {
+  local dir rc before=$FAIL reviews
+  reviews='[{"id":8813,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:03Z","body":"Review completed.\n\n_🟠 Major_ | **A blocking finding in the recovery run.**"}]'
+  dir=$(make_case "pe-recovery-run-major" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:00Z")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "2" ] && [ "$(jqf "$dir" '.status')" = findings ] \
+    || fail "PE-recovery: a recovery run carrying a blocking marker must surface findings (2), got rc=$rc status=$(jqf "$dir" '.status' 2>/dev/null); err=$(tail -4 "$dir/err.log")"
+  grep -q 'carries a blocking marker' "$dir/err.log" || fail "PE-recovery: the refusal arm did not grade the recovery run's body"
+  # Control: the same recovery run without the marker clears.
+  reviews='[{"id":8814,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:03Z","body":"Review completed. No actionable comments."}]'
+  dir=$(make_case "pe-recovery-run-clean" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:00Z")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] || fail "PE-recovery control: a clean recovery run should clear, got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$FAIL" -ne "$before" ] || pass "PE-recovery: Codex P1 on #2857 — a run that supersedes a processing-error comment is still graded, and its blocking marker surfaces findings"
+}
+
+# --- Phase 4b P1s on #2857: the latch is not the whole answer ---------------
+# (a) A set latch still grades the head-pinned run: a `_🟠 Major_` HEAD review
+#     at T2 under a later notice comment at T4 surfaces findings, not timeout.
+# (b) A cleared latch does not make a notice-only object a review: an
+#     error-only HEAD review at T0, a clean head-naming summary at T3 (clears
+#     the latch), a rate-limit notice at T5 and success at T6 must not clear on
+#     that object as the rate-limit refusal's releasing run.
+test_processing_error_latch_does_not_replace_run_grading() {
+  local dir rc before=$FAIL reviews
+  reviews='[{"id":8815,"user":{"login":"coderabbitai[bot]"},"commit_id":"head-sha","submitted_at":"2026-06-04T00:00:02Z","body":"Review completed.\n\n_🟠 Major_ | **A finding carried only by this review body.**"}]'
+  dir=$(make_case "pe-latch-set-run-major" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:04Z")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "2" ] && [ "$(jqf "$dir" '.status')" = findings ] \
+    || fail "PE-graded (a): a set latch dropped the head run's blocking marker, got rc=$rc status=$(jqf "$dir" '.status' 2>/dev/null); err=$(tail -4 "$dir/err.log")"
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" --arg h "$HEAD_SHA_40" '[{"id":8816,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2026-06-04T00:00:00Z","body":$b}]')
+  dir=$(make_case "pe-notice-object-releases-refusal" "$RATE_LIMIT_BODY_HEADREF" "2026-06-04T00:00:06Z" "Review completed" "2026-06-04T00:00:05Z" 999999999 "$SUMMARY_NAMES_CURRENT_HEAD" "2026-06-04T00:00:03Z" "$HEAD_SHA_40")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE-graded (b): a notice-only review object released a rate-limit refusal and cleared; err=$(tail -4 "$dir/err.log")"
+  grep -q "is CodeRabbit's processing-error notice, not a review" "$dir/err.log" \
+    || fail "PE-graded (b): the refusal arm did not reject the notice-only object as its releasing run"
+  [ "$FAIL" -ne "$before" ] || pass "PE-graded: 4b P1s on #2857 — a set latch still grades the head run, and a cleared latch does not make a notice-only object a review"
+}
+
+# --- CodeRabbit Major on #2857: a review-object notice's recovery run ---------
+# The notice is a HEAD review object at T0 and a later HEAD review at T3 carries
+# `_🟠 Major_`; the newest comment is a clean review comment, so the refusal arm
+# never runs. A superseded notice must change nothing: the verdict is the one
+# the same run gets with no notice at all (the control). Grading a run body
+# that no refusal arm reaches is outside the latch's job.
+test_processing_error_review_object_recovery_run_is_graded() {
+  local dir rc before=$FAIL reviews mode rc_notice="" st_notice=""
+  for mode in notice control; do
+    reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" --arg h "$HEAD_SHA_40" --arg mode "$mode" '
+      [ ( if $mode == "notice" then {"id":8817,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2026-06-04T00:00:00Z","body":$b} else empty end ),
+        {"id":8818,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2026-06-04T00:00:03Z","body":"Review completed.\n\n_🟠 Major_ | **A finding in the run that superseded the notice.**"} ]')
+    dir=$(make_case "pe-object-recovery-$mode" "$REVIEW_BODY_CLEAN" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:04Z")
+    rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+    if [ "$mode" = notice ]; then
+      rc_notice=$rc; st_notice=$(jqf "$dir" '.status' 2>/dev/null)
+      grep -q 'clearance withheld' "$dir/err.log" && fail "PE-object-recovery: the later HEAD run did not supersede the notice object"
+    else
+      [ "$rc" = "$rc_notice" ] && [ "$(jqf "$dir" '.status' 2>/dev/null)" = "$st_notice" ] \
+        || fail "PE-object-recovery: a superseded notice object changed the verdict (notice rc=$rc_notice/$st_notice, control rc=$rc/$(jqf "$dir" '.status' 2>/dev/null))"
+    fi
+  done
+  [ "$FAIL" -ne "$before" ] || pass "PE-object-recovery: CodeRabbit on #2857 — a notice object superseded by a later HEAD run leaves that run's verdict exactly as it is with no notice"
+}
+
+# --- 4b P1 on #2857: a checkbox edit to an old summary is not a later review --
+# A clean head-naming summary posted at T0, a processing-error HEAD review at
+# T4, the failed attempt's success status at T5, and an edit to the old summary
+# at T6 (a ticked checkbox). Nothing completed after the failure. The control
+# posts the same summary at T6 instead, which is a later report and clears.
+test_processing_error_not_superseded_by_summary_edit() {
+  local dir rc before=$FAIL reviews
+  reviews=$(jq -cn --arg b "$PROCESSING_ERROR_BODY" --arg h "$HEAD_SHA_40" '[{"id":8819,"user":{"login":"coderabbitai[bot]"},"commit_id":$h,"submitted_at":"2026-06-04T00:00:04Z","body":$b}]')
+  dir=$(make_case "pe-summary-checkbox-edit" "$SUMMARY_NAMES_CURRENT_HEAD" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:00Z" 999999999 "" "$HEAD_TIME" "$HEAD_SHA_40" "2026-06-04T00:00:06Z")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" != "0" ] || fail "PE-edit: an in-place edit to a summary posted before the notice superseded it and cleared; err=$(tail -4 "$dir/err.log")"
+  grep -q 'emitting cleared' "$dir/err.log" && fail "PE-edit: the fast path emitted cleared over an unsuperseded processing-error review"
+  dir=$(make_case "pe-summary-posted-later" "$SUMMARY_NAMES_CURRENT_HEAD" "2026-06-04T00:00:07Z" "Review completed" "2026-06-04T00:00:06Z" 999999999 "" "$HEAD_TIME" "$HEAD_SHA_40")
+  rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+  [ "$rc" = "0" ] || fail "PE-edit control: a summary posted after the notice should supersede it and clear, got $rc; err=$(tail -4 "$dir/err.log")"
+  [ "$FAIL" -ne "$before" ] || pass "PE-edit: 4b P1 on #2857 — only a summary posted after a processing-error notice supersedes it; an in-place edit to an older one does not"
+}
+
+# --- 4b round 3 on #2857: a run on an older commit is not this head's review --
+# A processing-error comment at T0 (this head's attempt failed), a clean run on
+# an older commit finishing at T2, a benign bot reply at T3 and the success
+# status at T5. Nothing reviewed this head. The control pins the same run to
+# this head, which is a later review of it and clears.
+test_processing_error_not_superseded_by_other_commit_run() {
+  local dir rc before=$FAIL reviews commit
+  for commit in other-sha head-sha; do
+    reviews=$(jq -cn --arg c "$commit" '[{"id":8820,"user":{"login":"coderabbitai[bot]"},"commit_id":$c,"submitted_at":"2026-06-04T00:00:02Z","body":"Review completed. No actionable comments."}]')
+    dir=$(make_case "pe-run-on-$commit" "$PROCESSING_ERROR_BODY" "2026-06-04T00:00:05Z" "Review completed" "2026-06-04T00:00:00Z" 999999999 "Thanks for the update." "2026-06-04T00:00:03Z")
+    rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" run_case "$dir")
+    if [ "$commit" = other-sha ]; then
+      [ "$rc" != "0" ] && ! grep -q 'emitting cleared' "$dir/err.log" \
+        || fail "PE-other-run: a run on an older commit superseded this head's processing-error comment and cleared (rc=$rc); err=$(tail -4 "$dir/err.log")"
+    else
+      [ "$rc" = "0" ] || fail "PE-other-run control: a later run pinned to this head should supersede the notice and clear, got $rc; err=$(tail -4 "$dir/err.log")"
+    fi
+  done
+  [ "$FAIL" -ne "$before" ] || pass "PE-other-run: 4b round 3 on #2857 — only a run pinned to this head supersedes a processing-error comment"
+}
+
 test_completed_description_still_clears() {
   local dir rc before=$FAIL
   dir=$(make_case "desc-completed" "$REVIEW_BODY_CLEAN" "$STATUS_TIME" "Review completed")
@@ -1366,9 +2008,10 @@ test_trailing_probe_flag_is_usage_error() {
 test_status_description_predicate_unit() {
   local snip="$WORKDIR/status-desc-helpers.sh" bad="" before=$FAIL
   awk '/^# BEGIN coderabbit_status_description_helpers$/{f=1;next} /^# END coderabbit_status_description_helpers$/{f=0} f' \
-    "$ROOT/scripts/coderabbit-wait.sh" >"$snip"
+    "${CODERABBIT_TEST_DESCRIPTION_HELPER_SOURCE:-$ROOT/scripts/lib/coderabbit-fence.sh}" >"$snip"
   # shellcheck disable=SC1090
   . "$snip"
+  declare -F crw_status_description_permits_clearance >/dev/null || return 1
   # The permitted set: empty (the field is optional metadata; refusing it would
   # disable the #221 fast path for every status posted without one) and the
   # completed-review family in either casing.
@@ -1796,8 +2439,11 @@ test_failed_fast_path_comment_decode_does_not_clear() {
   [ "$rc" != "0" ] || fail "25: FALSE-CLEARED (exit 0) after the fast path's comment-list decode failed"
   [ "$rc" = "5" ] || fail "25: expected exit 5 (rate_limit_stalled, same as the test-1 control), got $rc; err=$(tail -4 "$dir/err.log")"
   [ "$(jqf "$dir" '.status')" = "rate_limit_stalled" ] || fail "25: status=$(jqf "$dir" '.status'), expected rate_limit_stalled"
-  grep -q 'newest CodeRabbit comment could not be decoded' "$dir/err.log" \
-    || fail "25: expected the fast-path suppression message naming the failed decode; err=$(tail -4 "$dir/err.log")"
+  # The processing-error latch reads the same list first and, since #2857,
+  # refuses a non-object record as unreadable, so either read may be the one
+  # that names the failure. Both withhold clearance.
+  grep -qE 'newest CodeRabbit comment could not be decoded|processing-error latch could not be read' "$dir/err.log" \
+    || fail "25: expected the fast-path suppression message naming the failed read; err=$(tail -4 "$dir/err.log")"
   [ "$FAIL" -ne "$before" ] || pass "25: a failed comment-list DECODE inside the StatusContext fast path suppresses it (keep polling), never clears a rate-limited head"
 }
 
@@ -1909,11 +2555,11 @@ STUB
   [ "$out" = "strict=3 best=1 v=[] w=[]" ] \
     || fail "27a: expected strict rc 3 / best-effort rc 1 with empty stdout on both; got: $out"
   err=$(cat "$dir/err.log")
-  printf '%s' "$err" | grep -q 'ERROR: failed to fetch reviews' \
+  grep -q 'ERROR: failed to fetch reviews' <<<"$err" \
     || fail "27a: the strict wrapper did not name the failed fetch; err=$err"
-  printf '%s' "$err" | grep -q 'HTTP 500 upstream boom' \
+  grep -q 'HTTP 500 upstream boom' <<<"$err" \
     || fail "27a: the gh stderr diagnostic was lost; err=$err"
-  printf '%s' "$err" | grep -q 'best-effort fetch failed for reviews' \
+  grep -q 'best-effort fetch failed for reviews' <<<"$err" \
     || fail "27a: the best-effort wrapper lost its own fetch wording; err=$err"
 
   # (b) parse failure — gh SUCCEEDS with a body that is not JSON, so the
@@ -1938,9 +2584,9 @@ STUB
   [ "$out" = "strict=3 best=1 v=[] w=[]" ] \
     || fail "27b: expected strict rc 3 / best-effort rc 1 with empty stdout on both; got: $out"
   err=$(cat "$dir/err2.log")
-  printf '%s' "$err" | grep -q 'ERROR: failed to flatten reviews pagination output' \
+  grep -q 'ERROR: failed to flatten reviews pagination output' <<<"$err" \
     || fail "27b: the strict wrapper did not name the failed flatten; err=$err"
-  printf '%s' "$err" | grep -q 'best-effort fetch failed to flatten reviews pagination output' \
+  grep -q 'best-effort fetch failed to flatten reviews pagination output' <<<"$err" \
     || fail "27b: the best-effort wrapper collapsed its flatten wording into the fetch one; err=$err"
 
   # (c) the success escape: a genuinely empty page is a READ, not a failure,
@@ -1977,10 +2623,10 @@ STUB
   [ "$out" = "strict=0 best=0 v=[[]] w=[[]]" ] \
     || fail "27c: an empty page with benign gh stderr must still read as [] with status 0 on both wrappers; got: $out"
   err=$(cat "$dir/err3.log")
-  if printf '%s' "$err" | grep -q 'failed to fetch reviews'; then
+  if grep -q 'failed to fetch reviews' <<<"$err"; then
     fail "27c: benign stderr on a SUCCESSFUL read was graded as a fetch failure; err=$err"
   fi
-  if printf '%s' "$err" | grep -q 'failed to flatten reviews'; then
+  if grep -q 'failed to flatten reviews' <<<"$err"; then
     fail "27c: benign stderr on a SUCCESSFUL read reached the jq slurp; err=$err"
   fi
 
@@ -2135,14 +2781,16 @@ test_summary_naming_other_head_does_not_clear() {
 }
 
 # --- Test 30: #968 AC2 — the #824 rung must not regress ---------------------
-# Same edit timeline, same 40-hex head, one difference: the commits range ends
+# With an ordinary non-completion status (no terminal refusal), the range ends
 # at the CURRENT head. `created_at` still predates the head committer date, so
-# only `fresh_at` admits it — and it must still clear. A demotion keyed on
+# only `fresh_at` admits it — and it must still clear. The #2326 edited-summary
+# controls below separately prove that a terminal refusal defeats this escape.
+# A demotion keyed on
 # "created_at is old" rather than on the named SHA fails here.
 test_summary_naming_current_head_still_clears() {
   local dir rc before=$FAIL
   dir=$(make_case "summary-current-head" "$SUMMARY_NAMES_CURRENT_HEAD" "$STATUS_TIME" \
-    "Review rate limited" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 "" "$HEAD_TIME" \
+    "Review in progress" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 "" "$HEAD_TIME" \
     "$HEAD_SHA_40" "$SUMMARY_EDITED_AFTER_HEAD")
   rc=$(run_case "$dir")
   [ "$rc" = "0" ] || fail "30: expected exit 0 (cleared) for a summary naming the current head, got $rc; err=$(tail -4 "$dir/err.log")"
@@ -2202,6 +2850,9 @@ SKIP_REASON=""; FEEDBACK_POLICY_PRESENT=false; BLOCKING_TIER_UNRESOLVED=null
 PROBE_MODE=false; PROBE_JSON=null; STATUS_PROBE_JSON='{"enabled":false}'
 RATE_LIMIT_RETRIES=0; RESUME_RETRIES=0; CODEX_FAILOVER_REQUESTED=false
 START_EPOCH=\$(date +%s)
+# #2752 backstop: the emitter consults the processing-error latch on every
+# exit-0 clearance. Stubbed by CRW_TEST_LATCH_RC (default 0, permit).
+crw_processing_error_latch_permits_clearance() { return "\${CRW_TEST_LATCH_RC:-0}"; }
 . "$snip"
 emit_json_and_exit "\$1" "\$2" "\$3" "\$4"
 HARNESS
@@ -2247,7 +2898,21 @@ HARNESS
   [ "$rc" = "4" ] || fail "32: the literal null review object exited $rc, expected 4 — a JSON null is a legal emission, not a violation"
   [ "$(printf '%s' "$out" | jq -r '.review')" = "null" ] || fail "32: review should emit as null, got $(printf '%s' "$out" | jq -c '.review')"
 
-  [ "$FAIL" -ne "$before" ] || pass "32: #985 — emit_json_and_exit refuses an empty/unparseable review object with exit 3 and no stdout, and emits well-formed values (null included) unchanged"
+  # 4. #2752 backstop: a clearance the latch withholds (set or unreadable)
+  #    stops with infra and writes nothing, for both clearance statuses; a
+  #    non-clearance emission does not consult it.
+  local latch status
+  for latch in 1 3; do
+    for status in cleared reported; do
+      rc=0; out=$(CRW_TEST_LATCH_RC=$latch bash "$harness" "$status" 0 '{"id":7701}' 0 2>"$WORKDIR/emit-latch.err") || rc=$?
+      [ "$rc" = "3" ] && [ -z "$out" ] && grep -q 'processing-error latch withheld clearance' "$WORKDIR/emit-latch.err" \
+        || fail "32: $status with latch rc $latch exited $rc (expected 3, no stdout); err=$(cat "$WORKDIR/emit-latch.err")"
+    done
+  done
+  rc=0; out=$(CRW_TEST_LATCH_RC=1 bash "$harness" findings 2 '{"id":7701}' 1 2>/dev/null) || rc=$?
+  [ "$rc" = "2" ] || fail "32: a findings emission consulted the latch backstop, exited $rc"
+
+  [ "$FAIL" -ne "$before" ] || pass "32: #985 — emit_json_and_exit refuses an empty/unparseable review object with exit 3 and no stdout, and emits well-formed values (null included) unchanged; a latch-withheld clearance also exits 3 (#2752)"
 }
 
 # --- Test 33: #968 AC1 — a later chat reply must not restore the false clear -
@@ -2284,7 +2949,7 @@ test_later_chat_reply_does_not_restore_other_head_clear() {
 test_later_chat_reply_over_current_head_summary_still_clears() {
   local dir rc before=$FAIL
   dir=$(make_case "summary-current-head-chat" "$SUMMARY_NAMES_CURRENT_HEAD" "$STATUS_TIME" \
-    "Review rate limited" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 \
+    "Review in progress" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 \
     "$CHAT_REPLY_AFTER_SUMMARY" "$CHAT_REPLY_TIME" "$HEAD_SHA_40" "$SUMMARY_EDITED_AFTER_HEAD")
   rc=$(run_case "$dir")
   [ "$rc" = "0" ] || fail "34: expected exit 0 (cleared) — the summary names this head, got $rc; err=$(tail -4 "$dir/err.log")"
@@ -2385,7 +3050,7 @@ test_bodyless_ack_does_not_outrank_stale_summary() {
 test_quoted_range_in_chat_reply_does_not_veto_current_head() {
   local dir rc before=$FAIL
   dir=$(make_case "quoted-range-chat" "$SUMMARY_NAMES_CURRENT_HEAD" "$STATUS_TIME" \
-    "Review rate limited" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 \
+    "Review in progress" "$SUMMARY_CREATED_BEFORE_HEAD" 999999999 \
     "$CHAT_REPLY_QUOTING_OLD_RANGE" "$CHAT_REPLY_TIME" "$HEAD_SHA_40" "$SUMMARY_EDITED_AFTER_HEAD")
   rc=$(run_case "$dir")
   grep -q 'latest CodeRabbit comment id=7702' "$dir/err.log" \
@@ -2447,11 +3112,12 @@ $pad"
 test_notice_less_timeout_contract() {
   local snip="$WORKDIR/timeout-functions.sh" harness="$WORKDIR/timeout-harness.sh"
   local name state desc trust enabled helper_rc pause terminal prior rc out calls
-  awk '/^# BEGIN coderabbit_status_description_helpers/{p=1} p{print} /^# END coderabbit_status_description_helpers/{p=0}' "$ROOT/scripts/coderabbit-wait.sh" >"$snip"
+  awk '/^# BEGIN coderabbit_status_description_helpers/{p=1} p{print} /^# END coderabbit_status_description_helpers/{p=0}' "${CODERABBIT_TEST_DESCRIPTION_HELPER_SOURCE:-$ROOT/scripts/lib/coderabbit-fence.sh}" >"$snip"
   awk '/^# BEGIN coderabbit_timeout_disposition/{p=1} p{print} /^# END coderabbit_timeout_disposition/{p=0}' "$ROOT/scripts/coderabbit-wait.sh" >>"$snip"
   cat >"$WORKDIR/timeout-codex.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s\n' "${MERGEPATH_PHASE_4A_GATED:-}" "$*" >>"$TIMEOUT_EVENTS"
+echo '{"trigger_requested":true,"blocked_reason":null}'
 exit "${TIMEOUT_CODEX_RC:-0}"
 EOF
   chmod +x "$WORKDIR/timeout-codex.sh"
@@ -2462,8 +3128,10 @@ source "$1"
 TRUST_STATUS_CONTEXT=$2; CODEX_FAILOVER_ON_RATE_LIMIT=$3
 PAUSE_OBSERVED=$4; terminal=$5; prior=$6; fixture_state=$7; fixture_desc=$8
 CODEX_FAILOVER_FIRED=false; CODEX_FAILOVER_REQUESTED=false
-PR_NUMBER=999; REPO=owner/repo
+PR_NUMBER=999; REPO=owner/repo; HEAD_SHA=head-sha; BOT_LOGIN='coderabbitai[bot]'
 log() { :; }
+fetch_api_array() { printf '[]\n'; }
+crw_select_head_pinned_review_run() { :; }
 check_status_context_record() {
   echo status-read >>"$TIMEOUT_EVENTS"
   jq -nc --arg state "$fixture_state" --arg desc "$fixture_desc" '{state:$state,description:$desc,created_at:"2026-06-04T00:00:01Z"}'
@@ -2493,13 +3161,18 @@ EOF
       bash "$harness" "$snip" "$trust" "$enabled" "$pause" "$terminal" "$prior" "$state" "$desc" >"$out" 2>"$WORKDIR/timeout-$name.err" || actual=$?
     [ "$actual" = "$rc" ] || fail "940 $name: expected rc $rc, got $actual"
     local n
-    n=$(grep -c '^true|--trigger-only 999 owner/repo$' "$WORKDIR/timeout-$name.events" || true)
+    # The failover passes --failover (#2534) and --allow-moving-head (#2166): it must always be able
+    # to hand a rate-limited head to Codex, whatever the head's age.
+    n=$(grep -c '^true|--trigger-only --failover --allow-moving-head 999 owner/repo$' "$WORKDIR/timeout-$name.events" || true)
     [ "$n" = "$calls" ] || fail "940 $name: expected $calls gated Codex trigger(s), got $n"
-    if [ "$pause" = true ] || [ "$terminal" != none ] || [ "$trust" = false ]; then
-      ! grep -q '^status-read$' "$WORKDIR/timeout-$name.events" || fail "940 $name: later status read ran despite earlier precedence or opt-out"
+    if [ "$pause" = true ] || [ "$trust" = false ]; then
+      ! grep -q '^status-read$' "$WORKDIR/timeout-$name.events" || fail "940 $name: status read ran despite pause or opt-out"
     else
-      [ "$(tail -n +1 "$WORKDIR/timeout-$name.events" | grep -E '^status-question$|^terminal-check$|^status-read$' | tr '\n' ',')" = 'status-question,terminal-check,status-read,' ] \
-        || fail "940 $name: did not use fresh status after question/terminal check"
+      local expected_order='status-read,status-question,terminal-check,status-read,'
+      [ "$rc" != 5 ] || expected_order='status-read,terminal-check,'
+      [ "$terminal" = none ] || expected_order='status-read,terminal-check,'
+      [ "$(grep -E '^status-question$|^terminal-check$|^status-read$' "$WORKDIR/timeout-$name.events" | tr '\n' ',')" = "$expected_order" ] \
+        || fail "940 $name: did not refresh terminal evidence before the status question"
     fi
     if [ "$helper_rc" != 0 ] || [ "$calls" = 0 ]; then
       [ "$(jq -r '.codex_failover_requested' "$out")" = false ] || fail "940 $name: recorded a failover that did not succeed"
@@ -2532,6 +3205,45 @@ EOF
 
 test_notice_less_timeout_contract
 
+test_status_only_refusal_grades_head_run() {
+  local source scenario dir rc before expected calls reviews body at sha fail_read notice description
+  for source in status notice notice-untrusted; do
+  for scenario in clean marker old bodyless wrong-head unreadable malformed-time same-second; do
+    before=$FAIL;expected=5;calls=1;fail_read=''
+    body='Review completed. No actionable comments.'
+    at='2026-06-04T00:00:02Z';sha=head-sha
+    case "$scenario" in
+      clean) expected=0;calls=0 ;;
+      marker) body="$(printf '%*s' 300 '') _🟠 Major_ | A blocking finding in the review body.";expected=2;calls=0 ;;
+      old) at='2026-06-04T00:00:00Z' ;;
+      bodyless) body='' ;;
+      wrong-head) sha=previous-head ;;
+      unreadable) fail_read=1;expected=3;calls=0 ;;
+      malformed-time) at=invalid;expected=3;calls=0 ;;
+      same-second) at=$STATUS_TIME ;;
+    esac
+    notice='';description='Review rate limited'
+    if [ "$source" != status ]; then
+      notice=$LEGACY_RATE_LIMIT_BODY;description='Review in progress'
+    fi
+    dir=$(make_case "refusal-run-$source-$scenario" "$notice" "$STATUS_TIME" "$description" "$STATUS_TIME")
+    if [ "$source" = notice-untrusted ]; then
+      sed -i.bak 's/trust_status_context_for_clearance: true/trust_status_context_for_clearance: false/' "$dir/.github/review-policy.yml"
+    fi
+    reviews=$(jq -nc --arg body "$body" --arg at "$at" --arg sha "$sha" \
+      '[{id:8801,user:{login:"coderabbitai[bot]"},commit_id:$sha,submitted_at:$at,body:$body}]')
+    rc=$(CODERABBIT_TEST_REVIEWS_JSON="$reviews" CODERABBIT_TEST_FAIL_REVIEWS="$fail_read" run_case "$dir")
+    [ "$rc" = "$expected" ] || fail "2139 $source $scenario: expected $expected, got $rc; $(tail -5 "$dir/err.log")"
+    [ "$(stub_calls "$dir")" = "$calls" ] || fail "2139 $source $scenario: unexpected Codex substitution"
+    [ ! -f "$dir/state/fake-time" ] || [ "$(cat "$dir/state/fake-time")" = 2000000000 ] \
+      || fail "2139 $source $scenario: unexpectedly slept"
+    [ "$FAIL" -ne "$before" ] || pass "2139 $source $scenario: exact-head review grading precedes substitution"
+  done
+  done
+}
+
+test_status_only_refusal_grades_head_run
+
 test_headref_ratelimit_suppresses_status
 test_headref_review_still_clears
 test_headref_later_status_without_review_stays_refused
@@ -2545,6 +3257,24 @@ test_summary_only_marker_is_findings_not_cleared
 test_ratelimited_description_without_notice_never_clears
 test_unknown_description_does_not_clear
 test_completed_description_still_clears
+test_processing_error_with_success_status_does_not_clear
+test_processing_error_with_actual_head_review_clears
+test_processing_error_review_body_does_not_release
+test_processing_error_older_run_does_not_release
+test_processing_error_review_object_only_does_not_clear
+test_processing_error_unreadable_fails_closed
+test_processing_error_latch_unit
+test_processing_error_latch_edges_enumerated
+test_processing_error_polling_and_terminal_edges_withhold
+test_processing_error_verdict_edge_withholds
+test_processing_error_probe_evidence_withholds
+test_processing_error_probe_reported_withholds
+test_processing_error_superseded_by_later_summary_clears
+test_processing_error_recovery_run_is_graded
+test_processing_error_latch_does_not_replace_run_grading
+test_processing_error_review_object_recovery_run_is_graded
+test_processing_error_not_superseded_by_summary_edit
+test_processing_error_not_superseded_by_other_commit_run
 test_aged_notice_with_open_window_suppresses
 test_aged_notice_with_expired_window_stays_refused
 test_trailing_probe_flag_is_usage_error
@@ -2970,6 +3700,109 @@ test_final_risk_marker_fallback() {
 }
 
 test_final_risk_marker_fallback
+
+# #2326: a refused rerun on the same SHA must not credit an older report.
+test_status_refusal_before_clean_review_clearance() {
+  local authority phase mode review_at updated_at dir reviews rc expected before body
+  for authority in run summary; do
+  for phase in polling terminal terminal_fresh; do
+  for mode in older equal newer untrusted edited progress_newer progress_older raced; do
+    [ "$mode" != edited ] || [ "$authority" = summary ] || continue
+    case "$mode" in progress_newer|progress_older)
+      { [ "$authority" = run ] && [ "$phase" != polling ]; } || continue ;;
+    esac
+    before=$FAIL
+    case "$mode" in
+      older|untrusted|edited|raced|progress_older) review_at=2026-06-04T00:00:10Z ;;
+      equal) review_at=2026-06-04T00:00:20Z ;;
+      newer|progress_newer) review_at=2026-06-04T00:00:30Z ;;
+    esac
+    expected=5
+    case "$mode" in newer|untrusted|progress_newer) expected=0 ;; esac
+    body="<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+
+**Actionable comments posted: 0**
+
+Review between $BASE_SHA_40 and $HEAD_SHA_40."
+    updated_at=$review_at
+    [ "$mode" != edited ] || updated_at=2026-06-04T00:00:30Z
+    dir=$(make_case "2326-$authority-$phase-$mode" "$body" \
+      2026-06-04T00:00:20Z 'Review rate limited' "$review_at" 999999999 \
+      '' "$HEAD_TIME" "$HEAD_SHA_40" "$updated_at")
+    if [ "$mode" = raced ]; then
+      touch "$dir/state/late-refusal-enabled"
+      python3 - "$dir/scripts/coderabbit-wait.sh" <<'RACE'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); code = p.read_text()
+entry = 'crw_head_pinned_clean_review_run() {'
+assert code.count(entry) == 1
+code = code.replace(entry, entry + '\n  touch "$CODERABBIT_TEST_STATE_DIR/selection-done"', 1)
+p.write_text(code)
+RACE
+    fi
+    [ "$mode" != untrusted ] || sed -i.bak \
+      's/trust_status_context_for_clearance: true/trust_status_context_for_clearance: false/' \
+      "$dir/.github/review-policy.yml"
+    if [ "$phase" != polling ]; then
+      # Drive the real terminal-upgrade helper after production startup and
+      # its initial trusted status read, instead of entering the poll loop.
+      python3 - "$dir/scripts/coderabbit-wait.sh" "$phase" "$mode" <<'TERMINAL'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); code = p.read_text(); entry = "\nwhile :; do\n"
+assert code.count(entry) == 1
+invoke = "emit_terminal_review_after_probe_if_present"
+if sys.argv[2] == "terminal_fresh":
+    invoke = 'fresh=$(check_status_context_record)\nPOLLED_STATUS_RECORD=\'{"state":"success","description":"Review completed"}\'\nemit_terminal_review_after_probe_if_present "$fresh"'
+if sys.argv[3] in ("progress_newer", "progress_older"):
+    invoke = 'CLASS=in_progress\nCOMMENT_FRESH_AT=2026-06-04T00:00:20Z\n' + invoke
+code = code.replace(entry, "\n" + invoke + "\nemit_rate_limit_stall_at_timeout_if_present\nemit_json_and_exit timeout 4 null 0\n" + entry)
+p.write_text(code)
+TERMINAL
+    fi
+    reviews=$(jq -nc --arg sha "$HEAD_SHA_40" --arg at "$review_at" \
+      '[{id:5501,user:{login:"coderabbitai[bot]"},commit_id:$sha,submitted_at:$at,body:"**Actionable comments posted: 0**"}]')
+    [ "$authority" != summary ] || reviews='[]'
+    rc=$(CODERABBIT_TEST_REVIEWS_RAW="$reviews" run_case "$dir")
+    [ "$rc" = "$expected" ] || fail "2326 $mode: expected $expected, got $rc; $(tail -4 "$dir/err.log")"
+    if [ "$expected" = 5 ]; then
+      [ "$(stub_calls "$dir")" = 1 ] && [ "$(jqf "$dir" '.codex_failover_requested')" = true ] \
+        || fail "2326 $mode: refusal did not request exactly one substitute"
+      [ "$(cat "$dir/state/fake-time")" = 2000000000 ] || fail "2326 $mode: refusal slept before substitution"
+    else
+      [ "$(stub_calls "$dir")" = 0 ] || fail "2326 $mode: valid clearance unnecessarily requested a substitute"
+    fi
+    [ "$FAIL" -ne "$before" ] || pass "2326 $authority $phase $mode report respects same-SHA refusal ordering"
+  done
+  done
+  done
+}
+test_status_refusal_before_clean_review_clearance
+
+test_immediate_status_refusal_respects_selected_progress() {
+  local mode status_at dir rc expected before
+  for mode in older equal newer; do
+    before=$FAIL
+    case "$mode" in
+      older) status_at=2026-06-04T00:00:10Z; expected=4 ;;
+      equal) status_at=2026-06-04T00:00:20Z; expected=4 ;;
+      newer) status_at=2026-06-04T00:00:30Z; expected=5 ;;
+    esac
+    dir=$(make_case "status-refusal-progress-$mode" "$FULL_REVIEW_TRIGGER_BODY" \
+      "$status_at" "Review rate limited" "2026-06-04T00:00:20Z" 999999999)
+    sed -i.bak 's/max_wait_seconds: 300/max_wait_seconds: 15/' "$dir/.github/review-policy.yml"
+    rc=$(run_case "$dir")
+    [ "$rc" = "$expected" ] || fail "status/progress $mode: expected $expected, got $rc; $(tail -4 "$dir/err.log")"
+    if [ "$expected" = 4 ]; then
+      [ ! -s "$dir/state/codex-stub.log" ] || fail "status/progress $mode: older refusal requested an unnecessary substitute"
+    else
+      [ "$(jqf "$dir" '.codex_failover_requested')" = true ] || fail "status/progress newer: current refusal did not request Codex"
+    fi
+    [ "$FAIL" -ne "$before" ] || pass "immediate refusal respects $mode status against selected progress"
+  done
+}
+test_immediate_status_refusal_respects_selected_progress
 
 test_quoted_refusal_marker_is_not_current_refusal
 test_current_refusal_with_blocking_head_review_is_findings

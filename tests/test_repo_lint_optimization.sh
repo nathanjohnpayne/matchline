@@ -32,6 +32,27 @@ fail() {
   FAIL=$((FAIL + 1))
 }
 
+# Derive this test-only inventory from raw wrapper text. A shell comment
+# stripper can erase a later source command when a quoted `#` occurs first on
+# the same physical line; raw inspection is conservative and cannot miss it.
+mode_helper_source_inventory_entry() {
+  local wrapper="$1"
+  grep -q 'ci-check-modes\.sh' "$wrapper" || return 1
+  basename "$wrapper"
+}
+
+# True when $1 matches one of the newline-separated case globs in $2, the
+# way the classifier matches graph entries.
+matches_any_glob() {
+  local candidate="$1" patterns="$2" pattern
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    # shellcheck disable=SC2254 # graph entries are case globs by design
+    case "$candidate" in $pattern) return 0 ;; esac
+  done <<<"$patterns"
+  return 1
+}
+
 # The classifier changes behaviour with the checkout it sits in (hub vs
 # consumer mode), and this suite also runs on consumers, so its assertions
 # run against explicit fixture roots rather than "$SCOPE" in place:
@@ -99,11 +120,259 @@ else
     fi
   done
 
-  if [ "$(scope_value full pull_request rules/repo_rules.md)" = "true" ] \
-     && [ "$(scope_value checks pull_request rules/repo_rules.md)" = '[]' ]; then
-    pass "rules/repo_rules.md fails closed to the full deep surface"
+  # #1655: governance documents request the deep legs in SMOKE mode. Their
+  # only deep-lane readers are the hub-only harnesses, so they select no
+  # self-test, no complete consumer replay and no fail-closed full surface;
+  # the complete replay runs for them on push to main and on the schedule.
+  # Every output key is asserted so a regression to the old fail-closed
+  # behaviour (full=true) or a new silent key cannot pass unnoticed.
+  governance_smoke_ok=1
+  for path in \
+    specs/example.md \
+    rules/repo_rules.md \
+    docs/agents/operating-rules.md \
+    docs/architecture/0002-branch-protection-enforcement-posture.md \
+    .repo-template.yml \
+    AGENTS.md \
+    REVIEW_POLICY.md \
+    ai_agent_tooling_standard.md; do
+    scope_out=$(classify pull_request "$path" | LC_ALL=C sort | tr '\n' ' ')
+    if [ "$scope_out" != "checks=[] consumer_replay=false deep=true full=false self_tests=false " ]; then
+      governance_smoke_ok=0
+      echo "INFO: $path -> $scope_out" >&2
+    fi
+  done
+  if [ "$governance_smoke_ok" -eq 1 ]; then
+    pass "governance documents request deep smoke without the full surface, the complete replay, or the self-test legs"
   else
-    fail "rules/repo_rules.md must not bypass the full self-approval policy checker"
+    fail "governance documents must classify as deep=true full=false checks=[] consumer_replay=false self_tests=false"
+  fi
+
+  # The reader of rules/repo_rules.md (the self-approval policy checker) is a
+  # live lint-fast step, so moving the document off the full surface removes
+  # nothing from the required lane. Pinned here so the smoke assertion above
+  # cannot outlive the live step it relies on.
+  if command -v yq >/dev/null 2>&1 \
+     && yq -e '[.jobs.lint_fast.steps[] | select(.name == "check_self_approval_detector")] | length == 1' "$REPO_LINT" >/dev/null 2>&1; then
+    pass "the self-approval policy checker stays a live lint-fast step"
+  else
+    fail "check_self_approval_detector must remain wired in lint-fast (the rules/ reader moved off the full deep surface)"
+  fi
+
+  # Consumer-shape inputs select the complete consumer replay (the sharded
+  # deep_consumer_replay job) without forcing every self-test; a change to
+  # the bootstrap exclusion list also selects its own wrapper (and, since
+  # #2580, every other wrapper whose suites name it). The manifest selects
+  # exactly one wrapper, the pre-push fleet suite that reads its consumer
+  # facts and hook entries (#2844), which is not an enrolled self-test.
+  manifest_scope=$(classify pull_request .mergepath-sync.yml | LC_ALL=C sort | tr '\n' ' ')
+  mirror_scope=$(classify pull_request scripts/bootstrap/template-mirror.sh | LC_ALL=C sort | tr '\n' ' ')
+  mirror_checks=$(scope_value checks pull_request scripts/bootstrap/template-mirror.sh)
+  if [ "$manifest_scope" = 'checks=["check_repo_lint_prepush_fleet"] consumer_replay=true deep=true full=false self_tests=false ' ] \
+     && case "$mirror_scope" in *"consumer_replay=true deep=true full=false "*) true ;; *) false ;; esac \
+     && jq -e 'index("check_bootstrap_template_mirror") != null' <<<"$mirror_checks" >/dev/null 2>&1; then
+    pass "consumer-shape inputs select the complete consumer replay without the full surface"
+  else
+    fail "manifest/bootstrap-exclusion changes must select consumer_replay=true with full=false (manifest: $manifest_scope; mirror: $mirror_scope)"
+  fi
+
+  # A propagation-lane head runs the complete surface on every repo.
+  sync_head=$(printf '%s\n' docs/README.md | bash "$HUB_SCOPE_ROOT/scripts/ci/repo-lint-scope.sh" --event pull_request --head-ref mergepath-sync/abc123 | LC_ALL=C sort | tr '\n' ' ')
+  feature_head=$(printf '%s\n' docs/README.md | bash "$HUB_SCOPE_ROOT/scripts/ci/repo-lint-scope.sh" --event pull_request --head-ref feat/abc123 | sed -n 's/^deep=//p')
+  if [ "$sync_head" = "checks=[] consumer_replay=true deep=true full=true self_tests=true " ] && [ "$feature_head" = "false" ]; then
+    pass "a mergepath-sync/ head selects the complete surface; an ordinary head does not"
+  else
+    fail "--head-ref mergepath-sync/* must fail closed to the full surface (sync: $sync_head; feature deep=$feature_head)"
+  fi
+
+  # self_tests follows the graph's enrolment list: a lint-fast-only wrapper
+  # leaves the self-test legs idle, an enrolled wrapper or a full selection
+  # starts them.
+  if [ "$(scope_value self_tests pull_request scripts/ci/check_codex_scripts)" = "false" ] \
+     && [ "$(scope_value self_tests pull_request scripts/ci/check_cockpit)" = "true" ] \
+     && [ "$(scope_value self_tests pull_request scripts/unknown-helper.sh)" = "true" ] \
+     && [ "$(scope_value self_tests pull_request docs/README.md)" = "false" ]; then
+    pass "self_tests is true only for a full selection or an enrolled wrapper"
+  else
+    fail "self_tests must track the graph's self-test enrolment (codex=$(scope_value self_tests pull_request scripts/ci/check_codex_scripts) cockpit=$(scope_value self_tests pull_request scripts/ci/check_cockpit))"
+  fi
+
+  if [ "$(scope_value deep pull_request scripts/ci/README.md tests/README.md scripts/phase-4b/README.md)" = "false" ]; then
+    pass "prose beside the implementation stays on the fast lane"
+  else
+    fail "scripts/**/*.md and tests/*.md must not request deep CI by shape"
+  fi
+
+  # The graph's self_tests list must equal the set of suites the workflow
+  # enrols: a suite enrolled in the workflow but absent from the list leaves
+  # its leg unstarted for a partial selection (a silent coverage gap), and a
+  # listed suite the workflow never runs starts the legs for nothing.
+  if command -v yq >/dev/null 2>&1 && [ -f "$DEPENDENCIES" ]; then
+    enrolled=$(yq -r '.jobs.deep_self_tests.steps[] | select(.name | test(" --self-test$")) | .name | sub(" --self-test$"; "")' "$REPO_LINT" | LC_ALL=C sort -u)
+    listed=$(jq -r '.self_tests[]' "$DEPENDENCIES" | LC_ALL=C sort -u)
+    if [ -n "$enrolled" ] && [ "$enrolled" = "$listed" ]; then
+      pass "the graph's self_tests list equals the workflow's enrolled --self-test suites ($(printf '%s\n' "$enrolled" | wc -l | tr -d ' '))"
+    else
+      fail "repo-lint-dependencies.json self_tests must equal the deep_self_tests --self-test steps (workflow: $(tr '\n' ' ' <<<"$enrolled"); graph: $(tr '\n' ' ' <<<"$listed"))"
+    fi
+  fi
+
+  # Every test a declared wrapper names must be a declared dependency of
+  # that wrapper, so a suite a wrapper gains cannot route to the wrong
+  # partial selection. References are read from the RAW wrapper text,
+  # comments included (#2227): a comment stripper has to model shell syntax
+  # (quotes, heredocs, `$#`, continuations, `${…}`), and every construct it
+  # misreads hides a live reference silently (#2176). Scanning raw text can
+  # only over-ask, and an over-ask is loud. A test a wrapper names only in a
+  # comment is therefore declared under it, or the comment is reworded so it
+  # no longer names a test path. There are deliberately no per-wrapper or
+  # per-path exemptions: one that fits a comment today would hide an
+  # executable reference added beside it later. Hub-only: the wrappers are
+  # read from the tree.
+  if [ -f "$ROOT/scripts/sync-to-downstream.sh" ] && [ -f "$DEPENDENCIES" ]; then
+    undeclared_refs=""
+    witness_refs=""
+    declared_wrappers=$(jq -r '.wrappers | keys[]' "$DEPENDENCIES")
+    while IFS= read -r wrapper; do
+      [ -n "$wrapper" ] || continue
+      [ -f "$ROOT/scripts/ci/$wrapper" ] || continue
+      wrapper_patterns=$(jq -r --arg w "$wrapper" '.wrappers[$w][]' "$DEPENDENCIES")
+      referenced=$(grep -o 'tests/test_[A-Za-z0-9_]*\.\(sh\|py\|cjs\)' "$ROOT/scripts/ci/$wrapper" \
+        | LC_ALL=C sort -u || true)
+      while IFS= read -r ref; do
+        [ -n "$ref" ] || continue
+        declared=0
+        while IFS= read -r pattern; do
+          [ -n "$pattern" ] || continue
+          # shellcheck disable=SC2254 # graph entries are case globs by design
+          case "$ref" in $pattern) declared=1; break ;; esac
+        done <<<"$wrapper_patterns"
+        [ "$declared" -eq 1 ] || undeclared_refs="$undeclared_refs $wrapper:$ref"
+      done <<<"$referenced"
+      [ "$wrapper" != "check_merge_clearance_gate" ] || witness_refs="$referenced"
+    done <<<"$declared_wrappers"
+    if [ -z "$undeclared_refs" ]; then
+      pass "every test a declared wrapper names, in code or in a comment, is a declared dependency of that wrapper"
+    else
+      fail "wrapper test references missing from repo-lint-dependencies.json (declare each under its wrapper, or reword the comment that names it; #2227):$undeclared_refs"
+    fi
+    # Non-vacuity witness (#2227): check_merge_clearance_gate names this
+    # suite only inside a `#` comment, so it is visible exactly when the
+    # extraction above reads raw text. Any comment stripper reintroduced at
+    # the call site, naive or quote-aware, drops it while the completeness
+    # check still passes. Should the comment change, move the witness to
+    # another test path a wrapper names only in a comment.
+    if grep -Fxq 'tests/test_465_fail_closed.sh' <<<"$witness_refs"; then
+      pass "the reference extraction reads comments too (check_merge_clearance_gate witness)"
+    else
+      fail "the reference extraction lost tests/test_465_fail_closed.sh, which check_merge_clearance_gate names only in a comment; references must be read from the raw wrapper text (#2227)"
+    fi
+  fi
+
+  # #2580: every top-level scripts/*.sh that a declared wrapper names, in its
+  # own text or in a suite it runs, is a declared dependency of that wrapper. An undeclared script
+  # costs both lanes: CI fails closed to the complete surface for it, and
+  # the pre-push hook runs only the live assertions for it, so a change to
+  # the script never runs the suite that exercises it before the push. A
+  # script declared under one wrapper but named by another wrapper's suite is
+  # worse: CI selects the first wrapper alone and skips the second suite
+  # (#1839). Suites are read from the RAW wrapper text and scripts from the
+  # RAW wrapper and suite text, comments included, for the reason given
+  # above (#2227); a wrapper can inspect a script itself, as
+  # check_workflow_parsers does scripts/required-head-checks.sh:
+  # a reference reader can only over-ask, and an over-ask is loud. A script
+  # the lane's own definition covers (full_triggers) already selects
+  # everything. Hub-only: the wrappers and suites are read from the tree.
+  if [ -f "$ROOT/scripts/sync-to-downstream.sh" ] && [ -f "$DEPENDENCIES" ]; then
+    # Real-case names: a case-insensitive filesystem would accept a
+    # miscased reference as an existing file.
+    top_scripts=$(find "$ROOT/scripts" -maxdepth 1 -type f -name '*.sh' -exec basename {} \; | sed 's|^|scripts/|' | LC_ALL=C sort -u)
+    full_trigger_patterns=$(jq -r '.full_triggers[]' "$DEPENDENCIES")
+    script_gaps=""
+    script_edges=0
+    gh_as_author_witness=0
+    wrapper_direct_witness=0
+    while IFS= read -r wrapper; do
+      [ -n "$wrapper" ] || continue
+      [ -f "$ROOT/scripts/ci/$wrapper" ] || continue
+      wrapper_patterns=$(jq -r --arg w "$wrapper" '.wrappers[$w][]' "$DEPENDENCIES")
+      suites=$(grep -o 'tests/test_[A-Za-z0-9_]*\.\(sh\|py\|cjs\)' "$ROOT/scripts/ci/$wrapper" | LC_ALL=C sort -u || true)
+      named=$({
+          grep -o 'scripts/[A-Za-z0-9_.-]*\.sh' "$ROOT/scripts/ci/$wrapper" || true
+          while IFS= read -r suite; do
+            [ -n "$suite" ] && [ -f "$ROOT/$suite" ] || continue
+            grep -o 'scripts/[A-Za-z0-9_.-]*\.sh' "$ROOT/$suite" || true
+          done <<<"$suites"
+        } | LC_ALL=C sort -u | LC_ALL=C comm -12 - <(printf '%s\n' "$top_scripts"))
+      while IFS= read -r script; do
+        [ -n "$script" ] || continue
+        if matches_any_glob "$script" "$full_trigger_patterns"; then
+          continue
+        fi
+        script_edges=$((script_edges + 1))
+        if [ "$wrapper" = check_gh_as_author ] && [ "$script" = scripts/gh-as-author.sh ]; then
+          gh_as_author_witness=1
+        fi
+        # Named only by the wrapper itself, so it is visible exactly when the
+        # wrapper's own text is read.
+        if [ "$wrapper" = check_workflow_parsers ] && [ "$script" = scripts/required-head-checks.sh ]; then
+          wrapper_direct_witness=1
+        fi
+        matches_any_glob "$script" "$wrapper_patterns" || script_gaps="$script_gaps $wrapper:$script"
+      done <<<"$named"
+    done < <(jq -r '.wrappers | keys[]' "$DEPENDENCIES")
+    if [ -z "$script_gaps" ] && [ "$script_edges" -gt 0 ] && [ "$gh_as_author_witness" -eq 1 ] && [ "$wrapper_direct_witness" -eq 1 ]; then
+      pass "every top-level script a declared wrapper or its suites name is declared under that wrapper ($script_edges edges)"
+    else
+      fail "scripts named by a wrapper or its suites but not declared under that wrapper in repo-lint-dependencies.json (declare each under that wrapper; #2580; edges=$script_edges, gh-as-author witness=$gh_as_author_witness, wrapper-direct witness=$wrapper_direct_witness):$script_gaps"
+    fi
+
+    # Libraries (scripts/lib/*.sh, scripts/bootstrap/*.sh) follow the same
+    # rule once declared under ANY wrapper: a partial declaration is what
+    # makes CI select that wrapper alone and skip the others whose suites
+    # name the library (#1839: dependabot-commit-provenance.sh was declared
+    # only under check_merge_clearance_gate). Adding a wrapper to a declared
+    # library only widens CI's selection. A library no wrapper declares is
+    # left alone: CI keeps the complete surface for it, and declaring it
+    # safely needs the wrappers of every script that sources it, which a
+    # name scan cannot see.
+    all_patterns=$(jq -r '.wrappers[][]' "$DEPENDENCIES")
+    declared_libs=$(find "$ROOT/scripts/lib" "$ROOT/scripts/bootstrap" -maxdepth 1 -type f -name '*.sh' 2>/dev/null \
+      | sed "s|^$ROOT/||" | LC_ALL=C sort -u | while IFS= read -r lib; do
+          if matches_any_glob "$lib" "$all_patterns"; then printf '%s\n' "$lib"; fi
+        done)
+    lib_gaps=""
+    lib_edges=0
+    provenance_witness=0
+    while IFS= read -r wrapper; do
+      [ -n "$wrapper" ] || continue
+      [ -f "$ROOT/scripts/ci/$wrapper" ] || continue
+      wrapper_patterns=$(jq -r --arg w "$wrapper" '.wrappers[$w][]' "$DEPENDENCIES")
+      suites=$(grep -o 'tests/test_[A-Za-z0-9_]*\.\(sh\|py\|cjs\)' "$ROOT/scripts/ci/$wrapper" | LC_ALL=C sort -u || true)
+      named=$({
+          grep -o 'scripts/\(lib\|bootstrap\)/[A-Za-z0-9_.-]*\.sh' "$ROOT/scripts/ci/$wrapper" || true
+          while IFS= read -r suite; do
+            [ -n "$suite" ] && [ -f "$ROOT/$suite" ] || continue
+            grep -o 'scripts/\(lib\|bootstrap\)/[A-Za-z0-9_.-]*\.sh' "$ROOT/$suite" || true
+          done <<<"$suites"
+        } | LC_ALL=C sort -u | LC_ALL=C comm -12 - <(printf '%s\n' "$declared_libs"))
+      while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        if matches_any_glob "$lib" "$full_trigger_patterns"; then
+          continue
+        fi
+        lib_edges=$((lib_edges + 1))
+        if [ "$wrapper" = check_workflow_parsers ] && [ "$lib" = scripts/lib/dependabot-commit-provenance.sh ]; then
+          provenance_witness=1
+        fi
+        matches_any_glob "$lib" "$wrapper_patterns" || lib_gaps="$lib_gaps $wrapper:$lib"
+      done <<<"$named"
+    done < <(jq -r '.wrappers | keys[]' "$DEPENDENCIES")
+    if [ -z "$lib_gaps" ] && [ "$lib_edges" -gt 0 ] && [ "$provenance_witness" -eq 1 ]; then
+      pass "every declared library is declared under each wrapper that it or its suites name ($lib_edges edges)"
+    else
+      fail "declared libraries missing from a wrapper that names them, which CI then skips (declare each under that wrapper; #1839, #2580; edges=$lib_edges, provenance witness=$provenance_witness):$lib_gaps"
+    fi
   fi
 
   if [ "$(scope_value full push docs/README.md)" = "true" ] \
@@ -156,18 +425,26 @@ else
   # wrapper that sources the helper is selected", and a fixed list of six
   # names asserted a snapshot of that instead: the seventh such wrapper
   # (#931's check_pr_review_policy_nudge) failed it while satisfying it.
-  # Comments are stripped first so a wrapper that merely mentions the helper
-  # in prose is not counted as sourcing it.
+  # The raw wrapper text is read, comments included, for the same reason as
+  # the test-reference completeness check above (#2227): a wrapper that
+  # names the helper only in prose counts as sourcing it, which can only
+  # demand a graph entry, never hide one.
+  quoted_hash_wrapper="$SCOPE_FIXTURES/quoted-hash-before-source.sh"
+  printf '%s\n' "message='# is quoted data' && . \"\$ROOT/scripts/lib/ci-check-modes.sh\"" >"$quoted_hash_wrapper"
+  quoted_hash_source=$(mode_helper_source_inventory_entry "$quoted_hash_wrapper" || true)
+  if [ "$quoted_hash_source" = "quoted-hash-before-source.sh" ]; then
+    pass "a quoted hash before a source command remains in the sourcing-wrapper inventory"
+  else
+    fail "quoted-hash-before-source.sh disappeared from the sourcing-wrapper inventory"
+  fi
+
   sourcing=$(for f in "$ROOT"/scripts/ci/check_*; do
-      # `grep -c`, not `grep -q`: under this suite's `set -o pipefail`, a
-      # quiet grep exits at the first match and `sed` takes SIGPIPE (141),
-      # which failed the `&&` and silently dropped check_doc_ownership and
-      # check_merge_clearance_gate from the derived set — leaving the subset
-      # assertion below passing for the wrong reason. Counting consumes the
-      # whole stream. `|| true` because a non-matching wrapper is the common
-      # case and its exit 1 would abort the suite under `set -e`.
-      hits=$(sed 's/[[:space:]]*#.*$//' "$f" | grep -c 'ci-check-modes\.sh' || true)
-      [ "${hits:-0}" -gt 0 ] && basename "$f" || true
+      # No pipeline, so a quiet grep cannot SIGPIPE a reader under this
+      # suite's `set -o pipefail` (the earlier `sed | grep -q` form silently
+      # dropped check_doc_ownership and check_merge_clearance_gate). `|| true`
+      # because a non-matching wrapper is the common case and its exit 1
+      # would abort the suite under `set -e`.
+      mode_helper_source_inventory_entry "$f" || true
     done | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
   # A SUBSET check, matching the assertion's own words: every sourcing wrapper
   # must be selected. Equality would be wrong — the graph also declares this
@@ -238,13 +515,36 @@ else
   # wrapper declaring it. scripts/lib/preflight-helpers.sh is sourced by
   # coderabbit-wait.sh and phase-4b-review.sh as well, so it stays undeclared
   # and keeps the fail-closed full deep net rather than selecting one caller.
-  for shared in scripts/lib/preflight-helpers.sh scripts/validate-pr-body.sh scripts/gh-as-author.sh; do
-    if [ "$(scope_value full pull_request "$shared")" = "true" ]; then
-      pass "$shared keeps the full deep net rather than a partial selection"
-    else
-      fail "$shared was narrowed to a partial selection; its other callers' deep suites would be skipped"
-    fi
+  if [ "$(scope_value full pull_request scripts/lib/preflight-helpers.sh)" = "true" ]; then
+    pass "scripts/lib/preflight-helpers.sh keeps the full deep net rather than a partial selection"
+  else
+    fail "scripts/lib/preflight-helpers.sh was narrowed to a partial selection; its other callers' deep suites would be skipped"
+  fi
+
+  # #2580: the shared top-level review scripts are declared under EVERY
+  # wrapper whose suites name them (the completeness check above), so a
+  # change to one selects those wrappers instead of the complete surface.
+  hot_ok=1
+  for hot in \
+    'scripts/gh-as-author.sh check_gh_as_author check_codex_scripts' \
+    'scripts/gh-as-reviewer.sh check_gh_as_author check_codex_scripts' \
+    'scripts/codex-review-check.sh check_codex_scripts check_merge_clearance_gate' \
+    'scripts/validate-pr-body.sh check_gh_as_author check_pr_review_policy_nudge'; do
+    read -r hot_path hot_wrappers <<<"$hot"
+    hot_full=$(scope_value full pull_request "$hot_path")
+    hot_checks=$(scope_value checks pull_request "$hot_path")
+    for hot_wrapper in $hot_wrappers; do
+      if [ "$hot_full" != "false" ] || ! jq -e --arg w "$hot_wrapper" 'index($w) != null' <<<"$hot_checks" >/dev/null 2>&1; then
+        hot_ok=0
+        echo "INFO: $hot_path selected full=$hot_full checks=$hot_checks; expected $hot_wrapper" >&2
+      fi
+    done
   done
+  if [ "$hot_ok" -eq 1 ]; then
+    pass "the shared review scripts select the wrappers whose suites exercise them, not the complete surface"
+  else
+    fail "a shared review script fell back to the complete surface or lost a wrapper that exercises it (#2580)"
+  fi
 
   auto_clear_dependencies_ok=1
   for path in \
@@ -264,10 +564,11 @@ else
     fail "shared auto-clear self-test inputs must select check_auto_clear_workflow"
   fi
 
+  # At least these two source it; since #2580 every other wrapper whose
+  # suites name it is selected as well.
   selected=$(scope_value checks pull_request scripts/lib/gh-command-classifier.sh)
   if jq -e '
-      length == 2
-      and (index("check_auto_clear_workflow") != null)
+      (index("check_auto_clear_workflow") != null)
       and (index("check_self_approval_detector") != null)
     ' <<<"$selected" >/dev/null 2>&1; then
     pass "the command classifier selects every wrapper that sources it"
@@ -334,8 +635,10 @@ STUB
   rm -rf "$jq_stub_dir"
   if grep -Fxq 'deep=true' <<<"$parse_failure" \
      && grep -Fxq 'full=true' <<<"$parse_failure" \
-     && grep -Fxq 'checks=[]' <<<"$parse_failure"; then
-    pass "dependency graph parse failures fail closed to the full deep surface"
+     && grep -Fxq 'checks=[]' <<<"$parse_failure" \
+     && grep -Fxq 'consumer_replay=true' <<<"$parse_failure" \
+     && grep -Fxq 'self_tests=true' <<<"$parse_failure"; then
+    pass "dependency graph parse failures fail closed to the full deep surface, replay and self-test legs included"
   else
     fail "a later jq failure must not continue with incomplete wrapper patterns (got $parse_failure)"
   fi
@@ -462,13 +765,29 @@ JSON
     mkdir -p "$one_marker_root/scripts/ci"
     cp "$SCOPE" "$DEPENDENCIES" "$one_marker_root/scripts/ci/"
     touch "$one_marker_root/$marker"
-    one_marker=$(printf '%s\n' specs/example.md | bash "$one_marker_root/scripts/ci/repo-lint-scope.sh" --event pull_request)
-    if grep -Fxq 'full=true' <<<"$one_marker"; then
+    one_marker=$(printf '%s\n' specs/example.md scripts/unknown-helper.sh | bash "$one_marker_root/scripts/ci/repo-lint-scope.sh" --event pull_request)
+    # specs/ is a governance document (deep on the hub, fast on a consumer)
+    # and the unknown helper is the hub catch-all; together they must reach
+    # the full surface INCLUDING the hub-only replay, which consumer mode
+    # withholds.
+    if grep -Fxq 'deep=true' <<<"$one_marker" \
+       && grep -Fxq 'full=true' <<<"$one_marker" \
+       && grep -Fxq 'consumer_replay=true' <<<"$one_marker"; then
       pass "a checkout carrying only $marker keeps the hub rules"
     else
       fail "a checkout carrying only $marker must keep the hub rules (got $one_marker)"
     fi
   done
+
+  # Consumer mode never selects the consumer replay: the harness is hub-only
+  # (marker-first SKIP), so the replay legs would spin up for nothing. The
+  # full surface there is the kit's self-tests.
+  consumer_full=$(printf '%s\n' scripts/ci/repo-lint-scope.sh | bash "$CONSUMER_SCOPE_ROOT/scripts/ci/repo-lint-scope.sh" --event pull_request | LC_ALL=C sort | tr '\n' ' ')
+  if [ "$consumer_full" = "checks=[] consumer_replay=false deep=true full=true self_tests=true " ]; then
+    pass "consumer mode keeps the full surface but never selects the hub-only consumer replay"
+  else
+    fail "consumer mode must emit consumer_replay=false even for a full selection (got $consumer_full)"
+  fi
 
   # Completeness, hub only (it needs the manifest): every path the manifest
   # delivers to consumers that the hub would send to deep CI is still deep in
@@ -536,10 +855,66 @@ else
     fail "repo-lint must expose the daily deep-CI schedule and manual trigger"
   fi
 
-  if yq -e '.jobs.scope.outputs.deep == "${{ steps.classify.outputs.deep }}" and .jobs.scope.outputs.full == "${{ steps.classify.outputs.full }}" and .jobs.scope.outputs.checks == "${{ steps.classify.outputs.checks }}" and (.jobs.scope.steps[] | select(.id == "classify") | .run | contains("repo-lint-scope.sh"))' "$REPO_LINT" >/dev/null; then
-    pass "repo-lint publishes one parsed affected-wrapper scope decision"
+  if yq -e '.jobs.scope.outputs.deep == "${{ steps.classify.outputs.deep }}" and .jobs.scope.outputs.full == "${{ steps.classify.outputs.full }}" and .jobs.scope.outputs.checks == "${{ steps.classify.outputs.checks }}" and .jobs.scope.outputs.consumer_replay == "${{ steps.classify.outputs.consumer_replay }}" and .jobs.scope.outputs.self_tests == "${{ steps.classify.outputs.self_tests }}" and (.jobs.scope.steps[] | select(.id == "classify") | .run | contains("repo-lint-scope.sh")) and (.jobs.scope.steps[] | select(.id == "classify") | .run | contains("--head-ref \"$HEAD_REF\"")) and (.jobs.scope.steps[] | select(.id == "classify") | .env.HEAD_REF == "${{ github.head_ref }}")' "$REPO_LINT" >/dev/null; then
+    pass "repo-lint publishes one parsed affected-wrapper scope decision with the replay and self-test bits and the head ref"
   else
-    fail "repo-lint must classify and publish deep/full/check scope once"
+    fail "repo-lint must classify and publish deep/full/checks/consumer_replay/self_tests once, passing the PR head ref"
+  fi
+
+  # The kit-less consumer branch and the diff-unavailable branch write the
+  # outputs by hand; both must name every key the jobs below read, or an
+  # empty string reaches a job `if` and the aggregator table.
+  classify_run=$(yq -r '.jobs.scope.steps[] | select(.id == "classify") | .run' "$REPO_LINT")
+  if [ "$(grep -c 'echo "consumer_replay=' <<<"$classify_run")" = "2" ] \
+     && [ "$(grep -c 'echo "self_tests=' <<<"$classify_run")" = "2" ] \
+     && grep -Fq 'echo "consumer_replay=false"' <<<"$classify_run" \
+     && grep -Fq 'echo "consumer_replay=true"' <<<"$classify_run" \
+     && grep -Fq 'echo "self_tests=false"' <<<"$classify_run" \
+     && grep -Fq 'echo "self_tests=true"' <<<"$classify_run"; then
+    pass "both hand-written scope fallbacks emit the replay and self-test keys (kit-less false, diff-unavailable true)"
+  else
+    fail "the scope step's kit-less and diff-unavailable fallbacks must emit consumer_replay and self_tests"
+  fi
+
+  # #2926: a tooling file moved out of a tooling path must still select the
+  # deep lane. With rename detection on, the diff lists only the
+  # destination, so the move reads as a docs change and skips the deep net
+  # that covers the moved file. Execute the shipped step body on a real
+  # rename, and prove the fixture is a rename git would collapse.
+  if [ -f "$SCOPE" ] && [ -f "$DEPENDENCIES" ] && command -v git >/dev/null 2>&1; then
+    RN_GIT="$SCOPE_FIXTURES/rename-git"
+    cp -R "$HUB_SCOPE_ROOT" "$RN_GIT"
+    printf '#!/usr/bin/env bash\n# residue safety wrapper fixture\nexit 0\n' > "$RN_GIT/scripts/ci/check_consumer_residue_safety"
+    git -C "$RN_GIT" init -q -b main
+    git -C "$RN_GIT" -c user.name=t -c user.email=t@example.invalid add -A
+    git -C "$RN_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm base
+    rn_base=$(git -C "$RN_GIT" rev-parse HEAD)
+    mkdir -p "$RN_GIT/docs"
+    git -C "$RN_GIT" mv scripts/ci/check_consumer_residue_safety docs/residue-safety.txt
+    git -C "$RN_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm rename
+    rn_head=$(git -C "$RN_GIT" rev-parse HEAD)
+
+    # $1 step body. Prints the published `full` value.
+    run_classify_step() {
+      local out="$SCOPE_FIXTURES/rename-github-output"
+      : > "$out"
+      ( cd "$RN_GIT" && EVENT_NAME=pull_request BASE_SHA="$rn_base" HEAD_SHA="$rn_head" HEAD_REF=feat/move \
+          GITHUB_OUTPUT="$out" bash --noprofile --norc -e -o pipefail -c "$1" >/dev/null 2>&1 ) || echo "step-failed"
+      sed -n 's/^full=//p' "$out"
+    }
+    rn_collapsed=$(git -C "$RN_GIT" -c diff.renames=true diff --name-only "$rn_base" "$rn_head")
+    rn_destination_full=$(classify pull_request docs/residue-safety.txt | sed -n 's/^full=//p')
+    rn_step_full=$(run_classify_step "$classify_run")
+    # Mutation: the same step with rename detection back on must miss it.
+    rn_mutant=${classify_run//'git diff --no-renames --name-only'/'git diff --name-only'}
+    rn_mutant_full=$(run_classify_step "$rn_mutant")
+    if [ "$rn_collapsed" = "docs/residue-safety.txt" ] && [ "$rn_destination_full" = "false" ] \
+       && [ "$rn_step_full" = "true" ] \
+       && [ "$rn_mutant" != "$classify_run" ] && [ "$rn_mutant_full" = "false" ]; then
+      pass "the classify step selects the full deep lane for a tooling file renamed out of a tooling path (rename-detecting mutant caught)"
+    else
+      fail "the classify step must count a renamed file's source path (collapsed=$rn_collapsed destination_full=$rn_destination_full step_full=$rn_step_full mutant_full=$rn_mutant_full)"
+    fi
   fi
 
   if yq -e '.jobs.deep_safety.needs == "scope" and .jobs.deep_safety.if == "needs.scope.outputs.deep == '\''true'\''" and (.jobs.deep_safety.strategy.matrix.safety | contains(["consumer", "residue"]))' "$REPO_LINT" >/dev/null; then
@@ -550,10 +925,10 @@ else
 
   aggregator_run=$(yq -r '.jobs.lint.steps[] | select(.name == "publish aggregate lint result") | .run' "$REPO_LINT")
   if yq -e '.jobs.lint.name == "lint" and .jobs.lint.if == "always()" and (.jobs.lint.needs | contains(["scope", "lint_fast", "deep_safety"]))' "$REPO_LINT" >/dev/null \
-     && printf '%s' "$aggregator_run" | grep -Fq 'FAST_RESULT' \
-     && printf '%s' "$aggregator_run" | grep -Fq 'DEEP_RESULT' \
-     && printf '%s' "$aggregator_run" | grep -Fq 'SCOPE_RESULT' \
-     && printf '%s' "$aggregator_run" | grep -Fq 'exit 1'; then
+     && printf '%s' "$aggregator_run" | grep -F 'FAST_RESULT' >/dev/null \
+     && printf '%s' "$aggregator_run" | grep -F 'DEEP_RESULT' >/dev/null \
+     && printf '%s' "$aggregator_run" | grep -F 'SCOPE_RESULT' >/dev/null \
+     && printf '%s' "$aggregator_run" | grep -F 'exit 1' >/dev/null; then
     pass "a stable lint aggregator preserves the required status context"
   else
     fail "repo-lint must retain one always-running lint aggregator over every lane"
@@ -565,20 +940,410 @@ else
     fail "the fast lane must use token --scan and doc-ownership --check modes"
   fi
 
-  if yq -e '(.jobs.deep_safety.steps[] | select(.name == "check_no_token_in_output --self-test") | .run | contains("--self-test")) and (.jobs.deep_safety.steps[] | select(.name == "check_doc_ownership --self-test") | .run | contains("--self-test"))' "$REPO_LINT" >/dev/null; then
+  if yq -e '(.jobs.deep_self_tests.steps[] | select(.name == "check_no_token_in_output --self-test") | .run | contains("--self-test")) and (.jobs.deep_self_tests.steps[] | select(.name == "check_doc_ownership --self-test") | .run | contains("--self-test"))' "$REPO_LINT" >/dev/null; then
     pass "deep CI retains the full token and ownership regression suites"
   else
     fail "deep CI must run token and doc-ownership self-tests"
   fi
 
   governance_modes_ok=1
-  for name in check_auto_clear_workflow check_coderabbit_wait check_merge_clearance_gate check_required_check_publisher check_phase_4b_automation check_phase_4b_accounting check_gh_projects_move_item; do
-    name="$name" yq -e '([.jobs.lint_fast.steps[] | select(.name == strenv(name)) | .run | contains("--check")] | any) and ([.jobs.deep_safety.steps[] | select(.name == (strenv(name) + " --self-test")) | select((.if | contains("needs.scope.outputs.full")) and (.if | contains("needs.scope.outputs.checks"))) | .run | contains("--self-test")] | any)' "$REPO_LINT" >/dev/null || governance_modes_ok=0
+  for name in check_auto_clear_workflow check_coderabbit_wait check_merge_clearance_gate check_required_check_publisher check_phase_4b_automation check_phase_4b_accounting check_gh_projects_move_item check_gh_projects_read_route check_gh_projects_backfill_route_markers; do
+    name="$name" yq -e '([.jobs.lint_fast.steps[] | select(.name == strenv(name)) | .run | contains("--check")] | any) and ([.jobs.deep_self_tests.steps[] | select(.name == (strenv(name) + " --self-test")) | select((.if | contains("needs.scope.outputs.full")) and (.if | contains("needs.scope.outputs.checks")) and (.if | contains("matrix.suite == "))) | .run | contains("--self-test")] | any)' "$REPO_LINT" >/dev/null || governance_modes_ok=0
   done
   if [ "$governance_modes_ok" -eq 1 ]; then
     pass "auto-clear and governance wrappers keep live structure fast and move regression suites to deep CI"
   else
     fail "auto-clear, CodeRabbit, merge-clearance, and Phase 4b wrappers must split live and self-test modes"
+  fi
+
+  # #1655 sharding. Every --self-test step is pinned to exactly one suite leg
+  # (a step without a matrix.suite guard would run on every leg; a step
+  # naming two legs would run twice), and the slowest suites sit on
+  # different legs so the critical path is one suite, not their sum.
+  suite_pins=$(yq -r '.jobs.deep_self_tests.steps[] | select(.name | test(" --self-test$")) | .if' "$REPO_LINT")
+  suite_pin_ok=1
+  while IFS= read -r cond; do
+    [ -n "$cond" ] || continue
+    # `|| true`: an unpinned step yields zero matches, which fails the
+    # pipeline under this suite's `set -e -o pipefail` and would abort the
+    # suite inside the assignment instead of reporting the finding.
+    pins=$(grep -o "matrix.suite == '[a-z0-9-]*'" <<<"$cond" | wc -l | tr -d ' ' || true)
+    if [ "${pins:-0}" != "1" ]; then
+      suite_pin_ok=0
+      echo "INFO: self-test step pinned to $pins legs: $cond" >&2
+    fi
+  done <<<"$suite_pins"
+  automation_leg=$(yq -r '.jobs.deep_self_tests.steps[] | select(.name == "check_phase_4b_automation --self-test") | .if' "$REPO_LINT" | grep -o "matrix.suite == '[a-z0-9-]*'")
+  coderabbit_leg=$(yq -r '.jobs.deep_self_tests.steps[] | select(.name == "check_coderabbit_wait --self-test") | .if' "$REPO_LINT" | grep -o "matrix.suite == '[a-z0-9-]*'")
+  if [ "$suite_pin_ok" -eq 1 ] && [ -n "$automation_leg" ] && [ -n "$coderabbit_leg" ] && [ "$automation_leg" != "$coderabbit_leg" ] \
+     && yq -e '.jobs.deep_self_tests.needs == "scope" and .jobs.deep_self_tests.if == "needs.scope.outputs.deep == '\''true'\'' && needs.scope.outputs.self_tests == '\''true'\''" and (.jobs.deep_self_tests.strategy.matrix.suite | length >= 2) and .jobs.deep_self_tests.strategy."fail-fast" == false and (.jobs.deep_self_tests.name | contains("deep-safety ("))' "$REPO_LINT" >/dev/null; then
+    pass "self-test suites are sharded over legs that run only when a selected wrapper is enrolled, with the two slowest suites apart"
+  else
+    fail "deep_self_tests must pin every suite to one matrix leg, gate on scope self_tests, and keep Phase 4b automation and CodeRabbit wait on different legs"
+  fi
+
+  if yq -e '.jobs.deep_consumer_replay.needs == "scope" and .jobs.deep_consumer_replay.if == "needs.scope.outputs.deep == '\''true'\'' && needs.scope.outputs.consumer_replay == '\''true'\''" and (.jobs.deep_consumer_replay.strategy.matrix.shard | length == 3) and .jobs.deep_consumer_replay.strategy."fail-fast" == false and .jobs.deep_consumer_replay.env.REPO_LINT_FULL == "true" and .jobs.deep_consumer_replay.env.REPO_LINT_SHARD == "${{ matrix.shard }}/3" and (.jobs.deep_consumer_replay.name | contains("deep-safety (")) and ([.jobs.deep_consumer_replay.steps[] | select(.name == "check_repo_lint_consumer_safety")] | length == 1)' "$REPO_LINT" >/dev/null; then
+    pass "the complete consumer replay runs as three independent shards only when the scope selects it"
+  else
+    fail "deep_consumer_replay must gate on scope consumer_replay, run REPO_LINT_FULL=true over a 3-way REPO_LINT_SHARD matrix, and keep the deep-safety name prefix"
+  fi
+
+  if yq -e '([.jobs.deep_safety.steps[] | select(.name == "check_repo_lint_consumer_safety") | select(.env.REPO_LINT_FULL == "false") | select(.if == "matrix.safety == '\''consumer'\''")] | length == 1) and ([.jobs.deep_safety.steps[] | select(.name | test(" --self-test$"))] | length == 0)' "$REPO_LINT" >/dev/null; then
+    pass "the deep-safety consumer leg runs the harness in smoke mode and carries no self-test steps"
+  else
+    fail "deep_safety must pin the consumer leg to REPO_LINT_FULL=false (the complete replay is the sharded job) and host no --self-test step"
+  fi
+
+  # Aggregator semantics, executed rather than grepped: the run: body is
+  # extracted and driven under the Actions default shell with every
+  # (scope decision, job result) combination that must pass or fail. A
+  # skipped job satisfies branch protection by itself, so this table is the
+  # only thing that makes an unexpectedly skipped, cancelled or failed leg
+  # red the required `lint` context.
+  # FAST_SHARDS (#2990) is the shard list lint_fast expanded; the rows below
+  # that do not set it read the hub's list, and the shard rows further down
+  # set it explicitly. `unset` is the empty-output case.
+  aggregate() {  # DEEP REPLAY SELF SCOPE FAST DEEP_RESULT REPLAY_RESULT SELF_RESULT
+    DEEP="$1" CONSUMER_REPLAY="$2" SELF_TESTS="$3" SCOPE_RESULT="$4" FAST_RESULT="$5" \
+      DEEP_RESULT="$6" REPLAY_RESULT="$7" SELF_TESTS_RESULT="$8" \
+      FAST_SHARDS="${AGG_FAST_SHARDS-[1,2,3,4,5,6,7,8]}" \
+      bash --noprofile --norc -e -o pipefail -c "$aggregator_run" >/dev/null 2>&1
+  }
+  aggregator_ok=1
+  aggregate false false false success success skipped skipped skipped || aggregator_ok=0
+  aggregate true false false success success success skipped skipped || aggregator_ok=0
+  aggregate true true true success success success success success || aggregator_ok=0
+  aggregate true false true success success success skipped success || aggregator_ok=0
+  for bad in \
+    "false false false success failure skipped skipped skipped" \
+    "false false false failure success skipped skipped skipped" \
+    "false false false success success success skipped skipped" \
+    "true false false success success failure skipped skipped" \
+    "true false false success success cancelled skipped skipped" \
+    "true false false success success skipped skipped skipped" \
+    "true true true success success success skipped success" \
+    "true true true success success success failure success" \
+    "true true true success success success cancelled success" \
+    "true true true success success success success skipped" \
+    "true true true success success success success failure" \
+    "true false false success success success success skipped" \
+    "true false false success success success skipped success"; do
+    # shellcheck disable=SC2086 # the row is a deliberate word list
+    if aggregate $bad; then
+      aggregator_ok=0
+      echo "INFO: aggregator accepted: $bad" >&2
+    fi
+  done
+  if [ "$aggregator_ok" -eq 1 ] \
+     && yq -e '(.jobs.lint.needs | join(",")) == "scope,lint_fast,deep_safety,deep_consumer_replay,deep_self_tests" and .jobs.lint.steps[0].env.REPLAY_RESULT == "${{ needs.deep_consumer_replay.result }}" and .jobs.lint.steps[0].env.SELF_TESTS_RESULT == "${{ needs.deep_self_tests.result }}" and .jobs.lint.steps[0].env.CONSUMER_REPLAY == "${{ needs.scope.outputs.consumer_replay }}" and .jobs.lint.steps[0].env.SELF_TESTS == "${{ needs.scope.outputs.self_tests }}"' "$REPO_LINT" >/dev/null; then
+    pass "the lint aggregator reads every deep job against the scope decision: selected legs must succeed, unselected legs must skip"
+  else
+    fail "the lint aggregator must fail on a failed, cancelled or unexpectedly skipped deep leg and pass only on the selected set"
+  fi
+
+  # -------------------------------------------------------------------------
+  # #2163: the fast lane is a shard matrix. Every check step is pinned to one
+  # shard; the prelude is not. Two silent failure shapes are closed here: a
+  # pin naming a shard outside the matrix never runs anywhere (the check is
+  # switched off while `lint` stays green), and an unpinned check runs on
+  # every leg (minutes wasted, and a false reading of the balance).
+  # -------------------------------------------------------------------------
+  # #2990: the shard list is generated by the scope job's `lint-fast shards`
+  # step, so it is read by executing that step's run: body on a hub-shaped
+  # and a consumer-shaped tree, not by reading YAML. The consumer list is the
+  # 2-5 shards every repository runs; the hub list is that plus hub-only
+  # shards, which only hub-only checks may use (asserted further down).
+  shards_run=$(yq -r '.jobs.scope.steps[] | select(.id == "shards") | .run' "$REPO_LINT")
+  fast_shards_for() {  # $1 = fixture root; prints the step's fast_shards value
+    local out="$SCOPE_FIXTURES/shards-output.$$"
+    : > "$out"
+    (cd "$1" && GITHUB_OUTPUT="$out" bash --noprofile --norc -e -o pipefail -c "$shards_run" >/dev/null 2>&1) || return 1
+    sed -n 's/^fast_shards=//p' "$out"
+    rm -f "$out"
+  }
+  hub_fast_shards=$(fast_shards_for "$HUB_SCOPE_ROOT" || true)
+  consumer_fast_shards=$(fast_shards_for "$CONSUMER_SCOPE_ROOT" || true)
+  shard_members=$(printf '%s' "$hub_fast_shards" | jq -r '.[]?' 2>/dev/null || true)
+  consumer_members=$(printf '%s' "$consumer_fast_shards" | jq -r '.[]?' 2>/dev/null || true)
+  hub_only_members=$(LC_ALL=C comm -23 <(printf '%s\n' "$shard_members" | sed '/^$/d' | LC_ALL=C sort) \
+    <(printf '%s\n' "$consumer_members" | sed '/^$/d' | LC_ALL=C sort))
+  shard_count=$(printf '%s\n' "$consumer_members" | sed '/^$/d' | wc -l | tr -d ' ')
+  if [ "$shard_count" -ge 2 ] && [ "$shard_count" -le 5 ] \
+     && printf '%s' "$consumer_fast_shards" | jq -e 'type == "array" and all(.[]; type == "number" and . == floor)' >/dev/null 2>&1 \
+     && printf '%s' "$hub_fast_shards" | jq -e --argjson c "$consumer_fast_shards" 'type == "array" and all(.[]; type == "number" and . == floor) and .[:($c | length)] == $c and (length - ($c | length)) >= 1' >/dev/null 2>&1 \
+     && yq -e '.jobs.lint_fast.strategy.matrix.shard == "${{ fromJSON(needs.scope.outputs.fast_shards) }}" and .jobs.scope.outputs.fast_shards == "${{ steps.shards.outputs.fast_shards }}" and ([.jobs.scope.steps[] | select(.id == "shards")] | length == 1) and ([.jobs.scope.steps[] | select(.id == "shards") | .if] | .[0] == null)' "$REPO_LINT" >/dev/null \
+     && yq -e '.jobs.lint_fast.strategy."fail-fast" == false and .jobs.lint_fast.if == null and .jobs.lint_fast.name == "lint-fast" and (.jobs.lint_fast."timeout-minutes" | tag == "!!int")' "$REPO_LINT" >/dev/null; then
+    pass "lint-fast runs $consumer_fast_shards on a consumer and $hub_fast_shards on the hub, from the scope job; every leg reports, is never skipped, and is time-bounded"
+  else
+    fail "lint-fast must expand the scope job's fast_shards: a 2-5 integer list on a consumer, that list plus hub-only shards on the hub, with fail-fast: false, no job-level if:, and a timeout (hub: '$hub_fast_shards', consumer: '$consumer_fast_shards')"
+  fi
+
+  # The aggregator accepts exactly the lists the step writes, so a list that
+  # dropped a shard (its checks unrun, the rolled-up result still success)
+  # fails `lint`. Executed against the published step body.
+  shard_list_ok=1
+  for good in "$consumer_fast_shards" "$hub_fast_shards"; do
+    AGG_FAST_SHARDS="$good" aggregate false false false success success skipped skipped skipped || shard_list_ok=0
+  done
+  for bad in '' '[]' '[1,2,3]' '[1,2,3,4]' '[1,2,3,4,6]' '[1,2,3,4,5,6]' '[1,2,3,4,5,6,7]' '[1,2,3,4,5,6,8]' '[1,2,3,4,5,6,7,8,9]' '[1, 2, 3, 4]' 'null'; do
+    if AGG_FAST_SHARDS="$bad" aggregate false false false success success skipped skipped skipped; then
+      shard_list_ok=0
+      echo "INFO: aggregator accepted fast_shards '$bad'" >&2
+    fi
+  done
+  if [ "$shard_list_ok" -eq 1 ] && [ -n "$consumer_fast_shards" ] && [ -n "$hub_fast_shards" ] \
+     && yq -e '(.jobs.lint.steps[] | select(.name == "publish aggregate lint result") | .env.FAST_SHARDS) == "${{ needs.scope.outputs.fast_shards }}"' "$REPO_LINT" >/dev/null; then
+    pass "the aggregator passes only the consumer and hub shard lists and fails an empty, short, reordered or extended one"
+  else
+    fail "the lint aggregator must read needs.scope.outputs.fast_shards and accept exactly the two lists the scope step writes"
+  fi
+
+  pins_ok=1
+  pinned_steps=0
+  unpinned_steps=""
+  bad_pins=""
+  hygiene_full_shard=""
+  hygiene_verify_shard=""
+  tooling_gated=""
+  while IFS=$'\t' read -r step_name step_if; do
+    [ -n "$step_name" ] || continue
+    case "$step_name" in
+      "check_git_identity_hygiene --snapshot")
+        # Unpinned by design: every leg records its own baseline.
+        if [ -n "$step_if" ]; then
+          pins_ok=0
+          bad_pins="$bad_pins ${step_name}(pinned)"
+        fi
+        continue
+        ;;
+    esac
+    if [ -z "$step_if" ]; then
+      pins_ok=0
+      unpinned_steps="$unpinned_steps $step_name"
+      continue
+    fi
+    # #2921: a tooling-only check adds exactly this clause after its `==`
+    # pin. Strip it and record shard:name; the set is compared below with
+    # the report step's TOOLING_ONLY_CHECKS.
+    case "$step_if" in
+      "matrix.shard == "[0-9]*" && needs.scope.outputs.tooling != 'false'")
+        step_if="${step_if% && needs.scope.outputs.tooling != \'false\'}"
+        tooling_gated="$tooling_gated${step_if##* }:$step_name"$'\n'
+        ;;
+    esac
+    if ! printf '%s' "$step_if" | grep -E '^matrix\.shard (==|!=) [0-9]+$' >/dev/null; then
+      pins_ok=0
+      bad_pins="$bad_pins ${step_name}(${step_if})"
+      continue
+    fi
+    pin_value="${step_if##* }"
+    if ! printf '%s\n' "$shard_members" | grep -Fx "$pin_value" >/dev/null; then
+      pins_ok=0
+      bad_pins="$bad_pins ${step_name}(shard $pin_value is not in the matrix)"
+      continue
+    fi
+    case "$step_name" in
+      check_git_identity_hygiene)
+        case "$step_if" in *"== "*) hygiene_full_shard="$pin_value" ;; esac ;;
+      "check_git_identity_hygiene --verify")
+        case "$step_if" in *"!= "*) hygiene_verify_shard="$pin_value" ;; esac ;;
+      *)
+        # Every other check is pinned to exactly one leg: `!=` would run it
+        # on all but one, which is the duplication the matrix exists to end.
+        case "$step_if" in
+          *"!= "*) pins_ok=0; bad_pins="$bad_pins ${step_name}(!= pins run on every other leg)" ;;
+        esac ;;
+    esac
+    pinned_steps=$((pinned_steps + 1))
+  done < <(yq -r '.jobs.lint_fast.steps[] | select(.name | test("^check_")) | [.name, (.if // "")] | @tsv' "$REPO_LINT")
+  if [ "$pins_ok" -eq 1 ] && [ "$pinned_steps" -ge 60 ]; then
+    pass "every lint-fast check step ($pinned_steps) is pinned to one shard that exists in the matrix"
+  else
+    fail "lint-fast shard pins are broken (unpinned:$unpinned_steps) (bad:$bad_pins) (pinned=$pinned_steps)"
+  fi
+
+  # #2921: the steps gated on the tooling scope are exactly the ones the
+  # report step names, so the log's SKIPPED lines are the truth. The scope
+  # job must publish the output the gate reads, and lint-fast must need it.
+  tooling_gated_sorted=$(printf '%s' "$tooling_gated" | sed '/^$/d' | LC_ALL=C sort)
+  tooling_reported=$(yq -r '.jobs.lint_fast.steps[] | select(.name == "report tooling scope") | .env.TOOLING_ONLY_CHECKS' "$REPO_LINT" | tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort)
+  if [ -n "$tooling_gated_sorted" ] && [ "$tooling_gated_sorted" = "$tooling_reported" ] \
+     && printf '%s\n' "$tooling_gated_sorted" | grep -Fx '1:check_codex_scripts' >/dev/null \
+     && yq -e '.jobs.lint_fast.needs == "scope" and .jobs.scope.outputs.tooling == "${{ steps.tooling.outputs.tooling }}" and ([.jobs.scope.steps[] | select(.id == "tooling")] | length == 1) and ((.jobs.lint_fast.steps[] | select(.name == "report tooling scope") | .if) == null) and ((.jobs.lint_fast.steps[] | select(.name == "report tooling scope") | .env.TOOLING) == "${{ needs.scope.outputs.tooling }}")' "$REPO_LINT" >/dev/null; then
+    pass "the tooling-scope gate covers exactly the steps the report step names ($(printf '%s\n' "$tooling_gated_sorted" | wc -l | tr -d ' ')), including check_codex_scripts"
+  else
+    fail "tooling-gated steps ($(printf '%s' "$tooling_gated_sorted" | tr '\n' ' ')) must equal the report step's TOOLING_ONLY_CHECKS ($(printf '%s' "$tooling_reported" | tr '\n' ' ')) and read the scope job's tooling output"
+  fi
+
+  shard_coverage_ok=1
+  for member in $shard_members; do
+    member="$member" yq -e '[.jobs.lint_fast.steps[] | select(.if == ("matrix.shard == " + strenv(member)))] | length > 0' "$REPO_LINT" >/dev/null 2>&1 || shard_coverage_ok=0
+  done
+  if [ "$shard_coverage_ok" -eq 1 ]; then
+    pass "every declared shard carries at least one pinned check"
+  else
+    fail "a declared shard carries no pinned check (a leg that does nothing but setup)"
+  fi
+
+  # #2990: a consumer has no hub-only shard, so a check pinned there runs on
+  # the hub alone. Each one must be a wrapper that SKIPs on a consumer, and
+  # SKIPs because the hub's markers are absent: run on a tree holding only
+  # the wrapper, it must exit 0 and print SKIP; with the hub markers
+  # (scripts/sync-to-downstream.sh, .mergepath-sync.yml) added it must not. A consumer-applicable check pinned there would silently lose
+  # its consumer coverage, and fails here. A tooling-gated pin
+  # (`matrix.shard == N && needs.scope.outputs.tooling != 'false'`) is held to
+  # the same rule: the gate narrows when the step runs, not where.
+  #
+  # The wrapper-only tree proves the marker logic but not that the check is
+  # hub-only: a wrapper whose suite and library the manifest delivers to every
+  # consumer also SKIPs there, because the suite is missing (#2995 Phase 4b,
+  # check_template_substitution). So each wrapper must also SKIP on a tree
+  # holding everything the hub sends a consumer: every `paths:` entry (a
+  # templated source lands at its dest) and every `requires:` path, for any
+  # consumer, minus the two hub markers.
+  delivered_tree="$SCOPE_FIXTURES/hub-only-delivered"
+  rm -rf "$delivered_tree"
+  mkdir -p "$delivered_tree"
+  delivered_ok=1
+  while IFS=$'\t' read -r src dest; do
+    [ -n "$src" ] || continue
+    src="${src%/}"
+    dest="${dest%/}"
+    if [ ! -e "$ROOT/$src" ]; then
+      continue
+    fi
+    if [ -d "$ROOT/$src" ]; then
+      mkdir -p "$delivered_tree/$dest"
+      cp -R "$ROOT/$src/." "$delivered_tree/$dest/" || delivered_ok=0
+    else
+      mkdir -p "$delivered_tree/$(dirname "$dest")"
+      cp "$ROOT/$src" "$delivered_tree/$dest" || delivered_ok=0
+    fi
+  done < <(yq -r '.paths[] | ((.source // .path) + "\t" + (.dest // .path)), ((.requires // [])[] | . + "\t" + .)' "$ROOT/.mergepath-sync.yml")
+  rm -f "$delivered_tree/scripts/sync-to-downstream.sh" "$delivered_tree/.mergepath-sync.yml"
+  if [ "$delivered_ok" -ne 1 ] || [ ! -f "$delivered_tree/scripts/ci/check_template_substitution" ] \
+     || [ ! -f "$delivered_tree/scripts/lib/template-substitution.sh" ] || [ ! -f "$delivered_tree/tests/test_template_substitution.sh" ]; then
+    fail "the consumer-delivered fixture must hold the manifest's paths and requires (a check whose suite travels must find it there)"
+  fi
+  # hub_only_oracle WORKFLOW [WRAPPER]: 0 when every check WORKFLOW pins to a
+  # hub-only shard (only WRAPPER, when named) passes both trees; the checks
+  # it ran are left in HUB_ONLY_STEPS, and each rejection as wrapper:tree
+  # (marker or delivered) in HUB_ONLY_REJECTS.
+  hub_only_oracle() {
+    local workflow="$1" only="${2:-}" oracle_ok=1 member run_line wrapper skip_tree
+    local consumer_rc consumer_out hub_out delivered_rc delivered_out
+    HUB_ONLY_STEPS=""
+    HUB_ONLY_REJECTS=""
+    for member in $hub_only_members; do
+      while IFS= read -r run_line; do
+        [ -n "$run_line" ] || continue
+        wrapper=$(printf '%s' "$run_line" | sed -n 's|^\./scripts/ci/\(check_[A-Za-z0-9_]*\).*|\1|p')
+        if [ -z "$wrapper" ] || [ ! -f "$ROOT/scripts/ci/$wrapper" ]; then
+          oracle_ok=0
+          echo "INFO: hub-only shard $member runs something other than a scripts/ci wrapper: $run_line" >&2
+          continue
+        fi
+        if [ -n "$only" ] && [ "$wrapper" != "$only" ]; then
+          continue
+        fi
+        skip_tree="$SCOPE_FIXTURES/hub-only-$wrapper"
+        rm -rf "$skip_tree"
+        mkdir -p "$skip_tree/scripts/ci"
+        cp "$ROOT/scripts/ci/$wrapper" "$skip_tree/scripts/ci/$wrapper"
+        consumer_rc=0
+        consumer_out=$(bash "$skip_tree/scripts/ci/$wrapper" 2>&1) || consumer_rc=$?
+        touch "$skip_tree/scripts/sync-to-downstream.sh" "$skip_tree/.mergepath-sync.yml"
+        hub_out=$(bash "$skip_tree/scripts/ci/$wrapper" 2>&1 || true)
+        if [ "$consumer_rc" -ne 0 ] || ! grep -q 'SKIP' <<<"$consumer_out" || grep -q 'SKIP' <<<"$hub_out"; then
+          oracle_ok=0
+          echo "INFO: $wrapper on hub-only shard $member does not SKIP on the hub marker alone (consumer rc=$consumer_rc)" >&2
+          HUB_ONLY_STEPS="$HUB_ONLY_STEPS $wrapper"
+          HUB_ONLY_REJECTS="$HUB_ONLY_REJECTS $wrapper:marker"
+          continue
+        fi
+        delivered_rc=0
+        delivered_out=$(cd "$delivered_tree" && env -u GH_TOKEN -u GITHUB_TOKEN bash "./scripts/ci/$wrapper" </dev/null 2>&1) || delivered_rc=$?
+        if [ "$delivered_rc" -ne 0 ] || ! grep -q "^$wrapper: SKIP" <<<"$delivered_out"; then
+          oracle_ok=0
+          HUB_ONLY_REJECTS="$HUB_ONLY_REJECTS $wrapper:delivered"
+          echo "INFO: $wrapper on hub-only shard $member runs on a consumer that has every delivered path (rc=$delivered_rc): $(head -n 1 <<<"$delivered_out" | cut -c1-160)" >&2
+        fi
+        HUB_ONLY_STEPS="$HUB_ONLY_STEPS $wrapper"
+      done < <(member="$member" yq -r '.jobs.lint_fast.steps[] | select((.if // "") | test("^matrix\\.shard == " + strenv(member) + "( &&|$)")) | .run' "$workflow")
+    done
+    [ "$oracle_ok" -eq 1 ]
+  }
+  if [ -n "$hub_only_members" ] && hub_only_oracle "$REPO_LINT" && [ -n "$HUB_ONLY_STEPS" ]; then
+    pass "the hub-only shard's checks ($HUB_ONLY_STEPS ) each SKIP on a consumer, even one holding every delivered path, because the hub markers are absent"
+  else
+    fail "every check on a hub-only shard must be a wrapper that SKIPs exactly when the hub markers are absent, including on a tree with every consumer-delivered path (hub-only shards: '$hub_only_members'; checks:$HUB_ONLY_STEPS)"
+  fi
+
+  # The oracle's own mutants: a consumer check moved to a hub-only shard must
+  # fail it. check_codex_review_request (moved with its tooling-scope entry)
+  # holds the selector to tooling-gated pins; check_template_substitution,
+  # whose wrapper SKIPs on the wrapper-only tree, holds the delivered fixture
+  # to suites the manifest sends (#2995), so it must be rejected there and not
+  # by the marker check. Each mutant runs only its own check.
+  oracle_mutants_ok=1
+  for mutant_case in check_codex_review_request: check_template_substitution:delivered; do
+    mutant="${mutant_case%%:*}"
+    mutant_reason="${mutant_case#*:}"
+    mutant_workflow="$SCOPE_FIXTURES/hub-only-mutant-$mutant.yml"
+    if ! mutant="$mutant" yq '(.jobs.lint_fast.steps[] | select(.name == strenv(mutant)) | .if) |= sub("^matrix\\.shard == [0-9]+", "matrix.shard == 8")' "$REPO_LINT" >"$mutant_workflow" \
+       || ! mutant="$mutant" yq -e '.jobs.lint_fast.steps[] | select(.name == strenv(mutant)) | .if | test("^matrix\\.shard == 8( &&|$)")' "$mutant_workflow" >/dev/null; then
+      oracle_mutants_ok=0
+      echo "INFO: could not build the $mutant hub-only mutant" >&2
+      continue
+    fi
+    sed -i.bak -E "s/(^|[[:space:]])[0-9]+:$mutant([[:space:]]|$)/\18:$mutant\2/" "$mutant_workflow" && rm -f "$mutant_workflow.bak"
+    if hub_only_oracle "$mutant_workflow" "$mutant" 2>/dev/null || [ "$HUB_ONLY_STEPS" != " $mutant" ] \
+       || { [ -n "$mutant_reason" ] && [ "$HUB_ONLY_REJECTS" != " $mutant:$mutant_reason" ]; }; then
+      oracle_mutants_ok=0
+      echo "INFO: the hub-only oracle accepted $mutant on shard 8, or rejected it on the wrong tree (ran:$HUB_ONLY_STEPS; rejected:$HUB_ONLY_REJECTS)" >&2
+    fi
+  done
+  if [ "$oracle_mutants_ok" -eq 1 ]; then
+    pass "the hub-only oracle rejects a consumer check moved to shard 8, tooling-gated or with a manifest-delivered suite (the latter on the delivered tree)"
+  else
+    fail "the hub-only oracle must reject check_codex_review_request (tooling-gated) and check_template_substitution (delivered suite) on shard 8"
+  fi
+
+  # The #777 closing pair: the plain call (Parts A-C + suite) on one shard and
+  # `--verify` (Parts A and B against this leg's own snapshot) on every other,
+  # pinned to the SAME number so exactly one of them closes every leg, and
+  # both as the job's final two steps so no suite runs after them.
+  last_two=$(yq -r '.jobs.lint_fast.steps[-2:] | map(.name) | join("|")' "$REPO_LINT")
+  if [ -n "$hygiene_full_shard" ] && [ "$hygiene_full_shard" = "$hygiene_verify_shard" ] \
+     && [ "$last_two" = "check_git_identity_hygiene|check_git_identity_hygiene --verify" ] \
+     && yq -e '.jobs.lint_fast.steps[] | select(.name == "check_git_identity_hygiene --verify") | .run | test("check_git_identity_hygiene --verify")' "$REPO_LINT" >/dev/null \
+     && yq -e '.jobs.lint_fast.steps[] | select(.name == "check_git_identity_hygiene --snapshot") | .if == null' "$REPO_LINT" >/dev/null; then
+    pass "every shard snapshots .git/config first and closes with the full hygiene check or --verify (full on shard $hygiene_full_shard)"
+  else
+    fail "the identity-hygiene closing pair must be the last two lint-fast steps, pinned == and != to one shard (full=$hygiene_full_shard verify=$hygiene_verify_shard last=$last_two)"
+  fi
+
+  # Lint-fast shard rows for the aggregator oracle above (#2163). They reuse
+  # its `aggregate` (DEEP REPLAY SELF SCOPE FAST DEEP_RESULT REPLAY_RESULT
+  # SELF_RESULT) rather than defining a second one, so there is one driver
+  # for the published step body. FAST_RESULT is the matrix job's ROLLED-UP
+  # result: one failed or cancelled shard makes it non-success, and skipped
+  # can only mean the job never ran. Each shape is paired with its passing
+  # control, so a negative row cannot pass because the shape itself is bad.
+  fast_shard_ok=1
+  aggregate false false false success success skipped skipped skipped || fast_shard_ok=0
+  aggregate true true true success success success success success || fast_shard_ok=0
+  aggregate true false false success success success skipped skipped || fast_shard_ok=0
+  for fast in failure cancelled skipped; do
+    aggregate false false false success "$fast" skipped skipped skipped && fast_shard_ok=0
+    aggregate true true true success "$fast" success success success && fast_shard_ok=0
+    aggregate true false false success "$fast" success skipped skipped && fast_shard_ok=0
+  done
+  if [ "$fast_shard_ok" -eq 1 ] \
+     && yq -e '(.jobs.lint.steps[] | select(.name == "publish aggregate lint result") | .env.FAST_RESULT) == "${{ needs.lint_fast.result }}"' "$REPO_LINT" >/dev/null; then
+    pass "a failed, cancelled or skipped lint-fast shard fails the aggregator on fast and deep heads, which reads needs.lint_fast.result"
+  else
+    fail "the aggregator must fail on any non-success lint-fast result (failure, cancelled, skipped) on every scope shape and read needs.lint_fast.result"
   fi
 
   agent_review_probe=$(yq -r '.jobs."auto-merge-on-approval".steps[] | select(.name == "Probe current-head check readiness once") | .run' "$AGENT_REVIEW")
@@ -709,6 +1474,49 @@ else
   else
     pass "shared selector rejects malformed selection JSON"
   fi
+
+  # #1655 sharding. The default shard owns everything; a 3-way split
+  # partitions ordinals exactly (each owned by one shard, none by two or
+  # none); a malformed or out-of-range shard fails closed at source time.
+  shard_owned() {  # $1 = shard spec, $2 = ordinal
+    REPO_LINT_SHARD="$1" bash -c '. "$1"; repo_lint_shard_owns "$2"' _ "$SELECTION_HELPER" "$2" 2>/dev/null
+  }
+  shard_ok=1
+  for ordinal in 0 1 2 67; do
+    shard_owned 1/1 "$ordinal" || shard_ok=0
+  done
+  for ordinal in 0 1 2 3 4 5 6 7 8 9 10 11; do
+    owners=0
+    for shard in 1/3 2/3 3/3; do
+      if shard_owned "$shard" "$ordinal"; then owners=$((owners + 1)); fi
+    done
+    [ "$owners" -eq 1 ] || { shard_ok=0; echo "INFO: ordinal $ordinal owned by $owners shards" >&2; }
+  done
+  shard_owned 2/3 1 && shard_owned 2/3 4 && ! shard_owned 2/3 0 && ! shard_owned 2/3 2 || shard_ok=0
+  if [ "$shard_ok" -eq 1 ]; then
+    pass "shard ownership is a round-robin partition and the default shard owns every ordinal"
+  else
+    fail "repo_lint_shard_owns must partition ordinals round-robin by REPO_LINT_SHARD"
+  fi
+  shard_reject_ok=1
+  for bad in 0/3 4/3 a/b 1/0 3 1/3/1 ''; do
+    if REPO_LINT_SHARD="$bad" bash -c '. "$1"' _ "$SELECTION_HELPER" >/dev/null 2>&1; then
+      # An EMPTY value is the unset default (1/1) by design; every other form is rejected.
+      [ -z "$bad" ] || { shard_reject_ok=0; echo "INFO: accepted REPO_LINT_SHARD='$bad'" >&2; }
+    elif [ -z "$bad" ]; then
+      shard_reject_ok=0
+    fi
+  done
+  if ! shard_owned 1/3 x && ! shard_owned 1/3 -1; then
+    :
+  else
+    shard_reject_ok=0
+  fi
+  if [ "$shard_reject_ok" -eq 1 ]; then
+    pass "malformed, zero, out-of-range and non-integer shard inputs fail closed"
+  else
+    fail "the shard selector must reject malformed REPO_LINT_SHARD values and non-integer ordinals"
+  fi
 fi
 
 for harness in "$CONSUMER_HARNESS" "$RESIDUE_HARNESS"; do
@@ -725,17 +1533,53 @@ for harness in "$CONSUMER_HARNESS" "$RESIDUE_HARNESS"; do
   fi
 done
 
+# The replay loop numbers wrappers in REPLAY_ORDER (measured-heavy wrappers
+# first, then the sorted WIRED tail) and asks the shared shard selector
+# before running one, so the three replay legs partition the set the way the
+# selector's own tests prove and the heavy wrappers land one per shard.
+if [ ! -f "$CONSUMER_HARNESS" ]; then
+  : # consumer checkout: the hub-only replay harness is deliberately absent
+# The loop is cut at its OWN first `done <<<` terminator (awk stops there),
+# and that terminator must feed REPLAY_ORDER: a range that ended at a
+# literal `done <<< "$REPLAY_ORDER"` ran to EOF when the loop was fed
+# `$WIRED` instead, and still found the strings it looked for.
+elif replay_loop=$(awk '/^while IFS= read -r name; do$/ {f=1} f {print} f && /^done <<< / {exit}' "$CONSUMER_HARNESS") \
+     && [ "$(tail -n 1 <<<"$replay_loop")" = 'done <<< "$REPLAY_ORDER"' ] \
+     && grep -Fq 'repo_lint_shard_owns "$ordinal"' <<<"$replay_loop" \
+     && grep -Fq 'ordinal=$((ordinal + 1))' <<<"$replay_loop" \
+     && sed -n '/^REPLAY_HEAVY=(/,/^)/p' "$CONSUMER_HARNESS" | grep -F 'check_codex_scripts' >/dev/null \
+     && sed -n '/^REPLAY_HEAVY=(/,/^)/p' "$CONSUMER_HARNESS" | grep -F 'check_gh_as_author' >/dev/null; then
+  pass "the consumer replay loop shards REPLAY_ORDER (heavy wrappers first) through the shared shard selector"
+else
+  fail "tests/test_repo_lint_consumer_safety.sh must order heavy wrappers first, number them, and consult repo_lint_shard_owns inside the replay loop"
+fi
+
+# The heavy-first order must actually separate the two heaviest wrappers
+# over three shards: with REPLAY_HEAVY listed in cost order, ordinals 0 and
+# 1 are owned by shards 1 and 2 respectively. Executed against the real
+# selector rather than assumed from the list.
+if [ -f "$CONSUMER_HARNESS" ] && [ -f "$SELECTION_HELPER" ]; then
+  first_heavy=$(sed -n '/^REPLAY_HEAVY=(/,/^)/p' "$CONSUMER_HARNESS" | grep -o 'check_[a-z0-9_]*' | head -2 | tr '\n' ' ')
+  if [ "$first_heavy" = "check_codex_scripts check_gh_as_author " ] \
+     && REPO_LINT_SHARD=1/3 bash -c '. "$1"; repo_lint_shard_owns 0 && ! repo_lint_shard_owns 1' _ "$SELECTION_HELPER" \
+     && REPO_LINT_SHARD=2/3 bash -c '. "$1"; repo_lint_shard_owns 1 && ! repo_lint_shard_owns 0' _ "$SELECTION_HELPER"; then
+    pass "the two heaviest replay wrappers land on different shards"
+  else
+    fail "REPLAY_HEAVY must list check_codex_scripts then check_gh_as_author first so round-robin puts them on shards 1 and 2 (got '$first_heavy')"
+  fi
+fi
+
 if sed -n '/Stale-ratchet sweep/,/Same ratchet/p' "$RESIDUE_HARNESS" \
-     | grep -Fq 'repo_lint_check_is_selected "$n"'; then
+     | grep -F 'repo_lint_check_is_selected "$n"' >/dev/null; then
   pass "partial residue selection audits only the selected wrappers' exception records"
 else
   fail "partial residue selection must not report unselected legacy exceptions as stale"
 fi
 
-if yq -e '.jobs.deep_safety.env.REPO_LINT_FULL == "${{ needs.scope.outputs.full }}" and .jobs.deep_safety.env.REPO_LINT_CHECKS_JSON == "${{ needs.scope.outputs.checks }}"' "$REPO_LINT" >/dev/null; then
-  pass "deep-safety passes the classifier selection to both harness legs"
+if yq -e '.jobs.deep_safety.env.REPO_LINT_FULL == "${{ needs.scope.outputs.full }}" and .jobs.deep_safety.env.REPO_LINT_CHECKS_JSON == "${{ needs.scope.outputs.checks }}" and .jobs.deep_self_tests.env.REPO_LINT_FULL == "${{ needs.scope.outputs.full }}" and .jobs.deep_self_tests.env.REPO_LINT_CHECKS_JSON == "${{ needs.scope.outputs.checks }}"' "$REPO_LINT" >/dev/null; then
+  pass "deep-safety and the self-test legs receive the classifier selection"
 else
-  fail "deep-safety must consume the classifier full/check outputs"
+  fail "deep_safety and deep_self_tests must consume the classifier full/check outputs"
 fi
 
 if [ -f "$MODE_HELPER" ]; then
@@ -815,6 +1659,216 @@ else
     pass "consumer-safety distinguishes a canonical wrapper skip from nested skip chatter"
   else
     fail "consumer-safety verdicts should be exit 0/SKIP, got '$nested'/'$canonical'"
+  fi
+fi
+
+# -------------------------------------------------------------------------
+# #2921: content-only PRs skip the lint-fast tooling-only checks. The
+# classifier answers tooling=false only for a pull request whose every
+# changed path is declared content and none is a tooling path; every other
+# shape, including each negative control below, must run the full set. The
+# rows run against fixture roots, since a consumer has no hub glob file.
+# -------------------------------------------------------------------------
+TOOLING_SCOPE="$ROOT/scripts/ci/repo-lint-tooling-scope.sh"
+if [ ! -f "$TOOLING_SCOPE" ]; then
+  if [ -f "$ROOT/scripts/sync-to-downstream.sh" ]; then
+    fail "the tooling-scope classifier exists on the hub"
+  fi
+else
+  TS_FIXTURES="$(mktemp -d "${TMPDIR:-/tmp}/repo-lint-tooling-scope.XXXXXX")"
+  trap 'rm -rf "$TS_FIXTURES" "$SCOPE_FIXTURES" "${TOKEN_FIXTURE:-}"' EXIT
+  TS_ROOT="$TS_FIXTURES/repo"
+  mkdir -p "$TS_ROOT/.github" "$TS_ROOT/scripts/ci"
+  cp "$TOOLING_SCOPE" "$TS_ROOT/scripts/ci/repo-lint-tooling-scope.sh"
+  printf '%s\n' '# content' 'plans/*' 'src/content/*' 'public/*' 'NOTES.md' > "$TS_ROOT/.github/repo-lint-content-paths"
+
+  # $1 classifier, $2 event, $3 glob-file root, then the changed paths (or
+  # nothing for an empty list). Prints the first output line.
+  tooling_verdict() {
+    local classifier="$1" event="$2" root="$3"
+    shift 3
+    if [ "$#" -eq 0 ]; then
+      printf '' | bash "$classifier" --event "$event" --root "$root" | head -n 1
+    else
+      printf '%s\n' "$@" | bash "$classifier" --event "$event" --root "$root" | head -n 1
+    fi
+  }
+
+  # The negative controls, as event|root|paths rows (paths `,`-separated).
+  # Each must answer tooling=true. Prints the rows that wrongly skip.
+  tooling_negative_skips() {
+    local classifier="$1" row event root paths verdict
+    local -a list
+    local missing_root="$TS_FIXTURES/no-glob-file"
+    local malformed_root
+    mkdir -p "$missing_root/.github"
+    for glob in '*' 'p*' '/plans/*' '../plans/*' 'plans/**' 'plans/*/x' '*/content'; do
+      malformed_root="$TS_FIXTURES/malformed-$(printf '%s' "$glob" | cksum | cut -d' ' -f1)"
+      mkdir -p "$malformed_root/.github"
+      printf '%s\n' 'plans/*' "$glob" > "$malformed_root/.github/repo-lint-content-paths"
+      verdict=$(tooling_verdict "$classifier" pull_request "$malformed_root" plans/a.md)
+      [ "$verdict" = "tooling=true" ] || echo "malformed glob $glob: $verdict"
+    done
+    local empty_root="$TS_FIXTURES/comments-only"
+    mkdir -p "$empty_root/.github"
+    printf '%s\n' '# nothing declared' '' > "$empty_root/.github/repo-lint-content-paths"
+    local broad_root="$TS_FIXTURES/declares-tooling"
+    mkdir -p "$broad_root/.github"
+    printf '%s\n' 'plans/*' 'scripts/*' '.github/*' 'tests/*' 'docs/agents/*' > "$broad_root/.github/repo-lint-content-paths"
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      event="${row%%|*}"; row="${row#*|}"
+      root="${row%%|*}"; paths="${row#*|}"
+      IFS=',' read -r -a list <<<"$paths"
+      if [ -z "$paths" ]; then
+        verdict=$(tooling_verdict "$classifier" "$event" "$root")
+      else
+        verdict=$(tooling_verdict "$classifier" "$event" "$root" "${list[@]}")
+      fi
+      [ "$verdict" = "tooling=true" ] || echo "$event|$root|$paths: $verdict"
+    done <<ROWS
+push|$TS_ROOT|plans/a.md
+schedule|$TS_ROOT|plans/a.md
+merge_group|$TS_ROOT|plans/a.md
+workflow_dispatch|$TS_ROOT|plans/a.md
+pull_request|$missing_root|plans/a.md
+pull_request|$empty_root|plans/a.md
+pull_request|$TS_ROOT|
+pull_request|$TS_ROOT|plans/a.md,,plans/b.md
+pull_request|$TS_ROOT|plans/a.md,README.md
+pull_request|$TS_ROOT|plans/a.md,scripts/ci/check_codex_scripts
+pull_request|$TS_ROOT|plans/a.md,.github/workflows/repo_lint.yml
+pull_request|$TS_ROOT|plans/a.md,tests/test_codex_review_request_ack.sh
+pull_request|$TS_ROOT|plans/a.md,"plans/caf\303\251.md"
+pull_request|$TS_ROOT|plans/a.md,plans/my post.md
+pull_request|$TS_ROOT|plans/../scripts/x.sh
+pull_request|$TS_ROOT|/plans/a.md
+pull_request|$broad_root|plans/a.md,scripts/ci/repo-lint-tooling-scope.sh
+pull_request|$broad_root|plans/a.md,.github/repo-lint-content-paths
+pull_request|$broad_root|plans/a.md,.github/workflows/repo_lint.yml
+pull_request|$broad_root|plans/a.md,docs/agents/cloud-environments.md
+ROWS
+  }
+
+  content_verdict=$(printf '%s\n' plans/a.md src/content/blog/post.mdx public/img.png NOTES.md | bash "$TS_ROOT/scripts/ci/repo-lint-tooling-scope.sh" --event pull_request --root "$TS_ROOT")
+  if [ "$(printf '%s\n' "$content_verdict" | head -n 1)" = "tooling=false" ] \
+     && printf '%s\n' "$content_verdict" | grep -Fx 'path: content src/content/blog/post.mdx' >/dev/null \
+     && printf '%s\n' "$content_verdict" | grep -Fx 'reason=all 4 changed paths are declared content' >/dev/null; then
+    pass "a content-only pull request answers tooling=false and logs each path's classification"
+  else
+    fail "a content-only pull request should answer tooling=false, got: $content_verdict"
+  fi
+
+  negative_skips=$(tooling_negative_skips "$TS_ROOT/scripts/ci/repo-lint-tooling-scope.sh")
+  if [ -z "$negative_skips" ]; then
+    pass "every negative control runs the full set: non-PR events, missing/empty/malformed glob file, empty or unreadable path list, tooling paths, the classifier and glob file themselves"
+  else
+    fail "negative controls skipped the tooling checks: $negative_skips"
+  fi
+
+  # Mutation: a classifier whose fail-closed exit answers false must be
+  # caught by the negative controls, or they prove nothing.
+  mutant_dir="$TS_FIXTURES/mutant/scripts/ci"
+  mkdir -p "$mutant_dir"
+  sed "s/printf 'tooling=true\\\\n/printf 'tooling=false\\\\n/" "$TOOLING_SCOPE" > "$mutant_dir/repo-lint-tooling-scope.sh"
+  mutant_skips=$(tooling_negative_skips "$mutant_dir/repo-lint-tooling-scope.sh" | wc -l | tr -d ' ')
+  if ! cmp -s "$TOOLING_SCOPE" "$mutant_dir/repo-lint-tooling-scope.sh" && [ "$mutant_skips" -ge 20 ]; then
+    pass "a fail-open mutant of the classifier is caught by $mutant_skips negative controls"
+  else
+    fail "the fail-open classifier mutant should trip the negative controls (caught $mutant_skips)"
+  fi
+
+  if command -v yq >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+    # Execute the shipped scope step and report step bodies, not copies.
+    tooling_step=$(yq -r '.jobs.scope.steps[] | select(.id == "tooling") | .run' "$REPO_LINT")
+    report_step=$(yq -r '.jobs.lint_fast.steps[] | select(.name == "report tooling scope") | .run' "$REPO_LINT")
+    report_checks=$(yq -r '.jobs.lint_fast.steps[] | select(.name == "report tooling scope") | .env.TOOLING_ONLY_CHECKS' "$REPO_LINT")
+
+    TS_GIT="$TS_FIXTURES/git"
+    cp -R "$TS_ROOT" "$TS_GIT"
+    git -C "$TS_GIT" init -q -b main
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid add -A
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm base
+    ts_base=$(git -C "$TS_GIT" rev-parse HEAD)
+    mkdir -p "$TS_GIT/plans"
+    echo post > "$TS_GIT/plans/post.md"
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid add -A
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm content
+    ts_content=$(git -C "$TS_GIT" rev-parse HEAD)
+    echo '# edit' >> "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh"
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qam classifier
+    ts_tooling=$(git -C "$TS_GIT" rev-parse HEAD)
+    # A tooling file moved into a content directory: the source path must
+    # count, or the move would skip the checks that read it.
+    git -C "$TS_GIT" checkout -q -b rename "$ts_base"
+    mkdir -p "$TS_GIT/plans"
+    git -C "$TS_GIT" mv scripts/ci/repo-lint-tooling-scope.sh plans/moved.sh
+    git -C "$TS_GIT" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -qm rename
+    ts_rename=$(git -C "$TS_GIT" rev-parse HEAD)
+    git -C "$TS_GIT" checkout -q main
+
+    # $1 step body, $2 event, $3 base, $4 head. Prints the published value.
+    run_tooling_step() {
+      local body="$1" out="$TS_FIXTURES/github-output"
+      : > "$out"
+      ( cd "$TS_GIT" && EVENT_NAME="$2" BASE_SHA="$3" HEAD_SHA="$4" GITHUB_OUTPUT="$out" \
+          bash --noprofile --norc -e -o pipefail -c "$body" >/dev/null 2>&1 ) || echo "step-failed"
+      cat "$out"
+    }
+    step_rows_ok=1
+    [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" "$ts_content")" = "tooling=false" ] || step_rows_ok=0
+    [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" "$ts_tooling")" = "tooling=true" ] || step_rows_ok=0
+    [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" "$ts_rename")" = "tooling=true" ] || step_rows_ok=0
+    [ "$(run_tooling_step "$tooling_step" push "$ts_base" "$ts_content")" = "tooling=true" ] || step_rows_ok=0
+    [ "$(run_tooling_step "$tooling_step" pull_request 0000000000000000000000000000000000000000 "$ts_content")" = "tooling=true" ] || step_rows_ok=0
+    [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" '')" = "tooling=true" ] || step_rows_ok=0
+    if [ "$step_rows_ok" -eq 1 ]; then
+      pass "the scope job's tooling step publishes false for a content-only diff and true for tooling, a tooling file renamed into content, push, and an unreadable diff"
+    else
+      fail "the scope job's tooling step published the wrong verdict for a content, tooling, rename, push or unreadable-diff row"
+    fi
+
+    # A classifier that is absent, errors after printing false, or prints
+    # anything but an exact first line of tooling=false must publish true.
+    cp "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh" "$TS_FIXTURES/real-classifier"
+    stub_rows_ok=1
+    for stub in 'printf "tooling=false\n"; exit 1' 'printf "tooling=falsey\n"' 'printf "TOOLING=false\n"' 'printf "\n"' 'printf "reason=x\ntooling=false\n"' 'printf " tooling=false\n"'; do
+      printf '%s\n' "$stub" > "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh"
+      [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" "$ts_content")" = "tooling=true" ] || { stub_rows_ok=0; echo "INFO: stub accepted: $stub" >&2; }
+    done
+    rm "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh"
+    [ "$(run_tooling_step "$tooling_step" pull_request "$ts_base" "$ts_content")" = "tooling=true" ] || stub_rows_ok=0
+    # Mutation: a step body whose fallback publishes false must fail a row.
+    mutant_step=${tooling_step//'echo "tooling=true" >>'/'echo "tooling=false" >>'}
+    printf '%s\n' 'printf "tooling=falsey\n"' > "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh"
+    mutant_caught=0
+    [ "$mutant_step" != "$tooling_step" ] \
+      && [ "$(run_tooling_step "$mutant_step" pull_request "$ts_base" "$ts_content")" != "tooling=true" ] \
+      && mutant_caught=1
+    cp "$TS_FIXTURES/real-classifier" "$TS_GIT/scripts/ci/repo-lint-tooling-scope.sh"
+    if [ "$stub_rows_ok" -eq 1 ] && [ "$mutant_caught" -eq 1 ]; then
+      pass "only an exact tooling=false first line skips: absent, erroring or malformed classifier output publishes true (fail-open step mutant caught)"
+    else
+      fail "the tooling step must publish true unless the classifier printed exactly tooling=false (stubs=$stub_rows_ok mutant=$mutant_caught)"
+    fi
+
+    run_report() {  # EVENT TOOLING SHARD
+      EVENT_NAME="$1" TOOLING="$2" SHARD="$3" TOOLING_ONLY_CHECKS="$report_checks" \
+        bash --noprofile --norc -e -o pipefail -c "$report_step" 2>&1
+    }
+    report_ok=1
+    run_report pull_request false 1 | grep -Fx 'SKIPPED (content-only PR, #2921): check_codex_scripts' >/dev/null || report_ok=0
+    run_report pull_request false 2 | grep -F 'check_codex_scripts' >/dev/null && report_ok=0
+    run_report pull_request true 1 | grep -F 'SKIPPED' >/dev/null && report_ok=0
+    run_report pull_request '' 1 | grep -F 'running every check' >/dev/null || report_ok=0
+    for event in push schedule merge_group workflow_dispatch; do
+      run_report "$event" false 1 >/dev/null && report_ok=0
+    done
+    if [ "$report_ok" -eq 1 ]; then
+      pass "each leg logs its skipped checks on a content-only PR, and tooling=false on a non-PR event fails the leg"
+    else
+      fail "the report step must log SKIPPED lines per shard and fail on tooling=false outside pull_request"
+    fi
   fi
 fi
 

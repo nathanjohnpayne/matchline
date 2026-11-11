@@ -19,11 +19,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Matrix mirrors package.json engines.node: ^20.19.0 || >=22.12.0.
-        # Validates that the bumped vite v8 / vitest v4 toolchain works
-        # on both the lowest-supported 20.x and the lowest-supported 22.x.
-        # Added in response to CodeRabbit finding on #162.
-        node-version: ['20.19.0', '22.12.0']
+        # Matrix mirrors package.json engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0.
+        # Validates the toolchain on the lowest-supported 22.x and 24.x.
+        # The floor follows jsdom 30's engines (#673): its bundled undici
+        # crashes the vitest jsdom pool on older 22.x and on Node 20.
+        # '24' tracks the Cloud Functions runtime (firebase.json
+        # functions[0].runtime = nodejs24): Cloud Run applies 24.x patch
+        # updates automatically, so the latest 24.x is the faithful pin
+        # for the functions build and the tests that import functions/src.
+        node-version: ['22.22.2', '24.15.0', '24']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -61,8 +65,9 @@ jobs:
       fail-fast: false
       matrix:
         # Same matrix as the unit job — validates rules-unit-testing v5
-        # + firebase v12 stack on both supported Node ranges.
-        node-version: ['20.19.0', '22.12.0']
+        # + firebase v12 stack on the lowest supported 22.x and 24.x, plus the
+        # Cloud Functions runtime major (see the unit job).
+        node-version: ['22.22.2', '24.15.0', '24']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -75,8 +80,8 @@ jobs:
             package-lock.json
             functions/package-lock.json
 
-      - name: Setup Java 21 (Firestore emulator dependency)
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - name: Setup Java 21 (Firestore and Storage emulator dependency)
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -87,7 +92,7 @@ jobs:
       - name: Install functions deps
         run: npm --prefix functions ci
 
-      - name: Rules + integration tests (Firestore emulator)
+      - name: Rules + integration tests (Firestore + Storage emulators)
         # `test:rules` names its suites EXPLICITLY in
         # package.json — it is not a glob. A new
         # *.integration.test.ts that is not added to that list
@@ -101,4 +106,51 @@ jobs:
         #   - matching-replace, validation-fabrication,
         #     generation-persistence, and derive-match-evidence
         #     (#441, read-only: asserts no write happens)
+        #   - tests/storage-rules.test.ts (#521: no client read
+        #     or write under applications/) and
+        #     export-asset (#521: server-side export gate, object
+        #     path, overwrite) on the Storage emulator
         run: npm run test:rules
+
+  e2e:
+    name: e2e smoke (Playwright, emulators)
+    runs-on: ubuntu-latest
+    # Browser smoke tests for UI critical paths (#511; testing-
+    # requirements.md § Phase 2): the real app in Chromium against the
+    # Auth + Firestore emulators for the offline demo-matchline-e2e
+    # project. One Node version: the unit and rules jobs already cover
+    # the engines matrix, and this job tests browser behavior. It runs
+    # the local dev Node from .nvmrc (24, the Cloud Functions runtime).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java 21 (emulator dependency)
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright smoke tests (Auth + Firestore emulators)
+        run: npm run test:e2e
+
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7

@@ -209,8 +209,15 @@ describe("assertKnownFlags", () => {
         "--token-source=claude-cli",
         "--no-cache",
         "--refresh-cache",
+        "--extraction-only",
       ]),
     ).not.toThrow();
+  });
+
+  it("treats --extraction-only as a boolean flag (#648)", () => {
+    expect(() => assertKnownFlags(["--extraction-only", "--samples", "2"])).not.toThrow();
+    expect(() => assertKnownFlags(["--extraction-only=1"])).toThrow(/Unrecognized argument/);
+    expect(() => assertKnownFlags(["--extraction-only", "stray"])).toThrow(/Unrecognized argument/);
   });
 
   it.each([

@@ -17,6 +17,12 @@
 #                                  | --resolve-verified-propagation]
 #                                 [--dry-run] [--rationale <text>]
 #                                 [--no-tag-reply]
+#   scripts/resolve-pr-threads.sh <PR#> --resolve-actioned --ci-app-identity
+#     (CI only, #2726: the token is the installation token of the ONE app
+#     .github/review-policy.yml names in thread_resolution_ci_app_identity)
+#   scripts/resolve-pr-threads.sh <PR#> --thread <node-id|comment-id>
+#     --disposition fixed|rebuttal|deferred-to-followup|addressed-elsewhere
+#     [--issue <number>] [--commit <SHA>] [--rationale <text>] [--dry-run]
 #
 # Modes — split by DISPOSITION (#575). Pick the mode that matches what
 # actually HAPPENED to the feedback, because each mode records a
@@ -25,6 +31,9 @@
 #
 #   fixed or rebutted        → --resolve-actioned  (addressed-elsewhere /
 #                                                    rebuttal-recorded)
+#   fixed outside the        → --thread <id> --disposition fixed
+#     anchored file             (addressed-elsewhere; --resolve-actioned
+#                               cannot prove it and warns, #2555)
 #   explicitly deferred      → --auto-resolve-bots (deferred-to-followup)
 #   propagated from upstream → --resolve-verified-propagation
 #                                                   (verified-propagation)
@@ -94,7 +103,12 @@
 #                           addressed-elsewhere (an agent commit touching the
 #                           anchored file, after the latest re-raise) or
 #                           rebuttal-recorded (a substantive agent rebuttal
-#                           after the latest re-raise). Routing-only classes
+#                           after the latest re-raise; a reply that leads
+#                           with "Fixed" is a fix claim, not a rebuttal, so
+#                           without a commit touching the anchored file it
+#                           is left unresolved with a warning naming the
+#                           --thread --disposition fixed mode that records
+#                           a cross-file fix, #2555). Routing-only classes
 #                           — canonical-coverage / templated-render — are
 #                           NOT actioned here: they show WHERE a fix belongs
 #                           (upstream), not that one happened, so a fresh
@@ -328,7 +342,8 @@
 #     nitpick-noted         severity is Nitpick/Trivial/P3 and no
 #                           stronger signal applies
 #     rebuttal-recorded     a substantive agent-authored reply (≥30
-#                           chars) is on the thread
+#                           chars, not leading with "Fixed", #2555) is
+#                           on the thread
 #     deferred-to-followup  default fallback / --rationale override
 #     verified-propagation  consumer content at the anchored path (at the
 #                           compared ref: PR head while open, default
@@ -363,6 +378,11 @@
 #       resolution exist only in GraphQL, so no credential or retry changes
 #       the answer: hand the step to a session that can reach GraphQL. See
 #       scripts/lib/graphql-ceiling.sh.
+#   5 — REFUSED (#2727, ADR 0004 caller C17): with --bind-head, the PR is not
+#       open against the default branch, or its head/base pair moved during
+#       the run and the bounded re-evaluation budget is spent (or a write had
+#       already been made, so no re-evaluation is allowed). Every remaining
+#       resolution was stopped; nothing was resolved on an unproven pair.
 #   3 — unresolved threads exist (in --list mode), or a resolve mode left
 #       threads unresolved (human-authored, stale-HEAD, not-actioned,
 #       comments-incomplete, not-propagation-routed, drifted,
@@ -433,6 +453,14 @@ Resolve modes are split by DISPOSITION (#575) — pick the one that matches
 what actually happened to the feedback (the recorded tag is read by the
 daily rollup / weekly sweep as the disposition of record):
 
+  --thread <id>         Select exactly one bot thread by its node ID or original
+                        review-comment database ID; requires --disposition.
+  --disposition <kind>  Explicit fixed, rebuttal, deferred-to-followup or
+                        addressed-elsewhere; no file-touch inference.
+  --issue <number>      Follow-up issue; required for deferred-to-followup.
+  --commit <SHA>        Optional 7–40 hex commit citation for the marker.
+                        Targeted mode cannot combine bulk/list modes or
+                        --no-tag-reply; its marker must post before resolving.
   --list                List unresolved threads (default).
   --resolve-actioned    FIXED/REBUTTED feedback — the default on a PR you
                         pushed fixes to. Resolves ONLY current-HEAD bot
@@ -467,13 +495,32 @@ daily rollup / weekly sweep as the disposition of record):
                         truthful actioned class instead (#575 upgrade).
   --dry-run             With any resolve mode, print would-resolve /
                         would-skip per thread without mutating.
-  --rationale <text>    With --auto-resolve-bots, free-form rationale
+  --rationale <text>    With --auto-resolve-bots or --thread, free-form rationale
                         appended after the [mergepath-resolve: deferred-to-followup]
                         tag (overrides auto-classification; the #575
                         actioned auto-upgrade still applies to the class).
-  --no-tag-reply        With any resolve mode, suppress the
+  --no-tag-reply        With bulk resolve modes, suppress the
                         [mergepath-resolve:<class>] reply emission
                         (the resolve mutation still runs).
+  --ci-app-identity     With --resolve-actioned only: the token is the CI
+                        app's installation token, verified by
+                        identity-check.sh --expect-thread-resolution-app
+                        against thread_resolution_ci_app_identity in this
+                        checkout's .github/review-policy.yml (#2726).
+                        RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK does not
+                        skip the check in this mode; --dry-run does,
+                        because dry-run makes no changes. Implies --bind-head.
+  --bind-head           With --resolve-actioned only (#2727, ADR 0004 C17):
+                        refuse (exit 5) unless the PR is open against the
+                        default branch; capture its head and base SHAs before
+                        any evidence is read; take fix-commit evidence only
+                        from the captured head's complete commit list, and
+                        read no local ledger (its rows name no head); re-read
+                        the pair immediately before every write. Commits a
+                        reply's text cites are not checked (see the #2727
+                        specification's residuals). A pair that moves before any write restarts the
+                        run against a fresh capture (at most twice); after a
+                        write it stops every remaining resolution (exit 5).
 EOF
   exit 1
 }
@@ -485,6 +532,16 @@ DRY_RUN=false
 RATIONALE_OVERRIDE=""
 RATIONALE_FLAG_USED=false
 NO_TAG_REPLY=false
+TARGET_THREAD=""
+EXPLICIT_DISPOSITION=""
+TARGET_ISSUE=""
+TARGET_COMMIT=""
+BULK_MODE_USED=false
+CI_APP_IDENTITY=false
+BIND_HEAD=false
+# The original argv, kept for --bind-head's bounded re-run against a fresh
+# head/base capture (#2727).
+ORIG_ARGS=("$@")
 # Match both REST and GraphQL bot-login formats. The REST API returns
 # `coderabbitai[bot]`; GraphQL `author{login}` returns `coderabbitai`
 # (un-suffixed user-facing handle). The trailing `(\[bot\])?` accepts
@@ -511,10 +568,22 @@ while [ $# -gt 0 ]; do
         usage
       fi
       REPO="$2"; shift 2 ;;
-    --list) MODE="list"; shift ;;
-    --auto-resolve-bots) MODE="auto-resolve-bots"; shift ;;
-    --resolve-actioned) MODE="resolve-actioned"; shift ;;
-    --resolve-verified-propagation) MODE="resolve-verified-propagation"; shift ;;
+    --list) MODE="list"; BULK_MODE_USED=true; shift ;;
+    --auto-resolve-bots) MODE="auto-resolve-bots"; BULK_MODE_USED=true; shift ;;
+    --resolve-actioned) MODE="resolve-actioned"; BULK_MODE_USED=true; shift ;;
+    --resolve-verified-propagation) MODE="resolve-verified-propagation"; BULK_MODE_USED=true; shift ;;
+    --thread|--disposition|--issue|--commit)
+      if [ $# -lt 2 ] || [ -z "$2" ] || [[ "$2" = --* ]]; then
+        echo "Error: $1 requires a non-empty value" >&2
+        usage
+      fi
+      case "$1" in
+        --thread) TARGET_THREAD="$2" ;;
+        --disposition) EXPLICIT_DISPOSITION="$2" ;;
+        --issue) TARGET_ISSUE="$2" ;;
+        --commit) TARGET_COMMIT="$2" ;;
+      esac
+      shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --rationale)
       # Same defensive value check as --repo (Codex r2 on PR #172):
@@ -528,6 +597,8 @@ while [ $# -gt 0 ]; do
       RATIONALE_FLAG_USED=true
       shift 2 ;;
     --no-tag-reply) NO_TAG_REPLY=true; shift ;;
+    --ci-app-identity) CI_APP_IDENTITY=true; shift ;;
+    --bind-head) BIND_HEAD=true; shift ;;
     -h|--help) usage ;;
     -*) echo "Unknown flag: $1" >&2; usage ;;
     *)
@@ -565,6 +636,61 @@ if { [ "$MODE" = "resolve-actioned" ] || [ "$MODE" = "resolve-verified-propagati
   echo "       (action / byte-verified propagation); use" >&2
   echo "       --auto-resolve-bots --rationale to deliberately resolve a" >&2
   echo "       deferred thread with a rationale." >&2
+  exit 1
+fi
+
+# Explicit disposition is an operator attestation bound to one finding,
+# independent of the bulk modes' file-touch proxies (#2196).
+if [ -n "$TARGET_THREAD" ]; then
+  if $BULK_MODE_USED || $NO_TAG_REPLY; then
+    echo "Error: --thread cannot combine bulk/list modes or --no-tag-reply" >&2
+    exit 1
+  fi
+  if ! [[ "$TARGET_THREAD" =~ ^[A-Za-z0-9_=-]+$ ]]; then
+    echo "Error: invalid thread node ID or original comment ID" >&2
+    exit 1
+  fi
+  case "$EXPLICIT_DISPOSITION" in
+    fixed|addressed-elsewhere) TARGET_CLASS="addressed-elsewhere" ;;
+    rebuttal) TARGET_CLASS="rebuttal-recorded" ;;
+    deferred-to-followup|deferred-to-follow-up) TARGET_CLASS="deferred-to-followup"
+      if [ -z "$TARGET_ISSUE" ]; then
+        echo "Error: deferred-to-followup requires --issue <number>" >&2
+        exit 1
+      fi ;;
+    *) echo "Error: --thread requires a supported --disposition" >&2; exit 1 ;;
+  esac
+  if [ -n "$TARGET_ISSUE" ] && ! [[ "$TARGET_ISSUE" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --issue must be a positive integer" >&2; exit 1
+  fi
+  if [ -n "$TARGET_COMMIT" ] && ! [[ "$TARGET_COMMIT" =~ ^[a-fA-F0-9]{7,40}$ ]]; then
+    echo "Error: --commit must be a 7–40 character hexadecimal SHA" >&2; exit 1
+  fi
+  MODE="resolve-targeted"
+  TARGET_RATIONALE="Explicit disposition: $EXPLICIT_DISPOSITION."
+  [ -z "$TARGET_ISSUE" ] || TARGET_RATIONALE+=" Follow-up: #$TARGET_ISSUE."
+  [ -z "$TARGET_COMMIT" ] || TARGET_RATIONALE+=" Commit: $TARGET_COMMIT."
+  [ -z "$RATIONALE_OVERRIDE" ] || TARGET_RATIONALE+=" $RATIONALE_OVERRIDE"
+elif [ -n "$EXPLICIT_DISPOSITION$TARGET_ISSUE$TARGET_COMMIT" ]; then
+  echo "Error: --disposition, --issue and --commit require --thread" >&2
+  exit 1
+fi
+
+# #2726: the bounded CI-app identity mode exists for --resolve-actioned ONLY,
+# the mode whose every resolve rests on fail-closed, finding-bound action
+# evidence. Deferral, propagation verification and explicit dispositions are
+# operator decisions and stay on the reviewer PAT. Refused here, before any
+# gh call.
+if $CI_APP_IDENTITY && [ "$MODE" != "resolve-actioned" ]; then
+  echo "Error: --ci-app-identity is valid only with --resolve-actioned (#2726)" >&2
+  exit 1
+fi
+# #2727 (ADR 0004, caller C17): the CI app never resolves on an unbound pair,
+# so its mode always binds. --bind-head is also how the CI lane binds the
+# reviewer-PAT path today.
+$CI_APP_IDENTITY && BIND_HEAD=true
+if $BIND_HEAD && [ "$MODE" != "resolve-actioned" ]; then
+  echo "Error: --bind-head is valid only with --resolve-actioned (#2727)" >&2
   exit 1
 fi
 
@@ -712,6 +838,100 @@ else
   esac
 fi
 
+# --- --bind-head: one captured head/base pair for the whole run (#2727) -----
+# ADR 0004 § Caller mapping, C17: the lane's `if:` checks only the dispatch
+# ref, never the PR's base, so the resolver itself refuses a PR that is not
+# open against the default branch. It captures the live head and base SHAs
+# here, BEFORE the thread enumeration and before any evidence is evaluated;
+# fix-commit evidence then comes only from that head's complete commit list,
+# no local ledger is read, and the pair is re-read immediately before every
+# write (bind_recheck). Commits a reply's free-form text cites are NOT checked:
+# binding prose did not converge in review, and the owner dropped it from this
+# slice (#2816; residual recorded in docs/audits/ci-app-credentials-2026-10.md). A pair that moves
+# before any write re-runs the resolver against a fresh capture, at most
+# BIND_MAX_RESTARTS times; once this run has written, a moved pair stops
+# every remaining resolution (exit 5), as invariant 5 requires.
+BIND_ATTEMPT="${RESOLVE_PR_THREADS_BIND_ATTEMPT:-0}"
+case "$BIND_ATTEMPT" in ''|*[!0-9]*) BIND_ATTEMPT=0 ;; esac
+BIND_MAX_RESTARTS=2
+BIND_WRITES=0
+BIND_STOPPED=false
+BIND_STOP_CODE=5
+BIND_COMMITS_VERIFIED=false
+CAPTURED_PAIR=""
+CAPTURED_HEAD=""
+
+# bind_read_pair → "<head sha> <base sha> <base ref> <state>" on stdout.
+bind_read_pair() {
+  gh_pat_read api "repos/$OWNER/$NAME/pulls/$PR_NUM" \
+    --jq '[.head.sha, .base.sha, .base.ref, .state] | join(" ")'
+}
+
+# bind_restart_or_stop <reason> — re-run against a fresh capture when this
+# run has made no write and the restart budget remains (does not return);
+# otherwise print why every remaining resolution stops and return 1.
+bind_restart_or_stop() {
+  local reason="$1"
+  if [ "$BIND_WRITES" -eq 0 ] && [ "$BIND_ATTEMPT" -lt "$BIND_MAX_RESTARTS" ]; then
+    echo "BIND: $reason. No write made yet; re-evaluating against a fresh head/base capture (restart $((BIND_ATTEMPT + 1)) of $BIND_MAX_RESTARTS, #2727)." >&2
+    rm -rf "$COMMIT_FILES_CACHE_DIR"
+    RESOLVE_PR_THREADS_BIND_ATTEMPT=$((BIND_ATTEMPT + 1)) exec bash "${BASH_SOURCE[0]}" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+  fi
+  if [ "$BIND_WRITES" -gt 0 ]; then
+    echo "BIND: $reason. This run already attempted $BIND_WRITES write(s), so it stops every remaining resolution instead of re-evaluating (#2727)." >&2
+  else
+    echo "BIND: $reason. The re-evaluation budget ($BIND_MAX_RESTARTS) is spent; stopping every remaining resolution (#2727)." >&2
+  fi
+  BIND_STOPPED=true
+  return 1
+}
+
+# bind_recheck <before-what> — exit 0 when the live pair still equals the
+# captured one. Runs immediately before each write; a read failure stops the
+# run (exit 4 at the end), never a write on an unproven pair.
+bind_recheck() {
+  $BIND_HEAD || return 0
+  local live
+  if ! live=$(bind_read_pair 2>/dev/null) || [ -z "$live" ]; then
+    echo "BIND: could not re-read the head/base pair of $REPO#$PR_NUM before $1; stopping every remaining resolution (#2727)." >&2
+    BIND_STOPPED=true
+    BIND_STOP_CODE=4
+    return 1
+  fi
+  [ "$live" = "$CAPTURED_PAIR" ] && return 0
+  bind_restart_or_stop "the head/base pair changed before $1 (captured: $CAPTURED_PAIR; live: $live)"
+}
+
+if $BIND_HEAD; then
+  BIND_DEFAULT_BRANCH=""
+  if ! BIND_DEFAULT_BRANCH=$(gh_pat_read api "repos/$OWNER/$NAME" --jq .default_branch 2>/dev/null) \
+     || [ -z "$BIND_DEFAULT_BRANCH" ]; then
+    echo "Could not READ the default branch of $REPO for --bind-head; nothing was resolved (#2727)." >&2
+    exit 4
+  fi
+  if ! CAPTURED_PAIR=$(bind_read_pair 2>/dev/null) || [ -z "$CAPTURED_PAIR" ]; then
+    echo "Could not READ the head/base pair of $REPO#$PR_NUM for --bind-head; nothing was resolved (#2727)." >&2
+    exit 4
+  fi
+  read -r CAPTURED_HEAD CAPTURED_BASE CAPTURED_BASE_REF CAPTURED_STATE <<<"$CAPTURED_PAIR"
+  if ! [[ "${CAPTURED_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${CAPTURED_BASE:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "REFUSED: $REPO#$PR_NUM did not return a 40-hex head and base SHA ($CAPTURED_PAIR); nothing was resolved (#2727)." >&2
+    exit 4
+  fi
+  if [ "${CAPTURED_STATE:-}" != "open" ]; then
+    echo "REFUSED: $REPO#$PR_NUM is ${CAPTURED_STATE:-in an unknown state}, not open; --bind-head resolves only open PRs. Nothing was resolved (#2727)." >&2
+    exit 5
+  fi
+  if [ "${CAPTURED_BASE_REF:-}" != "$BIND_DEFAULT_BRANCH" ]; then
+    echo "REFUSED: $REPO#$PR_NUM targets '${CAPTURED_BASE_REF:-}', not the default branch '$BIND_DEFAULT_BRANCH'. ADR 0004 binds C17 to default-branch PRs only; nothing was resolved (#2727)." >&2
+    exit 5
+  fi
+  if [ "$CAPTURED_HEAD" != "$HEAD_OID" ]; then
+    bind_restart_or_stop "the head moved between two reads (${HEAD_OID:0:7} then ${CAPTURED_HEAD:0:7})" || exit 5
+  fi
+  echo "BIND: captured head ${CAPTURED_HEAD:0:12} and base ${CAPTURED_BASE:0:12} ($CAPTURED_BASE_REF) for $REPO#$PR_NUM before reading any evidence (#2727)."
+fi
+
 # Fetch all review threads with isResolved state. Three design
 # choices, all load-bearing:
 #
@@ -775,6 +995,7 @@ QUERY='
             # (rare but possible — bot churn).
             commentsFirst: comments(first: 1) {
               nodes {
+                databaseId
                 author { login }
                 path
                 body
@@ -815,7 +1036,9 @@ QUERY='
               totalCount
               pageInfo { hasPreviousPage }
               nodes {
-                author { login }
+                # __typename: GraphQL reports a bot by its bare slug, and Bot
+                # proves it is the app, not a same-named user (#2726).
+                author { login __typename }
                 body
                 databaseId
                 # createdAt powers the addressed-elsewhere staleness guard
@@ -947,6 +1170,21 @@ EOF
   exit 2
 fi
 
+if [ "$MODE" = "resolve-targeted" ]; then
+  TARGET_MATCHES=$(printf '%s' "$THREADS_JSON" | jq -c --arg selector "$TARGET_THREAD" '
+    [.[] | select(.id == $selector or
+      ((.commentsFirst.nodes[0].databaseId // "") | tostring) == $selector)]')
+  if [ "$(printf '%s' "$TARGET_MATCHES" | jq 'length')" -ne 1 ]; then
+    echo "Error: --thread must identify exactly one thread on this PR" >&2
+    exit 1
+  fi
+  THREADS_JSON="$TARGET_MATCHES"
+  if [ "$(printf '%s' "$THREADS_JSON" | jq -r '.[0].isResolved')" = true ]; then
+    echo "Selected thread is already resolved; no writes performed."
+    exit 0
+  fi
+fi
+
 UNRESOLVED=$(echo "$THREADS_JSON" | jq -c '
   .[]
   # `!= true` instead of `== false` so a null/missing isResolved
@@ -1027,7 +1265,14 @@ fi
 # Phase 4b r2 reproduced this. The fix: the helper-presence test
 # becomes a hard error inside the opt-out branch rather than a
 # precondition for entering it.
-if [ "${RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK:-0}" != "1" ] && ! $DRY_RUN; then
+#
+# #2726: --ci-app-identity selects the bounded CI-app mode instead, and
+# RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK does not skip its check: that is a dev
+# opt-out for the reviewer path, not a way to resolve as an unverified app.
+# --dry-run skips it, as it skips every identity check here, because dry-run
+# makes no changes. Without the flag an installation token reaches
+# --expect-write-identity, which refuses it whatever the policy configures.
+if { [ "${RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK:-0}" != "1" ] || $CI_APP_IDENTITY; } && ! $DRY_RUN; then
   CHECKER="$(dirname "${BASH_SOURCE[0]}")/identity-check.sh"
   if [ ! -x "$CHECKER" ]; then
     echo "ERROR: identity-check helper missing or non-executable: $CHECKER" >&2
@@ -1036,18 +1281,28 @@ if [ "${RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK:-0}" != "1" ] && ! $DRY_RUN; then
     echo "       RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK=1 (dev only)." >&2
     exit 2
   fi
-  if command -v gh_default_reviewer_identity >/dev/null 2>&1; then
-    expected_login="$(gh_default_reviewer_identity)"
+  if $CI_APP_IDENTITY; then
+    if ! GH_TOKEN="$PAT_GH_TOKEN" "$CHECKER" --expect-thread-resolution-app; then
+      echo "ERROR: CI app identity check failed before any mutation. Refusing" >&2
+      echo "       to resolve threads. --ci-app-identity accepts only the" >&2
+      echo "       installation token of the app .github/review-policy.yml" >&2
+      echo "       names in thread_resolution_ci_app_identity (#2726)." >&2
+      exit 2
+    fi
   else
-    expected_login="nathanpayne-${MERGEPATH_AGENT:-claude}"
-  fi
-  if ! GH_TOKEN="$PAT_GH_TOKEN" "$CHECKER" \
-       --expect-write-identity "$expected_login"; then
-    echo "ERROR: identity-check failed before any mutation. Refusing to" >&2
-    echo "       resolve threads. Confirm GH_TOKEN / OP_PREFLIGHT_REVIEWER_PAT" >&2
-    echo "       resolves to $expected_login, then re-run." >&2
-    echo "       Opt-out (dev only): RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK=1." >&2
-    exit 2
+    if command -v gh_default_reviewer_identity >/dev/null 2>&1; then
+      expected_login="$(gh_default_reviewer_identity)"
+    else
+      expected_login="nathanpayne-${MERGEPATH_AGENT:-claude}"
+    fi
+    if ! GH_TOKEN="$PAT_GH_TOKEN" "$CHECKER" \
+         --expect-write-identity "$expected_login"; then
+      echo "ERROR: identity-check failed before any mutation. Refusing to" >&2
+      echo "       resolve threads. Confirm GH_TOKEN / OP_PREFLIGHT_REVIEWER_PAT" >&2
+      echo "       resolves to $expected_login, then re-run." >&2
+      echo "       Opt-out (dev only): RESOLVE_PR_THREADS_SKIP_IDENTITY_CHECK=1." >&2
+      exit 2
+    fi
   fi
 fi
 
@@ -1089,6 +1344,60 @@ is_agent_author_local() {
   return 1
 }
 
+# #2726: the CI app's own marker replies. In --ci-app-identity mode the app
+# posts the `[mergepath-resolve: <class>]` reply itself, so that marker is this
+# script's OUTPUT, not reviewer feedback. Counted as non-agent, it would move
+# the staleness floor past the fix commit, and a resolve that did not stick
+# (rejected mutation, failed readback, reopened thread) could then never be
+# resolved again, by the app or by the reviewer PAT.
+#
+# Bounded: only a comment that BOTH starts with the generated marker AND is
+# authored by the ONE app .github/review-policy.yml names in
+# thread_resolution_ci_app_identity (validated exactly as identity-check.sh
+# --expect-thread-resolution-app validates it) is treated as own output. The
+# app is NOT added to MERGEPATH_AGENT_AUTHORS: any other reply it posts still
+# counts as non-agent and can never be a rebuttal or a disposition. REST
+# reports the app as `<slug>[bot]`; GraphQL reports the bare `<slug>`, which
+# is accepted only with `__typename: Bot`, so a user account with that login
+# is never mistaken for the app. Unconfigured, invalid, or without the policy
+# reader, CI_APP_LOGIN is empty and nothing changes (fail closed: the marker
+# stays non-agent feedback, the pre-#2726 reading).
+CI_APP_LOGIN=""
+if [ -r "$__RESOLVE_THREADS_DIR/lib/reviewers-helpers.sh" ]; then
+  # shellcheck source=lib/reviewers-helpers.sh
+  . "$__RESOLVE_THREADS_DIR/lib/reviewers-helpers.sh"
+  CI_APP_LOGIN=$(validate_thread_resolution_ci_app_identity \
+    "$__RESOLVE_THREADS_DIR/../.github/review-policy.yml" 2>/dev/null) || CI_APP_LOGIN=""
+fi
+
+# is_ci_app_marker_local <login> <typename> <body> → exit 0 iff the comment
+# is the configured CI app's own generated marker reply.
+is_ci_app_marker_local() {
+  [ -n "$CI_APP_LOGIN" ] || return 1
+  local login="$1" typename="$2" body="$3" trimmed
+  trimmed="${body#"${body%%[![:space:]]*}"}"
+  case "$trimmed" in
+    "[mergepath-resolve:"*) ;;
+    *) return 1 ;;
+  esac
+  [ "$login" = "$CI_APP_LOGIN" ] && return 0
+  [ "$typename" = Bot ] && [ "${login}[bot]" = "$CI_APP_LOGIN" ] && return 0
+  return 1
+}
+
+# is_self_comment_local <thread_json> <index> → exit 0 when all_comments[i]
+# is agent-side: an agent author's comment, or the CI app's own marker. Every
+# "latest non-agent comment" scan uses this, so they stay in step.
+is_self_comment_local() {
+  local tj="$1" i="$2" login
+  login=$(printf '%s' "$tj" | jq -r ".all_comments[$i].author.login // \"\"")
+  is_agent_author_local "$login" && return 0
+  [ -n "$CI_APP_LOGIN" ] || return 1
+  is_ci_app_marker_local "$login" \
+    "$(printf '%s' "$tj" | jq -r ".all_comments[$i].author.__typename // \"\"")" \
+    "$(printf '%s' "$tj" | jq -r ".all_comments[$i].body // \"\"")"
+}
+
 # latest_nonagent_created <thread_json> → ISO timestamp on stdout.
 #
 # THE STALENESS FLOOR. The createdAt of the most recent NON-agent (bot /
@@ -1115,13 +1424,12 @@ is_agent_author_local() {
 # resolution) builds on this floor — keep the complete-thread invariant.
 latest_nonagent_created() {
   local tj="$1"
-  local latest cnt i login created
+  local latest cnt i created
   latest=$(printf '%s' "$tj" | jq -r '.created // ""')
   cnt=$(printf '%s' "$tj" | jq '.all_comments | length' 2>/dev/null || echo 0)
   i=0
   while [ "$i" -lt "$cnt" ]; do
-    login=$(printf '%s' "$tj" | jq -r ".all_comments[$i].author.login // \"\"")
-    if ! is_agent_author_local "$login"; then
+    if ! is_self_comment_local "$tj" "$i"; then
       created=$(printf '%s' "$tj" | jq -r ".all_comments[$i].createdAt // \"\"")
       if [ -n "$created" ] && { [ -z "$latest" ] || [ "$created" \> "$latest" ]; }; then
         latest="$created"
@@ -1163,7 +1471,7 @@ fetch_all_thread_comments() {
             totalCount
             pageInfo { hasNextPage endCursor }
             nodes {
-              author { login }
+              author { login __typename }
               body
               databaseId
               createdAt
@@ -2465,6 +2773,68 @@ verify_propagation_content() {
   return 1
 }
 
+# reply_is_fix_claim <reply-body> → exit 0 when the reply leads with the word
+# "Fixed" in any case, through any leading Markdown emphasis, with the word
+# ending at whitespace, closing emphasis, sentence punctuation or the end of
+# the reply (#2555; Codex P2 on #2599). "FIXED in abc1234" and
+# "**Fixed** in abc1234" are fix claims; "Fixed-width inputs …" is not.
+reply_is_fix_claim() {
+  # Closing emphasis counts only when it exactly closes the stripped opener
+  # (Codex P2 on #2599): "`fixed_width`" and "fixed_width" are not claims.
+  local lead open rest bt='`' punct=':.,;!?'
+  lead=$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  lead="${lead#"${lead%%[![:space:]]*}"}"
+  open="${lead%%[!*_$bt]*}"
+  lead="${lead#"$open"}"
+  case "$lead" in fixed*) ;; *) return 1 ;; esac
+  rest="${lead#fixed}"
+  if [ -n "$open" ]; then
+    case "$rest" in "$open"*) rest="${rest#"$open"}" ;; esac
+  fi
+  case "$rest" in
+    ''|[[:space:]]*|[$punct]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Finite leading vocabulary only; unknown prose keeps the existing ladder.
+reply_disposition_polarity() {
+  local lead
+  lead=$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+  lead="${lead#"${lead%%[![:space:]]*}"}"
+  case "$lead" in
+    disposition:*) lead="${lead#disposition:}"; lead="${lead#"${lead%%[![:space:]]*}"}" ;;
+  esac
+  if reply_is_fix_claim "$lead"; then printf 'fixed'; return; fi
+  if LC_ALL=C grep -Eq '^(defer|deferred|deferring|follow-up|wontfix|deferred-to-followup|deferred-to-follow-up)([[:space:]:.,;!?]|$)|^tracked in ([a-z0-9_.-]+/[a-z0-9_.-]+)?#[0-9]+([[:space:]:.,;!?]|$)' <<<"$lead"; then
+    printf 'deferred'
+  elif [ "${#1}" -ge 30 ] && LC_ALL=C grep -Eq '^(rebuttal|rebutted|disagree)([[:space:]:.,;!?]|$)' <<<"$lead"; then
+    printf 'rebutted'
+  fi
+}
+
+# The caller already found the latest non-agent index over complete comments.
+# Unknown replies and generated markers cannot cancel recognized polarity.
+thread_reply_polarity() {
+  local tj="$1" k=$(($2 + 1)) count login body trimmed current result=""
+  [ "$k" -ge 1 ] || k=1
+  count=$(printf '%s' "$tj" | jq '.all_comments | length')
+  while [ "$k" -lt "$count" ]; do
+    login=$(printf '%s' "$tj" | jq -r ".all_comments[$k].author.login // \"\"")
+    body=$(printf '%s' "$tj" | jq -r ".all_comments[$k].body // \"\"")
+    trimmed="${body#"${body%%[![:space:]]*}"}"
+    case "$trimmed" in
+      "[mergepath-resolve:"*) k=$((k + 1)); continue ;;
+    esac
+    if is_agent_author_local "$login"; then
+      current=$(reply_disposition_polarity "$body")
+      [ -z "$current" ] || result="$current"
+    fi
+    k=$((k + 1))
+  done
+  printf '%s' "$result"
+}
+
 # derive_tag_class — given the thread JSON (one line of UNRESOLVED),
 # return one of the rollup's class strings on stdout.
 #
@@ -2483,6 +2853,7 @@ verify_propagation_content() {
 #   2. addressed-elsewhere    agent-author commit after createdAt
 #                             touching the anchored file
 #   3. rebuttal-recorded      ≥30-char agent-author reply on thread
+#                             that does not lead with "Fixed" (#2555)
 #   4. nitpick-noted          severity is Nitpick/Trivial/P3
 #   5. deferred-to-followup   fallback
 #
@@ -2534,16 +2905,17 @@ derive_tag_class() {
   # because it only ever causes a skip — the fail-closed/safe outcome — even
   # if later replies exist. Most-recent valid marker wins; an unrecognized
   # class is ignored. `last_nonagent_idx` is reused by step 3.
-  local recorded_class="" rc_count rc_i rc_login rc_body rc_tag
+  local recorded_class="" rc_count rc_i rc_body rc_tag
   local last_marker_idx=-1 last_nonagent_idx=-1
   rc_count=$(printf '%s' "$thread_json" | jq '.all_comments | length' 2>/dev/null || echo 0)
   rc_i=0
   while [ "$rc_i" -lt "$rc_count" ]; do
-    rc_login=$(printf '%s' "$thread_json" | jq -r ".all_comments[$rc_i].author.login // \"\"")
-    if is_agent_author_local "$rc_login"; then
+    if is_self_comment_local "$thread_json" "$rc_i"; then
       rc_body=$(printf '%s' "$thread_json" | jq -r ".all_comments[$rc_i].body // \"\"")
       rc_tag=$(printf '%s' "$rc_body" \
         | sed -n 's/.*\[mergepath-resolve:[[:space:]]*\([a-z][a-z-]*\)[[:space:]]*\].*/\1/p' | head -1)
+      # Permanent persisted alias; all downstream class branches emit canonical.
+      [ "$rc_tag" != "deferred-to-follow-up" ] || rc_tag="deferred-to-followup"
       if [ -n "$rc_tag" ]; then recorded_class="$rc_tag"; last_marker_idx=$rc_i; fi
     else
       last_nonagent_idx=$rc_i
@@ -2597,6 +2969,17 @@ derive_tag_class() {
     echo "templated-render"
     return
   fi
+
+  # Preserve recognized finding-bound polarity before incidental file touches.
+  # Marker/routing precedence above and the separate action-evidence gate stay
+  # unchanged. Unreadable ledger state still fails closed in that gate (#1010).
+  local reply_polarity ledger_polarity=""
+  reply_polarity=$(thread_reply_polarity "$thread_json" "$last_nonagent_idx")
+  ledger_polarity=$(thread_ledger_polarity "$thread_json") || ledger_polarity=""
+  case "$reply_polarity:$ledger_polarity" in
+    deferred:*|*:deferred) echo "deferred-to-followup"; return ;;
+    rebutted:*|*:rebutted) echo "rebuttal-recorded"; return ;;
+  esac
 
   # 2. addressed-elsewhere — an agent-authored commit that BOTH (a)
   # post-dates the latest bot/reviewer comment (the #565 staleness guard)
@@ -2690,6 +3073,24 @@ derive_tag_class() {
         "[mergepath-resolve:"*) k=$((k + 1)); continue ;;
       esac
       if [ -n "$r_login" ] && [ "$r_body_len" -ge 30 ] && is_agent_author_local "$r_login"; then
+        # #2555: a reply that leads with "Fixed" is a fix claim, not a
+        # rebuttal. Step 2 found no agent commit after the latest re-raise
+        # touching the anchored file, so the claim is unproven here: record
+        # nothing rather than a rebuttal that never happened, say so, and
+        # keep scanning for a genuine rebuttal. A cross-file fix is recorded
+        # by the explicit --thread <id> --disposition fixed mode (#2196),
+        # which the warning names; the file-touch rule itself is unchanged.
+        if reply_is_fix_claim "$r_body"; then
+          echo "WARN: the agent reply on [$thread_path] leads with 'Fixed' but no agent commit after the latest re-raise touches that file, so it is not recorded as a rebuttal; record a cross-file fix with --thread <id> --disposition fixed --commit <sha> (#2555)" >&2
+          k=$((k + 1))
+          continue
+        fi
+        # A later recognized fix claim supersedes older rebuttal prose, but
+        # still needs step 2's commit proof (or the explicit fixed mode).
+        if [ "$reply_polarity" = fixed ]; then
+          k=$((k + 1))
+          continue
+        fi
         echo "rebuttal-recorded"
         return
       fi
@@ -2789,6 +3190,14 @@ class_is_actioned() {
 # Mirrors the defaults (and env overrides) of the two recorder scripts, so a
 # repo that relocates its ledgers keeps working without a second knob.
 ledger_paths() {
+  # --bind-head (#2727): a local ledger row names no head, so it cannot prove
+  # it applies to the captured pair. Read no ledger at all, so neither a
+  # verdict nor a polarity (a stale deferral blocking a bound reply, a stale
+  # rebuttal classifying a neutral one) reaches the decision (CodeRabbit on
+  # #2816). The CI lane's fresh checkout has no ledger anyway.
+  if $BIND_HEAD; then
+    return 0
+  fi
   local dir="${MERGEPATH_FEEDBACK_LEDGER_DIR:-$REPO_ROOT_FOR_MANIFEST/.mergepath}"
   printf '%s\n%s\n' \
     "${CODEX_FEEDBACK_LEDGER:-$dir/codex-feedback-ledger.jsonl}" \
@@ -2874,8 +3283,7 @@ thread_reply_disposition() {
   case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
   i=0
   while [ "$i" -lt "$cnt" ]; do
-    login=$(printf '%s' "$tj" | jq -r ".all_comments[$i].author.login // \"\"")
-    is_agent_author_local "$login" || last_nonagent_idx=$i
+    is_self_comment_local "$tj" "$i" || last_nonagent_idx=$i
     i=$((i + 1))
   done
   local k=$((last_nonagent_idx + 1))
@@ -2902,37 +3310,67 @@ thread_reply_disposition() {
 # earlier finding even within one second. Use the same selector for
 # deferrals and fixed/rebutted verdicts.
 current_round_finding_ids() {
-  printf '%s' "$1" | jq --arg floor "$2" --arg agents "$MERGEPATH_AGENT_AUTHORS" '
+  # The CI app's own marker is agent-side here too (#2726), by the same
+  # predicate as is_ci_app_marker_local.
+  printf '%s' "$1" | jq --arg floor "$2" --arg agents "$MERGEPATH_AGENT_AUTHORS" \
+    --arg app "$CI_APP_LOGIN" '
     ($agents | split(":")) as $authors
     | [.all_comments[] | select((.createdAt // "") >= $floor)
        | select(.author.login as $login | ($authors | index($login)) == null)
+       | select(($app != ""
+                 and ((.body // "") | sub("^[[:space:]]+"; "") | startswith("[mergepath-resolve:"))
+                 and ((.author.login // "") == $app
+                      or ((.author.__typename // "") == "Bot"
+                          and ((.author.login // "") + "[bot]") == $app))) | not)
       ] | [last | select(. != null) | .databaseId]
   '
 }
 
-# An explicit current deferral is not fix/rebuttal evidence, even when an
-# older ledger row or a reply would otherwise qualify (#1010). A later
-# superseding fixed/rebutted row restores the normal evidence path.
-thread_has_current_deferral() {
-  local tj="$1" floor ids f rc state
+# Current finding polarity uses newest append order in each ledger, never
+# cross-clock timestamp ordering. Unusable state retains #1010's closed gate.
+thread_ledger_polarity() {
+  local tj="$1" floor ids f rc state result=none
   floor=$(latest_nonagent_created "$tj")
   ids=$(current_round_finding_ids "$tj" "$floor") || return 2
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     if state=$(jq -r -s --argjson ids "$ids" --arg repo "$REPO" '
+      # Both recorder writers preserve raw verdict aliases; Codex adds
+      # reaction without disposition, CodeRabbit adds canonical disposition.
+      def verdict_polarity:
+        if type != "string" then "unusable" else
+          ascii_downcase as $v
+          | if (["fixed", "real", "useful", "+1", "thumbsup", "thumbs-up", "up"] | index($v)) != null then "fixed"
+            elif (["rebutted", "false-positive", "false_positive", "falsepositive", "not-useful", "not_useful", "notuseful", "-1", "thumbsdown", "thumbs-down", "down"] | index($v)) != null then "rebutted"
+            elif (["deferred", "tracked", "split", "deferred-to-followup", "deferred-to-follow-up"] | index($v)) != null then "deferred"
+            else "unusable" end
+        end;
       [.[] | select(.repo == $repo)
              | select(.comment_id as $id | ($ids | index($id)) != null)]
       | group_by(.comment_id) | map(last)
-      | if any(.[];
-          ((.recorded_at | type == "string" and length > 0)
-           and (.disposition == "deferred-to-followup"
-                or (.verdict | type == "string" and length > 0))) | not)
-        then "unusable"
-        elif any(.[]; .disposition == "deferred-to-followup") then "deferred"
-        else "clear" end
+      | map(
+          (.verdict | verdict_polarity) as $v
+          | (if .disposition == null or .disposition == "" then $v
+             elif .disposition == "fixed" then "fixed"
+             elif .disposition == "rebutted" then "rebutted"
+             elif .disposition == "deferred-to-followup" or .disposition == "deferred-to-follow-up" then "deferred"
+             else "unusable" end) as $d
+          | if (.recorded_at | type != "string" or length == 0) then "unusable"
+            # Preserve the existing metadata-only explicit deferral rows.
+            elif $d == "deferred" and (.verdict == null or .verdict == "") and (.reaction == null or .reaction == "") then "deferred"
+            elif $v == "unusable" or $d == "unusable" or $v != $d then "unusable"
+            elif .reaction == null or .reaction == "" then $d
+            elif (.reaction == "+1" and $v == "fixed") or (.reaction == "-1" and $v == "rebutted") then $d
+            else "unusable" end)
+      | if any(.[]; . == "unusable") then "unusable"
+        elif any(.[]; . == "deferred") then "deferred"
+        elif any(.[]; . == "rebutted") then "rebutted"
+        elif any(.[]; . == "fixed") then "fixed" else "none" end
     ' "$f" 2>/dev/null); then
       case "$state" in
-        deferred) return 0 ;;
+        deferred) result=deferred ;;
+        rebutted) [ "$result" = deferred ] || result=rebutted ;;
+        fixed) [ "$result" != none ] || result=fixed ;;
         unusable)
           echo "WARN: ledger $f has an unusable newest row for the current finding; refusing actioned classification (#1010)" >&2
           return 2 ;;
@@ -2947,7 +3385,13 @@ thread_has_current_deferral() {
   done <<EOF
 $(ledger_paths)
 EOF
-  return 1
+  printf '%s' "$result"
+}
+
+thread_has_current_deferral() {
+  local polarity
+  polarity=$(thread_ledger_polarity "$1") || return 2
+  [ "$polarity" = deferred ]
 }
 
 # finding_dispositioned <thread_json> → prints the evidence description,
@@ -3067,7 +3511,11 @@ synth_rationale() {
       echo "nitpick/trivial severity; noted, no code change."
       ;;
     rebuttal-recorded)
-      echo "agent rebuttal posted on thread; resolving."
+      if [ "$(thread_ledger_polarity "$thread_json")" = rebutted ]; then
+        echo "negative/rebutted verdict recorded for this finding; resolving."
+      else
+        echo "agent rebuttal posted on thread; resolving."
+      fi
       ;;
     deferred-to-followup|*)
       echo "deferred to follow-up; resolving for branch-protection conversation gate."
@@ -3122,12 +3570,11 @@ post_tag_reply() {
   local rationale="$3"
   local body
   body="[mergepath-resolve: $class] $rationale"
-  # Capture BOTH streams: `gh api` writes an HTTP error BODY to stdout and
-  # only a summary to stderr, so the proxy's refusal phrase can be in either
-  # (Codex P2 on #1529). On success the captured mutation response is simply
-  # unused; it is only read on the failure path below.
-  local err
-  if ! err=$(gh_pat api graphql \
+  # Keep successful JSON separate from diagnostics, but inspect both streams
+  # on failure: the proxy's refusal phrase can be in either (#1529).
+  local response err stderr_file status=0
+  stderr_file=$(mktemp "${TMPDIR:-/tmp}/resolve-pr-thread-tag-stderr.XXXXXX") || return 1
+  response=$(gh_pat api graphql \
     -f query='mutation($id: ID!, $body: String!) {
       addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) {
         comment { id }
@@ -3135,11 +3582,27 @@ post_tag_reply() {
     }' \
     -F id="$thread_id" \
     -F body="$body" \
-    2>&1); then
+    2>"$stderr_file") || status=$?
+  if ! err=$(cat "$stderr_file"); then
+    rm -f "$stderr_file"
+    echo "tag-reply diagnostic capture could not be read" >&2
+    return 1
+  fi
+  rm -f "$stderr_file"
+  if [ "$status" -ne 0 ]; then
+    err="$response"$'\n'"$err"
     # Called in the main shell (`if post_tag_reply ...`), so the refusal ends
     # the run before any thread is resolved without its disposition tag.
     graphql_ceiling_hit "$err" && graphql_ceiling_refuse resolve-pr-threads "posting the disposition reply on review thread $thread_id"
     printf 'tag-reply mutation failed: %s\n' "$err" >&2
+    return 1
+  fi
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  if [ "$MODE" = "resolve-targeted" ] && ! printf '%s' "$response" | jq -e '
+    ((.errors // []) | length) == 0 and
+    (.data.addPullRequestReviewThreadReply.comment.id | type == "string" and length > 0)
+  ' >/dev/null 2>&1; then
+    echo "tag-reply mutation did not confirm the explicit marker" >&2
     return 1
   fi
   return 0
@@ -3248,6 +3711,9 @@ while IFS= read -r thread; do
   # target population is backlog threads on long-merged sync PRs — where
   # the PR-HEAD anchor proxy is meaningless.
   #
+  # --thread ALSO bypasses it (#2196): the operator explicitly dispositions
+  # one finding, including cross-file fixes on a later head.
+  #
   # Codex r1 on PR #172 caught that the previous check
   # `if [ -n "$COMMIT_OID" ] && [ "$COMMIT_OID" != "$HEAD_OID" ]`
   # treated EMPTY commit_oid as "matches HEAD" → bot threads with no
@@ -3255,6 +3721,7 @@ while IFS= read -r thread; do
   # silently. The safe default is the opposite: missing oid is
   # treated as stale.
   if [ "$MODE" != "resolve-actioned" ] && [ "$MODE" != "resolve-verified-propagation" ] \
+     && [ "$MODE" != "resolve-targeted" ] \
      && { [ -z "$COMMIT_OID" ] || [ "$COMMIT_OID" = "null" ] || [ "$COMMIT_OID" != "$HEAD_OID" ]; }; then
     if [ -z "$COMMIT_OID" ] || [ "$COMMIT_OID" = "null" ]; then
       reason="no commit linkage"
@@ -3280,6 +3747,26 @@ while IFS= read -r thread; do
   if [ "$MODE" = "resolve-actioned" ]; then
     fetch_pr_tag_data
     augment_pr_commits_with_sha
+    # --bind-head (#2727): fix evidence comes from this commit list, so it
+    # must be the CAPTURED head's, and complete. The list ends at the PR's
+    # head; any other last commit means the pair moved. The endpoint returns
+    # at most 250 commits and does not document which, so a list that long
+    # may omit fix commits even when it ends at the head: fail closed
+    # (CodeRabbit on #2816). Resolve such a PR locally, without the flag.
+    if $BIND_HEAD && ! $BIND_COMMITS_VERIFIED; then
+      bind_count=$(printf '%s' "$PR_COMMITS_CACHE" | jq -r 'length' 2>/dev/null || echo 0)
+      case "$bind_count" in ''|*[!0-9]*) bind_count=0 ;; esac
+      if [ "$bind_count" -ge 250 ]; then
+        echo "BIND: the PR commit list has $bind_count commits, the endpoint's 250-commit cap, so it may be incomplete; nothing in it is accepted as evidence. Stopping every remaining resolution; resolve this PR locally without --bind-head (#2727)." >&2
+        BIND_STOPPED=true
+        break
+      fi
+      bind_last=$(printf '%s' "$PR_COMMITS_CACHE" | jq -r 'last.sha // ""' 2>/dev/null || echo "")
+      if [ "$bind_last" != "$CAPTURED_HEAD" ]; then
+        bind_restart_or_stop "the PR commit list ends at ${bind_last:-nothing}, not the captured head ${CAPTURED_HEAD:0:12}" || break
+      fi
+      BIND_COMMITS_VERIFIED=true
+    fi
     # #573 item 2: the staleness floor (latest_nonagent_created) is only
     # trustworthy over the COMPLETE thread. If the enumeration's last-50
     # window truncated this thread, re-fetch every comment before
@@ -3468,7 +3955,9 @@ while IFS= read -r thread; do
   if $DRY_RUN; then
     echo "  WOULD RESOLVE [$AUTHOR] $PATH_"
     echo "    $EXCERPT"
-    if [ "$MODE" = "resolve-verified-propagation" ]; then
+    if [ "$MODE" = "resolve-targeted" ]; then
+      echo "    → [mergepath-resolve: $TARGET_CLASS] $TARGET_RATIONALE"
+    elif [ "$MODE" = "resolve-verified-propagation" ]; then
       # thread_class is verified-propagation for a byte-verified thread,
       # or the truthful actioned class after the #616 upgrade above.
       echo "    → [mergepath-resolve: $thread_class] $VERIFIED_RATIONALE"
@@ -3489,7 +3978,10 @@ while IFS= read -r thread; do
   # behavior the script had before #305 — losing the tag is a soft
   # regression, not a correctness bug.
   if ! $NO_TAG_REPLY; then
-    if $RATIONALE_FLAG_USED; then
+    if [ "$MODE" = "resolve-targeted" ]; then
+      tag_class="$TARGET_CLASS"
+      tag_rationale="$TARGET_RATIONALE"
+    elif $RATIONALE_FLAG_USED; then
       tag_class="deferred-to-followup"
       tag_rationale="$RATIONALE_OVERRIDE"
       # #575 guard on the EXPLICIT-DEFERRAL override: --rationale is exactly
@@ -3629,12 +4121,26 @@ while IFS= read -r thread; do
       tag_class="$thread_class"
       tag_rationale=$(synth_rationale "$tag_class" "$thread")
     fi
+    # --bind-head (#2727): re-read the pair immediately before the tag post,
+    # after the class and rationale are prepared (preparing them reads the
+    # comment history and commit list; the automated Phase 4b review of #2816
+    # found the re-read placed before that work). Then count the write as
+    # ATTEMPTED before dispatch: a write GitHub accepts whose response is lost
+    # reads as a failure here, so counting only confirmed writes would let a
+    # moved pair restart after a persisted write (Codex on #2816).
+    bind_recheck "the tag reply for [$AUTHOR] $PATH_" || break
+    BIND_WRITES=$((BIND_WRITES + 1))
     if post_tag_reply "$THREAD_ID" "$tag_class" "$tag_rationale"; then
       echo "  TAGGED [$AUTHOR] $PATH_ → [mergepath-resolve: $tag_class]"
       TAG_REPLY_POSTED=$((TAG_REPLY_POSTED + 1))
     else
-      echo "  WARN: tag-reply post failed for [$AUTHOR] $PATH_ (resolving anyway)" >&2
       TAG_REPLY_FAILED=$((TAG_REPLY_FAILED + 1))
+      if [ "$MODE" = "resolve-targeted" ]; then
+        echo "  FAILED: explicit disposition reply did not post; leaving thread open" >&2
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        continue
+      fi
+      echo "  WARN: tag-reply post failed for [$AUTHOR] $PATH_ (resolving anyway)" >&2
     fi
   else
     TAG_REPLY_SKIPPED=$((TAG_REPLY_SKIPPED + 1))
@@ -3648,6 +4154,10 @@ while IFS= read -r thread; do
   # isResolved!=true did NOT actually resolve the thread, so it must count
   # as FAILED, not RESOLVED. Threads confirmed true here are collected into
   # RESOLVED_IDS for the consolidated reviewThreads readback after the loop.
+  # --bind-head (#2727): re-read the pair immediately before the resolve.
+  bind_recheck "resolving [$AUTHOR] $PATH_" || break
+  # Counted as attempted before dispatch, for the same reason as the tag reply.
+  BIND_WRITES=$((BIND_WRITES + 1))
   resolve_state=""
   mutation_err="$(mktemp "${TMPDIR:-/tmp}/resolve-pr-threads-mutation.XXXXXX")"
   if mutation_out=$(gh_pat api graphql -f query='
@@ -3685,6 +4195,9 @@ if $DRY_RUN; then
   # human-skipped, or stale-skipped). The only exit-0 path through
   # auto-resolve-bots --dry-run is "no unresolved threads at all"
   # which is already short-circuited above (UNRESOLVED is empty).
+  if $BIND_STOPPED; then
+    exit "$BIND_STOP_CODE"
+  fi
   if [ "$WOULD_RESOLVE_COUNT" -gt 0 ] || [ "$SKIPPED_HUMAN" -gt 0 ] || [ "$SKIPPED_STALE" -gt 0 ] || [ "$SKIPPED_NOT_ACTIONED" -gt 0 ] || [ "$SKIPPED_NOT_DISPOSITIONED" -gt 0 ] || [ "$SKIPPED_COMMENTS_INCOMPLETE" -gt 0 ] || [ "$SKIPPED_NOT_PROPAGATION" -gt 0 ] || [ "$SKIPPED_DRIFT" -gt 0 ] || [ "$SKIPPED_VERIFY_ERROR" -gt 0 ] || [ "$SKIPPED_NO_UPSTREAM_EVIDENCE" -gt 0 ]; then
     exit 3
   fi
@@ -3774,6 +4287,12 @@ fi
 # below). A readback failure is as fail-closed as a mutation failure.
 if [ "$FAILED_COUNT" -gt 0 ] || [ "$READBACK_FAILED" -gt 0 ]; then
   exit 2
+fi
+# --bind-head (#2727): a stopped run is not a completed pass, whatever it
+# resolved before the pair moved.
+if $BIND_STOPPED; then
+  echo "Stopped: the head/base pair could not be held for the whole run; re-dispatch to evaluate the new head (#2727)." >&2
+  exit "$BIND_STOP_CODE"
 fi
 # Use an explicit `if`, not `[ a ] || [ b ] && exit 3`. In that
 # one-liner `&&` and `||` are equal-precedence and left-associative,

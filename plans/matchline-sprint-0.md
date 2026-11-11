@@ -5,6 +5,12 @@ No product surface ships in this sprint. Duration target: 1 week.
 
 Reference: `specs/matchline.md` and PRD § What ships first → Sprint 0.
 
+> **Historical (as of 2026-10-22).** Sprint 0 is complete, and the
+> PRD's sprint plan is now its "Historical: the original sprint plan"
+> section (PRD v0.3). Current sequencing is the PRD's "What ships next"
+> section. The five-route shell described below is the shipped
+> navigation, which the PRD's target navigation replaces.
+
 ## Tasks
 
 1. **Firebase project**

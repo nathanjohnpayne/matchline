@@ -20,6 +20,8 @@ import {
 
 import { getAuthClient } from "../firebase.ts";
 
+import { claimFormDrafts } from "./formDraft.ts";
+
 export interface AuthState {
   /** Currently signed-in user, or `null` once auth has resolved. */
   readonly user: User | null;
@@ -35,6 +37,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(getAuthClient(), (next) => {
+      // Before any route renders for this account: drop form drafts a
+      // different account left in this browser (#431).
+      if (next !== null) claimFormDrafts(next.uid);
       setUser(next);
       setPending(false);
     });

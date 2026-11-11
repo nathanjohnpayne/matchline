@@ -7,6 +7,11 @@
 # touching GitHub. The reaction WRITE path is asserted to go through
 # gh-as-reviewer.sh under the reviewer identity (never a bare gh write).
 
+# These cases drive the gh transport. Pin it so a cloud session's
+# CLAUDE_CODE_REMOTE (or MERGEPATH_AGENT_SURFACE) cannot switch the wrappers
+# to the REST transport, which tests/test_gh_rest_transport.sh covers.
+export MERGEPATH_GH_TRANSPORT=gh
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,6 +46,7 @@ make_case() {
   chmod +x "$dir/scripts/codex-record-feedback.sh"
   cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$dir/scripts/lib/gh-token-resolver.sh"
   cp "$ROOT/scripts/lib/gh-api-array.sh" "$dir/scripts/lib/gh-api-array.sh"     # #1008, hard-sourced
+  cp "$ROOT/scripts/lib/feedback-policy-helpers.sh" "$dir/scripts/lib/feedback-policy-helpers.sh"  # #2913, --scan policy reader
 
   cat >"$dir/.github/review-policy.yml" <<'EOF'
 codex:
@@ -101,8 +107,13 @@ make_real_wrapper_case() {
   chmod +x "$dir/scripts/codex-record-feedback.sh"
   cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$dir/scripts/lib/gh-token-resolver.sh"
   cp "$ROOT/scripts/lib/gh-api-array.sh" "$dir/scripts/lib/gh-api-array.sh"     # #1008, hard-sourced
+  cp "$ROOT/scripts/lib/feedback-policy-helpers.sh" "$dir/scripts/lib/feedback-policy-helpers.sh"  # #2913, --scan policy reader
+  mkdir -p "$dir/scripts/workflow"
+  cp "$ROOT/scripts/lib/gh-comment-trigger-guard.sh" "$dir/scripts/lib/gh-comment-trigger-guard.sh"
+  cp "$ROOT/scripts/workflow/gh-comment-trigger-guard.py" "$dir/scripts/workflow/gh-comment-trigger-guard.py"
   cp "$ROOT/scripts/gh-as-reviewer.sh" "$dir/scripts/gh-as-reviewer.sh"
   chmod +x "$dir/scripts/gh-as-reviewer.sh"
+  cp "$ROOT/scripts/lib/gh-rest-transport.sh" "$dir/scripts/lib/gh-rest-transport.sh"  # gh-as-reviewer.sh sources it (#1057 A)
   cp "$ROOT/scripts/identity-check.sh" "$dir/scripts/identity-check.sh"
   chmod +x "$dir/scripts/identity-check.sh"
   cp "$ROOT/scripts/lib/credential-class.sh" "$dir/scripts/lib/credential-class.sh"    # identity-check --expect-write-identity (#1057)
@@ -395,9 +406,10 @@ EOF
 test_scan_is_head_pinned_to_latest_round() {
   local dir rc
   dir=$(make_case "scan-head-pinned")
-  # gh stub modeling: HEAD=head-sha; a STALE review (old, not HEAD) carries a
-  # P1 finding, and the CURRENT-HEAD latest review (id 200) carries 1301. The
-  # scan must pick up ONLY 1301 (latest round on HEAD), never the stale one.
+  # gh stub modeling: HEAD=head-sha; a STALE review (old, not HEAD) carries
+  # 1300 (named by --verdict) and 1302 (unnamed); the CURRENT-HEAD latest
+  # review (id 200) carries 1301. The scan collects ONLY 1301: the unnamed
+  # stale 1302 never surfaces, the named stale 1300 is fetched by id (#2565).
   cat >"$dir/bin/gh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -412,7 +424,9 @@ case "\$ep" in
   repos/owner/repo/pulls/999/reviews)
     printf '[{"id":100,"user":{"login":"%s"},"state":"COMMENTED","submitted_at":"2026-06-01T00:00:00Z","commit_id":"old-sha"},{"id":200,"user":{"login":"%s"},"state":"COMMENTED","submitted_at":"2026-06-02T00:00:00Z","commit_id":"head-sha"}]\n' "\$bot" "\$bot" ;;
   repos/owner/repo/pulls/999/comments)
-    printf '[{"id":1300,"user":{"login":"%s"},"pull_request_review_id":100,"path":"old","line":1,"body":"STALE P1. $SOLICIT"},{"id":1301,"user":{"login":"%s"},"pull_request_review_id":200,"path":"new","line":2,"body":"![P1 Badge] current. $SOLICIT"}]\n' "\$bot" "\$bot" ;;
+    printf '[{"id":1300,"user":{"login":"%s"},"pull_request_review_id":100,"path":"old","line":1,"body":"STALE P1. $SOLICIT"},{"id":1301,"user":{"login":"%s"},"pull_request_review_id":200,"path":"new","line":2,"body":"![P1 Badge] current. $SOLICIT"},{"id":1302,"user":{"login":"%s"},"pull_request_review_id":100,"path":"old2","line":3,"body":"![P2 Badge] unnamed stale. $SOLICIT"}]\n' "\$bot" "\$bot" "\$bot" ;;
+  repos/owner/repo/pulls/comments/1300)
+    printf '{"id":1300,"user":{"login":"%s"},"pull_request_url":"https://api.github.com/repos/owner/repo/pulls/999","pull_request_review_id":100,"commit_id":"old-sha","path":"old","line":null,"original_line":1,"body":"![P1 Badge] STALE P1. $SOLICIT"}\n' "\$bot" ;;
   repos/owner/repo/pulls/comments/*/reactions) printf '[]\n' ;;
   *) echo "unexpected gh api endpoint: \$ep" >&2; exit 9 ;;
 esac
@@ -422,14 +436,70 @@ EOF
 
   if [ "$rc" != "0" ]; then
     fail "scan head-pinned: exit $rc; stderr=$(cat "$dir/err.log")"
-  elif grep -q 'comments/1300/reactions' "$(posts_file "$dir")" 2>/dev/null; then
-    fail "scan head-pinned: reacted on the STALE (non-HEAD) finding 1300"
   elif ! grep -q 'comments/1301/reactions' "$(posts_file "$dir")" 2>/dev/null; then
     fail "scan head-pinned: did not react on the current-HEAD finding 1301; posts=$(cat "$(posts_file "$dir")" 2>/dev/null)"
-  elif [ "$(jq -r '[.skipped[] | select(.comment_id==1300 and .why=="not-found")] | length' "$dir/out.json")" != "1" ]; then
-    fail "scan head-pinned: verdict for stale 1300 should be reported not-found"
+  elif grep -q 'comments/1302/reactions' "$(posts_file "$dir")" 2>/dev/null \
+    || [ "$(jq -r '[.skipped[] | select(.comment_id==1302)] | length' "$dir/out.json")" != "0" ]; then
+    fail "scan head-pinned: the unnamed stale finding 1302 surfaced; out=$(cat "$dir/out.json")"
+  elif ! grep -q 'gh api -X POST repos/owner/repo/pulls/comments/1300/reactions -f content=+1' "$(posts_file "$dir")" 2>/dev/null; then
+    fail "scan head-pinned: named stale 1300 not fetched by id and reacted on (#2565); posts=$(cat "$(posts_file "$dir")" 2>/dev/null) stderr=$(cat "$dir/err.log")"
+  elif [ "$(jq -r '[.recorded[] | select(.comment_id==1300 and .priority=="P1" and .location=="pull_request_review_comment" and .action=="posted")] | length' "$dir/out.json")" != "1" ]; then
+    fail "scan head-pinned: named stale 1300 not recorded with its badge and location; out=$(cat "$dir/out.json")"
+  elif [ "$(jq -r '[.skipped[] | select(.why=="not-found")] | length' "$dir/out.json")" != "0" ]; then
+    fail "scan head-pinned: a named finding on this PR was reported not-found; out=$(cat "$dir/out.json")"
   else
-    pass "scan picks up only the current-HEAD latest-round finding (HEAD-pinned)"
+    pass "scan picks up only the current-HEAD latest-round finding; a named earlier-round finding is fetched by id (#2565)"
+  fi
+}
+
+test_scan_named_offhead_rejections() {
+  # #2565 boundary: another PR's comment, a non-bot comment and a 404 stay
+  # not-found with no reaction; a failed direct read exits 3 and posts nothing.
+  local dir rc
+  dir=$(make_case "scan-named-rejections")
+  cat >"$dir/bin/gh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[ "\${1:-}" = "api" ] || { echo "unexpected gh: \$*" >&2; exit 9; }
+shift
+[ "\${1:-}" = "--paginate" ] && shift
+ep=\${1:-}
+bot='chatgpt-codex-connector[bot]'
+case "\$ep" in
+  repos/owner/repo/pulls/999) printf '{"head":{"sha":"head-sha"}}\n' ;;
+  repos/owner/repo/pulls/999/reviews) printf '[]\n' ;;
+  repos/owner/repo/pulls/999/comments) printf '[]\n' ;;
+  repos/owner/repo/pulls/comments/1310)
+    printf '{"id":1310,"user":{"login":"%s"},"pull_request_url":"https://api.github.com/repos/owner/repo/pulls/998","path":"a","line":1,"body":"![P1 Badge] other PR. $SOLICIT"}\n' "\$bot" ;;
+  repos/owner/repo/pulls/comments/1311)
+    printf '{"id":1311,"user":{"login":"somebody-else"},"pull_request_url":"https://api.github.com/repos/owner/repo/pulls/999","path":"b","line":1,"body":"![P1 Badge] human. $SOLICIT"}\n' ;;
+  repos/owner/repo/pulls/comments/1399)
+    echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+  repos/owner/repo/pulls/comments/1300)
+    echo "error connecting to api.github.com" >&2; exit 1 ;;
+  repos/owner/repo/pulls/comments/*/reactions) printf '[]\n' ;;
+  *) echo "unexpected gh api endpoint: \$ep" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$dir/bin/gh"
+  rc=$(run_case "$dir" -- 999 owner/repo --scan --verdict 1310=fixed --verdict 1311=fixed --verdict 1399=fixed)
+  if [ "$rc" != "0" ]; then
+    fail "named rejections: exit $rc; stderr=$(cat "$dir/err.log")"
+  elif [ -s "$(posts_file "$dir")" ]; then
+    fail "named rejections: a rejected id was reacted on; posts=$(cat "$(posts_file "$dir")")"
+  elif [ "$(jq -r '[.skipped[] | select(.why=="not-found") | .comment_id] | sort' "$dir/out.json" | jq -c .)" != "[1310,1311,1399]" ]; then
+    fail "named rejections: expected 1310, 1311 and 1399 not-found; out=$(cat "$dir/out.json")"
+  else
+    pass "a named id on another PR, by a non-bot author, or missing stays not-found with no reaction (#2565)"
+  fi
+
+  rc=$(run_case "$dir" -- 999 owner/repo --scan --verdict 1300=fixed)
+  if [ "$rc" != "3" ]; then
+    fail "named transport failure: exit $rc, expected 3; stderr=$(cat "$dir/err.log")"
+  elif [ -s "$(posts_file "$dir")" ]; then
+    fail "named transport failure: reacted despite the failed read"
+  else
+    pass "a failed direct read of a named finding exits 3 and posts nothing (#2565)"
   fi
 }
 
@@ -676,6 +746,109 @@ EOF
   fi
 }
 
+# #2913: --scan reads codex.bot_login from the parsed policy. The earlier
+# line-oriented awk reader matched only an unquoted, block-style `bot_login:`
+# key, so a quoted key or a flow mapping read as unset and the scan looked for
+# the default login, missing every finding of a custom bot.
+LEGACY_RECORD_BOT_LOGIN_AWK='
+  /^codex:/ {in_block=1; next}
+  in_block && /^[^[:space:]#]/ {in_block=0}
+  in_block && $1 == field":" {
+    sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
+    gsub(/^["\047]/, "", $0)
+    gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
+    gsub(/[[:space:]]*#.*$/, "", $0)
+    sub(/[[:space:]]+$/, "", $0)
+    print
+    exit
+  }
+'
+write_gh_custom_bot() {
+  local dir=$1
+  cat >"$dir/bin/gh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[ "\${1:-}" = "api" ] || { echo "unexpected gh: \$*" >&2; exit 9; }
+shift
+[ "\${1:-}" = "--paginate" ] && shift
+ep=\${1:-}
+bot='custom-codex[bot]'
+case "\$ep" in
+  repos/owner/repo/pulls/999) printf '{"head":{"sha":"head-sha"}}\n' ;;
+  repos/owner/repo/pulls/999/reviews)
+    printf '[{"id":300,"user":{"login":"%s"},"state":"COMMENTED","submitted_at":"2026-06-02T00:00:00Z","commit_id":"head-sha"}]\n' "\$bot" ;;
+  repos/owner/repo/pulls/999/comments)
+    printf '[{"id":1501,"user":{"login":"%s"},"pull_request_review_id":300,"path":"a","line":1,"body":"![P1 Badge] custom bot. $SOLICIT"}]\n' "\$bot" ;;
+  repos/owner/repo/pulls/comments/1501)
+    printf '{"id":1501,"user":{"login":"%s"},"pull_request_url":"https://api.github.com/repos/owner/repo/pulls/999","pull_request_review_id":300,"commit_id":"head-sha","path":"a","line":1,"body":"![P1 Badge] custom bot. $SOLICIT"}\n' "\$bot" ;;
+  repos/owner/repo/pulls/comments/*/reactions) printf '[]\n' ;;
+  *) echo "unexpected gh api endpoint: \$ep" >&2; exit 9 ;;
+esac
+EOF
+  chmod +x "$dir/bin/gh"
+}
+
+test_scan_reads_bot_login_from_parsed_policy() {
+  local label yaml dir rc legacy n=0
+  while IFS='|' read -r label yaml; do
+    n=$((n + 1))
+    dir=$(make_case "scan-bot-login-$n")
+    printf '%b\n' "$yaml" >"$dir/.github/review-policy.yml"
+    write_gh_custom_bot "$dir"
+    rc=$(run_case "$dir" -- 999 owner/repo --scan --verdict 1501=fixed)
+    if [ "$rc" = "0" ] && grep -q 'comments/1501/reactions' "$(posts_file "$dir")" 2>/dev/null; then
+      pass "#2913 $label: the scan finds the custom bot's finding"
+    else
+      fail "#2913 $label: the scan missed the custom bot (rc=$rc); stderr=$(cat "$dir/err.log") posts=$(cat "$(posts_file "$dir")" 2>/dev/null)"
+    fi
+    # Mutation self-check: the legacy reader misreads this spelling, so the
+    # case above would fail against it.
+    legacy=$(awk -v field=bot_login "$LEGACY_RECORD_BOT_LOGIN_AWK" "$dir/.github/review-policy.yml")
+    if [ "$legacy" != "custom-codex[bot]" ]; then
+      pass "#2913 mutation $label: the legacy awk reader misreads bot_login ('$legacy')"
+    else
+      fail "#2913 mutation $label: the legacy awk reader already reads bot_login; the case proves nothing"
+    fi
+  done <<'CASES'
+quoted key|codex:\n  "bot_login": "custom-codex[bot]"
+single-quoted key|codex:\n  'bot_login': custom-codex[bot]
+flow mapping|codex: {bot_login: "custom-codex[bot]"}
+flow mapping, quoted key|codex: {"enabled": true, "bot_login": "custom-codex[bot]"}
+CASES
+
+  # A policy that cannot be parsed, or a bot_login of the wrong kind, refuses
+  # before any read or reaction instead of scanning for the default login.
+  while IFS='|' read -r label yaml; do
+    n=$((n + 1))
+    dir=$(make_case "scan-bot-login-$n")
+    printf '%b\n' "$yaml" >"$dir/.github/review-policy.yml"
+    write_gh_custom_bot "$dir"
+    rc=$(run_case "$dir" -- 999 owner/repo --scan --verdict 1501=fixed)
+    if [ "$rc" = "3" ] && [ ! -s "$(posts_file "$dir")" ] && grep -q 'codex.bot_login' "$dir/err.log"; then
+      pass "#2913 $label: --scan refuses (exit 3) and posts nothing"
+    else
+      fail "#2913 $label: expected exit 3 and no post (rc=$rc); stderr=$(cat "$dir/err.log")"
+    fi
+  done <<'CASES'
+unparseable policy|codex:\n  bot_login: [unclosed
+list bot_login|codex:\n  bot_login: [custom-codex]
+empty bot_login|codex: {bot_login: ""}
+CASES
+
+  # No policy file keeps the default login, as before.
+  dir=$(make_case "scan-bot-login-absent")
+  rm -f "$dir/.github/review-policy.yml"
+  write_gh_custom_bot "$dir"
+  rc=$(run_case "$dir" -- 999 owner/repo --scan --verdict 1501=fixed)
+  if [ "$rc" = "0" ] && [ ! -s "$(posts_file "$dir")" ] \
+     && [ "$(jq -c '[.skipped[] | select(.why=="not-found") | .comment_id]' "$dir/out.json")" = "[1501]" ]; then
+    pass "#2913: with no policy file the scan keeps the default login (the custom bot's finding is not-found)"
+  else
+    fail "#2913: absent policy changed behaviour (rc=$rc); stderr=$(cat "$dir/err.log")"
+  fi
+}
+
+
 test_string_id_coerced_no_double_report
 test_fixed_reacts_plus1_via_reviewer
 test_rebuttal_reacts_minus1
@@ -686,11 +859,13 @@ test_idempotent_existing_reviewer_reaction
 test_dry_run_posts_nothing
 test_unrecognized_verdict_fails_before_any_post
 test_scan_is_head_pinned_to_latest_round
+test_scan_named_offhead_rejections
 test_issue_comment_endpoint_selected_by_location
 test_findings_from_stdin
 test_post_failure_exits_1_and_skips_ledger
 test_ambient_gh_token_bridges_to_reviewer_write
 test_explicit_reviewer_pat_not_clobbered_by_ambient
+test_scan_reads_bot_login_from_parsed_policy
 
 echo
 echo "Results: $PASS passed, $FAIL failed"

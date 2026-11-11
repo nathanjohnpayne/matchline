@@ -489,7 +489,11 @@ for arg in "$@"; do
     fetch) exit 0 ;;
     rev-parse) value="${!#}"; printf '%s\n' "${value%\^\{commit\}}"; exit 0 ;;
     merge-base) prev=''; for value in "$@"; do previous="$prev"; prev="$value"; done; printf '%s\n' "$previous"; exit 0 ;;
-    diff) cat "$P4B_FIXTURE_DIFF"; exit 0 ;;
+    diff)
+      for option in "$@"; do
+        if [ "$option" = --name-only ]; then printf 'x.js\0'; exit 0; fi
+      done
+      cat "$P4B_FIXTURE_DIFF"; exit 0 ;;
   esac
 done
 exit 99
@@ -766,7 +770,7 @@ if printf '%s' "$uf" | jq -e '.[0].title == "first line"' >/dev/null; then
 else fail "multi-line title: $uf"; fi
 uf="$(printf '%s\n' '{"loop":1,"severity":"P2","path":"a.js","line":3,"body":"dup"}' \
   | p4b_acct_unique_findings '{"F1":{"disposition":"deferred-to-follow-up","issue":585}}')"
-if printf '%s' "$uf" | jq -e '.[0].disposition == "deferred-to-follow-up" and .[0].issue == 585' >/dev/null; then
+if printf '%s' "$uf" | jq -e '.[0].disposition == "deferred-to-followup" and .[0].issue == 585' >/dev/null; then
   pass "explicit dispositions map applies (issue link recorded)"
 else fail "dispositions map: $uf"; fi
 uf="$(printf '' | p4b_acct_unique_findings)"
@@ -815,7 +819,7 @@ uf="$(printf '%s\n%s\n' \
   '{"loop":2,"severity":"P3","path":null,"line":null,"body":"solo"}' \
   | p4b_acct_unique_findings '' "$FILED")"
 if printf '%s' "$uf" | jq -e '
-    (.[0].id == "F1" and .[0].disposition == "deferred-to-follow-up" and .[0].issue == 701)
+    (.[0].id == "F1" and .[0].disposition == "deferred-to-followup" and .[0].issue == 701)
     and (.[1].id == "F2" and .[1].disposition == "unresolved" and .[1].issue == null)' >/dev/null; then
   pass "filed-issues tuple join sets deferred-to-follow-up + issue on the matched finding only (#675)"
 else fail "filed-issues tuple join: $uf"; fi
@@ -836,7 +840,7 @@ uf="$(printf '%s\n%s\n' \
   '{"loop":2,"severity":"P2","path":"a|1|b","line":2,"body":"c"}' \
   | p4b_acct_unique_findings '' '[{"severity":"P2","path":"a","line":1,"body":"b|2|c","issue":703}]')"
 if printf '%s' "$uf" | jq -e '
-    (.[0].issue == 703 and .[0].disposition == "deferred-to-follow-up")
+    (.[0].issue == 703 and .[0].disposition == "deferred-to-followup")
     and (.[1].issue == null and .[1].disposition == "unresolved")' >/dev/null; then
   pass "filed join respects the collision-proof tuple key ('|'-bearing content) (#675)"
 else fail "filed join collision: $uf"; fi
@@ -1173,6 +1177,18 @@ p4b_acct_build_record "abc" x APPROVED r d posted "" "[$CLEAN_LOOP]" "[]" "{}" "
 echo "accounting.schema.json — golden sample validates + round-trips"
 # ===========================================================================
 jq -e . "$ACCT_SCHEMA" >/dev/null 2>&1 && pass "accounting.schema.json parses" || fail "schema unparseable"
+CANONICAL_GOLDEN=$(printf '%s' "$GOLDEN" | jq -c '.unique_findings |= map(.disposition = "deferred-to-followup")')
+if printf '%s' "$CANONICAL_GOLDEN" | jq -e --slurpfile s "$ACCT_SCHEMA" '
+  all(.unique_findings[]; .disposition as $d
+    | $s[0]."$defs".unique_finding.properties.disposition.enum | index($d) != null)
+' >/dev/null; then pass "canonical deferral envelope validates against schema enum (#1677)"
+else fail "canonical deferral envelope rejected by schema enum (#1677)"; fi
+# Read the historical bytes directly, independently of the renderer.
+legacy_record=$(printf '<!-- p4b-accounting:v1\n%s\n-->\n' "$GOLDEN" | p4b_acct_extract_records)
+if [ "$(printf '%s' "$legacy_record" | jq -S .)" = "$(printf '%s' "$CANONICAL_GOLDEN" | jq -S .)" ]; then
+  pass "historical accounting extraction normalizes only the deferral alias (#1677)"
+else fail "historical accounting extraction did not normalize deferral alias (#1677)"; fi
+
 if jq -e --slurpfile s "$ACCT_SCHEMA" '
     ($s[0]) as $sch
     | (keys | sort) == ($sch.required | sort)
@@ -1216,7 +1232,7 @@ grep -q  -- 'unavailable (unavailable)' <<<"$BLOCK" \
   && pass "loop with no CLI counts renders explicit unavailable" || fail "missing unavailable cell"
 grep -q  -- '\*\*yes\*\* — approval-carried-findings' <<<"$BLOCK" \
   && pass "fail-closed loop rendered as positive safety evidence" || fail "fail-closed loop row missing"
-grep -qF '| F1 | P2 | — | Codex `--output-schema` vs jq validator drift (`line` min) | current-head | 3 | 3 | deferred-to-follow-up | #585 |' <<<"$BLOCK" \
+grep -qF '| F1 | P2 | — | Codex `--output-schema` vs jq validator drift (`line` min) | current-head | 3 | 3 | deferred-to-followup | #585 |' <<<"$BLOCK" \
   && pass "findings table carries content (path/summary), scope, and the follow-up issue link (#615)" \
   || fail "findings row missing"
 grep -qF  'Unique findings across loops: 4 — 4 on the approved head, 0 historical (earlier loops only). Repeated across loops: 0.' <<<"$BLOCK" \
@@ -1292,8 +1308,8 @@ grep -q '| Local gates green | ✅ | check_phase_4b_automation 67/67 green |' <<
   && pass "captured gate evidence renders the gates row green" || fail "gates evidence row wrong"
 
 RT="$(printf '%s\n' "$BLOCK" | p4b_acct_extract_records)"
-if [ "$(printf '%s' "$RT" | jq -S .)" = "$(printf '%s' "$GOLDEN" | jq -S .)" ]; then
-  pass "embedded record round-trips: render → extract == original"
+if [ "$(printf '%s' "$RT" | jq -S .)" = "$(printf '%s' "$GOLDEN" | jq -S '.unique_findings |= map(.disposition = "deferred-to-followup")')" ]; then
+  pass "embedded historical record round-trips to canonical deferral dispositions"
 else fail "round-trip mismatch"; fi
 RT_N="$(printf 'prose mentions p4b-accounting:v1 in passing\n%s\n' "$BLOCK" | p4b_acct_extract_records | wc -l | tr -d '[:space:]')"
 [ "$RT_N" = "1" ] && pass "extractor keys on the comment-open, not bare marker prose" \
@@ -1317,7 +1333,7 @@ HTERMS="$(printf '%s\n' "$HBLOCK" | sed -n '/<!-- p4b-accounting:v1/,$p' | grep 
   && pass "a hostile title cannot terminate the embedded comment early (exactly one --> after the comment-open)" \
   || fail "embedded comment carries $HTERMS terminator line(s)"
 HRT="$(printf '%s\n' "$HBLOCK" | p4b_acct_extract_records)"
-if [ -n "$HRT" ] && [ "$(printf '%s' "$HRT" | jq -S .)" = "$(printf '%s' "$HOSTILE" | jq -S .)" ]; then
+if [ -n "$HRT" ] && [ "$(printf '%s' "$HRT" | jq -S .)" = "$(printf '%s' "$HOSTILE" | jq -S '.unique_findings |= map(.disposition = "deferred-to-followup")')" ]; then
   pass "hostile-title record round-trips: render → extract == original (#615 round 2)"
 else fail "hostile round-trip mismatch: $HRT"; fi
 BADREC="$(printf '%s' "$GOLDEN" | jq -c '.loops[0].findings.P1 = 3')"
@@ -1472,7 +1488,7 @@ PRIOR_BODY="$WORK/prior-review-body.txt"
 set +e
 out="$(PATH="$BIN:$PATH" P4B_FAKE_PRIOR_BODIES="$PRIOR_BODY" p4b_acct_fetch_prior_records o/r)"; rc=$?
 set -e
-if [ "$rc" = 0 ] && [ "$(printf '%s' "$out" | jq -S .)" = "$(printf '%s' "$GOLDEN" | jq -S .)" ]; then
+if [ "$rc" = 0 ] && [ "$(printf '%s' "$out" | jq -S .)" = "$(printf '%s' "$CANONICAL_GOLDEN" | jq -S .)" ]; then
   pass "fetch pulls prior review bodies via the PATH-shimmed gh and re-emits the embedded record"
 else fail "fetch happy path (rc=$rc, out=$out)"; fi
 set +e
@@ -1584,8 +1600,8 @@ PATH="$BIN:$PATH" P4B_FAKE_GRAPHQL_PAGE_DIR="$PAGES_DIR" \
 set -e
 if [ "$rc" = 0 ] \
    && [ "$(grep -c . "$WORK/fetch-pages.jsonl")" = "2" ] \
-   && [ "$(jq -s -S '.[0]' "$WORK/fetch-pages.jsonl")" = "$(printf '%s' "$GOLDEN" | jq -S .)" ] \
-   && [ "$(jq -s -S '.[1]' "$WORK/fetch-pages.jsonl")" = "$(printf '%s' "$REC2" | jq -S .)" ]; then
+   && [ "$(jq -s -S '.[0]' "$WORK/fetch-pages.jsonl")" = "$(printf '%s' "$CANONICAL_GOLDEN" | jq -S .)" ] \
+   && [ "$(jq -s -S '.[1]' "$WORK/fetch-pages.jsonl")" = "$(printf '%s' "$REC2" | jq -S '.unique_findings |= map(.disposition = "deferred-to-followup")')" ]; then
   pass "fetch follows pageInfo.endCursor: trusted records from BOTH pages, in scan order (#615 round 3)"
 else fail "pagination (rc=$rc, out=$(cat "$WORK/fetch-pages.jsonl" 2>/dev/null))"; fi
 [ "${P4B_ACCT_PRIOR_FETCH_TRUNCATED:-}" = "false" ] && [ "${P4B_ACCT_PRIOR_FETCH_SCANNED_PRS:-}" = "3" ] \
@@ -2219,6 +2235,28 @@ out_t="$(p4b_acct_safe_truncate "$BLK_U" $(( ${#BLK_U} - 2 )))"
 # ===========================================================================
 echo "orchestrator — accounting hook (fail-open, exit codes preserved)"
 # ===========================================================================
+# #1618: no-snapshot request-generation capture and revalidation materialize
+# governing policy. Keep each accounting orchestration case hermetic by
+# resolving its own fixture policy, rather than trying to read a real PR.
+cat > "$BIN/fake-resolve-base-policy" <<'SH'
+#!/bin/sh
+set -eu
+default=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --default-config) default=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -r "$default" ] || exit 2
+tmp=$(mktemp "${TMPDIR:-/tmp}/p4b-acct-policy.XXXXXX")
+cp "$default" "$tmp"
+printf '%s\n' "$tmp"
+SH
+chmod +x "$BIN/fake-resolve-base-policy"
+# Direct orchestration cases below share the same governing-policy fixture.
+export P4B_RESOLVE_BASE_POLICY="$BIN/fake-resolve-base-policy"
+
 run_orch() { # run_orch <state-dir> <policy> <codex-fake> <pr> [extra env as VAR=VAL...] -- [extra args...]
   # Extra env vars come LAST so a test can override the defaults below (env
   # takes the last assignment); extra args land after the defaults, and the
@@ -2431,13 +2469,76 @@ if [ "$rc1" = 0 ] && [ "$rc2" = 0 ] \
   pass "two approvals of the same PR: the second record embeds only its own loop; each loop lives in exactly one ledger record (no double-count) (#615 round 6, finding 4)"
 else fail "no-double-count e2e (rc1=$rc1 rc2=$rc2, recA loops=$(printf '%s' "$REC_A2A" | jq '.loops|length' 2>/dev/null), recB loops=$(printf '%s' "$REC_A2B" | jq '.loops|length' 2>/dev/null), ledger-loops=$(jq -s '[ .[].loops | length ] | add' "$LEDGER_A2" 2>/dev/null))"; fi
 
-# (b) accounting sub-toggle off → plain summary only, exit 0, no state writes.
+# Verdict staging is independent of accounting; a successful post removes
+# its raw file but may leave this one private empty directory (#2790).
+no_accounting_state() {
+  python3 - "$1" <<'PY_STATE'
+from pathlib import Path
+import stat
+import sys
+
+state = Path(sys.argv[1])
+try:
+    mode = state.lstat().st_mode
+except FileNotFoundError:
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+try:
+    if (not stat.S_ISDIR(mode)
+            or {entry.name for entry in state.iterdir()} != {"unposted-verdicts"}):
+        sys.exit(1)
+    evidence = state / "unposted-verdicts"
+    mode = evidence.lstat().st_mode
+    sys.exit(0 if stat.S_ISDIR(mode) and stat.S_IMODE(mode) == 0o700
+             and not any(evidence.iterdir()) else 1)
+except OSError:
+    sys.exit(1)
+PY_STATE
+}
+
+# Exercise the exact invariant used below, including state that must still fail.
+STATE_CONTROLS="$WORK/accounting-state-controls"
+mkdir -p "$STATE_CONTROLS/empty/unposted-verdicts"
+chmod 700 "$STATE_CONTROLS/empty/unposted-verdicts"
+no_accounting_state "$STATE_CONTROLS/absent" \
+  && pass '#2790: absent state preserves the accounting opt-out' || fail '#2790: absent state refused'
+no_accounting_state "$STATE_CONTROLS/empty" \
+  && pass '#2790: only empty private verdict staging is allowed without accounting' || fail '#2790: private empty staging refused'
+for bad_state in ledger loops pending staged unknown hidden residual evidence-hidden root-link dangling-root evidence-link evidence-file public-evidence empty-root root-file; do
+  control="$STATE_CONTROLS/$bad_state"
+  mkdir -p "$control/unposted-verdicts"; chmod 700 "$control/unposted-verdicts"
+  case "$bad_state" in
+    ledger) : > "$control/phase-4b-ledger.jsonl" ;;
+    loops) mkdir "$control/phase-4b-loops" ;;
+    pending) mkdir "$control/phase-4b-pending" ;;
+    staged) : > "$control/staged-record.json" ;;
+    unknown) : > "$control/unexpected" ;;
+    hidden) : > "$control/.unexpected" ;;
+    residual) : > "$control/unposted-verdicts/pr-2790.residual" ;;
+    evidence-hidden) : > "$control/unposted-verdicts/.residual" ;;
+    root-link) mv "$control" "$control-target"; ln -s "$control-target" "$control" ;;
+    dangling-root) rmdir "$control/unposted-verdicts" "$control"; ln -s "$control-missing" "$control" ;;
+    evidence-link)
+      mkdir "$control-target"; chmod 700 "$control-target"
+      rmdir "$control/unposted-verdicts"; ln -s "$control-target" "$control/unposted-verdicts" ;;
+    evidence-file) rmdir "$control/unposted-verdicts"; : > "$control/unposted-verdicts" ;;
+    public-evidence) chmod 755 "$control/unposted-verdicts" ;;
+    empty-root) rmdir "$control/unposted-verdicts" ;;
+    root-file) rmdir "$control/unposted-verdicts" "$control"; : > "$control" ;;
+  esac
+  no_accounting_state "$control" \
+    && fail "#2790: accounting opt-out accepted $bad_state state" \
+    || pass "#2790: accounting opt-out rejects $bad_state state"
+done
+
+# (b) accounting sub-toggle off → plain summary only, exit 0, no accounting state writes.
 STATE_B="$WORK/state-b"; BODY_B="$WORK/body-b.md"
 set +e
 out="$(run_orch "$STATE_B" "$POLICY_ACCT_OFF" fake-codex-approve 202 P4B_WRAPPER_BODY="$BODY_B" -- 2>/dev/null)"; rc=$?
 set -e
-if [ "$rc" = 0 ] && ! grep -q 'Phase 4b Approval Accounting' "$BODY_B" && [ ! -d "$STATE_B" ]; then
-  pass "accounting.enabled: false → plain summary, no state writes, exit 0"
+if [ "$rc" = 0 ] && ! grep -q 'Phase 4b Approval Accounting' "$BODY_B" && no_accounting_state "$STATE_B"; then
+  pass "accounting.enabled: false → plain summary, no accounting state writes, exit 0"
 else fail "sub-toggle off (rc=$rc)"; fi
 
 # (b2) #615 round 4 (fails pre-fix): the SAME opt-out formatted with
@@ -2448,8 +2549,8 @@ STATE_B2="$WORK/state-b2"; BODY_B2="$WORK/body-b2.md"
 set +e
 out="$(run_orch "$STATE_B2" "$POLICY_ACCT_OFF4" fake-codex-approve 216 P4B_WRAPPER_BODY="$BODY_B2" -- 2>/dev/null)"; rc=$?
 set -e
-if [ "$rc" = 0 ] && ! grep -q 'Phase 4b Approval Accounting' "$BODY_B2" && [ ! -d "$STATE_B2" ]; then
-  pass "a four-space-indented opt-out is honored end-to-end: plain summary, no state writes (#615 round 4)"
+if [ "$rc" = 0 ] && ! grep -q 'Phase 4b Approval Accounting' "$BODY_B2" && no_accounting_state "$STATE_B2"; then
+  pass "a four-space-indented opt-out is honored end-to-end: plain summary, no accounting state writes (#615 round 4)"
 else fail "four-space sub-toggle off (rc=$rc, body=$(grep -c 'Phase 4b Approval Accounting' "$BODY_B2" 2>/dev/null) accounting block(s))"; fi
 
 # (c) forced report-generation error → plain summary posts, exit 0 (never
@@ -2513,8 +2614,8 @@ if [ "$rc" = 0 ] \
    && printf '%s' "$out" | jq -e '.verdict == "APPROVED" and .review_posted == true' >/dev/null \
    && grep -q '^\*\*Automated Phase 4b review\*\*' "$BODY_C3" \
    && ! grep -q 'Phase 4b Approval Accounting' "$BODY_C3" \
-   && [ ! -d "$STATE_C3" ]; then
-  pass "missing accounting module: a valid APPROVED still posts plain (no undefined-hook manual fallback, no state writes) (#615 round 9 CodeRabbit)"
+   && no_accounting_state "$STATE_C3"; then
+  pass "missing accounting module: a valid APPROVED still posts plain (no undefined-hook manual fallback, no accounting state writes) (#615 round 9 CodeRabbit)"
 else fail "module-absent approval regressed (rc=$rc, out=$(printf '%s' "$out" | head -c 200), err=$(tail -c 300 "$WORK/noacct.err" 2>/dev/null))"; fi
 
 # (c4) #615 round 9, CodeRabbit (fails pre-fix), end-to-end: the current

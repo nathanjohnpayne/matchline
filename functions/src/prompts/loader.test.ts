@@ -6,6 +6,7 @@ import {
   clearPromptVersionOverrides,
   getPromptVersionOverrides,
   loadPromptText,
+  loadPromptTextVersion,
   parsePromptSections,
   promptOverrideKey,
   resolvePromptVersion,
@@ -368,5 +369,45 @@ describe("setPromptVersionOverrides + resolvePromptVersion", () => {
     expect(() => loadPromptText("extraction", "resume")).toThrow(
       /resume\.v999\.md/,
     );
+  });
+});
+
+describe("loadPromptTextVersion (#655)", () => {
+  afterEach(() => {
+    clearPromptVersionOverrides();
+  });
+
+  it("loads the named version, ignoring an override and PROMPT_CONFIG", () => {
+    setPromptVersionOverrides({ "generation/fitBrief": "v1" });
+    const v2 = loadPromptTextVersion("generation", "fitBrief", "v2");
+    expect(v2.version).toBe("v2");
+    expect(loadPromptText("generation", "fitBrief").version).toBe("v1");
+  });
+
+  it("caches per version, so v1 and v2 never shadow each other", () => {
+    const v1 = loadPromptTextVersion("generation", "fitBrief", "v1");
+    const v2 = loadPromptTextVersion("generation", "fitBrief", "v2");
+    expect(v1).not.toBe(v2);
+    expect(v1.system).not.toBe(v2.system);
+    expect(loadPromptTextVersion("generation", "fitBrief", "v1")).toBe(v1);
+    // loadPromptText with no override resolves the configured default through the same cache.
+    expect(loadPromptText("generation", "fitBrief")).toBe(v1);
+  });
+
+  it("throws naming the missing file for a version not on disk", () => {
+    expect(() => loadPromptTextVersion("generation", "fitBrief", "v9")).toThrow(/fitBrief\.v9\.md/);
+  });
+
+  it("refuses a version that is not v<N> before building a path from it (#655 round 2)", () => {
+    for (const version of ["../x", "v2/../v1", "v1/../../v1", "", "V2", "v", "v1.md", "v1 ", "2"]) {
+      expect(() => loadPromptTextVersion("generation", "fitBrief", version), JSON.stringify(version)).toThrow(
+        /^Invalid prompt version .* for generation\/fitBrief: expected v<N>/,
+      );
+    }
+  });
+
+  it("refuses an invalid version from a runtime override too", () => {
+    setPromptVersionOverrides({ "generation/fitBrief": "../../generation/fitBrief.v1" });
+    expect(() => loadPromptText("generation", "fitBrief")).toThrow(/^Invalid prompt version "\.\.\/\.\.\/generation\/fitBrief\.v1"/);
   });
 });

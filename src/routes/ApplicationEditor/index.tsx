@@ -54,11 +54,13 @@ import {
   invokeValidateAsset,
   subscribeValidationAttestation,
 } from "../../services/validation.ts";
+import type { ExportFormat } from "../../services/export.ts";
 import {
   assetContentVersion,
   type ValidationAttestation,
 } from "../../../functions/src/validation/attestation.ts";
 import { attestationSubscription } from "./attestationSubscription.ts";
+import { exportCurrentAsset } from "./exportCurrentAsset.ts";
 import type { AttestationLookup } from "./exportGate.ts";
 import type { ExperienceUnit } from "../../types/capability.ts";
 import type { Application } from "../../types/crm.ts";
@@ -767,7 +769,14 @@ function ApplicationEditorInner({
         // server may have persisted a verdict even though the response
         // was lost or timed out. If the refetch shows a new verdict, the
         // effect on the asset's validation state clears this error.
-        setRevalidateError("Validation couldn't run. Try again in a moment.");
+        // `deadline-exceeded` comes from the server's own deadline
+        // (#619) or the client's callable timeout; either way the run
+        // ended without a verdict.
+        setRevalidateError(
+          (err as { code?: unknown } | null)?.code === "functions/deadline-exceeded"
+            ? "Validation ran out of time before it checked every claim, so there's no verdict yet. Try again."
+            : "Validation couldn't run. Try again in a moment.",
+        );
       }
       try {
         await refetchApplication();
@@ -789,13 +798,18 @@ function ApplicationEditorInner({
     setRevalidateError(null);
   }, [asset?.id, asset?.validation_status, asset?.validated_at]);
 
-  const onExport = useCallback(() => {
-
-    console.info("Export not yet implemented (Phase 2)", {
-      applicationId,
-      assetId: asset?.id,
-    });
-  }, [applicationId, asset]);
+  // Export (#523): the server re-checks the gate against its own
+  // attestation for the asset's current content, renders the file and
+  // returns a short-lived URL; `exportAndDownload` holds a busy lease
+  // across the call and starts the download. A rejection (including the
+  // server's failed-precondition when the gate is closed server-side, and
+  // the "can't be exported right now" refusal when the editor has no ids
+  // yet) propagates to the Export menu, which shows it inline.
+  const assetId = asset?.id;
+  const onExport = useCallback(
+    (format: ExportFormat): Promise<void> => exportCurrentAsset(applicationId, assetId, format),
+    [applicationId, assetId],
+  );
 
   return (
     <>

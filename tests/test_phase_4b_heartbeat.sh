@@ -126,8 +126,8 @@ set -eu
 n=$(cat "$HB_CASE/feedback-count" 2>/dev/null || printf 0); n=$((n+1)); printf '%s' "$n" > "$HB_CASE/feedback-count"
 printf 'feedback:%s\n' "$n" >> "$HB_CASE/events"
 if [ "$HB_MODE" = feedback ] || { [ "$HB_MODE" = late-feedback ] && [ "$n" -ge 3 ]; }; then printf '{"missing":[]}\n'; exit 1; fi
-# The owner contract deliberately permits the final-accounting request race:
-# the writer posts with the original generation; merge-gate fixtures reject it.
+# The final-accounting request race is caught by the generation-only fence:
+# heartbeat must report refusal without inventing a posted approval.
 if [ "$HB_MODE" = final-accounting-request ] && [ "$n" = 3 ]; then : > "$HB_CASE/new-request"; fi
 printf '{"feedback_policy":{},"findings":[],"missing":[]}\n'
 EOF
@@ -181,7 +181,11 @@ for arg in "$@"; do
   fetch) exit 0 ;;
   rev-parse) value="${!#}"; printf '%s\n' "${value%\^\{commit\}}"; exit 0 ;;
   merge-base) prev=''; for value in "$@"; do previous="$prev"; prev="$value"; done; printf '%s\n' "$previous"; exit 0 ;;
-  diff) cat "$HB_WORK/diff"; exit 0 ;;
+  diff)
+    for option in "$@"; do
+      if [ "$option" = --name-only ]; then printf 'x.sh\0'; exit 0; fi
+    done
+    cat "$HB_WORK/diff"; exit 0 ;;
  esac
 done
 exit 99
@@ -205,6 +209,46 @@ codex:
   enabled: true
   max_review_rounds: 10
 EOF
+# Retained verdict paths vary per invocation. Validate their complete raw
+# evidence before normalizing only that metadata in late-refusal summaries.
+compare_unposted_summaries() {
+  python3 - "$1" "$2" <<'PY_COMPARE'
+from pathlib import Path
+import json
+import re
+import stat
+import sys
+
+
+def normalized(case):
+    case = Path(case)
+    summary = json.loads((case / "out").read_text())
+    if (not isinstance(summary, dict)
+            or "validated_verdict_retention_error" in summary
+            or not isinstance(summary.get("validated_verdict"), dict)
+            or not isinstance(summary.get("validated_verdict_path"), str)):
+        raise ValueError("missing complete retained-verdict evidence")
+    path = Path(summary["validated_verdict_path"])
+    directory = case / "accounting" / "unposted-verdicts"
+    if (not path.is_absolute() or path.parent != directory
+            or not re.fullmatch(r"pr-1589\.[A-Za-z0-9]+", path.name)
+            or path.resolve(strict=True) != case.resolve(strict=True) / "accounting" / "unposted-verdicts" / path.name
+            or not stat.S_ISREG(path.lstat().st_mode)):
+        raise ValueError("retained verdict is not this invocation's regular file")
+    raw = json.loads(path.read_text())
+    canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if canonical(raw) != canonical(summary["validated_verdict"]):
+        raise ValueError("retained verdict differs from complete summary verdict")
+    summary["validated_verdict_path"] = "<validated-invocation-evidence>"
+    return canonical(summary)
+
+
+try:
+    sys.exit(0 if normalized(sys.argv[1]) == normalized(sys.argv[2]) else 1)
+except (OSError, ValueError):
+    sys.exit(1)
+PY_COMPARE
+}
 run_case() {
   local mode="$1" expected="$2" stages="$3" storage="${4:-good}" rc=0 record id log
   export HB_MODE="$mode" HB_CASE="$WORK/$mode-$storage"
@@ -242,7 +286,11 @@ run_case() {
   case "$storage" in entropy-*)
     [ ! -e "$P4B_HEARTBEAT_DIR" ] && pass "$mode/$storage publishes no unavailable identity" || fail "$mode/$storage advertised heartbeat identity"
     cmp -s "$WORK/$mode-good/events" "$HB_CASE/events" \
-      && cmp -s "$WORK/$mode-good/out" "$HB_CASE/out" \
+      && { if [ "$mode" = late-feedback ]; then
+             compare_unposted_summaries "$WORK/$mode-good" "$HB_CASE"
+           else
+             cmp -s "$WORK/$mode-good/out" "$HB_CASE/out"
+           fi; } \
       && pass "$mode/$storage preserves boundary operations, order and summary" || fail "$mode/$storage changed review flow"
     log="$P4B_ACCT_STATE_DIR/phase-4b-loops/fixture-repo-pr1589.jsonl"
     [ "$mode" != approve ] || log="$log.archive"
@@ -285,7 +333,7 @@ run_case() {
   [ "$(sort -u "$HB_CASE/observed-ids")" = "$id" ] \
     && pass "$mode keeps one identity across live and terminal stages" || fail "$mode changed stage identity"
   case "$mode" in
-    approve|changes|final-accounting-request)
+    approve|changes)
       jq -e '.summary_emitted and .review_posted and .token_count == 123 and .adapter_elapsed_seconds != null and .adapter_started_at_epoch != null' "$record" >/dev/null \
         && pass "$mode final summary and measured adapter timing" || fail "$mode final summary/timing"
       grep -qx posting "$HB_CASE/observed" && grep -qx adapter "$HB_CASE/observed" \
@@ -325,13 +373,16 @@ for storage in good blocked; do
 done
 run_case moved-request 10 barrier,adapter,posting,done
 run_case late-feedback 7 barrier,adapter,posting,done
-run_case final-accounting-request 0 barrier,adapter,posting,done
-# Feedback remains the last request-budget read; the final transition
-# fence checks head history afterward without adopting another request.
-if [ "$(sed '/read:.*timeline/d' "$HB_CASE/events" | sed -n '/^post$/{x;p;};h')" = feedback:3 ] \
-   && jq -er '.body' "$HB_CASE/posted.json" | grep -qxF '<!-- mergepath-p4b-request-generation: [1] -->'; then
-  pass 'late request remains outside original approval generation; feedback remains the last request-budget read before the transition fence'
-else fail 'request-generation race/read order changed'; fi
+run_case final-accounting-request 10 barrier,adapter,posting,done
+# The final fence refuses before the reviewer wrapper, preserving provisional
+# loop identity and pending-record cleanup rather than archiving an approval.
+if [ -e "$HB_CASE/new-request" ] && [ ! -e "$HB_CASE/posted.json" ] \
+   && ! grep -qx post "$HB_CASE/events" \
+   && jq -e '.loop.posted == "not-posted" and .loop.fail_closed.happened' \
+      "$P4B_ACCT_STATE_DIR/phase-4b-loops/fixture-repo-pr1589.jsonl" >/dev/null \
+   && [ ! -e "$P4B_ACCT_STATE_DIR/phase-4b-pending/fixture-repo-pr1589.json" ]; then
+  pass 'final-accounting request refuses without POST and preserves truthful cleanup telemetry'
+else fail 'final-accounting request refusal/cleanup changed'; fi
 
 # Entropy failures preserve both the successful POST/accounting transaction
 # and a writer-boundary refusal with provisional-loop correction. A valid

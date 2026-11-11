@@ -157,11 +157,19 @@ function normalizedMessage(err: unknown): string | undefined {
   return message.replace(STATUS_SUFFIX, "").trim();
 }
 
+/**
+ * Compared case-insensitively, with `_` read as `-`: an exception the
+ * callable did not catch reaches the client as `HttpsError("internal",
+ * "INTERNAL")`, the canonical status name in upper case, and a naive
+ * `message === code` let that one-word banner through verbatim.
+ */
 function isBareCode(err: unknown, bareCode: string): boolean {
   const message = normalizedMessage(err);
   if (message === undefined || message === "") return true;
   if (BACKEND_STATUS_PREFIX.test(message)) return true;
-  return message === bareCode || message === `${CODE_PREFIX}${bareCode}`;
+  const folded = message.toLowerCase().replace(/_/g, "-");
+  const code = bareCode.toLowerCase();
+  return folded === code || folded === `${CODE_PREFIX}${code}`;
 }
 
 function joinHint(sentence: string, hint: string | undefined): string {

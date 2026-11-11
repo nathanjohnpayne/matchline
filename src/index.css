@@ -89,3 +89,24 @@ body {
   content: attr(data-placeholder);
   @apply pointer-events-none float-left h-0 text-zinc-400 dark:text-zinc-500;
 }
+
+/*
+ * Calibrate card stack (#636): the next card settles into place when the
+ * previous one leaves. Reduced motion gets no movement; the route also
+ * skips the fly-out for it.
+ */
+@keyframes calibrate-card-in {
+  from {
+    transform: translateY(8px) scale(0.97);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .calibrate-card-in {
+    animation: calibrate-card-in 200ms ease-out;
+  }
+}

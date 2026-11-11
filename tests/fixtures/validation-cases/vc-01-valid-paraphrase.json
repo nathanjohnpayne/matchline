@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "id": "vc-01-valid-paraphrase",
+  "category": "valid_paraphrase",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 2,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_async_jobs_postgres",
+      "raw_text": "Built the Pliant async job system on top of Postgres LISTEN/NOTIFY plus a row-level locking pattern. Replaced the existing Sidekiq deployment for the workflow execution path; reduced per-job p99 latency by 60% and removed Redis as a tier-1 dependency.",
+      "normalized_summary": "Built Pliant async job system on Postgres LISTEN/NOTIFY plus row-level locking, replacing Sidekiq for workflow execution; reduced per-job p99 latency by 60% and removed Redis as tier-1 dependency",
+      "unit_type": "technical_decision",
+      "skills": [
+        "distributed systems",
+        "postgres engineering",
+        "performance engineering",
+        "infrastructure simplification"
+      ],
+      "tools": [
+        "Postgres",
+        "Sidekiq",
+        "Redis"
+      ],
+      "domains": [
+        "backend engineering",
+        "b2b saas"
+      ],
+      "metrics": [
+        {
+          "claim": "reduced per-job p99 latency by 60%",
+          "value": 60,
+          "unit": "% p99 latency",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "At Pliant, built a job queue on Postgres LISTEN/NOTIFY with row-level locks that replaced Sidekiq on the workflow path, cutting per-job p99 latency by 60% and dropping Redis as a tier-1 dependency.",
+    "source_unit_ids": [
+      "u_async_jobs_postgres"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Built Pliant's async job system on Postgres LISTEN/NOTIFY.",
+        "required_terms": [
+          "Pliant",
+          "LISTEN/NOTIFY"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_async_jobs_postgres"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "The job system replaced Sidekiq on the workflow execution path.",
+        "required_terms": [
+          "Sidekiq"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_async_jobs_postgres"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "The job system cut per-job p99 latency by 60%.",
+        "required_terms": [
+          "p99",
+          "60%"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_async_jobs_postgres"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a4",
+        "text": "The job system removed Redis as a tier-1 dependency.",
+        "required_terms": [
+          "Redis",
+          "tier-1"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_async_jobs_postgres"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [
+      {
+        "id": "rel1",
+        "assertion_ids": [
+          "a1",
+          "a3"
+        ],
+        "co_terms": [
+          [
+            "LISTEN/NOTIFY",
+            "job system",
+            "job queue"
+          ],
+          [
+            "60%"
+          ]
+        ]
+      }
+    ],
+    "expected_asset_status": "passed"
+  },
+  "notes": "Draft. A faithful paraphrase of one Unit; any flag is a supported-claim false flag."
+}

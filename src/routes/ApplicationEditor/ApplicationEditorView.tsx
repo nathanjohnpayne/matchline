@@ -12,7 +12,7 @@
  * PR 1 scope: two-pane shell + read-only bullets with
  * `source_unit_ids` chips. PR 2 (this commit) adds validation flag
  * badges per item, a popover surfacing the rationale + three
- * resolution paths, and the export-button gate. Inline edit +
+ * resolution paths, and the export gate (now the Export menu, #523). Inline edit +
  * autosave land in PR 3.
  */
 
@@ -33,6 +33,9 @@ import type {
   ValidationFlag,
 } from "../../types/crm.ts";
 import type { AddableSection } from "../../services/applications.ts";
+
+import ExportMenu from "../../components/ExportMenu.tsx";
+import type { ExportFormat } from "../../../functions/src/export/types.ts";
 
 import BulletEditor from "./BulletEditor.tsx";
 import ClaimAnnotation from "./ClaimAnnotation.tsx";
@@ -90,14 +93,15 @@ export interface ApplicationEditorViewProps {
    */
   readonly onAddSupportingUnit?: () => void;
   /**
-   * Click handler for the Export button. Disabled state is
-   * computed in the view from `asset.validation_status` via
-   * `exportGateState`; the container only needs to provide a
-   * handler for the enabled case. Actual export (PDF/DOCX) is
-   * Phase 2 — PR 2 wires the gate, not the export. Optional so
-   * PR 1 callers keep compiling.
+   * Export the resume in the chosen format (#523). The Export menu
+   * (`src/components/ExportMenu.tsx`) is disabled from the gate the
+   * view computes with `exportGateState`; the container only provides
+   * the call for the enabled case (`exportAndDownload` in
+   * `services/export.ts`), and the server re-checks the gate (#521). A
+   * rejection is shown inline under the menu. Optional: with no handler
+   * the menu stays disabled with "Export is not available yet."
    */
-  readonly onExport?: () => void;
+  readonly onExport?: (format: ExportFormat) => void | Promise<unknown>;
   /**
    * Explicit "Re-run validation" action, offered next to the disabled
    * Export button when the gate says re-validating the current content
@@ -370,7 +374,7 @@ interface TwoPaneLayoutProps {
   readonly applicationUnits: readonly ExperienceUnit[];
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
-  readonly onExport?: () => void;
+  readonly onExport?: (format: ExportFormat) => void | Promise<unknown>;
   readonly onRevalidate?: () => void;
   readonly revalidating?: boolean;
   readonly revalidateError?: string | null;
@@ -533,7 +537,7 @@ interface ResumePaneProps {
   readonly onScrollToUnit: (unitId: string) => void;
   readonly onRemoveBullet?: (bulletId: string) => void;
   readonly onAddSupportingUnit?: () => void;
-  readonly onExport?: () => void;
+  readonly onExport?: (format: ExportFormat) => void | Promise<unknown>;
   readonly onRevalidate?: () => void;
   readonly revalidating?: boolean;
   readonly revalidateError?: string | null;
@@ -759,12 +763,13 @@ function ResumePane({
       aria-label="Generated resume"
       data-testid="resume-pane"
     >
-      <ExportButton
+      <ExportMenu
         gate={gate}
         onExport={onExport}
         onRevalidate={onRevalidate}
         revalidating={revalidating}
         revalidateError={revalidateError}
+        className="border-b border-zinc-200 dark:border-zinc-800 pb-3 -mt-1"
       />
 
       <Section heading="Summary">
@@ -1179,86 +1184,6 @@ function AddBulletCTA({
     >
       {label}
     </button>
-  );
-}
-
-interface ExportButtonProps {
-  readonly gate: ReturnType<typeof exportGateState>;
-  readonly onExport?: () => void;
-  readonly onRevalidate?: () => void;
-  readonly revalidating?: boolean;
-  readonly revalidateError?: string | null;
-}
-
-function ExportButton({
-  gate,
-  onExport,
-  onRevalidate,
-  revalidating = false,
-  revalidateError = null,
-}: ExportButtonProps): ReactElement {
-  // Always render the button, never hide it — the user needs to see
-  // the gate's reason, not just an absent control. Gate enables iff
-  // BOTH the validation gate passes AND a click handler is wired —
-  // an enabled-looking button with no onClick is a broken primary
-  // action. CodeRabbit Major on PR #182. The "no handler wired"
-  // disabled reason is distinct from the validation reasons so the
-  // user (and tests) can tell them apart.
-  const enabled = gate.enabled && onExport !== undefined;
-  const disabledReason =
-    gate.enabled && onExport === undefined
-      ? "Export is not available yet."
-      : gate.disabledReason;
-  return (
-    <div className="flex items-center justify-end gap-3 border-b border-zinc-200 dark:border-zinc-800 pb-3 -mt-1">
-      {!enabled && disabledReason !== null && (
-        <p
-          className="text-xs italic text-zinc-500"
-          data-testid="export-disabled-reason"
-        >
-          {disabledReason}
-        </p>
-      )}
-      {revalidateError !== null && (
-        <p
-          role="alert"
-          className="text-xs text-red-600 dark:text-red-400"
-          data-testid="revalidate-error"
-        >
-          {revalidateError}
-        </p>
-      )}
-      {!gate.enabled && gate.canRevalidate === true && onRevalidate !== undefined && (
-        <button
-          type="button"
-          disabled={revalidating}
-          onClick={revalidating ? undefined : onRevalidate}
-          data-testid="revalidate-button"
-          className={
-            revalidating
-              ? "rounded-md border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-400 cursor-wait dark:border-zinc-700 dark:text-zinc-500"
-              : "rounded-md border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800 transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 focus-visible:ring-offset-1 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900"
-          }
-        >
-          {revalidating ? "Re-running validation…" : "Re-run validation"}
-        </button>
-      )}
-      <button
-        type="button"
-        disabled={!enabled}
-        onClick={enabled ? onExport : undefined}
-        title={enabled ? "Export this resume" : disabledReason ?? undefined}
-        data-testid="export-button"
-        data-export-enabled={enabled ? "true" : "false"}
-        className={
-          enabled
-            ? "rounded-md bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-50 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-            : "rounded-md bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600"
-        }
-      >
-        Export
-      </button>
-    </div>
   );
 }
 

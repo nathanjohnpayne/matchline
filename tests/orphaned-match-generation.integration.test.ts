@@ -692,3 +692,164 @@ describe("a revoked match mid-generation (#442, Codex P2 on #449 round 3)", () =
     expect(app.data()?.generated_assets ?? []).toEqual([]);
   });
 });
+
+describe("a rendered input that changes mid-generation (#485)", () => {
+  // The prompt now renders every eligible Unit's evidence text, the
+  // Role's title and the approved Unit-to-Requirement links. The
+  // persist re-reads all of it in its transaction and refuses a resume
+  // whose input changed while the model was writing it; additions do
+  // not count, because they cannot make what the model read untrue.
+
+  function pairMatch(unitId: string, requirementId: string): UnitMatch {
+    return {
+      ...match(requirementId),
+      id: `match-${unitId}-${requirementId}`,
+      experience_unit_id: unitId,
+    };
+  }
+
+  async function seedRenderedInput(): Promise<void> {
+    const batch = db().batch();
+    batch.set(db().collection("roles").doc(ROLE), {
+      id: ROLE,
+      owner_uid: ALICE,
+      title: "Staff PM",
+    });
+    batch.set(db().collection("applications").doc(APP), {
+      id: APP,
+      owner_uid: ALICE,
+      role_id: ROLE,
+      approved_unit_ids: ["unit-1", "unit-2"],
+    });
+    batch.set(
+      db().collection("experienceUnits").doc("unit-1"),
+      unit({ date_range: { start: "2020-01-01", end: "2022-06-30" } }),
+    );
+    batch.set(
+      db().collection("experienceUnits").doc("unit-2"),
+      unit({ id: "unit-2", raw_text: "Ran the payments migration." }),
+    );
+    batch.set(db().collection("jobRequirementUnits").doc("req-1"), requirement("req-1"));
+    batch.set(
+      db().collection("jobRequirementUnits").doc("req-2"),
+      requirement("req-2", { normalized_requirement: "Platform experience" }),
+    );
+    for (const [u, r] of [
+      ["unit-1", "req-1"],
+      ["unit-1", "req-2"],
+      ["unit-2", "req-1"],
+    ] as const) {
+      batch.set(db().collection("unitMatches").doc(`match-${u}-${r}`), pairMatch(u, r));
+    }
+    await batch.commit();
+  }
+
+  /** Generate, applying `mutate` while the model is "writing". */
+  async function generateWhile(mutate: () => Promise<void>): Promise<unknown> {
+    try {
+      await runGenerateResume(
+        { ownerUid: ALICE, applicationId: APP },
+        {
+          record: async () => 0,
+          generateId: () => "asset-1",
+          sleep: async () => {},
+          client: {
+            messages: {
+              create: async () => {
+                await mutate();
+                return mockResumeMessage();
+              },
+            },
+          } as never,
+        },
+      );
+      return null;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  async function savedAssets(): Promise<unknown[]> {
+    const app = await db().collection("applications").doc(APP).get();
+    return (app.data()?.generated_assets ?? []) as unknown[];
+  }
+
+  const units = () => db().collection("experienceUnits");
+
+  it.each<[string, () => Promise<void>, string]>([
+    ["a cited Unit's raw_text is edited", () => units().doc("unit-1").update({ raw_text: "Edited." }).then(() => {}), "was edited"],
+    ["a cited Unit's skills are edited", () => units().doc("unit-1").update({ skills: ["Strategy"] }).then(() => {}), "was edited"],
+    [
+      "a cited Unit's end date moves",
+      () => units().doc("unit-1").update({ "date_range.end": "2023-01-31" }).then(() => {}),
+      "was edited",
+    ],
+    [
+      "a cited Unit is unapproved",
+      () => units().doc("unit-1").update({ user_approved: false }).then(() => {}),
+      "unapproved, removed, or dropped",
+    ],
+    [
+      "a cited Unit is dropped from the application",
+      () =>
+        db().collection("applications").doc(APP).update({ approved_unit_ids: ["unit-2"] }).then(() => {}),
+      "unapproved, removed, or dropped",
+    ],
+    [
+      "an uncited but rendered Unit is edited",
+      () => units().doc("unit-2").update({ raw_text: "Edited." }).then(() => {}),
+      "Experience Unit unit-2 was edited",
+    ],
+    [
+      "one of a cited Unit's two rendered links is un-approved",
+      () =>
+        db().collection("unitMatches").doc("match-unit-1-req-2").update({ approved_for_use: false }).then(() => {}),
+      "unapproved or removed",
+    ],
+    [
+      "the Role's title is edited",
+      () => db().collection("roles").doc(ROLE).update({ title: "Principal PM" }).then(() => {}),
+      "Role changed",
+    ],
+  ])("refuses and saves nothing when %s", async (_case, mutate, expected) => {
+    await seedRenderedInput();
+    const thrown = await generateWhile(mutate);
+    expect(thrown).toBeInstanceOf(GenerateResumeGroundingStale);
+    expect((thrown as Error).message).toContain(expected);
+    expect(await savedAssets()).toEqual([]);
+  });
+
+  it("names approving a current match when a rendered link is withdrawn", async () => {
+    await seedRenderedInput();
+    const thrown = await generateWhile(() =>
+      db().collection("unitMatches").doc("match-unit-1-req-2").update({ approved_for_use: false }).then(() => {}),
+    );
+    expect((thrown as Error).message).toContain("approve a current match");
+  });
+
+  it.each<[string, () => Promise<void>]>([
+    [
+      "only fields the model never saw change",
+      () =>
+        units()
+          .doc("unit-1")
+          .update({ business_outcomes: ["faster launches"], updated_at: "2026-10-28T00:00:00.000Z" })
+          .then(() => {}),
+    ],
+    [
+      "a new approved match is added for a rendered Unit",
+      () => db().collection("unitMatches").doc("match-unit-2-req-2").set(pairMatch("unit-2", "req-2")).then(() => {}),
+    ],
+    [
+      "a new approved match is added for a Unit outside the snapshot",
+      async () => {
+        await units().doc("unit-3").set(unit({ id: "unit-3" }));
+        await db().collection("unitMatches").doc("match-unit-3-req-1").set(pairMatch("unit-3", "req-1"));
+      },
+    ],
+  ])("persists when %s", async (_case, mutate) => {
+    await seedRenderedInput();
+    expect(await generateWhile(mutate)).toBeNull();
+    expect(await savedAssets()).toHaveLength(1);
+  });
+});

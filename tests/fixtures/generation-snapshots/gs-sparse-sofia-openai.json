@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "id": "gs-sparse-sofia-openai",
+  "evidence_density": "sparse",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "jd_fixture_id": "openai-sse-fullstack-b2b-2026",
+    "expected_matches": "expected-matches/sofia-fullstack-founder-2026__openai-sse-fullstack-b2b-2026.json",
+    "expected_traces": null
+  },
+  "role": {
+    "id": "role_openai_sse_fullstack_b2b",
+    "title": "Senior Staff Product Engineer, Full Stack — B2B Applications",
+    "company_id": "co_openai"
+  },
+  "units": [
+    {
+      "id": "u_threadline_mvp",
+      "raw_text": "Built Threadline's MVP solo over fourteen months — Next.js front end, Node.js + Postgres back end, Stripe Billing, and a Twilio-backed factory-comms layer. Closed the first ten paying customers from cold outbound and a single Hacker News Show post; first $10K MRR within seven months of launch.",
+      "normalized_summary": "Built Threadline MVP solo over fourteen months — Next.js, Node.js, Postgres, Stripe Billing, Twilio factory-comms; closed first ten customers from cold outbound and Hacker News, hit $10K MRR in seven months",
+      "unit_type": "project",
+      "skills": [
+        "full-stack engineering",
+        "0-to-1 product",
+        "customer development",
+        "founding engineer"
+      ],
+      "tools": [
+        "Next.js",
+        "Node.js",
+        "Postgres",
+        "Stripe Billing",
+        "Twilio"
+      ],
+      "domains": [
+        "b2b saas",
+        "apparel manufacturing"
+      ],
+      "metrics": [
+        {
+          "claim": "first $10K MRR within seven months of launch",
+          "value": 10000,
+          "unit": "USD MRR",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "u_threadline_schema",
+      "raw_text": "Designed and shipped the Threadline production-tracking schema and API. Single Postgres database, multi-tenant by row-level security, with a Drizzle ORM layer and a typed REST API generated from the schema. Schema has held through three pricing-model changes and a 40x customer growth without a major rewrite.",
+      "normalized_summary": "Designed Threadline production-tracking schema and API — single Postgres database with row-level security multi-tenancy, Drizzle ORM, typed REST API; held through three pricing-model changes and 40x customer growth",
+      "unit_type": "technical_decision",
+      "skills": [
+        "schema design",
+        "multi-tenant architecture",
+        "api design",
+        "postgres engineering"
+      ],
+      "tools": [
+        "Postgres",
+        "Drizzle ORM",
+        "TypeScript"
+      ],
+      "domains": [
+        "b2b saas",
+        "backend engineering"
+      ],
+      "metrics": [
+        {
+          "claim": "schema held through 40x customer growth without a major rewrite",
+          "value": 40,
+          "unit": "x customer growth",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "u_b2b_pivot",
+      "raw_text": "Led the B2B pivot from D2C-brand-as-customer to factory-as-customer in early 2023. Ran 38 customer development calls in six weeks, rewrote the onboarding flow and pricing page, and re-targeted the GTM toward factory operations leads. ARR per logo doubled in the following two quarters and churn dropped from 4.1% to 1.8% monthly.",
+      "normalized_summary": "Led Threadline B2B pivot from D2C-brand-as-customer to factory-as-customer, ran 38 customer development calls in six weeks; ARR per logo doubled, monthly churn dropped from 4.1% to 1.8%",
+      "unit_type": "leadership",
+      "skills": [
+        "customer development",
+        "go-to-market strategy",
+        "pricing strategy",
+        "founder-led sales"
+      ],
+      "tools": [],
+      "domains": [
+        "b2b saas",
+        "founder operations"
+      ],
+      "metrics": [
+        {
+          "claim": "ran 38 customer development calls in six weeks",
+          "value": 38,
+          "unit": "calls",
+          "confidence": "high"
+        },
+        {
+          "claim": "monthly churn dropped from 4.1% to 1.8%",
+          "value": 1.8,
+          "unit": "% monthly churn",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "r_ts_react_web",
+      "raw_text": "Proficiency with TypeScript, React, and other web technologies",
+      "normalized_requirement": "TypeScript, React and web technologies",
+      "category": "tool",
+      "keywords": [
+        "typescript",
+        "react"
+      ],
+      "tools": [
+        "TypeScript",
+        "React"
+      ],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_backend_distsys",
+      "raw_text": "Proficiency in one or more backend languages (Python, Go, Rust, TypeScript or similar) and distributed systems concepts",
+      "normalized_requirement": "Backend language proficiency and distributed systems concepts",
+      "category": "skill",
+      "keywords": [
+        "backend",
+        "distributed systems"
+      ],
+      "tools": [
+        "Python",
+        "Go",
+        "Rust",
+        "TypeScript"
+      ],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_relational_db",
+      "raw_text": "Some experience with relational databases like Postgres / MySQL",
+      "normalized_requirement": "Relational database experience (Postgres, MySQL)",
+      "category": "tool",
+      "keywords": [
+        "relational databases"
+      ],
+      "tools": [
+        "Postgres",
+        "MySQL"
+      ],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_founder_early_eng",
+      "raw_text": "Former founder, or early engineer at a startup who has built a product from scratch is a plus",
+      "normalized_requirement": "Former founder or early startup engineer who built a product from scratch",
+      "category": "experience_level",
+      "keywords": [
+        "founder",
+        "early engineer",
+        "startup"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "medium",
+      "must_have": false,
+      "extracted_from": "nice_to_have"
+    },
+    {
+      "id": "r_fast_growing",
+      "raw_text": "Proven ability to thrive in fast-growing, product-driven companies",
+      "normalized_requirement": "Thrives in fast-growing, product-driven companies",
+      "category": "skill",
+      "keywords": [
+        "fast-growing",
+        "product-driven"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_9yr_eng",
+      "raw_text": "9+ years of professional engineering experience (excluding internships) at tech and product-driven companies",
+      "normalized_requirement": "9+ years of professional engineering experience",
+      "category": "experience_level",
+      "keywords": [
+        "9+ years",
+        "engineering experience"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    },
+    {
+      "id": "r_reliability_safety_perf",
+      "raw_text": "Care deeply about reliability, safety, and performance in production environments",
+      "normalized_requirement": "Reliability, safety and performance in production",
+      "category": "skill",
+      "keywords": [
+        "reliability",
+        "safety",
+        "performance"
+      ],
+      "tools": [],
+      "domains": [],
+      "priority": "high",
+      "must_have": true,
+      "extracted_from": "qualifications"
+    }
+  ],
+  "approved_matches": [
+    {
+      "experience_unit_id": "u_threadline_mvp",
+      "job_requirement_unit_id": "r_ts_react_web"
+    },
+    {
+      "experience_unit_id": "u_threadline_mvp",
+      "job_requirement_unit_id": "r_relational_db"
+    },
+    {
+      "experience_unit_id": "u_threadline_mvp",
+      "job_requirement_unit_id": "r_founder_early_eng"
+    },
+    {
+      "experience_unit_id": "u_threadline_schema",
+      "job_requirement_unit_id": "r_backend_distsys"
+    },
+    {
+      "experience_unit_id": "u_b2b_pivot",
+      "job_requirement_unit_id": "r_fast_growing"
+    }
+  ],
+  "item_upper_bound": 26,
+  "notes": "Draft stand-in for owner-approved evidence. r_9yr_eng and r_reliability_safety_perf are must-haves with no approved match here."
+}

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "vc-09-missing-cited-evidence",
+  "category": "missing_cited_evidence",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_threadline_schema",
+      "raw_text": "Designed and shipped the Threadline production-tracking schema and API. Single Postgres database, multi-tenant by row-level security, with a Drizzle ORM layer and a typed REST API generated from the schema. Schema has held through three pricing-model changes and a 40x customer growth without a major rewrite.",
+      "normalized_summary": "Designed Threadline production-tracking schema and API — single Postgres database with row-level security multi-tenancy, Drizzle ORM, typed REST API; held through three pricing-model changes and 40x customer growth",
+      "unit_type": "technical_decision",
+      "skills": [
+        "schema design",
+        "multi-tenant architecture",
+        "api design",
+        "postgres engineering"
+      ],
+      "tools": [
+        "Postgres",
+        "Drizzle ORM",
+        "TypeScript"
+      ],
+      "domains": [
+        "b2b saas",
+        "backend engineering"
+      ],
+      "metrics": [
+        {
+          "claim": "schema held through 40x customer growth without a major rewrite",
+          "value": 40,
+          "unit": "x customer growth",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "id": "u_soc2",
+      "raw_text": "Led the SOC 2 Type II program through a single-engineer-plus-vCISO model. Picked Drata for the evidence layer, ran the controls work in a sprint cadence, cleared the auditor's first walkthrough with zero exceptions, and got the report out three weeks ahead of the largest customer's procurement deadline.",
+      "normalized_summary": "Led Threadline SOC 2 Type II program single-engineer-plus-vCISO using Drata, cleared auditor first walkthrough with zero exceptions, delivered report three weeks ahead of largest customer procurement deadline",
+      "unit_type": "ownership",
+      "skills": [
+        "compliance program management",
+        "security engineering",
+        "vendor selection",
+        "founder operations"
+      ],
+      "tools": [
+        "Drata"
+      ],
+      "domains": [
+        "compliance",
+        "b2b saas"
+      ],
+      "metrics": [
+        {
+          "claim": "report out three weeks ahead of the customer's procurement deadline",
+          "value": 3,
+          "unit": "weeks early",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Designed Threadline's multi-tenant Postgres schema with row-level security and led the SOC 2 Type II program, clearing the auditor's first walkthrough with zero exceptions.",
+    "source_unit_ids": [
+      "u_threadline_schema"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Designed Threadline's multi-tenant Postgres schema with row-level security.",
+        "required_terms": [
+          "Postgres",
+          "row-level security"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_threadline_schema"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Led the SOC 2 Type II program, clearing the auditor's first walkthrough with zero exceptions.",
+        "required_terms": [
+          "SOC 2 Type II",
+          "zero exceptions"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The SOC 2 fact is true of the candidate (u_soc2, included as an uncited distractor) but the item cites only the schema Unit, so the traceability check must not find support in the cited evidence."
+}

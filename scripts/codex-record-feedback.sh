@@ -43,7 +43,11 @@
 #                       fetch the current-HEAD latest-round Codex inline
 #                       findings directly (read-only), mirroring
 #                       codex-review-request.sh's HEAD-pinned, latest-review
-#                       scoping. Use when no findings JSON is on hand.
+#                       scoping. Use when no findings JSON is on hand. A
+#                       --verdict comment_id outside that scope is fetched
+#                       by id and accepted as a codex.bot_login comment on
+#                       this PR (#2565); a 404 stays not-found, any other
+#                       read failure exits 3.
 #   --ledger F          Append per-finding verdict records (JSONL) to F.
 #                       Defaults to $CODEX_FEEDBACK_LEDGER, else
 #                       .mergepath/codex-feedback-ledger.jsonl under the repo
@@ -81,7 +85,9 @@
 #      JSON summary to stdout.
 #
 # HEAD-pinned: findings from --scan are scoped to the LATEST Codex review
-# round on the CURRENT HEAD (same filter shape as codex-review-request.sh).
+# round on the CURRENT HEAD (same filter shape as codex-review-request.sh),
+# plus any comment a --verdict names that the scan did not collect, fetched
+# by id and accepted only as a codex.bot_login comment on this PR (#2565).
 # Findings supplied via --findings-json inherit whatever scoping the producer
 # applied — pass the JSON from a request-script run on the current HEAD.
 #
@@ -416,24 +422,23 @@ fi
 if [ "$DO_SCAN" -eq 1 ]; then
   log "scanning current-HEAD latest-round Codex findings (read-only)"
   CONFIG=".github/review-policy.yml"
-  codex_field() {
-    local field=$1
-    [ -f "$CONFIG" ] || return 0
-    awk -v field="$field" '
-      /^codex:/ {in_block=1; next}
-      in_block && /^[^[:space:]#]/ {in_block=0}
-      in_block && $1 == field":" {
-        sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
-        gsub(/^["\047]/, "", $0)
-        gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
-        gsub(/[[:space:]]*#.*$/, "", $0)
-        sub(/[[:space:]]+$/, "", $0)
-        print
-        exit
-      }
-    ' "$CONFIG"
-  }
-  BOT_LOGIN=$(codex_field bot_login)
+  # codex.bot_login from the parsed policy (#2913). The earlier line-oriented
+  # awk reader matched only an unquoted, block-style `bot_login:` key, so a
+  # quoted key or a flow mapping read as unset and the scan looked for the
+  # default login, missing a custom bot's findings. A missing file keeps the
+  # default; a file that cannot be parsed, or a bot_login that is not a
+  # non-empty string, refuses.
+  BOT_LOGIN=""
+  if [ -f "$CONFIG" ]; then
+    [ -r "$__CRF_DIR/lib/feedback-policy-helpers.sh" ] \
+      || die 3 "scripts/lib/feedback-policy-helpers.sh is missing (policy parser); cannot read codex.bot_login"
+    # shellcheck source=lib/feedback-policy-helpers.sh
+    . "$__CRF_DIR/lib/feedback-policy-helpers.sh"
+    POLICY_JSON=$(policy_yaml_to_json "$CONFIG") && [ -n "$POLICY_JSON" ] \
+      || die 3 "$CONFIG could not be parsed; codex.bot_login is unknown"
+    BOT_LOGIN=$(policy_json_field "$POLICY_JSON" codex.bot_login string) \
+      || die 3 "codex.bot_login could not be read from $CONFIG"
+  fi
   BOT_LOGIN=${BOT_LOGIN:-"chatgpt-codex-connector[bot]"}
 
   PR_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER" 2>&1) || die 3 "failed to fetch PR metadata: $PR_JSON"
@@ -472,6 +477,50 @@ if [ "$DO_SCAN" -eq 1 ]; then
     log "no Codex review on the current HEAD ($HEAD_SHA) — nothing to scan"
   fi
   COLLECTED=$(jq -n --argjson a "$COLLECTED" --argjson b "$SCANNED" '$a + $b')
+
+  # #2565 (same shape as the CodeRabbit twin): a --verdict naming a comment
+  # the latest-round-on-HEAD scan did not collect is fetched by id. A pushed
+  # fix moves HEAD past the round that raised the finding, so the scope above
+  # dropped exactly the findings a `fixed` verdict follows and the verdict
+  # skipped as not-found with exit 0. The scan stays HEAD-pinned for unnamed
+  # findings; a fetched comment is accepted only as the configured bot's
+  # comment on this PR; a 404 keeps the not-found skip, and any other read
+  # failure exits 3, never a silent skip.
+  SCANNED_IDS=$(echo "$COLLECTED" | jq '[.[].comment_id]')
+  for ((di = 0; di < ${#VERDICT_IDS[@]}; di++)); do
+    did=${VERDICT_IDS[$di]}
+    if [ "$(echo "$SCANNED_IDS" | jq --argjson c "$did" 'index($c) != null')" = "true" ]; then
+      continue
+    fi
+    drc=0
+    DIRECT_OUT=$(gh api "repos/$REPO/pulls/comments/$did" 2>&1) || drc=$?
+    if [ "$drc" -ne 0 ]; then
+      case "$DIRECT_OUT" in
+        *"HTTP 404"*) log "comment $did named by --verdict is outside the current-HEAD scan and was not found by id (HTTP 404); skipping the verdict"; continue ;;
+        *) die 3 "failed to fetch comment $did named by --verdict: $DIRECT_OUT" ;;
+      esac
+    fi
+    DIRECT_ID=$(printf '%s' "$DIRECT_OUT" | jq -r '.id // empty' 2>/dev/null) || DIRECT_ID=""
+    [ "$DIRECT_ID" = "$did" ] \
+      || die 3 "unexpected response fetching comment $did named by --verdict: $DIRECT_OUT"
+    DIRECT_LOGIN=$(printf '%s' "$DIRECT_OUT" | jq -r '.user.login // ""')
+    DIRECT_PR=$(printf '%s' "$DIRECT_OUT" | jq -r '(.pull_request_url // "") | sub(".*/pulls/"; "")')
+    if [ "$DIRECT_LOGIN" != "$BOT_LOGIN" ]; then
+      log "comment $did (author ${DIRECT_LOGIN:-unknown}) is not authored by $BOT_LOGIN; skipping the verdict"
+      continue
+    fi
+    if [ "$DIRECT_PR" != "$PR_NUMBER" ]; then
+      log "comment $did belongs to another pull request (#${DIRECT_PR:-unknown}); skipping the verdict"
+      continue
+    fi
+    log "comment $did named by --verdict is outside the current-HEAD scan; fetched by id ($BOT_LOGIN finding on PR #$PR_NUMBER, commit $(printf '%s' "$DIRECT_OUT" | jq -r '.commit_id // "?"'))"
+    DIRECT_FINDING=$(printf '%s' "$DIRECT_OUT" | jq -c '{
+      path: (.path // null), line: (.line // .original_line // null), comment_id: .id, body: (.body // ""),
+      location: "pull_request_review_comment",
+      priority: ((.body | capture("!\\[P(?<n>[0-3]) Badge\\]")? // {n: null}) | .n | if . == null then "P?" else "P" + . end)
+    }')
+    COLLECTED=$(jq -n --argjson a "$COLLECTED" --argjson b "[$DIRECT_FINDING]" '$a + $b')
+  done
 fi
 
 # Deduplicate by comment_id (a finding present in both the JSON and the scan

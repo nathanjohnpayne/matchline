@@ -21,6 +21,7 @@ import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deriveMatchEvidenceCallable } from "./deriveMatchEvidence.ts";
+import { exportAssetCallable } from "./exportAsset.ts";
 import { extractFromResumeCallable } from "./extractFromResume.ts";
 import { generateResumeCallable } from "./generateResume.ts";
 import {
@@ -166,6 +167,11 @@ const CALLABLES: ReadonlyArray<{
   { name: "reembedExperienceUnit", fn: reembedExperienceUnitCallable, data: { unitId: "u-1" } },
   { name: "runMatching", fn: runMatchingCallable, data: { roleId: "role-1" } },
   { name: "deriveMatchEvidence", fn: deriveMatchEvidenceCallable, data: { roleId: "role-1" } },
+  {
+    name: "exportAsset",
+    fn: exportAssetCallable,
+    data: { applicationId: "app-1", assetId: "asset-1", format: "txt" },
+  },
 ];
 
 function request(uid: string | null, data: Record<string, unknown>): CallableRequest<unknown> {

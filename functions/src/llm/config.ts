@@ -5,6 +5,8 @@
  *
  * See specs/matchline.md § AI pipeline → Model strategy.
  */
+import type { Effort } from "./modelProfile.js";
+
 export interface ModelConfig {
   readonly provider: "anthropic" | "openai";
   readonly model: string;
@@ -21,10 +23,23 @@ export const STAGES = [
   "requirement_parsing",
   "rationale",
   "generation",
-  "validation",
+  "claim_extraction",
+  "traceability",
+  "specificity",
 ] as const;
 
 export type Stage = (typeof STAGES)[number];
+
+/**
+ * The three validation subtasks, each separately configurable (#489).
+ * These strings are the only spelling used across config keys, sweep
+ * `model.<stage>` / `effort.<stage>` keys, `UsageRecord.subtask`, eval
+ * CallRecords and reports. Usage records keep `stage: "validation"`
+ * with `subtask` set to one of these, so `scripts/latency/*` grouping
+ * is unchanged.
+ */
+export const VALIDATION_STAGES = ["claim_extraction", "traceability", "specificity"] as const;
+export type ValidationStage = (typeof VALIDATION_STAGES)[number];
 
 export function isStage(value: string): value is Stage {
   return (STAGES as readonly string[]).includes(value);
@@ -34,10 +49,21 @@ const defaults: Record<Stage, ModelConfig> = {
   // Frontier class — extraction quality is the foundation of the product.
   extraction: { provider: "anthropic", model: "claude-sonnet-4-6" },
   requirement_parsing: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+  // Reserved; never read. Match rationales are produced by the
+  // deterministic `generateRationale()` template (`matching/rationale.ts`,
+  // #100) and embeddings are unchanged, so editing this entry changes
+  // nothing. The eval sweep refuses `model.rationale` and
+  // `effort.rationale` as not exercised.
   rationale: { provider: "anthropic", model: "claude-sonnet-4-6" },
   // Cheaper class — generation is the highest-volume stage.
   generation: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-  validation: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  // Validation subtasks (#489): audited default; a change needs a
+  // measured, approved PR (#489).
+  claim_extraction: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  // Audited default; a change needs a measured, approved PR (#489).
+  traceability: { provider: "anthropic", model: "claude-sonnet-4-6" },
+  // Audited default; a change needs a measured, approved PR (#489).
+  specificity: { provider: "anthropic", model: "claude-sonnet-4-6" },
 };
 
 /**
@@ -98,6 +124,38 @@ export function getModelOverrides(): Readonly<Partial<Record<Stage, ModelConfig>
 
 export function modelFor(stage: Stage): ModelConfig {
   return runtimeModelOverrides.get(stage) ?? defaults[stage];
+}
+
+/**
+ * Runtime per-stage effort overrides (#495). Same inversion as the
+ * model overrides above, for the same reason: the sweep sets them
+ * before a variant runs and production leaves the map empty, in which
+ * case each model's profile default applies (see `llm/modelProfile.ts`).
+ * Call `clearEffortOverrides()` in test teardown.
+ */
+const runtimeEffortOverrides = new Map<Stage, Effort>();
+
+/** Replace the entire effort override map (full replacement, not a merge). */
+export function setEffortOverrides(overrides: Partial<Record<Stage, Effort>>): void {
+  runtimeEffortOverrides.clear();
+  for (const [stage, effort] of Object.entries(overrides)) {
+    if (effort !== undefined) runtimeEffortOverrides.set(stage as Stage, effort);
+  }
+}
+
+export function clearEffortOverrides(): void {
+  runtimeEffortOverrides.clear();
+}
+
+export function getEffortOverrides(): Readonly<Partial<Record<Stage, Effort>>> {
+  return Object.freeze(Object.fromEntries(runtimeEffortOverrides)) as Readonly<
+    Partial<Record<Stage, Effort>>
+  >;
+}
+
+/** The effort override for a stage, or `undefined` to use the model's default. */
+export function effortFor(stage: Stage): Effort | undefined {
+  return runtimeEffortOverrides.get(stage);
 }
 
 export const EMBEDDING_MODEL = "text-embedding-3-small";

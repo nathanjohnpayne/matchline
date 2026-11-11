@@ -23,7 +23,8 @@
 #     required" error instead of getting a surprise sudo install.
 #   - Otherwise: install the PINNED release to /usr/local/bin/yq via
 #     an unprivileged temporary download whose SHA-256 matches the pin
-#     below, then sudo install and verify the installed binary runs.
+#     below, then stage beside the destination, atomically replace it,
+#     and verify the installed binary runs.
 #     The official ubuntu-latest image ships yq 4.x
 #     preinstalled today; pinning keeps the checks resilient to runner
 #     image changes.
@@ -59,9 +60,35 @@ fi
 
 YQ_VERSION="${ENSURE_YQ_VERSION:-v4.53.6}"
 YQ_DEST="${ENSURE_YQ_DEST:-/usr/local/bin/yq}"
-# Official yq_linux_amd64 asset digest, cross-checked against the release
-# metadata: https://github.com/mikefarah/yq/releases/tag/v4.53.6
-YQ_SHA256="${ENSURE_YQ_SHA256:-c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385}"
+# The release assets below are Linux builds, and `uname -m` alone cannot tell
+# Linux from macOS/BSD (both can report arm64), so refuse any other OS before
+# the architecture mapping, any download, or sudo (#2748).
+YQ_OS=$(uname -s)
+if [ "$YQ_OS" != Linux ]; then
+  echo "ensure-yq.sh: unsupported OS: $YQ_OS (only Linux release assets are pinned); refusing install. Install mikefarah/yq v4+ another way (e.g. brew install yq)." >&2
+  exit 1
+fi
+YQ_MACHINE=$(uname -m)
+case "$YQ_MACHINE" in
+  x86_64)
+    YQ_ARCH=amd64
+    # Official v4.53.6 release asset digest from its GitHub release metadata:
+    # https://github.com/mikefarah/yq/releases/tag/v4.53.6
+    YQ_PINNED_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
+    ;;
+  aarch64|arm64)
+    YQ_ARCH=arm64
+    # Official v4.53.6 release asset digest from its GitHub release metadata:
+    # https://github.com/mikefarah/yq/releases/tag/v4.53.6
+    YQ_PINNED_SHA256=88a1016bc1d657375a35864e4f44b6f333df8ff97b559f51bba0adcb2169df09
+    ;;
+  *)
+    echo "ensure-yq.sh: unsupported Linux architecture: $YQ_MACHINE; refusing install" >&2
+    exit 1
+    ;;
+esac
+YQ_ASSET="yq_linux_${YQ_ARCH}"
+YQ_SHA256="${ENSURE_YQ_SHA256:-$YQ_PINNED_SHA256}"
 if [ "$YQ_VERSION" != v4.53.6 ] && [ -z "${ENSURE_YQ_SHA256:-}" ]; then
   echo "ensure-yq.sh: a version override requires ENSURE_YQ_SHA256" >&2
   exit 1
@@ -72,19 +99,26 @@ if [[ ! "$YQ_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 
 YQ_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ensure-yq.XXXXXX")
-trap 'rm -rf "$YQ_TMP_DIR"' EXIT
+YQ_STAGE_DIR=""
+trap 'if [ -n "$YQ_STAGE_DIR" ]; then sudo rm -rf "$YQ_STAGE_DIR"; fi; rm -rf "$YQ_TMP_DIR"' EXIT
 wget -q -O "$YQ_TMP_DIR/yq" \
-  "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+  "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_ASSET}"
 if command -v sha256sum >/dev/null 2>&1; then
   YQ_ACTUAL_SHA256=$(sha256sum "$YQ_TMP_DIR/yq")
 else
   YQ_ACTUAL_SHA256=$(shasum -a 256 "$YQ_TMP_DIR/yq")
 fi
 if [ "${YQ_ACTUAL_SHA256%% *}" != "$YQ_SHA256" ]; then
-  echo "ensure-yq.sh: SHA-256 mismatch for ${YQ_VERSION}/yq_linux_amd64; refusing install" >&2
+  echo "ensure-yq.sh: SHA-256 mismatch for ${YQ_VERSION}/${YQ_ASSET}; refusing install" >&2
   exit 1
 fi
-sudo install -m 0755 "$YQ_TMP_DIR/yq" "$YQ_DEST"
+# Keep the existing destination intact if staging or replacement fails.
+# The private root-owned directory is on the destination filesystem, so
+# GNU mv -T replaces exactly that path with one rename, including a
+# destination symlink; it never treats the destination as a directory.
+YQ_STAGE_DIR=$(sudo mktemp -d "${YQ_DEST}.install.XXXXXX")
+sudo install -m 0755 "$YQ_TMP_DIR/yq" "$YQ_STAGE_DIR/yq"
+sudo mv -fT "$YQ_STAGE_DIR/yq" "$YQ_DEST"
 # Verify the artifact we just installed actually runs (fail closed on a
 # truncated/failed download rather than letting a later check hit it).
 "$YQ_DEST" --version

@@ -77,7 +77,10 @@ export const CALLABLE_TIMEOUT_SECONDS = {
    * Runs several Sonnet passes per invocation — claim extraction,
    * then traceability and specificity over the extracted claims —
    * each with its own 3-attempt budget. The most call-fan-out of any
-   * stage even though each individual response is small.
+   * stage even though each individual response is small. Run one at a
+   * time, ~100 calls outlived this budget (#619); the orchestrator now
+   * runs them through a bounded pool and stops starting calls shortly
+   * before the budget ends (`validation/callPool.ts`).
    */
   validateAsset: 300,
 
@@ -106,6 +109,15 @@ export const CALLABLE_TIMEOUT_SECONDS = {
    * rather than a tighter one guessed from its p50.
    */
   deriveMatchEvidence: 120,
+
+  /**
+   * Résumé export (#521). No LLM call: a few `get()`s, a pure render,
+   * one Storage upload and one IAM `signBlob` round trip for the
+   * signed URL. Fast in practice; the budget is headroom for a slow
+   * upload or signing response, not for a long pipeline, and it keeps
+   * the server above the client SDK's 70s default like its siblings.
+   */
+  exportAsset: 120,
 } as const;
 
 export type CallableName = keyof typeof CALLABLE_TIMEOUT_SECONDS;

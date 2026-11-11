@@ -21,17 +21,17 @@
 #   - p1-resolved-no-mergedat-blocks.json — P1 thread resolved but merged_at unknown → fail-closed, NOT cleared (Codex P1 #460)
 #   - p1-unresolved-blocks.json   — P1 finding, thread unresolved → NOT cleared (#449)
 #   - resolution-lookup-failed.json — P1 finding, resolution lookup failed → NOT cleared / fail-closed (#449)
-#   - fresh-plus1-clears.json     — Codex +1 inside [HEAD date, merged_at] → cleared (#450)
+#   - fresh-plus1-clears.json     — fresh Codex +1 reaction is observation-only; NOT cleared (#1751)
 #   - stale-plus1-rejected.json   — +1 before the HEAD freshness floor → NOT cleared (#450)
 #   - post-merge-plus1-rejected.json — +1 after merged_at → NOT cleared (#450)
 #   - review-newer-than-reaction-blocks.json — newer review w/ unresolved P1 beats older +1 → NOT cleared (#450)
-#   - reaction-newer-than-review-clears.json — newer +1 beats older review w/ P1 → cleared (#450)
+#   - reaction-newer-than-review-clears.json — newer +1 reaction cannot clear an older P1 review → NOT cleared (#1751)
 #   - inline-fetch-failed.json    — inline_comments=null (fetch failed) → fail-closed, NOT cleared (CodeRabbit #460)
 #   - forcepush-stale-plus1-rejected.json — +1 predates a later force-push → raised lower bound, NOT cleared (Codex P2 #460)
-#   - forcepush-fresh-plus1-clears.json   — +1 after the force-push → cleared (anchor must not over-reject, Codex P2 #460)
+#   - forcepush-fresh-plus1-clears.json   — +1 after the force-push remains observation-only → NOT cleared (#1751)
 #   - stale-prior-head-plus1-rejected.json — +1 before merged_at-window floor → NOT cleared (merge-time freshness floor, Codex P2 #460)
 #   - codex-disabled-plus1-rejected.json — codex.enabled=false + fresh +1, no CLI APPROVED → NOT cleared (codexEnabled gate, Codex P2 #460)
-#   - postmerge-forcepush-plus1-clears.json — force-push AFTER merge ignored; pre-merge +1 still clears (merge-time force-push bound, Codex P2 #460 r2)
+#   - postmerge-forcepush-plus1-clears.json — post-merge force-push ignored; pre-merge +1 remains observation-only → NOT cleared (#1751)
 #   - cross-agent-plus1-rejected.json — fresh +1 but no same-agent Authoring-Agent → +1 cannot substitute reviewer approval, NOT cleared (same-agent gate, Codex P2 #460 r3)
 #
 # Inline-literal pattern: the algorithm under test is duplicated
@@ -529,8 +529,8 @@ fi
 # materialised review arrays — they can't catch a pagination bug at
 # the API call site. If the workflow regresses to the unpaginated
 # `github.rest.pulls.listReviews({...})` form, this canary fails.
-if grep -qE 'github\.paginate\(\s*$' "$WORKFLOW" && \
-   grep -A1 'github\.paginate(' "$WORKFLOW" | grep -qF 'github.rest.pulls.listReviews,'; then
+if grep -qE '(github\.paginate|auditPaginate)\(\s*$' "$WORKFLOW" && \
+   grep -A1 -E '(github\.paginate|auditPaginate)\(' "$WORKFLOW" | grep -qF 'github.rest.pulls.listReviews,'; then
   pass=$((pass + 1))
   echo "  PASS: $WORKFLOW paginates pulls.listReviews via github.paginate (PR #255 P2)"
 else
@@ -570,10 +570,10 @@ const end = source.indexOf('));', start) + 3;
 if (start < 0 || end < start) throw new Error('workflow resolver call missing');
 const body = 'é'.repeat(600000) + '\nReviewed commit: ' + 'a'.repeat(40);
 const comments = [{user: {login: 'chatgpt-codex-connector[bot]'}, body}];
-const invoke = new Function('execFileSync', 'issueComments', 'context', 'codexBotLogin',
+const invoke = new Function('execFileSync', 'issueComments', 'context', 'codexBotLogin', 'auditTimeout',
   source.slice(start, end) + '\nreturn issueComments;');
 const result = invoke(execFileSync, comments, {repo: {owner: 'owner', repo: 'repo'}},
-  'chatgpt-codex-connector[bot]');
+  'chatgpt-codex-connector[bot]', maximum => maximum);
 if (result.length !== 1 || result[0].body !== body) throw new Error('large resolver output was lost');
 NODE
 then

@@ -3,7 +3,7 @@ spec_id: matchline
 name: Matchline V1
 status: draft
 tested: false
-reason: Spec authored before implementation; tests land per-surface starting in Sprint 1.
+reason: Whole-product spec; behavior is covered by per-surface unit, DOM and integration tests rather than one spec-level suite.
 derived_from: ../../docs/projects/matchline/prds/matchline.md
 ---
 
@@ -20,12 +20,28 @@ The authoritative PRD lives in the `docs` sibling repo at
 repo-local derivation. On conflict, the PRD wins; file a plan entry to
 reconcile.
 
+This spec tracks PRD v0.3 (2026-10-22). Descriptive statements
+reflect shipped behavior unless marked **Target** (approved, not built
+or not yet met) or **Deferred** (out of this release by decision), as
+the PRD defines them. Acceptance criteria and execution targets are
+requirements; where shipped behavior does not meet one yet, it is
+marked **Target** with the measured result. Target
+requirements are summarized here only where they constrain shipped
+code; the PRD's "Target interface" and "Core requirements and
+enhancements" sections are the full list.
+
 ## Non-goals
 
 - Not an ATS keyword stuffer.
 - Not a generative writer — no claim ships that the user hasn't confirmed.
 - Not a job board, mass-apply tool, coaching product, or team product.
+  Two exceptions are **Target**: a scheduled scan of employer boards
+  the user names, and interview preparation and debriefs. The scan
+  never scrapes aggregators, and an aggregator-only result stays an
+  unverified lead until the employer's posting confirms it.
 - Not a replacement for networks. The Network Layer is V2+.
+- Not a native mobile app. V1 is a responsive web app; phone layouts
+  for agreed workflows are **Target**.
 
 ## Core loop
 
@@ -36,13 +52,20 @@ Career → Experience Units → Matching → Application
 The loop has four steps. Each must satisfy its own acceptance criteria;
 the loop as a whole must satisfy the end-to-end criteria below.
 
+**Target:** the PRD's revised loop, `Evidence → Role → Fit brief →
+Package → Process`, contains these four steps and extends them through
+the interview process.
+
 ### Step 1 — Career into Experience Units
 
 Acceptance criteria:
 
-- The user can import their career via at least one of: pasted resume
-  text, pasted LinkedIn profile HTML (browser view-source), pasted or
-  typed long-form career context.
+- The user can import their career by pasting resume text.
+  **Deferred** (PRD decision 3): LinkedIn profile HTML (#28), long-form
+  career context (#29), and artifact upload (#87). The `artifact`
+  `source_type` and the `artifact://` `source_ref` format (#592) are a
+  data-model change only, with no upload, storage, or parsing behind
+  them.
 - Extraction produces structured Experience Units conforming to the
   `ExperienceUnit` schema in `## Data model`.
 - Extraction generates embeddings for every Unit's `normalized_summary`
@@ -50,9 +73,9 @@ Acceptance criteria:
 - Every extracted Unit carries a `confidence_score` in `[0, 1]`, a
   `source_type`, and a `source_ref` pointing back to the input that
   produced it.
-- The Unit Review screen is the non-skippable landing surface
-  post-extraction. No Unit enters the matching pipeline until
-  `user_approved == true`.
+- Extraction lands the user in Unit Review; the approval gate, not
+  navigation, keeps Units out of matching: no Unit enters the matching
+  pipeline until `user_approved == true`.
 - Onboarding succeeds when the user has ≥ 20 approved Experience
   Units after the first session.
 
@@ -60,14 +83,17 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- The user can paste a JD as plain text into a Role.
+- The user can paste a JD as plain text into a Role, either when
+  creating it or later for a Role saved with only a title (#431).
 - Parsing produces `JobRequirementUnit` records conforming to the schema
   in `## Data model`, including `priority`, `must_have`, `category`, and
   `extracted_from`.
 - Parsing generates embeddings for every Requirement's
   `normalized_requirement`, cached per Role.
-- Every parsed Requirement is editable inline from the Role Detail →
-  Requirements tab.
+- Parsed Requirements are listed read-only on the Role Detail →
+  Requirements tab; changing them means editing the JD and re-parsing.
+  **Target enhancement:** inline editing (the rules and `upsertRequirement()`
+  allow it; no UI calls it).
 
 ### Step 3 — Match Units to Requirements
 
@@ -91,10 +117,12 @@ Acceptance criteria:
   Withholding is deliberate and follows from the neutral-fallback rule
   below: an explanation that may describe an unevaluated axis is a
   claim the data does not support, and no explanation is better than a
-  false one. The card offers no remedy, because the only rematch path
-  available today is destructive.
-- Requirements with no qualifying match appear in an explicit **Gaps**
-  view, not hidden.
+  false one. The card offers no remedy of its own; **Re-run matching** on the
+  tab rewrites the Role's matches under the current contract and
+  carries approve/reject decisions forward for unchanged pairs.
+- Must-have Requirements with no qualifying match appear in an
+  explicit **Gaps** view, not hidden. Nice-to-have Requirements are
+  not listed there.
 - No match is auto-approved. Generation uses only matches with
   `approved_for_use == true`.
 
@@ -102,48 +130,76 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- Generation accepts a target format (`resume`, `cover_letter`,
-  `outreach`) and produces output grounded only in approved Experience
-  Units and their approved matches.
-- Before the output is shown, the validation layer (see
-  `## Validation layer`) attaches a claim-to-Unit map. Any claim that
-  does not trace to an approved Unit is flagged.
-- The Application Editor blocks export while any validation flag is
+- Generation produces a resume grounded only in approved Experience
+  Units and their approved matches. **Target:** cover letters (#30) and
+  the other package artifacts (application answers, referral note),
+  under the same grounding and validation. Outreach drafting is
+  **Deferred**. `AssetRef.kind` already reserves `cover_letter` and
+  `outreach`; no writer produces them yet.
+- Generation reads each eligible Unit through the same evidence text the validator reads: `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range` (`functions/src/validation/unitPromptText.ts`). It does not read `business_outcomes`, which users can edit but which the #485 evidence decision does not admit as structured evidence (see § Validation layer). It also reads the target role (title and Requirements, with ids) and the approved Unit-to-Requirement links, in separately tagged sections. The target role and the links say what is relevant; they never supply facts about the candidate, including titles and tenure. Tags and seniority and scope signals are used only in their literal wording, and a title or level only when its own wording appears in a cited Unit's text or signals (the validator applies the same rule). A date or duration is stated only as a cited Unit states it, in its text or metrics or as its own `date_range`; a duration is never computed from a `date_range` (the validator applies the same rule). The input shows the run date (`today:`, UTC) outside the Unit text, and a `date_range` start or end later than it supports nothing, so a future end is read as no end: extraction has defaulted some approved Units' end dates into the future, and an end that has not happened is not evidence. A range with a start and no end supports neither an end date nor "present". Content the Units do not support is omitted, never filled; an empty bullet or skill list is a valid result. Eligibility is unchanged: an approved Unit in the Application's `approved_unit_ids` with at least one approved match to a Requirement the Role still has.
+- The validation layer (see `## Validation layer`) attaches a
+  claim-to-Unit map and flags any claim that does not trace to an
+  approved Unit. It runs when the user saves a bullet's text or
+  chooses "Re-run validation," after the draft is shown; adding or
+  removing a bullet marks the draft unvalidated (`validation_status: "stale"`, unrelated to staleness against the canonical) without running it; running it before the draft is shown is **Target**.
+- The export gate (today in the Application Editor; **Target:** the
+  Package, PRD decision 5) blocks export while any validation flag is
   unresolved.
-- A passing validation result covers the evidence as the validator read it. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`).
-- Exports are available as PDF, DOCX, and plain text.
+- A passing validation result covers the evidence as the validator read it. When the validator's evidence format changes (the evidence version's prefix moves, as it did to `ev3` for #485), every earlier verdict stops covering export and the editor says that validation has been updated; re-running it is a user-triggered model call, and stored verdicts are never recomputed. The app and the functions must agree on the prefix: during a deploy that moves it, export of an attested asset stays blocked, and a re-run does not clear it, until both the functions and hosting are on the new version (both directions fail closed), so the functions deploy first and hosting right after. Export is also blocked while any Unit the output cites is missing, no longer approved, or has changed since that read (the asset records each cited Unit's version as `validated_unit_versions`). **Target:** once tailored views pin a canonical version, a canonical edit that changes a Unit a kept view cites is staleness against the canonical, not an attestation failure: the gate checks the view against the Unit versions its pinned canonical carried, so the kept view stays exportable (PRD decision 2).
+- Plain-text export is built (see Export below): the Application Editor's Export menu offers Text, stays disabled with the gate's reason (and "Re-run validation" where that is the fix) while the gate is closed, and the server re-checks the gate before writing a file. **Target:** PDF and DOCX (#525, #527), and the menu moving to the Package (#628).
+
+### Export
+
+Export turns a validated résumé into a file someone else can receive (#33). Plain text is built end to end: the server path (#517, #521) and the Application Editor's Export menu (#523). PDF and DOCX are **Target** (#525, #527).
+
+- **Callable.** `exportAsset({ applicationId, assetId, format })` checks the owner, rejects an id outside `[A-Za-z0-9_-]{1,128}` or an unregistered format (`pdf`, `docx` and `json` today) with `invalid-argument` before any read, re-checks the export gate on the server (see Validation layer), renders, writes exactly one object at `applications/{applicationId}/{assetId}.{ext}` in the default bucket (re-export overwrites it), and returns a V4 signed URL valid for 5 minutes with the file name, format, content type and expiry. A gate refusal is `failed-precondition` with a written sentence and `details.reason` (an attestation with no `validated_unit_versions` map is refused as `evidence-unrecorded`); any unexpected failure, in a Firestore read, the gate check, the render, the write or the signing, is `internal` with one written sentence, the cause only in the function log. It writes no Firestore data. Exports are not kept: the bucket's lifecycle rule (`storage.lifecycle.json`, applied per `DEPLOYMENT.md`) deletes each object under `applications/` a day after it is written, and nothing deletes it sooner.
+- **Renderers.** Each format implements one contract (`functions/src/export/types.ts`) and registers in `functions/src/export/registry.ts`. A renderer changes presentation only; it never adds, drops, reorders or rewrites an item, and it renders exactly the content object the gate checked. Plain text (`functions/src/export/text.ts`) is deterministic: UTF-8 without a byte-order mark, LF line endings, no trailing whitespace, section headings SUMMARY, EXPERIENCE, SKILLS and EDUCATION in the editor's order, items in stored order, inline Markdown (`**`, `*`, `__`, `_`, links, images, autolinks and escapes) reduced to plain text (an emphasis delimiter pairs only at a word-like boundary, where it reads as emphasis, and anywhere else it is an operator, a glob, a path or a footnote mark and is kept as typed: `*…*` and `**…**` never pair inside a word or number, the opener not preceded and the closer not followed by a letter, combining mark or digit, or `_` for `**`, so `5*3*2`, `10**6 to 10**9`, `x**2` and a decomposed `cafe\u0301*2*` keep their stars; a `*` or `**` glued to punctuation or a symbol pairs only at a boundary, an opener followed by one coming after the start, whitespace, an opening bracket or quote, a dash or a held literal, and a closer preceded by one coming before the end, whitespace, closing punctuation, a dash, `/` or a held literal, and emphasised text never starts with `)`, `]`, `}`, `,`, `.`, `;`, `:`, `!`, `?`, `/`, `%` or a closing quote nor ends with `(`, `[`, `{`, an opening quote or `/`, so `COUNT(*)`, `src/*.ts`, `v2.*, v3.*`, `Grew 30%*, cut 12%*`, `(3)*(4)*(5)`, `*/15,*/30` and `**/node_modules/**` export as typed; `_…_` needs a boundary outside both delimiters, the opener after the start, whitespace, an opening bracket or quote, a dash or a held literal and the closer before the end, whitespace, closing punctuation, a dash or a held literal, never `/` or `@`, so `$_1_`, `/_internal_/api`, `_.map`, `_jdoe_@ex.com` and `github.com/acme/_private_` keep their underscores; emphasis never crosses a bracket, because the emphasised text must balance its brackets, so `f(*1)*` keeps its stars, and a `*` or `**` between a digit and a signed digit is an operator, never a closer, so `**2**-3**` keeps `2**-3` whole; `__…__` only at non-word boundaries and only when its inner text has whitespace or a non-word character: around a single identifier-like token of letters, combining marks, digits and `_`, such as `__init__` or `__slots__`, it is a dunder name and keeps its underscores wherever it appears; a `**…**` or `__…__` span longer than 500 characters keeps its delimiters, which bounds the work per opener; the trade-off is intended, so the delimiters of some emphasised prose that Markdown would format, such as `**.NET**`, `_42_/x`, `*+15%*…`, `**1)**` and a word-only `__x__`, are kept on purpose, because keeping characters is the safe side of the zero-fabrication invariant), URLs held whole so their `*`, `_` and balanced `(…)` pairs are never read as emphasis (a bare URL with any scheme, such as `https://`, `ftp://`, `file://` or `s3://`, an `<https://…>` or `<mailto:…>` autolink, and a link destination; a bare URL never ends with `*` or trailing sentence punctuation, which stay outside it), a link reduced to `label (url)`, or just `url` when the label is the URL, with its title dropped, an image reduced to its alt text with its URL dropped, so an image whose alt text is empty disappears, and, as in CommonMark, `![` always opening an image and `[x](y)` making a link wherever it stands, so `Wow![chart](u)` becomes `Wowchart` and `arr[0](1)` becomes `arr0 (1)`, code spans exported as typed (the backticks are removed and the text between them is kept exactly as written, backslashes, `*`, `_`, `~`, `#`, `>` and link syntax included, because a backslash inside a code span escapes nothing, as in CommonMark: code spans are held in the same first pass as escapes, before any escape outside them is reduced, so `` `\d+\.\d+` `` and `` `C:\*` `` keep every character; only whitespace is laid out, a line break in a span becoming a space and ASCII whitespace runs collapsing as elsewhere), and every other character, including em dashes and non-ASCII text, passed through unnormalized. At a line start only a `#` heading marker, a `-`/`*`/`+` bullet marker (neither when the first visible character after it is a number, a sign or a backslash-escaped literal: the guard looks through any run of whitespace, inline formatting (`*`, `_`, `~`, a stray backtick, and the `[` or `![` of a link or image whose label starts the content) and escapes, and reads a code span's text the same way, past whitespace and those delimiters, because inline Markdown is reduced only after block markers are stripped, so `# 1 ranked`, `+ 12% NRR`, `-  30% cost`, `- **30%** cost`, `# **1** ranked`, `` - `-30%` cost `` and `- \-30% cost` survive, and `- ~30% faster` and `` - `~30%` faster `` both keep their marker) and a thematic-break line are removed; blockquote `>`, ordered-list `1.`/`1)` and strikethrough `~~` are kept as typed, because the editor shows item text verbatim and `>40% faster` or `2019. B.A.` is a claim, not markup. A heading marker before a bullet marker keeps both, because the guard reads the `-` as a sign, so `## - Led` is exported as typed. No step's work grows with the square of an item's length (an emphasis span is bounded and no pattern rescans the rest of the text from every position), so a pathological item, such as a run of 40,000 NBSP, 40,000 `[` or tens of thousands of unclosed `**`, renders in milliseconds.
+- **File name.** `{Company} — {Title} — Resume.{ext}`, with a real em dash. A missing part is left out rather than filled in (Roles created today have no Company document, so the name is usually `{Title} — Resume.{ext}`). The name travels in a `Content-Disposition: attachment` header carried by the signed URL, with an RFC 5987 `filename*` for the exact UTF-8 name and an ASCII `filename` fallback (`functions/src/export/filename.ts`).
+- **Export menu.** `src/components/ExportMenu.tsx` is a dropdown driven only by its props: the export gate, the format list (always shown in the order PDF, DOCX, Text; only Text today) and the export call. It imports nothing from the Application Editor, so the Package can mount it (#628). While the gate is closed the trigger is disabled with the gate's reason and the re-validate action; there is no client path to the callable. Choosing a format calls `exportAndDownload` (`src/services/export.ts`), which holds a busy lease across the callable and starts the download by loading the returned URL in a hidden iframe, removed a minute later (only `https:` URLs, or `http:` on a loopback host for the emulator, are loaded). A frame, not a same-tab navigation, so a failed download (a 403, an expired URL, the emulator's 404) cannot replace the editor with an error page; the trade-off is that such a failure is silent, because the page cannot read the frame's cross-origin response, and exporting again signs a fresh URL. The trigger reads "Exporting…" until the call settles. A failure shows inline under the menu, never as a toast, and the menu is usable again at once: the server's sentence (its `failed-precondition` refusal or its `internal` one), the app's own refusal as written (`ExportRefusal`: no Application or asset id, an unexpected download link), or generic copy for any other error. The menu is keyboard-operable (Enter, Space or the arrow keys open it; arrows, Home and End move; Enter or Space chooses; Escape closes).
+- **Emulator.** Under the Storage emulator the callable returns the emulator's object URL instead of signing; production always signs. The emulator appends its own `filename*=` to the stored `Content-Disposition` when it serves the object, so the download file name is confirmed on a deployed project, not in the emulator. A Storage emulator host set inside a deployed runtime (`K_SERVICE`, `K_REVISION` or `FUNCTION_TARGET` without `FUNCTIONS_EMULATOR=true`) is refused with `internal` rather than answered with an unsigned URL. Provisioning and the runtime service account's Storage and signing grants: `DEPLOYMENT.md`.
 
 ### End-to-end acceptance
 
-- **Full flow.** From a populated Capability Graph, a user can paste
-  a JD and produce a validated, exportable resume in under 20 seconds
-  at p95.
-- **Cost.** Per-application LLM spend (parse + match + generate +
-  validate) is under $1 at p95; target $0.75.
-- **Zero fabrication.** Every claim in every shipped output traces to
-  an approved Experience Unit. This is an invariant, not a metric.
+- **Full flow (Target, not met).** From a populated Capability Graph, a user can paste a JD and produce a validated, exportable resume in under 20 s at p95. One timed run on matchline-dev took about 88 s of callable time, measured in the browser, to a saved validation verdict, about 4.4× the 20 s figure (n = 1, #619; see Execution targets). One run does not measure the p95; the target is still not met, because JD parsing alone exceeds 20 s (production p95 31.9 s, n = 5). The 236 s p95 from #177 timed résumé extraction through matching in the eval harness, not this flow. Plain-text export is built but was not part of that timed run; PDF and DOCX are not built (#33).
+- **Cost (Target).** Per-application LLM spend (parse + match + generate + validate) is under $1, with a p95 target of $0.75. Per-call cost is attributed by task since #483. One timed run of the full flow cost $0.87 (#619), under the $1 ceiling; a single run does not establish a p95.
+- **Zero fabrication.** Every claim in every exported or sent output traces to an approved Experience Unit. This is an invariant, not a metric. Today it is enforced at the export gate, which requires a passing, server-attested validation for the asset's current content. Plain-text export enforces it twice: the Export menu stays disabled while the gate is closed, and the `exportAsset` callable re-checks the attestation on the server and renders exactly the content it checked, changing presentation only. A freshly generated draft is shown before validation runs (see Validation layer), so it can carry an untraced claim until the user validates it. **Target:** validation completes before generated output is first shown.
 
 ## Data model
 
 CRM objects and Capability Graph objects are defined in the PRD § Data
 model. For each object, the repo ships TypeScript types in
 `src/types/` that must match the JSON shape below. Foreign keys use
-UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
+UUIDs; timestamps are ISO 8601 strings in the documents below.
+Exceptions: `llm_calls` (auto ids, server `createdAt`) and validation
+attestations (keyed by asset id and content fingerprint). Every CRM
+and Capability Graph object also carries `owner_uid` (the Firebase
+Auth uid), stamped by the service layer and enforced by
+`firestore.rules`; it is omitted from the shapes below. Validation
+attestations carry `owner_uid` too, stamped by `validateAsset`. The
+server-only `llm_calls` ledger does not: `firestore.rules` denies all
+client access to it, and it records an optional camel-case `ownerUid`
+(`functions/src/llm/cost.ts`).
 
 ### CRM objects
 
 - `Person { id, name, role, company_id, relationship_type, last_contacted_at?, notes? }`
 - `Company { id, name, industry?, size?, priority, url?, notes? }`
 - `Role { id, company_id, title, jd_raw, jd_url?, location?, remote_policy?, comp_range?, discovered_at }`
+  - **Target** (PRD decision 7): `origin: "manual" | "scan"` and `source_url?`. A scan-created Role exists only for a result verified on the employer's posting, which becomes its `jd_url`; `source_url` keeps where the lead was seen (the result's `discovery_url`). New Role stamps a placeholder `company_id` because there is no Company UI yet; adding Company and Source fields to the form, and persisting them, is Target work.
+  - `jd_raw` may be the empty string. A Role can be saved with only a title, as a lead whose JD arrives later (#431). Parsing, matching and generation stay gated on the JD: an empty `jd_raw` yields no Requirements, matching does not run without Requirements, and generation needs approved matches.
 - `Application { id, role_id, stage, applied_at?, last_activity_at, generated_assets[], approved_unit_ids[] }`
+  - `stage` is one of seven values: `saved`, `drafting`, `applied`, `interviewing`, `offer`, `rejected`, `withdrawn`. These stay for this release (PRD decision 1); finer process steps belong to the dossier, not to `stage`.
+  - An Application is created when the user starts resume generation for a Role, in `drafting`; it remains, with no asset, if generation fails. A Role with no Application does not appear on the Pipeline.
 - `Interaction { id, person_id, application_id?, type, direction, summary, occurred_at }`
+  - Companies, People and Interactions have service-layer readers and writers but no entry UI; the Pipeline reads Companies for the card's company name and People and Interactions for a key contact, and since nothing creates them, cards show "Unknown company" and no contact.
+- `Task { id, application_id, title, due_at?, completed, created_at }` (#34): a follow-up reminder on an Application. Completing one also stamps the Application's `last_activity_at`. V1 sends nothing; tasks are reminders the human acts on.
 
 ### Capability Graph
 
-- `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, date_range?, created_at, updated_at }`
+- `ExperienceUnit { id, source_type, source_ref, raw_text, normalized_summary, unit_type, skills[], tools[], domains[], seniority_signals[], scope_signals[], business_outcomes[], metrics[], evidence_type, confidence_score, user_approved, rejected?, flagged?, reembed_pending?, embedding?, date_range?, created_at, updated_at }`
 - `Metric { claim, value?, unit?, direction?, confidence }`
-- `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from }`
-- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, created_at }`
+- `JobRequirementUnit { id, role_id, raw_text, normalized_requirement, category, keywords[], tools[], domains[], seniority_level?, priority, must_have, extracted_from, embedding? }`
+- `UnitMatch { id, experience_unit_id, job_requirement_unit_id, role_id, semantic_score, rule_score, final_score, components?, structural_evidence?, component_applicability?, rationale, surface_evidence, approved_for_use, user_rejected, schema_version?, created_at }`
   - `components`, `structural_evidence` and `component_applicability`
     are **optional**: records written before those fields existed carry
     none of them, and the coverage gate depends on being able to
@@ -173,6 +229,50 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
     records store the same neutrals without marking them.
 - `UnitCluster { id, application_id, label, experience_unit_ids[], narrative_purpose, generated_text? }`
 
+### Dossier objects (Target)
+
+The PRD's § Dossier objects sketches `CanonicalResume`, `ResumeLine`,
+`TailoredResume`, `ClaimRule`, `FitBrief`, `InterviewRound`,
+`Correspondence`, `ScanResult` and `Correction`. None is persisted. Invariants the
+build must keep:
+
+- A `TailoredResume` pins `canonical_version`. An unsent view's pinned
+  version, and any canonical text it carries, changes only through an
+  explicit Rebase; Keep leaves it pinned. Its selection, order and
+  tracked exceptions stay editable until the package is sent. Staleness
+  against the current canonical is a visible, non-blocking warning
+  (PRD decision 2).
+- A package is sent when its `TailoredResume.sent_at` is set. A sent
+  package is immutable, and its fit brief freezes with it. Rebase does
+  not apply to it, and a correction to it is logged as a linked
+  `Correction` rather than an edit.
+- A fact found wrong is fixed once, at its source (a canonical line, a
+  Unit or a Role field). Unsent views pick the fix up through the
+  staleness warning and an explicit Rebase; nothing rewrites them
+  silently.
+- A `FitBrief` is keyed by `role_id`, so a Role entered by hand can
+  have a brief before it has an Application.
+- A `ClaimRule` violation blocks export, as an untraceable claim does.
+  Adding supporting evidence repairs traceability but never clears a
+  claim-rule hit: the text must change, or the user must explicitly
+  change the rule.
+- A `ScanResult` records its discovery source apart from the
+  employer's posting. One not verified on the employer's board cannot
+  become a Role or count as a verified opportunity (PRD decision 6).
+- Next actions are the shipped `Task`; there is no separate
+  `NextAction` object.
+
+The fit-brief generator (`functions/src/generation/fitBrief.ts`, #581)
+emits the `FitBrief` fields, citing verbatim evidence quotes rather
+than line ids. It is eval-only: no callable, route, or persisted
+document uses it.
+
+### Evaluation objects
+
+- `CalibrationDeck { id, deck_id, cell_order, card_count, fingerprint, deck_json, uploaded_at }` (#636): one calibration cell uploaded from Calibrate, stored as the deck's JSON text so its cards are not indexed one by one. The id is `<owner_uid>__<deck_id>`; a re-upload replaces the deck. Decks hold résumé and JD text and are owner-only like every other collection.
+- `CalibrationSession { id, deck_id, fingerprint, session_id, rev, base_rev, state_json, updated_at }`: the labelling progress for a deck (order, decisions, notes, timings, undos), same id as its deck, saved shortly after each decision so it resumes on another device. Writes are compare-and-swap: `rev` counts writes to the document and `base_rev` names the revision a write replaces (-1 for the first), and the rules accept a write only when `base_rev` is the stored `rev` and `rev` is the next one. `fingerprint` must equal the stored deck's, and a session can only exist for a stored deck. A device that fell behind another one is therefore refused rather than merged; the route pauses labelling on that deck and offers to load the account's copy or keep this device's. On open, this browser's copy is used only when it builds on the account's current revision (it holds changes not saved yet); otherwise the account's copy wins and the owner is told.
+- `firestore.rules` fixes both key sets, limits `deck_id` to letters, digits, `.`, `_` and `-`, caps `deck_json` at 900,000 characters (and the client at 1,000,000 UTF-8 bytes) and `state_json` at 200,000, and keeps `deck_id` fixed on update. `deck_json` and `state_json` are exempt from automatic indexing (`firestore.indexes.json`): they are never queried, and the deck text stays out of the index. Re-uploading a deck whose content changed is refused while a session exists for it; the rules enforce this against the account, so an out-of-date deck list on another device cannot strand labels.
+
 ### Invariants
 
 - `ExperienceUnit.user_approved == true` is required for the Unit to
@@ -186,15 +286,12 @@ UUIDs; all timestamps are ISO 8601 strings in Firestore documents.
   to something the job description no longer asks for. Such matches are
   refused at generation rather than deleted — the approval is the
   user's decision to keep, and a rematch may well reinstate the pair.
-  The check is applied again inside the persist transaction, because
-  the inputs are read minutes before the artifact is written and a
-  re-parse can land in between; a generation whose grounding stops
-  holding mid-flight is discarded rather than saved.
+  The check is applied again inside the persist transaction, because the inputs are read minutes before the artifact is written. The transaction re-verifies the Requirement set (ids, text and must-have), that every cited Unit still has a live approved match, the Role's title, that every Unit shown to the model is unchanged in its evidence text, still approved, owned and listed in `approved_unit_ids`, and that every Unit-to-Requirement link shown to the model is still live and approved. A generation whose inputs changed mid-flight is discarded rather than saved; additions (a newly approved match or Unit) do not discard it, because they cannot make what the model read untrue.
 - `Application.approved_unit_ids` is a snapshot of the Units used to
   generate a specific artifact. Changing a Unit later must not mutate
   a historical Application's grounding set.
 - Experience Units are permanent across applications; UnitMatches are
-  per-application and regenerated.
+  per-Role and regenerated.
 
 ## Matching engine
 
@@ -213,13 +310,21 @@ final_score = confidence_score × (
 Acceptance criteria:
 
 - Each component is normalized to `[0, 1]` before weighting.
-- Seniority alignment and scope alignment are penalty functions, not
-  similarity scores. A gap of more than one level drives the score to
-  zero.
+- Seniority alignment is a penalty function, not a similarity score:
+  a one-level gap scores 0.5, and a gap of more than one level drives
+  the score to zero.
+- Scope alignment scores 1.0 for a Requirement whose category is not
+  `scope`. For a scope Requirement it is the Jaccard overlap between
+  the Unit's `scope_signals` and the Requirement's `keywords`, with the
+  directional empty-set rule below. **Target:** a scope-level penalty
+  function like seniority's, which needs a scope ladder.
 - Recency is exponential decay on the Unit's end date, floored so
   ancient-but-relevant experience still contributes.
 - Skill, tool, and domain overlaps use Jaccard similarity on canonical
-  vocabularies normalized at extraction time. The empty-set case is
+  vocabularies. Extraction asks the model for canonical forms, and
+  matching applies deterministic normalization at match time
+  (`functions/src/matching/normalize.ts`); stored Units keep the
+  extracted strings. The empty-set case is
   **directional**: when the Requirement side carries nothing the
   canonical vocabulary recognizes, the axis places no evaluable
   constraint and scores a neutral `0.5`; when the Requirement side is
@@ -291,13 +396,15 @@ Acceptance criteria:
   is withheld entirely until the check has actually run. Silence would let "every must-have has a qualifying match"
   stand on a check that never happened.
 - Matching is nearly-free after embeddings exist; no per-match LLM call
-  is required. Rationale strings may be LLM-generated but must be
-  cached per `UnitMatch`.
+  is required. Rationale strings are a deterministic template, cached
+  per `UnitMatch`.
 
 Non-goals:
 
 - Does not auto-approve matches.
-- Does not hide low-quality matches; they appear in the Gaps view.
+- Does not filter matches by score: the Matches tab shows each
+  Requirement's top five, low scores included; must-haves left
+  uncovered appear in the Gaps view.
 - Does not pretend to certainty; every score surfaces its reasoning.
 
 ### Persisting a run, and runs that stop part-way
@@ -315,18 +422,42 @@ While a Role is incomplete and no run is in progress in the tab, the Matches tab
 
 ## Validation layer
 
-Before any generated output reaches the user:
+Validation runs these steps:
 
 1. Parse the output into discrete claims.
 2. For each claim, verify it maps to an approved Experience Unit.
 3. Flag generic non-specific language that cannot be tied to any Unit.
 4. Surface flagged issues as inline annotations in the Application
-   Editor. The editor blocks export while any flag is unresolved.
+   Editor. The editor blocks export while any flag is unresolved
+   (**Target:** the Package hosts this gate, PRD decision 5).
 
-The validation layer is a hard constraint. No generated output may be
-presented to the user without a completed traceability pass.
+The validation layer is a hard constraint on export: nothing exports
+without a passing, server-attested traceability pass. Generation saves
+the asset with `validation_status: "pending"` and the Application
+Editor opens it at once, so the user sees an unvalidated draft;
+validation runs when the user saves a bullet's text or chooses
+"Re-run validation" (adding or removing a bullet marks it stale
+without running it). **Target:** validation completes before generated output
+is first shown.
 
-The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
+`validateAsset` sends its model calls through one bounded pool, six at a time across all items and claims (`VALIDATION_CONCURRENCY`, `functions/src/validation/callPool.ts`, #621); each claim's traceability check still finishes before its specificity check starts, and flags come out in document order. The deadline covers validation's reads and model calls and falls 45 s before the callable's 300 s budget. When it passes, no new call starts, and the callable fails with `deadline-exceeded`, unless an earlier call already failed, in which case it reports that failure. Persisting the verdict runs after the pool closes, outside the deadline; the 45 s margin leaves room for it. The first failed call aborts the pool the same way, and the run then persists nothing. Empty or whitespace-only items are skipped without a call.
+
+Traceability reads each candidate Unit through the formatter generation uses (`functions/src/validation/unitPromptText.ts`), so the two can never see different evidence. It renders `raw_text`, `normalized_summary`, metrics, seniority and scope signals, `skills`, `tools`, `domains` and `date_range`. It deliberately leaves out `business_outcomes`, metric confidence, classification and provenance metadata, approval flags, embeddings and timestamps. `business_outcomes` is user-editable in Unit Review (inline edit and manual add), not only an extraction output; it is left out because the 2026-10-28 #485 evidence decision admits as structured evidence only `skills`, `tools`, `domains`, `seniority_signals` and `scope_signals`, each read in its literal wording, and `date_range`, read as the Unit's own dates; whether user-written outcomes should count is a separate decision. Every value is JSON-encoded on its labelled line except a numeric metric value, which prints as written so `NaN`, `Infinity` and `null` stay distinct; a metric entry that is not an object is skipped. Approved tags and seniority and scope signals count as evidence only in their literal wording: a claim that broadens one ("Python architecture" from "Python") is unsupported unless the Unit's text supports it. The signals are model-extracted, user-editable tags, so neither prompt reads them by meaning: a job title or level is supported only when its own wording appears in a Unit's `raw_text` or `normalized_summary` or as a signal value, and a seniority signal "led" does not support "team lead". A `date_range` supports only the Unit's own dates: durations, tenure, figures combined across Units and "current" from a range with no end are unsupported unless a Unit's text or metrics state them. A start-only range is rendered as stored, with no "ongoing" reading, and that loss is deliberate: the app writes the same shape when a user leaves the end blank to mean "ongoing" and when extraction found a start but no end, and the second is not evidence of current work. The Unit editor therefore labels a blank end "no end date", not "ongoing"; letting a user's "ongoing" support "present" needs an explicit stored marker that only the editor sets, which is a follow-up. Traceability's input shows the run date (`Today:`, UTC) between the claim and the Units, outside the Unit text, so it never changes an evidence version. A `date_range` start or end later than it supports no claim and is read as absent, so a future end leaves the range with no end; extraction has defaulted some approved Units' end dates into the future, and v2 is the first validator that sees `date_range` at all. Passing time only turns future dates into past ones, so a verdict reached on an earlier day is never less strict than one reached today. Ids print bare when safe (every UUID) and JSON-quoted otherwise; a model that cites a quoted id with its quotes is mapped back to the raw id (`citedEntityId`) before the membership check, in both generation and traceability. The traceability v2 system prompt and few-shot are about 8,200 characters (about 2,100 tokens, 3,540 characters more than v1) and are resent with every claim's check, uncached, so a run's fixed input grows with its claim count. A Unit's evidence version (`functions/src/validation/unitEvidenceVersion.ts`) is the prefix `ev3:` plus the SHA-256 of that text. The #485 change to the text moved the prefix from `ev2`, so every verdict recorded before it needs one re-run before export.
+
+**Target:**
+
+- A claim-rule check runs every generated artifact against the user's
+  claim rules. A violation blocks export.
+- A tailored resume's staleness against the canonical is reported
+  beside the validation results and never blocks export. Rebase is
+  offered only on unsent views; a sent package is read-only. Traceability
+  and claim-rule failures always block.
+
+The verdict is attested by the server, not by the asset. The asset's `validation_status` and `validation_flags` sit in a client-writable list (edits mark it `stale`, undo restores an earlier value), so they are display state only. This `stale` means the asset changed since its last validation run, and it blocks export; it is unrelated to staleness against the canonical, which is a non-blocking warning. Each validation run also writes an attestation to `applications/{id}/validations`, readable by the owner and writable only by `validateAsset`, keyed by the asset and a fingerprint of the content it validated (`functions/src/validation/attestation.ts`, #502). The fingerprint ignores object key order and item order within a section, because neither can change a verdict: flags are keyed by item id, and reordering keeps `passed` without re-validating. Export is enabled only when the attestation for the asset's current content says `passed` and every Unit that content cites is still at the version the attestation recorded. Any other edit moves the content to a fingerprint with no attestation, which reads as unvalidated; undoing back to validated content finds that content's attestation again.
+
+The server repeats this check before it exports anything, so a client that ignores the disabled control still cannot export. `exportAsset` (#521) reads the Application once, computes the current content's fingerprint, and requires the attestation stored under that fingerprint to name the same owner, Application and asset and to say `passed`, and every cited Unit to exist, be approved and match its recorded evidence version (`functions/src/validation/exportGate.ts`, shared with the editor's gate). Otherwise it refuses with `failed-precondition` (the reason in `details.reason`) and writes nothing. A pass recorded for earlier content lives under a different fingerprint, so a stale pass never exports. The asset's own `validation_status` is not consulted.
+
+Each validation subtask (claim extraction, traceability, specificity) is a separately configured model stage (#489), and `npm run eval:subtasks` evaluates each one in isolation against labeled cases, plus generation followed by validation pinned to production defaults (#488; see `tests/eval/README.md`). Its labeled cases and generation snapshots are drafts until the owner reviews them, so no result from them is a comparison of record.
 
 ## AI pipeline
 
@@ -338,18 +469,24 @@ Async (cached):
 
 Real-time:
 
-4. Matching (vector + rules, minimal LLM)
+4. Matching (vector + rules, deterministic rationales; no LLM call)
 5. Generation (controlled-generation prompt using approved Units as
-   ground truth)
-6. Validation (LLM claim-to-Unit check, or deterministic where possible)
+   ground truth, rendered through the same Unit formatter as
+   validation; the target role and approved links are relevance, not
+   evidence)
+6. Validation (LLM claim extraction, traceability and specificity; the
+   deny-list is a hint to the specificity model, not a verdict)
 
 Model strategy:
 
-- Frontier model (Claude Sonnet or GPT-4o class) for extraction,
-  rationale generation, and validation.
-- Cheaper model (Haiku or GPT-4o-mini class) for bulk generation.
+- Production defaults (`functions/src/llm/config.ts`): Claude Sonnet 4.6 for extraction and for each validation subtask, configured separately as `claim_extraction`, `traceability` and `specificity` (#489); Claude Haiku 4.5 for requirement parsing and generation. Embeddings use OpenAI `text-embedding-3-small`. Match rationales make no LLM call: they come from a deterministic template (`generateRationale()` in `functions/src/matching/rationale.ts`, #100). The config's `rationale` entry is reserved and never read (see the comment in `config.ts`). Each validation usage record keeps `stage: "validation"` and names its subtask. A default changes only through a measured, approved PR.
+- The Claude 5.5 models are wired for evaluation runs only (#579). A
+  production default changes only through its own approved change,
+  informed by #495.
 - Per-stage model choice is tunable via configuration; no model
   identifier is hardcoded in application logic.
+
+The corpus sweep (`npm run eval`) does not sweep generation (`SWEEPABLE_STAGES` covers extraction and requirement parsing); `npm run eval:subtasks -- --suite generation` does. The Unit formatter is not versioned with the prompts, so a run that overrides traceability or generation to v1 reads v1 instructions with the current (`ev3`) Unit text.
 
 ## Streaming progress
 
@@ -415,6 +552,10 @@ Guarding *unsaved editor content* is a related but separate contract, tracked in
 
 ## Execution targets
 
+These are **Target** values. Measured in production (`npm run latency:report`, the 12 recorded calls from 2026-08-31 to 2026-09-03): resume extraction 125 s (n = 1), JD parsing p50 31.6 s and p95 31.9 s (n = 5, Haiku 4.5, about 4,000 output tokens per call), embeddings under 2.5 s.
+
+The full flow is measured from one timed run on matchline-dev (n = 1, 2026-10-27 Pacific, #619): about 88 s of callable time from paste JD to a saved validation verdict, about 4.4× the 20 s p95 **Target**. One run does not measure the p95, but the target is not met: JD parsing alone exceeds 20 s (production model-call p95 31.9 s, n = 5; its callable took 31.2 s and 23.8 s in the two timed runs). Parse JD took 23.8 s, matching 5.1 s (including a 2.0 s `409` the app retried), resume generation 9.8 s and validation 48.8 s (108 Sonnet 4.6 calls: 281.9 s of model time, finishing within a 47.9 s span). Each step was timed in the browser around its callable; the clicks between steps are not counted. The run cost $0.87, inside the $0.50–$1.00 per-new-role cost **Target**. An earlier run the same day (#616) never reached a verdict: validation's calls ran one at a time and the callable's 300 s timeout killed it after 92 calls, which #621 fixed. The 236 s p95 in #177 is an eval-harness figure that includes resume extraction and stops at matching; it is not the full flow.
+
 Latency (p50 / p95):
 
 | Step | p50 | p95 |
@@ -425,7 +566,7 @@ Latency (p50 / p95):
 | Resume generation | 3s | 8s |
 | Cover letter generation | 4s | 10s |
 | Validation | 1s | 3s |
-| Full flow (paste JD → validated resume) | 6s | 18s |
+| Full flow (paste JD → validated resume) | 6s | 20s |
 
 Cost:
 
@@ -438,7 +579,9 @@ Cost:
 Reliability:
 
 - Structured-output failures retry with stricter prompts up to twice,
-  then surface to the user as "needs manual review."
+  then surface as "needs manual review" for extraction, parsing and
+  generation. **Target:** the same for validation. Today the Application Editor says validation "ran out of time" when a run hits its deadline (#621) and shows a generic "Validation couldn't run" for any other failure.
+- Before validating, extraction decodes a tool-call `units` array the model returned as a JSON string and validates the decoded array, so a well-formed one succeeds without a retry; that attempt's `llm_calls` record carries `recovered: "units-string"` whether or not the decoded array then passes. A string that does not decode to an array fails as before, and after any attempt whose `units` arrived as a string, decoded or not, the retry reminder adds that `units` must be a JSON array, not a string (#650).
 - Validation failures never auto-regenerate. They always surface for
   explicit user approval.
 - No silent fallbacks. If the system cannot produce a confident result,
@@ -446,25 +589,50 @@ Reliability:
 
 ## V1 surfaces
 
-The V1 product has exactly five screens. Nothing ships that isn't
-directly serving matching or generation.
+The shipped product has seven screens behind sign-in. Nothing ships
+that isn't serving the core loop, the pipeline around it, or the
+evaluation of either (Calibrate).
 
-1. **Onboarding** — one-time; import resume / LinkedIn / long-form
-   career text; lands in Unit Review.
-2. **Unit Review** — list of Experience Units, filterable by skill,
-   tool, domain, date range, approval status; inline editing;
-   approve / reject / flag; "Add Unit manually" action.
-3. **Role Detail** — header (company, title, JD URL, stage, dates) +
-   three tabs (Requirements, Matches, Applications) + persistent
-   action bar (Generate resume, Generate cover letter, Export, Update
-   stage).
-4. **Application Editor** — two-pane view (output ↔ approved Units),
-   inline traceability annotations, validation flag badges, blocked
-   export until flags resolve.
+1. **Onboarding** — paste resume text (reachable any time from the nav; **Target:** as Evidence → Import), with streamed
+   progress; lands in Unit Review. The four-source import picker is
+   **Deferred**.
+2. **Unit Review** — list of Experience Units, filterable by skill, tool, domain, date range, and approval status (approved, pending, flagged); inline editing, where an edit to `raw_text` or `normalized_summary` marks the Unit `reembed_pending`, which keeps it out of matching until it is re-embedded; approve / reject / flag; "Add Unit manually" action, whose Unit is born `reembed_pending` with no embedding and so cannot match today. Rejected Units drop out of the list. **Target:** a source-type filter; a client call to `reembedExperienceUnit` after an edit or a manual add, so the embedding is computed (today the callable has no client call site and no trigger); a separate view for reviewing and restoring rejected Units (`listRejectedExperienceUnits()` exists with no caller). **Deferred:** artifact upload.
+3. **Role Detail** — header (title and Role id) + three tabs
+   (Requirements, Matches, Applications); resume generation lives in
+   the Applications tab. This is the current implementation,
+   superseded in the target design by the five-tab dossier (Fit brief,
+   Requirements & matches, Package, Process, Correspondence). The
+   header details and persistent action bar described in PRD v0.1 were
+   never built.
+4. **Application Editor** — two-pane view (output ↔ approved Units), inline traceability annotations, validation flag badges, inline editing with undo, re-run validation, and an Export menu (Text today) that stays disabled, with the gate's reason and the re-validate action, until the export gate passes, and shows export failures inline. **Transitional** (PRD decision 5): the Package tab becomes the home for editing, validation, and export, and any expanded editor is another view of the same package.
 5. **Pipeline** — kanban by application stage
    (Saved, Drafting, Applied, Interviewing, Offer, Rejected,
-   Withdrawn); cards show company, title, days in stage, next action,
-   key contact; right sidebar for tasks and follow-up reminders.
+   Withdrawn), with drag-and-drop and arrow-key moves; cards show
+   company (today always "Unknown company": Roles carry a placeholder
+   `company_id`), title, a day count labeled "days in stage" that measures
+   days since `last_activity_at` (a completed task resets it; true
+   time in stage, which needs a stage-entry timestamp, is **Target**),
+   next action (the first open task; surfacing overdue ones first is a
+   **Target enhancement**),
+   and key contact; a collapsible sidebar with Due today, Upcoming, and
+   Follow-ups (Applied or Interviewing, quiet for more than 7 days, no
+   open task).
+6. **New Role** (`/roles/new`, the "+ New Role" nav entry) — a form
+   with a required title and optional job description, JD URL,
+   location, remote policy, and comp range; the draft persists across
+   reloads until saved or cancelled. Saving creates the Role, even
+   with only a title (#431), and opens its Role Detail. **Target**
+   (PRD decision 7): Company and Source fields, persisted on the Role.
+7. **Calibrate** (`/calibrate`) — an evaluation tool, not part of the core loop: swipe through a calibration deck (#636) one judgment at a time (right True, left False, down Mixed where the review sheet takes `partial`, up Can't tell, which re-queues the card with its full source open), with undo, one-line notes, per-card timing and a per-cell summary, then download a labels file that `tools/label-swipe/import-labels.mts` writes back into the review sheet. Decks are uploaded once from deck files into the owner's account (`CalibrationDeck`), listed with their progress, opened one at a time or all together, and removed with a confirmation; each decision saves the session to the account (`CalibrationSession`) and to the browser (ids, labels, notes, timings, seed, session id, revision and content hash; never card text), and a session resumes as described under `CalibrationSession`. The header shows whether the account save has landed; a save not yet confirmed (offline) stays queued, is reported inline and lands when the connection returns, never sent twice; a refused one (another device saved, the deck was removed or replaced) pauses labelling with the reason. A deck can also be opened from a file without uploading, for this device only. The route calls no Cloud Function. It is the one screen laid out for phones, and the top navigation scrolls sideways at phone width.
+
+**Target:** the navigation, dossier, Evidence (canonical resume and
+claim rules), Package, Process, Correspondence, and Scan surfaces in
+the PRD's "Target interface," and responsive layouts down to phone
+widths for the agreed workflows (PRD decision 8). Today the Pipeline
+board and the Application Editor stack below 768 px, the Pipeline's
+task sidebar moves beside the board only at 1024 px and up, and New
+Role's short fields drop from two columns to one below 640 px. Calibrate is laid out for phones, and the top navigation scrolls
+sideways at phone width; the other screens have no breakpoint-specific layout.
 
 ## Technical principles
 
@@ -476,9 +644,11 @@ directly serving matching or generation.
   its reasoning.
 - **Fail visibly.** No silent fallbacks; surface the gap instead.
 - **One user at a time.** No sharing, collaboration, or team features.
-- **Capability Graph is portable.** JSON export is a V1 feature.
-- **Cost is a feature.** The per-application budget is a hard
-  constraint, not a target.
+- **Capability Graph is portable.** JSON export is a V1 feature
+  (**Target**, #35).
+- **Cost is a feature.** The per-application budget is a requirement
+  (**Target**; not enforced or yet measured; see the Cost criterion
+  above).
 
 ## Access control
 
@@ -486,8 +656,9 @@ V1 is single-user, and that is an authorization rule, not only a product scope. 
 
 - **Owner allowlist, two layers.** Every callable rejects a caller whose uid is not in the `MATCHLINE_OWNER_UIDS` function param with `permission-denied`, before argument parsing and before any LLM or Firestore client is built. `firestore.rules` admits a client read or write only when the caller's uid is listed in the single fixed document `config/access` (`owner_uids`), which the deploy writes with a full overwrite from the same value. Each layer fails closed on its own: an empty param, or a missing or malformed `config/access`, admits nobody, including the owner. A per-uid document grants nothing, so nothing a client wrote before these rules can become access after them.
 - **No self-service.** The sign-in surface offers no account creation, and no client can read or write `config/`.
-- **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and pipeline-only writes (`llm_calls`, plus creates and deletes of `jobRequirementUnits` and `unitMatches`) are closed to clients; the owner may edit only a parsed Requirement's content fields and a match's approve/reject decision. Server-owned fields (`experienceUnits.embedding`, Application grounding and asset creation) are not client-writable.
+- **Explicit collections.** The rules name every collection. A collection that is not named is denied to clients, and pipeline-only writes (`llm_calls`, plus creates and deletes of `jobRequirementUnits` and `unitMatches`) are closed to clients; the owner may edit only a parsed Requirement's content fields and a match's approve/reject decision. Server-owned fields (`experienceUnits.embedding`, asset creation) are not client-writable; the client sets an Application's `approved_unit_ids` once, at create, and no update may change it.
 - **Bounded input.** Pasted resume and JD text is capped at 100 KB (UTF-8) per call.
+- **Storage is closed to clients.** `storage.rules` deny every client read, list, write and delete, for the owner as much as anyone else (`tests/storage-rules.test.ts`). Export files are written by the `exportAsset` callable with the admin SDK and read only through the 5-minute V4 signed URL it returns to the owner; no public URL, `allUsers` ACL or Firebase download token is ever created. The callable sits behind the same owner allowlist, and a missing or not-owned Application or asset is the same `permission-denied`.
 
 Configuration and deploy order: `DEPLOYMENT.md` § Owner allowlist.
 
@@ -503,14 +674,16 @@ V1:
 - LLMs: Anthropic + OpenAI; keys in Firebase secrets
 - Embeddings: OpenAI `text-embedding-3-small`, stored on Firestore
   documents
+- Storage: Firebase Storage holds résumé export files only (#521), at `applications/{applicationId}/{assetId}.{ext}` in the default bucket, written only by the `exportAsset` callable. Artifact upload stays **Deferred** (#519).
 
 Data-model discipline (even on Firestore):
 
-- UUIDs for all primary keys.
+- UUIDs for all entity primary keys (telemetry and attestation records
+  use Firestore auto-ids and composite keys).
 - Explicit foreign-key fields on every relationship.
 - No business logic embedded in Firestore queries.
 - Clean separation between Experience Units (permanent) and
-  UnitMatches (per-application).
+  UnitMatches (per-Role).
 - All write paths go through a typed service layer, not direct
   Firestore calls from the UI.
 
@@ -519,15 +692,21 @@ without forcing it.
 
 ## Out of scope for V1
 
-Deferred to V2+ (do not scaffold or build):
+Out of this release (do not build further):
 
 - Decision Engine (should-I-apply scoring)
 - Learning Layer (outcome-driven tuning)
 - Network Layer (relationship graph, referral suggestions)
 - Browser extension for JD / profile import
-- Mobile app
+- LinkedIn import, long-form context import, and artifact upload
+  (Deferred by PRD decision 3, out of this release; the `artifact`
+  source type and `artifact://` format from #592 are a data-model
+  change only)
+- Native mobile apps, offline support, or a separate mobile feature
+  set (V1 is responsive web)
 - Any generalization beyond the single V1 user
 - Multi-user, sharing, or team features
-- Integrations with job boards or ATS systems
+- Integrations with job boards or ATS systems, including aggregator
+  scraping
 
 See the PRD § V2+ layers for the longer list.

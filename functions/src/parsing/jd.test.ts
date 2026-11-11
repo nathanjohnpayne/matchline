@@ -1,11 +1,20 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { logger } from "firebase-functions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  clearEffortOverrides,
+  clearModelOverrides,
+  setEffortOverrides,
+  setModelOverrides,
+} from "../llm/config.ts";
 import type { recordUsage as RecordUsage } from "../llm/cost.ts";
+import { zodToToolSchema } from "../llm/zodToolSchema.ts";
+import { clearPromptVersionOverrides, loadPromptText, setPromptVersionOverrides } from "../prompts/loader.ts";
+import { JdParsingResponseV1Schema } from "../prompts/parsing/jd.v1.schema.ts";
 
 import { JdParsingError } from "./errors.ts";
-import { parseJobRequirements } from "./jd.ts";
+import { attemptFailureNotice, parseJobRequirements, type JdAttemptFailureNotice } from "./jd.ts";
 
 function mockMessage(
   toolInput: unknown,
@@ -409,3 +418,320 @@ describe("parseJobRequirements", () => {
     }
   });
 });
+
+describe("parseJobRequirements — Claude 5.5 request shape (#495)", () => {
+  afterEach(() => {
+    clearModelOverrides();
+    clearEffortOverrides();
+  });
+
+  function thinkingThenTool(response: Anthropic.Messages.Message): Anthropic.Messages.Message {
+    return {
+      ...response,
+      model: "claude-sonnet-5-5",
+      content: [
+        { type: "thinking", thinking: "", signature: "sig" },
+        ...response.content,
+      ],
+    } as Anthropic.Messages.Message;
+  }
+
+  it("asks Sonnet 5.5 for the tool without forcing it, with effort, a doubled budget and a timeout", async () => {
+    setModelOverrides({ requirement_parsing: { provider: "anthropic", model: "claude-sonnet-5-5" } });
+    const client = mockClient([thinkingThenTool(mockMessage(VALID_RESPONSE))]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("text", CTX, { client, record });
+
+    const create = vi.mocked(client.messages.create);
+    const [body, options] = create.mock.calls[0]! as unknown as [
+      Anthropic.Messages.MessageCreateParamsNonStreaming,
+      { timeout: number } | undefined,
+    ];
+    expect(body.tool_choice).toEqual({ type: "auto" });
+    expect(body.output_config).toEqual({ effort: "high" });
+    expect(body.max_tokens).toBe(32_768);
+    expect(String(body.system)).toContain("`record_job_requirements`");
+    expect(options?.timeout).toBeGreaterThan(10 * 60 * 1000);
+    // A thinking block ahead of the tool call is skipped, not treated as the answer.
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-sonnet-5-5", effort: "high", maxTokens: 32_768 }),
+    );
+  });
+
+  it("sends an effort override and records it", async () => {
+    setModelOverrides({ requirement_parsing: { provider: "anthropic", model: "claude-sonnet-5-5" } });
+    setEffortOverrides({ requirement_parsing: "low" });
+    const client = mockClient([thinkingThenTool(mockMessage(VALID_RESPONSE))]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("text", CTX, { client, record });
+
+    const body = vi.mocked(client.messages.create).mock.calls[0]![0] as Anthropic.Messages.MessageCreateParamsNonStreaming;
+    expect(body.output_config).toEqual({ effort: "low" });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ effort: "low" }));
+  });
+
+  it("stops on a refusal instead of spending the retry budget", async () => {
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
+    vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+    const refusal = {
+      ...mockMessage(VALID_RESPONSE),
+      content: [],
+      stop_reason: "refusal",
+      stop_details: { type: "refusal", category: "cyber", explanation: null },
+    } as unknown as Anthropic.Messages.Message;
+    const client = mockClient([refusal, mockMessage(VALID_RESPONSE)]);
+
+    const err = await parseJobRequirements("text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(JdParsingError);
+    expect((err as Error).message).toMatch(/declined by the model/);
+    expect((err as Error).message).not.toMatch(/after 3 attempts/);
+    // Logged as a refusal, not as an exhausted retry budget.
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      expect.stringContaining("model declined the request"),
+      expect.objectContaining({ detail: expect.stringContaining("cyber") }),
+    );
+    expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
+    expect(vi.mocked(client.messages.create)).toHaveBeenCalledTimes(1);
+    expect((JdParsingFailures(err))).toEqual([
+      expect.objectContaining({ attempt: 0, kind: "refusal", message: expect.stringContaining("cyber") }),
+    ]);
+  });
+});
+
+describe("parseJobRequirements — prompt version selection (#656)", () => {
+  afterEach(() => clearPromptVersionOverrides());
+
+  type Body = Anthropic.Messages.MessageCreateParamsNonStreaming;
+  const bodies = (client: Anthropic): Body[] =>
+    vi.mocked(client.messages.create).mock.calls.map((c) => c[0] as unknown as Body);
+
+  function systemsOf(): { v1: string; v2: string } {
+    setPromptVersionOverrides({ "parsing/jd": "v1" });
+    const v1 = loadPromptText("parsing", "jd").system;
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const v2 = loadPromptText("parsing", "jd").system;
+    clearPromptVersionOverrides();
+    return { v1, v2 };
+  }
+
+  it("sends v1 with no override: production is unchanged", async () => {
+    const { v1, v2 } = systemsOf();
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    await parseJobRequirements("JD text", CTX, { client, record });
+
+    const [body] = bodies(client);
+    expect(String(body!.system).startsWith(v1)).toBe(true);
+    expect(String(body!.system).startsWith(v2)).toBe(false);
+    expect(body!.tools![0]).toMatchObject({ input_schema: zodToToolSchema(JdParsingResponseV1Schema) });
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v1" }));
+  });
+
+  it("sends the v2 System under a parsing/jd=v2 override, with the same tool schema and few-shot", async () => {
+    const { v2 } = systemsOf();
+    const v1Client = mockClient([mockMessage(VALID_RESPONSE)]);
+    await parseJobRequirements("JD text", CTX, { client: v1Client, record: vi.fn<typeof RecordUsage>(async () => 0) });
+
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const reqs = await parseJobRequirements("JD text", CTX, { client, record, generateId: () => "id" });
+
+    expect(reqs).toHaveLength(2);
+    const [body] = bodies(client);
+    const [v1Body] = bodies(v1Client);
+    expect(String(body!.system).startsWith(v2)).toBe(true);
+    expect(body!.tools).toEqual(v1Body!.tools);
+    expect(body!.messages).toEqual(v1Body!.messages);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v2" }));
+  });
+
+  it("validates under v2 and retries a schema failure with the same reminder as v1", async () => {
+    setPromptVersionOverrides({ "parsing/jd": "v2" });
+    const outOfEnum = {
+      requirements: [{ ...VALID_RESPONSE.requirements[0], category: "education" }],
+    };
+    const client = mockClient([mockMessage(outOfEnum), mockMessage(VALID_RESPONSE)]);
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+    const reqs = await parseJobRequirements("JD text", CTX, { client, record, generateId: () => "id" });
+
+    expect(reqs).toHaveLength(2);
+    const [first, second] = bodies(client);
+    expect(String(first!.system)).not.toContain("failed schema validation");
+    expect(String(second!.system)).toContain("Your previous response failed schema validation.");
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ promptVersion: "parsing/jd.v2", attempt: 1 }));
+  });
+
+  it("refuses an override to a version with no prompt file before any request is sent", async () => {
+    setPromptVersionOverrides({ "parsing/jd": "v9" });
+    const client = mockClient([mockMessage(VALID_RESPONSE)]);
+
+    await expect(
+      parseJobRequirements("JD text", CTX, { client, record: vi.fn<typeof RecordUsage>(async () => 0) }),
+    ).rejects.toThrow(/Prompt file not found/);
+    expect(vi.mocked(client.messages.create)).not.toHaveBeenCalled();
+  });
+
+  it("refuses a version whose prompt file loads but has no registered schema, before any request", async () => {
+    // A prompt jd.v3.md that exists on disk but was never added to
+    // jdResponseSchema.ts. The loader is swapped for this test only.
+    vi.resetModules();
+    vi.doMock("../prompts/loader.ts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../prompts/loader.ts")>()),
+      loadPromptText: () => ({ version: "v3", system: "System v3.", userFewShot: "Few-shot v3." }),
+    }));
+    try {
+      const { parseJobRequirements: parseWithV3 } = await import("./jd.ts");
+      const client = mockClient([mockMessage(VALID_RESPONSE)]);
+      const record = vi.fn<typeof RecordUsage>(async () => 0);
+
+      await expect(parseWithV3("JD text", CTX, { client, record })).rejects.toThrow(
+        /No JD parsing schema registered for version "v3"/,
+      );
+      expect(vi.mocked(client.messages.create)).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../prompts/loader.ts");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("parseJobRequirements onAttemptFailure (#656)", () => {
+  afterEach(() => {
+    clearPromptVersionOverrides();
+  });
+
+  const missingKey = {
+    requirements: [{ ...VALID_RESPONSE.requirements[0], category: "education", must_have: "yes" }],
+  };
+
+  it("reports a recovered schema failure's attempt, kind and issue codes and paths", async () => {
+    const notices: JdAttemptFailureNotice[] = [];
+    const client = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+
+    const reqs = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: (n) => notices.push(n),
+    });
+
+    expect(reqs).toHaveLength(2);
+    expect(notices).toHaveLength(1);
+    const [notice] = notices;
+    expect(notice).toMatchObject({ attempt: 0, kind: "schema_error" });
+    const issues = [...(notice!.issues ?? [])].sort((x, y) => x.path.join(".").localeCompare(y.path.join(".")));
+    expect(issues).toEqual([
+      { code: "invalid_value", path: ["requirements", 0, "category"] },
+      { code: "invalid_type", path: ["requirements", 0, "must_have"] },
+    ]);
+    // Codes and paths only: no message, expected value or model output.
+    for (const issue of issues) expect(Object.keys(issue).sort()).toEqual(["code", "path"]);
+    expect(JSON.stringify(notices)).not.toContain("education");
+  });
+
+  it("reports every failed attempt of an exhausted run, in order, with the same kinds as .failures", async () => {
+    const notices: JdAttemptFailureNotice[] = [];
+    const noTool = { ...mockMessage(VALID_RESPONSE), content: [{ type: "text", text: "no", citations: null }] } as Anthropic.Messages.Message;
+    const client = mockClient([mockMessage(missingKey), noTool, mockMessage(missingKey)]);
+
+    const err = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      onAttemptFailure: (n) => notices.push(n),
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(JdParsingError);
+    expect(notices.map((n) => [n.attempt, n.kind])).toEqual([
+      [0, "schema_error"],
+      [1, "no_tool_use"],
+      [2, "schema_error"],
+    ]);
+    expect(notices.map((n) => n.kind)).toEqual(JdParsingFailures(err).map((f) => f.kind));
+    expect(notices[1]!.issues).toBeUndefined();
+  });
+
+  it("sends the same requests and returns the same result with or without the hook", async () => {
+    const withoutHook = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+    const withHook = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+    const a = await parseJobRequirements("JD text", CTX, {
+      client: withoutHook,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+    });
+    const b = await parseJobRequirements("JD text", CTX, {
+      client: withHook,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: () => undefined,
+    });
+
+    expect(b).toEqual(a);
+    expect(vi.mocked(withHook.messages.create).mock.calls).toEqual(vi.mocked(withoutHook.messages.create).mock.calls);
+  });
+
+  it("ignores a hook that throws, so the parse outcome is unchanged", async () => {
+    const client = mockClient([mockMessage(missingKey), mockMessage(VALID_RESPONSE)]);
+
+    const reqs = await parseJobRequirements("JD text", CTX, {
+      client,
+      record: vi.fn<typeof RecordUsage>(async () => 0),
+      generateId: () => "id",
+      onAttemptFailure: () => {
+        throw new Error("sink broke");
+      },
+    });
+
+    expect(reqs).toHaveLength(2);
+    expect(vi.mocked(client.messages.create)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("attemptFailureNotice", () => {
+  it("keeps attempt, kind and each issue's code and path, and nothing else", () => {
+    expect(
+      attemptFailureNotice({
+        attempt: 1,
+        kind: "schema_error",
+        message: "model output here",
+        zodIssues: [
+          { code: "invalid_value", path: ["requirements", 3, "category"], message: "bad", values: ["tool"], input: "education" },
+        ],
+      }),
+    ).toEqual({ attempt: 1, kind: "schema_error", issues: [{ code: "invalid_value", path: ["requirements", 3, "category"] }] });
+  });
+
+  it("omits issues for a failure without Zod issues, or with an empty list", () => {
+    expect(attemptFailureNotice({ attempt: 0, kind: "transport_error", message: "x" })).toEqual({ attempt: 0, kind: "transport_error" });
+    expect(attemptFailureNotice({ attempt: 2, kind: "schema_error", message: "x", zodIssues: [] })).toEqual({ attempt: 2, kind: "schema_error" });
+  });
+
+  it("skips malformed issues and stringifies a symbol path segment", () => {
+    const sym = Symbol("k");
+    expect(
+      attemptFailureNotice({
+        attempt: 0,
+        kind: "schema_error",
+        message: "x",
+        zodIssues: [null, "str", { path: ["a"] }, { code: 7, path: [] }, { code: "custom" }, { code: "custom", path: ["a", sym, 0] }],
+      }).issues,
+    ).toEqual([
+      { code: "custom", path: [] },
+      { code: "custom", path: ["a", "Symbol(k)", 0] },
+    ]);
+  });
+});
+
+function JdParsingFailures(err: unknown): readonly { kind: string }[] {
+  return (err as { failures: readonly { kind: string }[] }).failures;
+}

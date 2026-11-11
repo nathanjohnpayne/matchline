@@ -90,7 +90,11 @@ esac
 log() { echo "cloud-setup: $*" >&2; }
 
 CLEANUP_DIR=""
-cleanup_tmp() { [ -z "$CLEANUP_DIR" ] || rm -rf "$CLEANUP_DIR"; }
+CLEANUP_STAGE=""
+cleanup_tmp() {
+  [ -z "$CLEANUP_DIR" ] || rm -rf "$CLEANUP_DIR"
+  [ -z "$CLEANUP_STAGE" ] || rm -f "$CLEANUP_STAGE"
+}
 
 choose_prefix() {
   if [ -n "${MERGEPATH_TOOL_PREFIX:-}" ]; then
@@ -225,23 +229,38 @@ is_mikefarah_yq() { # <path>
 # PATH is replaced, not kept: it breaks the checks named at the top of this script.
 YQ_MIN_VERSION="v4.53.6"
 
-# Succeeds when <have> is at least <want>; both are [v]MAJOR.MINOR.PATCH,
-# compared field by field as numbers (v4.100.0 is newer than v4.53.6). A
-# version of any other shape fails.
+# Returns true when the decimal component <left> is greater than <right>.
+# Length comparison handles arbitrary-size SemVer components; equal-length
+# digit strings are compared lexically in the C locale.
+decimal_component_greater() { # <left> <right>
+  local left="$1" right="$2" LC_ALL=C
+  if [ "${#left}" -gt "${#right}" ]; then return 0; fi
+  if [ "${#left}" -lt "${#right}" ]; then return 1; fi
+  [[ "$left" > "$right" ]]
+}
+
+# Succeeds when <have> is at least <want>; both are [v]MAJOR.MINOR.PATCH.
+# Each numeric component follows SemVer grammar: zero or a nonzero digit
+# followed by digits, with no leading zeroes.
 version_at_least() { # <have> <want>
   local h1 h2 h3 w1 w2 w3 v
   for v in "${1#v}" "${2#v}"; do
-    case "$v" in
-      *[!0-9.]*|.*|*.|*..*|*.*.*.*) return 1 ;;
-      *.*.*) ;;
-      *) return 1 ;;
-    esac
+    [[ "$v" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
   done
   v="${1#v}"; h1="${v%%.*}"; v="${v#*.}"; h2="${v%%.*}"; h3="${v#*.}"
   v="${2#v}"; w1="${v%%.*}"; v="${v#*.}"; w2="${v%%.*}"; w3="${v#*.}"
-  if [ "$h1" -ne "$w1" ]; then [ "$h1" -gt "$w1" ]; return; fi
-  if [ "$h2" -ne "$w2" ]; then [ "$h2" -gt "$w2" ]; return; fi
-  [ "$h3" -ge "$w3" ]
+  if [ "$h1" != "$w1" ]; then decimal_component_greater "$h1" "$w1"; return; fi
+  if [ "$h2" != "$w2" ]; then decimal_component_greater "$h2" "$w2"; return; fi
+  [ "$h3" = "$w3" ] || decimal_component_greater "$h3" "$w3"
+}
+
+# The downloaded binary predicate below supports mikefarah/yq v4 only. Reject
+# other major versions before dry-run can claim an install is viable.
+is_supported_yq_release_version() { # <version>
+  # YQ_VERSION is interpolated directly into the release URL, whose canonical
+  # tags include the literal v prefix. Binary-reported versions are parsed
+  # separately by version_at_least and may omit it.
+  [[ "$1" =~ ^v4\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 }
 
 # mikefarah/yq v4 at YQ_MIN_VERSION or later.
@@ -257,7 +276,7 @@ yq_meets_minimum() { # <path>
 }
 
 install_yq() {
-  local arch asset base tmp expected actual prefix
+  local arch asset base tmp expected actual prefix stage
   [ "$(uname -s)" = "Linux" ] || { log "yq (mikefarah/yq $YQ_MIN_VERSION or later) is missing on $(uname -s); install it with the platform's package manager (brew install yq)"; return 1; }
   case "$(uname -m)" in
     x86_64|amd64) arch=amd64 ;;
@@ -273,6 +292,10 @@ install_yq() {
       *[!0-9a-f]*|'') log "no pinned SHA-256 for yq $YQ_VERSION $asset; set MERGEPATH_YQ_SHA256 to its 64-hex digest or use the default version"; return 1 ;;
     esac
     [ "${#expected}" -eq 64 ] || { log "MERGEPATH_YQ_SHA256 must be a 64-hex SHA-256 digest"; return 1; }
+  fi
+  if ! is_supported_yq_release_version "$YQ_VERSION" || ! version_at_least "$YQ_VERSION" "$YQ_MIN_VERSION"; then
+    log "yq release $YQ_VERSION must be a stable v-prefixed v4 tag at least $YQ_MIN_VERSION"
+    return 1
   fi
   if $DRY_RUN; then
     log "would install yq $YQ_VERSION ($asset) from $base into $prefix/bin after verifying SHA-256 $expected"
@@ -292,9 +315,34 @@ install_yq() {
     log "checksum mismatch for yq $YQ_VERSION $asset (expected $expected, got $actual); refusing to install"
     return 1
   fi
+  # Validate the verified bytes where they will run, not in $tmp: a noexec
+  # TMPDIR cannot execute them even when the prefix can (#2754, #2772). They
+  # are staged under a fresh name in $prefix/bin, so the existing yq is
+  # replaced only by a rename after validation, and every failure removes the
+  # staging file and leaves the prior binary in place.
   mkdir -p "$prefix/bin" || { log "could not create $prefix/bin"; return 1; }
-  cp "$tmp/$asset" "$prefix/bin/yq" || { log "could not copy yq into $prefix/bin"; return 1; }
-  chmod 755 "$prefix/bin/yq" || { log "could not make $prefix/bin/yq executable"; return 1; }
+  if [ -d "$prefix/bin/yq" ] && [ ! -L "$prefix/bin/yq" ]; then
+    log "$prefix/bin/yq is a directory; refusing to install over it"
+    return 1
+  fi
+  stage="$(mktemp "$prefix/bin/.yq-stage.XXXXXX")" || { log "could not stage yq in $prefix/bin"; return 1; }
+  CLEANUP_STAGE="$stage"
+  if ! cp "$tmp/$asset" "$stage" || ! chmod 755 "$stage"; then
+    log "could not stage verified yq download in $prefix/bin"
+    rm -f "$stage"; CLEANUP_STAGE=""
+    return 1
+  fi
+  if ! yq_meets_minimum "$stage"; then
+    log "verified download for yq $YQ_VERSION does not run as mikefarah/yq v4 at $YQ_MIN_VERSION or later; refusing to install"
+    rm -f "$stage"; CLEANUP_STAGE=""
+    return 1
+  fi
+  if ! mv -f "$stage" "$prefix/bin/yq"; then
+    log "could not move the validated yq into $prefix/bin/yq"
+    rm -f "$stage"; CLEANUP_STAGE=""
+    return 1
+  fi
+  CLEANUP_STAGE=""
   yq_meets_minimum "$prefix/bin/yq" || { log "$prefix/bin/yq does not run as mikefarah/yq v4 at $YQ_MIN_VERSION or later (yq --version failed, named another program, or an older version)"; return 1; }
   log "installed yq $YQ_VERSION to $prefix/bin/yq (sha256 verified)"
   resolves_to_installed yq "$prefix"

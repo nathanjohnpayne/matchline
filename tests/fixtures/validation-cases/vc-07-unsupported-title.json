@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "id": "vc-07-unsupported-title",
+  "category": "unsupported_title",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "chen-hardware-silicon-pm-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_halberd_reference_design",
+      "raw_text": "Ran the multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400). Owned the codec, ISP, and display feature matrix that OEMs took as their starting point, including AV1 decode rollout across the 8300 cycle and 8K30 HDR10+ recording on the 8400.",
+      "normalized_summary": "Ran multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400) — owned codec, ISP, and display feature matrix including AV1 decode rollout and 8K30 HDR10+ recording",
+      "unit_type": "ownership",
+      "skills": [
+        "reference design ownership",
+        "soc roadmap planning",
+        "feature matrix design",
+        "oem enablement"
+      ],
+      "tools": [
+        "AV1",
+        "HDR10+"
+      ],
+      "domains": [
+        "mobile silicon",
+        "connected devices"
+      ],
+      "metrics": []
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "As Director of Multimedia at Halberd, ran the multimedia reference design program across three flagship SoC generations, including the AV1 decode rollout.",
+    "source_unit_ids": [
+      "u_halberd_reference_design"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Held the title Director of Multimedia at Halberd.",
+        "required_terms": [
+          "Director of Multimedia"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      },
+      {
+        "id": "a2",
+        "text": "Ran the multimedia reference design program across three flagship SoC generations.",
+        "required_terms": [
+          "reference design program",
+          "three flagship SoC generations"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_halberd_reference_design"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "The reference design program included the AV1 decode rollout.",
+        "required_terms": [
+          "AV1"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_halberd_reference_design"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The resume's title at Halberd is Product Manager II; no Unit supports Director of Multimedia."
+}

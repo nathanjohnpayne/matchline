@@ -39,14 +39,23 @@
  */
 
 import {
+  clearEffortOverrides,
   clearModelOverrides,
+  effortFor,
   isStage,
   modelFor,
+  setEffortOverrides,
   setModelOverrides,
   STAGES,
   type ModelConfig,
   type Stage,
 } from "../../functions/src/llm/config.ts";
+import {
+  EFFORTS,
+  isEffort,
+  profileFor,
+  type Effort,
+} from "../../functions/src/llm/modelProfile.ts";
 import { rateFor } from "../../functions/src/llm/rates.ts";
 import {
   clearPromptVersionOverrides,
@@ -59,6 +68,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { RunForFixtureResult } from "./runForFixture.ts";
+import { assertGenerationVariantSupported, SWEEP_SCOPES, type SweepScope } from "./sweepScope.ts";
 
 /** Where `loadPromptText` resolves `<stage>/<name>.<version>.md` from. */
 const PROMPTS_ROOT = join(
@@ -75,12 +85,13 @@ const PROMPTS_ROOT = join(
  *
  * `runForFixture` runs extraction → embed → parse → embed → match.
  * `rationale` is currently a deterministic template (#100, no LLM),
- * and `generation` / `validation` need Firestore for AssetRef persist
- * so they are not wired into the harness. Overriding any of those
- * would parse cleanly and show up in the results table while
- * changing nothing.
+ * and `generation` and the three validation subtasks are not part of
+ * the corpus run (they have their own suites, `npm run eval:subtasks`,
+ * #488). Overriding any of those here would parse cleanly and show up
+ * in the results table while changing nothing. The scope tables live
+ * in `sweepScope.ts`.
  */
-export const SWEEPABLE_STAGES: readonly Stage[] = ["extraction", "requirement_parsing"];
+export const SWEEPABLE_STAGES: readonly Stage[] = SWEEP_SCOPES.corpus.stages;
 
 /**
  * Prompt keys the eval corpus actually resolves — the `stage/name`
@@ -89,10 +100,7 @@ export const SWEEPABLE_STAGES: readonly Stage[] = ["extraction", "requirement_pa
  * harness never loads) would appear in the results table while
  * changing nothing.
  */
-export const SWEEPABLE_PROMPT_KEYS: readonly string[] = [
-  "extraction/resume",
-  "parsing/jd",
-];
+export const SWEEPABLE_PROMPT_KEYS: readonly string[] = SWEEP_SCOPES.corpus.promptKeys;
 
 /** One point in the sweep matrix. */
 export interface SweepVariant {
@@ -102,6 +110,11 @@ export interface SweepVariant {
   readonly models?: Partial<Record<Stage, ModelConfig>>;
   /** Prompt-version overrides, e.g. `{ "extraction/resume": "v2" }`. */
   readonly promptVersions?: Readonly<Record<string, string>>;
+  /**
+   * Per-stage `output_config.effort` overrides (#495). Unlisted stages
+   * send their model's profile default (`llm/modelProfile.ts`).
+   */
+  readonly efforts?: Partial<Record<Stage, Effort>>;
   /** Where tokens come from. Recorded so the table shows it. */
   readonly tokenSource?: string;
 }
@@ -111,6 +124,8 @@ export interface VariantResult {
   readonly tokenSource: string;
   readonly models: Partial<Record<Stage, ModelConfig>>;
   readonly promptVersions: Readonly<Record<string, string>>;
+  /** Effort each stage actually sent; a stage whose model takes none is absent. */
+  readonly efforts: Partial<Record<Stage, Effort>>;
   /** Mean across the corpus, in [0, 1]. Null when no cell succeeded. */
   readonly extractionAccuracy: number | null;
   readonly matchAccuracy: number | null;
@@ -164,15 +179,15 @@ export function assertPromptsExist(
  * STATICALLY wired to.
  *
  * `functions/src/extraction/resume.ts` imports
- * `ExtractionResponseV1Schema` and builds its tool schema from it;
- * `functions/src/parsing/jd.ts` does the same with
- * `JdParsingResponseV1Schema`. Neither consults the resolved prompt
- * version, even though the loader can return a version's own schema.
+ * `ExtractionResponseV1Schema` and builds its tool schema from it,
+ * without consulting the resolved prompt version. `parsing/jd` is
+ * listed as v1 here, but since #656 `functions/src/parsing/jd.ts` picks
+ * the schema of the version it loaded from `parsing/jdResponseSchema.ts`:
+ * a version in the scope's `dispatchedSchemaVersions` is validated
+ * against its own schema, and any other version throws on the stage's
+ * first call (see `assertPromptSchemasCompatible`).
  */
-const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = {
-  "extraction/resume": "v1",
-  "parsing/jd": "v1",
-};
+const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = SWEEP_SCOPES.corpus.wiredSchemaVersion;
 
 /**
  * Refuse a prompt-version override whose co-located schema differs from
@@ -188,6 +203,14 @@ const WIRED_SCHEMA_VERSION: Readonly<Record<string, string>> = {
  * failure the other pre-flights exist to prevent, and prompt tuning
  * (#177 workstream B) is what will first author such a v2.
  *
+ * For a key the scope lists in `dispatchedSchemaVersions` (JD parsing
+ * since #656), the stage picks the schema by version: a listed version
+ * is validated against its own schema and passes, and any other version
+ * refuses here whatever its schema file holds, because the stage throws
+ * for an unregistered version on its first call. Comparing files would
+ * pass a byte-identical or absent schema that the stage then rejects
+ * after earlier variants had spent tokens.
+ *
  * Compares file contents rather than importing: a byte-identical schema
  * is safe to sweep, an absent one means the version reuses the wired
  * schema, and anything else refuses before a token is spent.
@@ -196,11 +219,26 @@ export function assertPromptSchemasCompatible(
   variants: readonly SweepVariant[],
   base: Readonly<Record<string, string>> = {},
   promptsRoot: string = PROMPTS_ROOT,
+  scope: SweepScope = SWEEP_SCOPES.corpus,
 ): void {
+  const wiredVersions = scope.suite === "corpus" ? WIRED_SCHEMA_VERSION : scope.wiredSchemaVersion;
   const conflicts: string[] = [];
+  const unregistered: string[] = [];
   const check = (key: string, version: string): void => {
-    const wired = WIRED_SCHEMA_VERSION[key];
+    const wired = wiredVersions[key];
     if (wired === undefined || wired === version) return;
+    // The stage picks the schema by version (#656): a registered version
+    // is validated against its own schema, any other one throws at run time.
+    const dispatched = scope.dispatchedSchemaVersions?.[key];
+    if (dispatched !== undefined) {
+      if (dispatched.includes(version)) return;
+      unregistered.push(
+        `${key}=${version} has no schema registered with its stage ` +
+          `(registered: ${dispatched.join(", ")}; for parsing/jd, add it to ` +
+          `functions/src/parsing/jdResponseSchema.ts)`,
+      );
+      return;
+    }
     const [stage, name] = key.split("/") as [string, string];
     const overrideSchema = join(promptsRoot, stage, `${name}.${version}.schema.ts`);
     // No schema of its own — the version reuses the wired one.
@@ -216,6 +254,15 @@ export function assertPromptSchemasCompatible(
   for (const [k, v] of Object.entries(base)) check(k, v);
   for (const variant of variants) {
     for (const [k, v] of Object.entries(variant.promptVersions ?? {})) check(k, v);
+  }
+  if (unregistered.length > 0) {
+    throw new Error(
+      `sweep: prompt version(s) whose stage has no schema for them:\n  ` +
+        `${unregistered.join("\n  ")}\n` +
+        `The stage picks its schema by prompt version and throws for an ` +
+        `unregistered one, so every flow of this variant would fail after ` +
+        `earlier variants had already spent tokens. Register the schema first.`,
+    );
   }
   if (conflicts.length > 0) {
     throw new Error(
@@ -279,7 +326,10 @@ export interface RunVariantDeps {
    * Run the whole labeled corpus once under the currently-active
    * overrides. Injected so the sweep is testable without LLM calls.
    */
-  readonly runCorpus: () => Promise<readonly RunForFixtureResult[]>;
+  readonly runCorpus: (
+    /** --record hook: the variant whose overrides are installed, so a recorder can label its flows. */
+    variant: SweepVariant,
+  ) => Promise<readonly RunForFixtureResult[]>;
 }
 
 /**
@@ -287,10 +337,73 @@ export interface RunVariantDeps {
  * variant override, command-wide override, or `config.ts` default,
  * whichever wins. Must be called while the overrides are installed.
  */
-function effectiveModels(): Partial<Record<Stage, ModelConfig>> {
+function effectiveModels(stages: readonly Stage[] = SWEEPABLE_STAGES): Partial<Record<Stage, ModelConfig>> {
   const out: Partial<Record<Stage, ModelConfig>> = {};
-  for (const stage of SWEEPABLE_STAGES) out[stage] = modelFor(stage);
+  for (const stage of stages) out[stage] = modelFor(stage);
   return out;
+}
+
+/**
+ * The effort each sweepable stage actually sends right now: the
+ * override if one is installed, else the model profile's default.
+ * Stages whose model accepts no effort are left out. Must be called
+ * while the overrides are installed, like `effectiveModels`.
+ */
+function effectiveEfforts(stages: readonly Stage[] = SWEEPABLE_STAGES): Partial<Record<Stage, Effort>> {
+  const out: Partial<Record<Stage, Effort>> = {};
+  for (const stage of stages) {
+    const effort = effortFor(stage) ?? profileFor(modelFor(stage).model).defaultEffort;
+    if (effort !== undefined) out[stage] = effort;
+  }
+  return out;
+}
+
+/**
+ * Refuse, before any spend, a variant whose model has no request
+ * profile or whose effort that model does not accept. Without this
+ * the first such cell would throw mid-run, after earlier variants had
+ * already spent their corpus.
+ */
+export function assertVariantsCallable(
+  variants: readonly SweepVariant[],
+  scope: SweepScope = SWEEP_SCOPES.corpus,
+): void {
+  const problems: string[] = [];
+  for (const variant of variants) {
+    // Codex P1 on #579: the subscription-CLI adapters drop
+    // `output_config`, so an effort clause there would run the CLI's own
+    // effort while the row is labelled with the requested one.
+    const tokenSource = variant.tokenSource ?? "api";
+    if (tokenSource !== "api" && Object.keys(variant.efforts ?? {}).length > 0) {
+      problems.push(
+        `${variant.label}: effort clauses need --token-source api; ` +
+          `${tokenSource} does not forward output_config.effort`,
+      );
+    }
+    for (const stage of scope.stages) {
+      const model = variant.models?.[stage]?.model ?? modelFor(stage).model;
+      let accepted: readonly Effort[];
+      try {
+        accepted = profileFor(model).efforts;
+      } catch {
+        problems.push(`${variant.label}: no request profile for ${model} (${stage})`);
+        continue;
+      }
+      const effort = variant.efforts?.[stage];
+      if (effort !== undefined && !accepted.includes(effort)) {
+        problems.push(
+          `${variant.label}: ${model} does not accept effort ${effort} (${stage}); ` +
+            (accepted.length === 0 ? "it takes no effort setting" : `supported: ${accepted.join(", ")}`),
+        );
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `sweep: refusing to start.\n  ${problems.join("\n  ")}\n` +
+        `Register the model in functions/src/llm/modelProfile.ts, or drop the effort clause.`,
+    );
+  }
 }
 
 /**
@@ -299,9 +412,9 @@ function effectiveModels(): Partial<Record<Stage, ModelConfig>> {
  * docstring there calls out this exact use — so the report cannot
  * drift from what `loadPromptText` read.
  */
-function resolvedPromptVersions(): Record<string, string> {
+function resolvedPromptVersions(keys: readonly string[] = SWEEPABLE_PROMPT_KEYS): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const key of SWEEPABLE_PROMPT_KEYS) {
+  for (const key of keys) {
     const [stage, name] = key.split("/") as [string, string];
     // SWEEPABLE_PROMPT_KEYS is a closed list of real (stage, name)
     // pairs, but it is typed as string[] so the parse-time guards can
@@ -342,6 +455,7 @@ export async function runVariant(
     }
   }
   setModelOverrides(variant.models ?? {});
+  setEffortOverrides(variant.efforts ?? {});
   // Variant overrides win on conflict; the command-wide ones survive
   // for keys the variant does not name.
   const effectivePromptVersions = {
@@ -350,7 +464,7 @@ export async function runVariant(
   };
   setPromptVersionOverrides(effectivePromptVersions);
   try {
-    const results = await deps.runCorpus();
+    const results = await deps.runCorpus(variant); // --record hook: pass the variant
     // Report the configuration that actually ran. Returning the raw
     // variant here used to hide command-wide --prompt flags behind
     // "(defaults)", making a valid sweep look like it used a
@@ -369,6 +483,9 @@ export async function runVariant(
       {
         ...variant,
         models: effectiveModels(),
+        // Only the metered API sends `output_config.effort`; a CLI row
+        // records none rather than a profile default it never sent.
+        efforts: (variant.tokenSource ?? "api") === "api" ? effectiveEfforts() : {},
         promptVersions: {
           ...effectivePromptVersions,
           ...resolvedPromptVersions(),
@@ -378,6 +495,7 @@ export async function runVariant(
     );
   } finally {
     clearModelOverrides();
+    clearEffortOverrides();
     clearPromptVersionOverrides();
   }
 }
@@ -406,6 +524,7 @@ export function rollUpVariant(
     tokenSource: variant.tokenSource ?? "api",
     models: variant.models ?? {},
     promptVersions: variant.promptVersions ?? {},
+    efforts: variant.efforts ?? {},
     extractionAccuracy: flows === 0 ? null : ext.reduce((a, b) => a + b, 0) / flows,
     matchAccuracy: flows === 0 ? null : mat.reduce((a, b) => a + b, 0) / flows,
     modeledCostUsd,
@@ -561,7 +680,10 @@ export function formatSweepReport(results: readonly VariantResult[]): string {
   for (const r of sorted) {
     const models =
       Object.entries(r.models)
-        .map(([stage, cfg]) => `${stage}=${cfg?.model ?? "?"}`)
+        .map(([stage, cfg]) => {
+          const effort = r.efforts[stage as Stage];
+          return `${stage}=${cfg?.model ?? "?"}${effort !== undefined ? ` (effort ${effort})` : ""}`;
+        })
         .join("<br>") || "(defaults)";
     const prompts =
       Object.entries(r.promptVersions)
@@ -640,7 +762,13 @@ function fmtUsd(v: number | null): string {
  * Provider is inferred from the model id prefix, matching the two
  * providers `ModelConfig` allows.
  */
-export function parseVariantFlag(spec: string, tokenSource: string): SweepVariant {
+export function parseVariantFlag(
+  spec: string,
+  tokenSource: string,
+  scope: SweepScope = SWEEP_SCOPES.corpus,
+): SweepVariant {
+  // The corpus keeps its original wording; the subtask suites name themselves.
+  const exercisedBy = scope.suite === "corpus" ? "the eval corpus" : `suite ${scope.suite}`;
   const sep = spec.indexOf(":");
   if (sep <= 0) {
     throw new Error(
@@ -675,6 +803,7 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
   const body = spec.slice(sep + 1);
   const models: Partial<Record<Stage, ModelConfig>> = {};
   const promptVersions: Record<string, string> = {};
+  const efforts: Partial<Record<Stage, Effort>> = {};
 
   for (const clause of body.split(",")) {
     const eq = clause.indexOf("=");
@@ -708,11 +837,11 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
       // model override). Overriding `generation` / `validation` /
       // `rationale` would parse cleanly, appear in the table, and
       // change nothing — another silent mislabel.
-      if (!SWEEPABLE_STAGES.includes(stageRaw)) {
+      if (!scope.stages.includes(stageRaw)) {
         throw new Error(
-          `--variant: stage ${JSON.stringify(stageRaw)} is not exercised by the eval ` +
-            `corpus, so overriding it would change nothing while still appearing in ` +
-            `the results table. Sweepable stages: ${SWEEPABLE_STAGES.join(", ")}.`,
+          `--variant: stage ${JSON.stringify(stageRaw)} is not exercised by ${exercisedBy}, ` +
+            `so overriding it would change nothing while still appearing in ` +
+            `the results table. Sweepable stages: ${scope.stages.join(", ")}.`,
         );
       }
       // The eval pipeline currently accepts Anthropic extraction and
@@ -733,11 +862,10 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
       // provider it belongs to, including one that does not exist yet.
       if (!/^claude-/.test(value)) {
         throw new Error(
-          `--variant: model ${JSON.stringify(value)} is not an Anthropic model, but ` +
-            `extractFromResume/parseJobRequirements hard-require provider "anthropic" ` +
-            `and throw before the injected client is called. Model sweeps are ` +
-            `Anthropic-only today (ids beginning "claude-"); sweeping another ` +
-            `provider needs that guard relaxed first.`,
+          `--variant: model ${JSON.stringify(value)} is not an Anthropic model; only ` +
+            `Anthropic models can be swept; OpenAI models are not wired (#402). The ` +
+            `pipeline modules hard-require provider "anthropic" and throw before the ` +
+            `injected client is called (ids beginning "claude-").`,
         );
       }
       models[stageRaw] = { provider: "anthropic", model: value };
@@ -749,11 +877,11 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
       // displayed in the report, but `runForFixture` only resolves
       // `extraction/resume` and `parsing/jd` — so the corpus ran the
       // DEFAULT prompt while the table credited the variant.
-      if (!SWEEPABLE_PROMPT_KEYS.includes(promptKey)) {
+      if (!scope.promptKeys.includes(promptKey)) {
         throw new Error(
-          `--variant: prompt key ${JSON.stringify(promptKey)} is not exercised by the ` +
-            `eval corpus, so overriding it would change nothing while still appearing ` +
-            `in the results table. Sweepable prompt keys: ${SWEEPABLE_PROMPT_KEYS.join(", ")}.`,
+          `--variant: prompt key ${JSON.stringify(promptKey)} is not exercised by ` +
+            `${exercisedBy}, so overriding it would change nothing while still appearing ` +
+            `in the results table. Sweepable prompt keys: ${scope.promptKeys.join(", ")}.`,
         );
       }
       // Codex P2: the version flows into `loadPromptText`'s
@@ -772,20 +900,51 @@ export function parseVariantFlag(spec: string, tokenSource: string): SweepVarian
         );
       }
       promptVersions[promptKey] = value;
+    } else if (key.startsWith("effort.")) {
+      // Same silent-mislabel guards as `model.`: a typo'd or unexercised
+      // stage would appear in the table while changing nothing.
+      const stageRaw = key.slice("effort.".length);
+      if (!isStage(stageRaw)) {
+        throw new Error(
+          `--variant: unknown stage ${JSON.stringify(stageRaw)} in ${JSON.stringify(key)}. ` +
+            `Valid stages: ${STAGES.join(", ")}.`,
+        );
+      }
+      if (!scope.stages.includes(stageRaw)) {
+        throw new Error(
+          `--variant: stage ${JSON.stringify(stageRaw)} is not exercised by ${exercisedBy}. ` +
+            `Sweepable stages: ${scope.stages.join(", ")}.`,
+        );
+      }
+      if (!isEffort(value)) {
+        throw new Error(
+          `--variant: effort must be one of ${EFFORTS.join(", ")} (got ${JSON.stringify(value)}).`,
+        );
+      }
+      efforts[stageRaw] = value;
     } else {
       throw new Error(
-        `--variant key must start with 'model.' or 'prompt.' (got ${JSON.stringify(key)})`,
+        `--variant key must start with 'model.', 'prompt.' or 'effort.' (got ${JSON.stringify(key)})`,
       );
     }
   }
 
-  return { label, models, promptVersions, tokenSource };
+  const variant: SweepVariant = {
+    label,
+    models,
+    promptVersions,
+    ...(Object.keys(efforts).length > 0 && { efforts }),
+    tokenSource,
+  };
+  if (scope.suite === "generation") assertGenerationVariantSupported(variant);
+  return variant;
 }
 
 /** Collect every `--variant` / `--variant=` occurrence from argv. */
 export function parseVariants(
   argv: readonly string[],
   tokenSource: string,
+  scope: SweepScope = SWEEP_SCOPES.corpus,
 ): readonly SweepVariant[] {
   const out: SweepVariant[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -795,10 +954,10 @@ export function parseVariants(
       if (value === undefined || value.startsWith("--")) {
         throw new Error("--variant requires a value");
       }
-      out.push(parseVariantFlag(value, tokenSource));
+      out.push(parseVariantFlag(value, tokenSource, scope));
       i += 1;
     } else if (arg.startsWith("--variant=")) {
-      out.push(parseVariantFlag(arg.slice("--variant=".length), tokenSource));
+      out.push(parseVariantFlag(arg.slice("--variant=".length), tokenSource, scope));
     }
   }
   // Duplicate labels would collide in the Pareto set (which is keyed
@@ -828,6 +987,7 @@ export async function runSweep(
   options: RunVariantOptions = {},
 ): Promise<{ results: readonly VariantResult[]; report: string }> {
   assertModelsPriced(variants);
+  assertVariantsCallable(variants);
   assertPromptsExist(variants, options.basePromptVersions ?? {});
   assertPromptSchemasCompatible(variants, options.basePromptVersions ?? {});
   const results: VariantResult[] = [];

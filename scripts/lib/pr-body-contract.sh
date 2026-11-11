@@ -45,23 +45,62 @@ PR_BODY_CONTRACT_TIMEOUT_SECONDS=120
 #      must not be. This is why the production watchdog suppresses stdout on
 #      expiry where `run_with_timeout` in the parity suite does not: the suite
 #      asserts on output, a gate acts on it.
-pr_body_contract_run() { # mode, body -> parser stdout; rc 124 on expiry
+#
+# Status 1 is reserved for a completed parser answer at BOTH process
+# boundaries (#2772). The outer `node -e` can itself exit 1 before this
+# wrapper's code runs (a `NODE_OPTIONS=--require=` module that is missing or
+# throws, an uncaught exception), and that must not read as "no Self-Review
+# heading". So the wrapper reports a completed absent answer as status 64, a
+# status Node itself never uses, and only that status maps back to 1; any
+# other unreserved outer status, 1 included, becomes 126. Residual: a
+# preload that calls process.exit(0) before the wrapper runs still reads as
+# status 0 with no output, which every caller treats as an empty answer.
+pr_body_contract_run() { # mode, body -> stdout; 1 absent, 124 timeout, 125 start, 126 execution
+  local rc=0
+  # Node owns these template expressions; the shell must not expand them.
+  # shellcheck disable=SC2016
   printf '%s\n' "$2" | node -e '
     const { readFileSync } = require("node:fs");
     const { spawnSync } = require("node:child_process");
     const seconds = Number(process.argv[1]);
     const command = process.argv.slice(2);
-    const result = spawnSync(command[0], command.slice(1), {
+    // Retain argv[1]=runtime and argv[2]=mode. Loading failures happen
+    // before the canonical CLI can reserve status 1 for semantic absence.
+    const launch = `import(require("node:url").pathToFileURL(process.argv[1]).href).catch(error => {
+      const detail = error instanceof Error ? error.message : String(error);
+      process.stderr.write("PR-body parser execution failed: " + detail + "\\n");
+      process.exitCode = 2;
+    });`;
+    const result = spawnSync(command[0], ["-e", launch, ...command.slice(1)], {
       input: readFileSync(0), encoding: "utf8", timeout: seconds * 1000, killSignal: "SIGKILL",
     });
-    if (result.error?.code === "ETIMEDOUT") {
-      if (result.stderr) process.stderr.write(result.stderr);
-      process.exit(124);
-    }
-    if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
-    process.exit(result.status ?? 1);
-  ' "$PR_BODY_CONTRACT_TIMEOUT_SECONDS" node "$PR_BODY_CONTRACT_PARSER" "$1"
+    if (result.error?.code === "ETIMEDOUT") process.exit(124);
+    if (result.error) {
+      const started = Number.isInteger(result.pid) && result.pid > 0;
+      process.stderr.write(`PR-body parser ${started ? "execution failed" : "could not start"} (${result.error.code ?? "unknown error"}).\n`);
+      process.exit(started ? 126 : 125);
+    }
+    // Only the selected canonical CLI reserves status 1 for normal absence.
+    const absent = command[2] === "--has-self-review" && result.status === 1;
+    if (result.signal || (result.status !== 0 && !absent)) {
+      process.stderr.write(`PR-body parser execution failed (${result.signal ?? result.status ?? "no exit status"}).\n`);
+      process.exit(126);
+    }
+    // A completed absent answer; the case below maps 64 back to 1.
+    if (absent) process.exit(64);
+    if (result.stdout) process.stdout.write(result.stdout);
+    process.exit(0);
+  ' "$PR_BODY_CONTRACT_TIMEOUT_SECONDS" node "$PR_BODY_CONTRACT_PARSER" "$1" \
+    || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    64) return 1 ;;
+    124|125|126) return "$rc" ;;
+    *)
+      echo "PR-body parser wrapper did not complete (node status $rc)." >&2
+      return 126 ;;
+  esac
 }
 
 pr_body_authoring_agent() {
@@ -127,6 +166,15 @@ pr_body_has_self_review() {
   pr_body_contract_run --has-self-review "$1"
 }
 
+# A nonsemantic status must never become a missing-heading accusation.
+pr_body_self_review_parser_error() { # infrastructure status, never 0 or 1
+  case "$1" in
+    124) echo "Cannot validate the '## Self-Review' section: the PR-body parser exceeded the ${PR_BODY_CONTRACT_TIMEOUT_SECONDS}s wall-clock bound." >&2 ;;
+    125) echo "Cannot validate the '## Self-Review' section: the PR-body parser could not start (status 125)." >&2 ;;
+    *) echo "Cannot validate the '## Self-Review' section: PR-body parser execution failed (status $1)." >&2 ;;
+  esac
+}
+
 pr_body_validate() {
   local body=$1
   local policy_file=${2:-}
@@ -148,7 +196,7 @@ pr_body_validate() {
   if [ "$count_rc" -ne 0 ] || [ "$author_rc" -ne 0 ]; then
     echo "Cannot validate the Authoring-Agent: the PR-body parser did not complete (status ${count_rc}/${author_rc})." >&2
     if [ "$count_rc" -eq 124 ] || [ "$author_rc" -eq 124 ]; then
-      echo "Status 124 means it exceeded the ${PR_BODY_CONTRACT_TIMEOUT_SECONDS}s wall-clock bound; see the parsing-cost limitation in specs/pr_body_contract.md." >&2
+      echo "Status 124 means it exceeded the ${PR_BODY_CONTRACT_TIMEOUT_SECONDS}s wall-clock bound; see the parsing-cost limitation at https://github.com/nathanjohnpayne/mergepath/blob/main/specs/pr_body_contract.md." >&2
     fi
     echo "This is an infrastructure or input-complexity problem, not a missing declaration." >&2
     failed=1
@@ -179,13 +227,12 @@ pr_body_validate() {
 
   local review_rc=0
   pr_body_has_self_review "$body" || review_rc=$?
-  # --has-self-review answers with its exit status (0 present, 1 absent), so a
-  # watchdog expiry would otherwise read as a confident "absent".
-  if [ "$review_rc" -eq 124 ]; then
-    echo "Cannot validate the '## Self-Review' section: the PR-body parser exceeded the ${PR_BODY_CONTRACT_TIMEOUT_SECONDS}s wall-clock bound." >&2
+  # Only 1 is a completed absent-heading answer from the canonical CLI.
+  if [ "$review_rc" -eq 1 ]; then
+    echo "PR description is missing a '## Self-Review' section." >&2
     failed=1
   elif [ "$review_rc" -ne 0 ]; then
-    echo "PR description is missing a '## Self-Review' section." >&2
+    pr_body_self_review_parser_error "$review_rc"
     failed=1
   fi
 

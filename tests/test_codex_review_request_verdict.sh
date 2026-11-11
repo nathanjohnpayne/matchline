@@ -76,7 +76,7 @@ else
 fi
 
 # ── 5. Inline logic: the verdict-matching jq filter. KEEP IN SYNC with the
-#      `verdict=$(echo "$issue_comments" | jq -c ...)` filter in
+#      `verdict=$(printf '%s\n' "$issue_comments" | jq -c ...)` filter in
 #      scan_codex_state. Selects the LATEST HEAD-anchored verdict comment
 #      (any disposition) and reports whether it is affirmative.
 BOT="chatgpt-codex-connector[bot]"
@@ -85,7 +85,7 @@ VERDICT_FILTER=$(python3 - "$SCRIPT" <<'SELECTOR'
 from pathlib import Path
 import sys
 source = Path(sys.argv[1]).read_text()
-start = source.index('  verdict=$(echo ')
+start = source.index('  verdict=$(printf \'%s\\n\' "$issue_comments" | jq -c ')
 marker = '--arg bot "$BOT_LOGIN" --arg sha "$HEAD_SHA" ' + chr(39)
 start = source.index(marker, start) + len(marker)
 end = source.index("\n  ')", start)
@@ -298,6 +298,59 @@ else
   fi
 fi
 
+# #1673: execute the production policy setup and finding-filter shell block,
+# preserving its JSON shape while exercising independent dispositions.
+test_discretionary_finding_flags() (
+  local setup filter fixture got policy bad="" dir findings=""
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/codex-finding-tiers.XXXXXX")
+  trap 'rm -rf "$dir"' EXIT
+  setup=$(sed -n '/^REQUIRED_TIERS_JSON=/,/^# --- Phase 4a entry decision/{ /^# --- Phase 4a entry decision/d; p; }' "$SCRIPT")
+  filter=$(python3 - "$SCRIPT" <<'PY1673'
+from pathlib import Path
+import sys
+s = Path(sys.argv[1]).read_text()
+start = s.index('  if [ -n "$latest_review_id" ]')
+print(s[start:s.index('\n  # #1751:', start)])
+PY1673
+)
+  fixture=$(jq -nc --arg bot "$BOT" '
+    ["![P1 Badge] required", "**P2 discretionary", "![P2 Badge] also discretionary",
+     "![P0 Badge] urgent", "unmarked"] | to_entries
+    | map({id: (.key + 1), user: {login: $bot}, pull_request_review_id: 1,
+           path: "fixture.sh", line: (.key + 1), body: .value})')
+  __CODEX_REQ_LIBDIR="$ROOT/scripts"
+  # shellcheck disable=SC2034 # Inputs consumed by the extracted production block through eval.
+  BOT_LOGIN=$BOT latest_review_id=1 comments=$fixture
+  for policy in hub absent ignore all; do
+    CONFIG="$dir/policy.yml"
+    case "$policy" in
+      hub) printf 'feedback_policy:\n  mode: by-priority\n  priorities:\n    p0: required\n    p1: required\n    p2: discretionary\n    p3: discretionary\n    nitpick: discretionary\n' >"$CONFIG" ;;
+      absent) printf 'codex:\n  enabled: true\n' >"$CONFIG" ;;
+      ignore) printf 'feedback_policy:\n  mode: by-priority\n  priorities:\n    p1: required\n    p2: ignore\n' >"$CONFIG" ;;
+      all) printf 'feedback_policy:\n  mode: address-all\n' >"$CONFIG" ;;
+    esac
+    eval "$setup"
+    eval "$filter"
+    got=$(printf '%s' "$findings" | jq -c 'map([.blocking,.discretionary])')
+    case "$policy" in
+      hub) [ "$got" = '[[true,false],[false,true],[false,true],[true,false],[false,false]]' ] || bad="$bad hub=$got" ;;
+      absent) [ "$got" = '[[true,false],[false,true],[false,true],[false,false],[false,false]]' ] || bad="$bad absent=$got" ;;
+      ignore) [ "$got" = '[[true,false],[false,false],[false,false],[false,true],[false,false]]' ] || bad="$bad ignore=$got" ;;
+      all) [ "$got" = '[[true,false],[true,false],[true,false],[true,false],[false,false]]' ] || bad="$bad all=$got" ;;
+    esac
+    # Existing fields preserve their values and findings remain in order.
+    printf '%s' "$findings" | jq -e --argjson fixture "$fixture" '
+      map(del(.blocking,.discretionary,.priority) | .id = .comment_id | del(.comment_id))
+      == ($fixture | map(del(.user,.pull_request_review_id)))' >/dev/null || bad="$bad $policy-shape"
+  done
+  [ -z "$bad" ] || { printf '%s\n' "$bad" >&2; exit 1; }
+)
+if test_discretionary_finding_flags; then
+  pass "#1673: production finding flags use independent hub/default/ignore/address-all tier sets"
+else
+  fail "#1673: discretionary finding flags"
+fi
+
 # ── 10. Behavioral: fetch_api_array must not let `gh api`'s STDERR reach
 #       the `jq -s` slurp. `gh api` prints diagnostics on calls that
 #       succeed (deprecation notices, retry chatter), and the old
@@ -345,6 +398,30 @@ STUB
     pass "fetch_api_array: benign gh stderr does not corrupt a successful fetch"
   else
     fail "fetch_api_array mishandled stderr on a successful fetch; got: $fetch_ok_output"
+  fi
+
+  # JSON payloads contain escape sequences that xpg_echo would interpret.
+  # Set the option inside this wrapper (not via inherited BASHOPTS): macOS
+  # Bash 3.2 ignores an inherited BASHOPTS setting.
+  cat >"$fetch_stub_dir/gh" <<'STUB'
+#!/bin/sh
+printf '%s\n' '[{"body":"line one\nline two\\path"}]'
+STUB
+  chmod +x "$fetch_stub_dir/gh"
+  fetch_xpg_echo_output="$(PATH="$fetch_stub_dir:$PATH" bash -c '
+    shopt -s xpg_echo
+    set -eo pipefail
+    log() { :; }
+    . "$2"
+    eval "$1"
+    out=$(fetch_api_array "repos/o/r/x" "widgets")
+    printf "%s" "$out" | jq -e ".[0].body == \"line one\\nline two\\\\path\"" >/dev/null
+    printf "escape-bearing JSON preserved\n"
+  ' _ "$FETCH_FN" "$ARRAY_LIB" 2>/dev/null)"
+  if [ "$fetch_xpg_echo_output" = "escape-bearing JSON preserved" ]; then
+    pass "fetch_api_array: literal JSON emission preserves newline and backslash escapes with xpg_echo enabled"
+  else
+    fail "fetch_api_array corrupted escape-bearing JSON with xpg_echo enabled; got: $fetch_xpg_echo_output"
   fi
 
   # #1008: `--paginate` emits one JSON document per page, and the flatten is
@@ -398,8 +475,8 @@ STUB
     fetch_api_array "repos/o/r/x" "widgets" || printf "rc=%s\n" "$?"
   ' _ "$FETCH_FN" "$ARRAY_LIB" 2>/dev/null)"
 
-  if printf '%s' "$fetch_err_output" | grep -q 'HTTP 502 upstream exploded' \
-    && printf '%s' "$fetch_err_output" | grep -q 'rc=3'; then
+  if grep -q 'HTTP 502 upstream exploded' <<<"$fetch_err_output" \
+    && grep -q 'rc=3' <<<"$fetch_err_output"; then
     pass "fetch_api_array: a failed fetch still returns 3 and logs gh's stderr"
   else
     fail "fetch_api_array lost the failure status or the stderr diagnostic; got: $fetch_err_output"
@@ -443,8 +520,8 @@ STUB
     printf "kind=%s msg=%s\n" "$GH_API_ARRAY_ERROR_KIND" "$GH_API_ARRAY_ERROR"
   ' _ "$ARRAY_LIB" 2>/dev/null)"
 
-  if printf '%s' "$kind_output" | grep -q 'kind=flatten' \
-    && printf '%s' "$kind_output" | grep -q 'failed to flatten widgets pagination output'; then
+  if grep -q 'kind=flatten' <<<"$kind_output" \
+    && grep -q 'failed to flatten widgets pagination output' <<<"$kind_output"; then
     pass "gh_api_array: a parse failure is reported as kind=flatten, distinct from a fetch failure (#1008)"
   else
     fail "gh_api_array mislabelled a flatten failure; got: $kind_output"
@@ -464,14 +541,85 @@ STUB
     printf "kind=%s detail=%s\n" "$GH_API_ARRAY_ERROR_KIND" "$GH_API_ARRAY_DETAIL"
   ' _ "$ARRAY_LIB" 2>/dev/null)"
 
-  if printf '%s' "$kind_fetch_output" | grep -q 'kind=fetch' \
-    && printf '%s' "$kind_fetch_output" | grep -q 'HTTP 502 upstream exploded'; then
+  if grep -q 'kind=fetch' <<<"$kind_fetch_output" \
+    && grep -q 'HTTP 502 upstream exploded' <<<"$kind_fetch_output"; then
     pass "gh_api_array: a transport failure is reported as kind=fetch with gh's stderr as the detail (#1008)"
   else
     fail "gh_api_array mislabelled a fetch failure; got: $kind_fetch_output"
   fi
 
   rm -rf "$fetch_stub_dir"
+fi
+
+# JSON values derived from API arrays must also survive the requester's own
+# scan pipeline under xpg_echo. Exercise the extracted production scan and
+# source its real shared evidence selectors so review/finding bodies and the
+# selected current-head review summary remain visible in returned JSON.
+SCAN_JSON_FN="$(sed -n '/^scan_codex_state() {/,/^}/p' "$SCRIPT")"
+if [ -z "$SCAN_JSON_FN" ]; then
+  fail "could not extract scan_codex_state for xpg_echo JSON round-trip"
+else
+  scan_xpg_echo_output="$(bash -c '
+    shopt -s xpg_echo
+    set -eo pipefail
+    REPO=owner/repo PR_NUMBER=1 HEAD_SHA=0123456789012345678901234567890123456789
+    BOT_LOGIN=codex[bot] AUTHOR_IDENTITY=author
+    REQUIRED_TIERS_JSON=$(jq -nc --arg tier p1 "[\$tier]")
+    DISCRETIONARY_TIERS_JSON='[]' CODEX_FAILURE_MARKERS_OK=false
+    body=$'"'"'**P1** first line\nsecond line\\n literal and \\\\path'"'"'
+    FIXTURE_REVIEW=$(jq -cn --arg body "$body" --arg sha "$HEAD_SHA" \
+      "{id:7,state:\"COMMENTED\",submitted_at:\"2026-01-01T00:00:00Z\",commit_id:\$sha,body:\$body}")
+    FIXTURE_COMMENTS=$(jq -cn --arg body "$body" --arg bot "$BOT_LOGIN" \
+      "[{id:9,user:{login:\$bot},pull_request_review_id:7,body:\$body,path:\"sample.sh\",line:1}]")
+    verdict_body=$(printf "%s\nReviewed commit: %s\n%s" \
+      "Codex Review: Didnt find any major issues." "$HEAD_SHA" "$body")
+    FIXTURE_ISSUE_COMMENTS=$(jq -cn --arg body "$verdict_body" --arg bot "$BOT_LOGIN" \
+      "[{id:10,user:{login:\$bot},body:\$body,created_at:\"2026-01-01T00:00:01Z\"}]")
+    summary_body=$(printf "%s\n%s\n%s" \
+      "<!-- codex-pull-request-review-summary -->" \
+      "| 📝 **Code Review** | **Running** | \`$HEAD_SHA\` | @codex review |" \
+      "Review note: line one\\nline two\\\\path")
+    FIXTURE_ISSUE_COMMENTS=$(jq -cn --argjson comments "$FIXTURE_ISSUE_COMMENTS" \
+      --arg body "$summary_body" --arg bot "$BOT_LOGIN" \
+      "\$comments + [{id:11,user:{login:\$bot},body:\$body,created_at:\"2026-01-01T00:00:02Z\",updated_at:\"2026-01-01T00:00:03Z\"}]")
+    fetch_scan_array() {
+      case "$1" in
+        */reviews) printf "[]\\n" ;;
+        */pulls/*/comments) printf "%s\\n" "$FIXTURE_COMMENTS" ;;
+        */issues/*/comments) printf "%s\\n" "$FIXTURE_ISSUE_COMMENTS" ;;
+      esac
+    }
+    . "$2"
+    crqe_resolve_verdict_anchors() { printf "%s" "$1"; }
+    crqe_select_head_review() { printf "%s" "$FIXTURE_REVIEW"; }
+    crqe_review_approval_time() { printf ""; }
+    crqe_select_trigger() { printf "null"; }
+    crqe_filter_provider_block() { printf "%s" "$1"; }
+    eval "$1"
+    if scan=$(scan_codex_state); then
+      summary=not-selected
+      if printf "%s" "$scan" | jq -e --arg body "$body" \
+        ".review.body == \$body and .findings[0].body == \$body and .findings[0].priority == \"P1\" and .verdict.affirmative == true" >/dev/null \
+        && summary=$(crqe_select_codex_review_summary "$FIXTURE_ISSUE_COMMENTS" "$BOT_LOGIN" "$HEAD_SHA") \
+        && printf "%s" "$summary" | jq -e --arg sha "$HEAD_SHA" \
+          ".status == \"running\" and .commit == \$sha and .observed_at == \"2026-01-01T00:00:03Z\" and .comment_id == 11 and .trigger == \"@codex review\"" >/dev/null; then
+        printf "scan and selected summary JSON preserved\\n"
+      else
+        printf "scan or selected summary JSON mismatch\\n"
+        printf "selected summary: %s\\nscan: %s\\n" "$summary" "$scan"
+      fi
+    else
+      printf "scan execution failed\\n"
+    fi
+  ' _ "$SCAN_JSON_FN" "$ROOT/scripts/lib/codex-request-evidence.sh" 2>&1)" || {
+    inner_rc=$?
+    scan_xpg_echo_output="inner exit $inner_rc: $scan_xpg_echo_output"
+  }
+  if [ "$scan_xpg_echo_output" = "scan and selected summary JSON preserved" ]; then
+    pass "scan_codex_state: review/finding JSON and real current-head summary selection survive newline/backslash escapes with xpg_echo enabled"
+  else
+    fail "scan_codex_state corrupted an API JSON payload with xpg_echo enabled; got: $scan_xpg_echo_output"
+  fi
 fi
 
 # ── 11. Behavioral (#1550): fetch_scan_array classifies a failed read with the

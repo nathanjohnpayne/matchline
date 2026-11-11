@@ -401,7 +401,10 @@ describe("RoleDetailView", () => {
       />,
     );
     expect(html).toContain('data-testid="requirements-tab-empty"');
-    expect(html).toContain("Paste JD text above");
+    // #431: an empty JD reads as "no JD yet", distinct from the
+    // "JD ready" copy for a saved-but-unparsed JD (next test).
+    expect(html).toContain("No JD yet. Paste it above to parse requirements.");
+    expect(html).not.toContain("JD ready");
     expect(html).toContain("(paste JD text first)");
     // Parse button rendered but disabled (jd is empty).
     // Match the HTML `disabled` attribute, not the Tailwind
@@ -411,6 +414,120 @@ describe("RoleDetailView", () => {
     );
     expect(parseBtn).not.toBeNull();
     expect(parseBtn?.[0]).toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("REQUIREMENTS TAB: no saved JD + typed draft reads as unsaved, not 'JD ready' (#431)", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft="Pasted but not saved."
+      />,
+    );
+    expect(html).toContain("JD not saved yet");
+    expect(html).not.toContain("JD ready");
+    expect(html).not.toContain("No JD yet");
+  });
+
+  it("REQUIREMENTS TAB: a legacy Role with no jd_raw field renders a typed draft without crashing (#431)", () => {
+    // Codex P2 on PR #575: typing the first JD into a Role whose
+    // document omits `jd_raw` used to call trim() on undefined.
+    const legacy = makeRole();
+    delete (legacy as Partial<Role>).jd_raw;
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={legacy}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft="First JD paste."
+      />,
+    );
+    expect(html).toContain("JD not saved yet");
+  });
+
+  it("REQUIREMENTS TAB: a saved JD cleared in the editor does not read as 'No JD yet' (#431)", () => {
+    // CodeRabbit on PR #575: the copy must key on the saved JD first.
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "Build great things." })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="requirements"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+        jdDraft=""
+      />,
+    );
+    expect(html).toContain("JD cleared in the editor but still saved");
+    expect(html).not.toContain("No JD yet");
+    expect(html).not.toContain("JD ready");
+  });
+
+  it("MATCHES TAB: a Role saved without a JD says 'No JD yet' (#431)", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    expect(html).toContain("No JD yet");
+    expect(html).not.toContain("No Requirements parsed for this Role yet");
+  });
+
+  it("MATCHES TAB: a Role with a JD but no Requirements keeps the parse-first copy", () => {
+    const html = renderToStaticMarkup(
+      <RoleDetailView
+        status="ready"
+        role={makeRole({ jd_raw: "JD body" })}
+        requirements={[]}
+        matches={[]}
+        unitsById={new Map()}
+        error={null}
+        activeTab="matches"
+        onTabChange={NOOP}
+        onApprovalStateChange={NOOP_STATE_CHANGE}
+        computingMatches={false}
+        {...REQS_TAB_DEFAULTS}
+        {...APPS_TAB_DEFAULTS}
+      />,
+    );
+    expect(html).toContain("No Requirements parsed for this Role yet");
+    expect(html).not.toContain("No JD yet");
   });
 
   it("REQUIREMENTS TAB: jd_raw set + requirements empty renders Parse JD enabled, no list yet", () => {

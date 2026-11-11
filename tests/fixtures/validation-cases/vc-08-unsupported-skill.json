@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "id": "vc-08-unsupported-skill",
+  "category": "unsupported_skill",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "dimitri-wireless-ran-engineer-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_ldpc_decoder",
+      "raw_text": "Implemented the LDPC decoder offload pipeline on the Marlowe 5K baseband card. Hand-tuned the layered min-sum decoder kernel against the FlexNIC FPGA, hit the 14 Gbps peak decode budget for a 100 MHz NR carrier, and reduced PUSCH BLER by 0.6 dB at the 10% target operating point versus the prior fixed-point implementation.",
+      "normalized_summary": "Implemented LDPC decoder offload pipeline on Marlowe 5K baseband, hit 14 Gbps peak decode budget for 100 MHz NR carrier, reduced PUSCH BLER by 0.6 dB versus prior fixed-point implementation",
+      "unit_type": "technical_decision",
+      "skills": [
+        "ldpc decoding",
+        "fpga acceleration",
+        "fixed-point optimization",
+        "baseband engineering"
+      ],
+      "tools": [
+        "FlexNIC FPGA",
+        "5G NR"
+      ],
+      "domains": [
+        "telecom infrastructure",
+        "baseband processing"
+      ],
+      "metrics": [
+        {
+          "claim": "hit the 14 Gbps peak decode budget for a 100 MHz NR carrier",
+          "value": 14,
+          "unit": "Gbps peak decode",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Implemented the LDPC decoder offload pipeline on the Marlowe 5K baseband card in Verilog on a custom ASIC, hitting the 14 Gbps peak decode budget for a 100 MHz NR carrier.",
+    "source_unit_ids": [
+      "u_ldpc_decoder"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Implemented the LDPC decoder offload pipeline on the Marlowe 5K baseband card.",
+        "required_terms": [
+          "LDPC",
+          "Marlowe 5K"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_ldpc_decoder"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Implemented the decoder in Verilog on a custom ASIC.",
+        "required_terms": [
+          "Verilog",
+          "ASIC"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      },
+      {
+        "id": "a3",
+        "text": "Hit the 14 Gbps peak decode budget for a 100 MHz NR carrier.",
+        "required_terms": [
+          "14 Gbps",
+          "100 MHz"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_ldpc_decoder"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The source tuned the kernel against the FlexNIC FPGA; Verilog and a custom ASIC are not in any Unit."
+}

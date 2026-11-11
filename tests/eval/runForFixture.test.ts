@@ -30,12 +30,26 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AnthropicClient as Anthropic } from "../../functions/src/llm/anthropic.ts";
-import { modelFor } from "../../functions/src/llm/config.ts";
+import {
+  clearEffortOverrides,
+  modelFor,
+  setEffortOverrides,
+} from "../../functions/src/llm/config.ts";
 import { priceFor } from "../../functions/src/llm/cost.ts";
 import type { OpenAIClient as OpenAI } from "../../functions/src/llm/openai.ts";
+import { clearPromptVersionOverrides, setPromptVersionOverrides } from "../../functions/src/prompts/loader.ts";
 
 import { StageCache } from "./cache.ts";
-import { describeError, promptFingerprint, runForFixture } from "./runForFixture.ts";
+import { cacheKey } from "./cache.ts";
+import { loadJdText, loadResumeText } from "./loadFixtures.ts";
+import {
+  describeError,
+  EXTRACTION_ONLY_JD_ID,
+  promptFingerprint,
+  runExtractionForFixture,
+  runForFixture,
+  withEffort,
+} from "./runForFixture.ts";
 
 // -- Mock factories ---------------------------------------------------------
 
@@ -50,13 +64,16 @@ function makeMockAnthropic(seq: readonly unknown[]): Anthropic {
   let i = 0;
   return {
     messages: {
-      create: vi.fn(async () => {
+      // Echo the requested model as the served one, as the API does.
+      // Pricing follows the served model (#483), so a fixed model here
+      // would price every stage as that model.
+      create: vi.fn(async (params: { model: string }) => {
         const toolInput = seq[i++];
         return {
           id: `msg_${i}`,
           type: "message",
           role: "assistant",
-          model: "claude-haiku-4-5-20251001",
+          model: params.model,
           content: [
             {
               type: "tool_use",
@@ -154,6 +171,45 @@ describe("promptFingerprint", () => {
     expect(promptFingerprint("extraction", "resume")).not.toBe(
       promptFingerprint("parsing", "jd"),
     );
+  });
+
+  // #656: a parsing/jd=v2 run must never be read as comparable with, or
+  // served from, a v1 run. Both the version label and the content hash
+  // change, so the stage-cache key and the recorded fingerprint do too.
+  describe("parsing/jd v2 (#656)", () => {
+    afterEach(() => clearPromptVersionOverrides());
+
+    it("changes with the version, in both the label and the hash", () => {
+      const v1 = promptFingerprint("parsing", "jd");
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      const v2 = promptFingerprint("parsing", "jd");
+      expect(v1).toMatch(/^v1:[0-9a-f]{16}$/);
+      expect(v2).toMatch(/^v2:[0-9a-f]{16}$/);
+      expect(v2.slice(3)).not.toBe(v1.slice(3));
+      expect(promptFingerprint("parsing", "jd")).toBe(v2);
+    });
+
+    it("leaves the extraction fingerprint alone", () => {
+      const before = promptFingerprint("extraction", "resume");
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      expect(promptFingerprint("extraction", "resume")).toBe(before);
+    });
+
+    it("gives the parsing stage a different cache key", () => {
+      const key = (): string =>
+        cacheKey({
+          stage: "requirement_parsing",
+          provider: "anthropic",
+          model: modelFor("requirement_parsing").model,
+          promptVersion: promptFingerprint("parsing", "jd"),
+          input: "JD text",
+        });
+      const v1 = key();
+      setPromptVersionOverrides({ "parsing/jd": "v2" });
+      expect(key()).not.toBe(v1);
+      clearPromptVersionOverrides();
+      expect(key()).toBe(v1);
+    });
   });
 
   // Codex P2 round 4. The section boundary must be forgeable by
@@ -795,5 +851,146 @@ describe("runForFixture", () => {
       // Requirement texts.
       expect(entriesIn("embedding")).toHaveLength(2);
     });
+
+    it("a parsing/jd=v2 run misses the v1 parsing entry and writes its own (#656)", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const pair = { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" };
+      const entriesIn = (stage: string): string[] => readdirSync(join(cacheDir, stage)).sort();
+      try {
+        await runForFixture(pair, {
+          anthropicClient: makeMockAnthropic([extraction, parsing]),
+          openaiClient: makeMockOpenAi(),
+          cache: new StageCache({ dir: cacheDir }),
+        });
+        const v1Entries = entriesIn("requirement_parsing");
+        expect(v1Entries).toHaveLength(1);
+
+        setPromptVersionOverrides({ "parsing/jd": "v2" });
+        const v2Anthropic = makeMockAnthropic([parsing]);
+        const v2 = await runForFixture(pair, {
+          anthropicClient: v2Anthropic,
+          openaiClient: makeMockOpenAi(),
+          cache: new StageCache({ dir: cacheDir }),
+        });
+        expect(v2.ok).toBe(true);
+        // Extraction is replayed; parsing is not, because its key changed.
+        expect(v2Anthropic.messages.create).toHaveBeenCalledTimes(1);
+        const body = vi.mocked(v2Anthropic.messages.create).mock.calls[0]![0] as { system: string };
+        expect(body.system).toContain("One Unit per ask.");
+        const v2Key = cacheKey({
+          stage: "requirement_parsing",
+          provider: modelFor("requirement_parsing").provider,
+          model: modelFor("requirement_parsing").model,
+          promptVersion: promptFingerprint("parsing", "jd"),
+          input: loadJdText("google-compute-spm-2026"),
+        });
+        expect(entriesIn("requirement_parsing")).toEqual([...v1Entries, `${v2Key}.json`].sort());
+      } finally {
+        clearPromptVersionOverrides();
+      }
+    });
+
+    /**
+     * #648: `--extraction-only` and the full flow run one shared
+     * extraction stage, so they must write and read the same entry.
+     * The key is pinned to its composition (stage, provider, model,
+     * prompt fingerprint, résumé text, discriminators), so a refactor
+     * that changes any part of it, for either path, fails here.
+     */
+    it("the extraction-only path and the full flow share one byte-identical extraction key", async () => {
+      const { extraction, parsing } = fixtureResponses();
+      const model = modelFor("extraction");
+      const entriesIn = (dir: string): string[] => readdirSync(join(dir, "extraction"));
+      for (const cacheDiscriminators of [undefined, { tokenSource: "claude-cli" }]) {
+        const dir = mkdtempSync(join(cacheDir, "keys-"));
+        const key = cacheKey({
+          stage: "extraction",
+          provider: model.provider,
+          model: model.model,
+          promptVersion: promptFingerprint("extraction", "resume"),
+          input: loadResumeText("nathan-2026"),
+          ...(cacheDiscriminators !== undefined && { discriminators: cacheDiscriminators }),
+        });
+        const discriminated = cacheDiscriminators !== undefined ? { cacheDiscriminators } : {};
+
+        // Full flow first: the extraction-only path replays its entry.
+        const full = await runForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" },
+          {
+            anthropicClient: makeMockAnthropic([extraction, parsing]),
+            openaiClient: makeMockOpenAi(),
+            cache: new StageCache({ dir }),
+            ...discriminated,
+          },
+        );
+        expect(full.ok).toBe(true);
+        expect(entriesIn(dir)).toEqual([`${key}.json`]);
+        const replayAnthropic = makeMockAnthropic([extraction]);
+        const only = await runExtractionForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: EXTRACTION_ONLY_JD_ID },
+          { anthropicClient: replayAnthropic, openaiClient: makeMockOpenAi(), cache: new StageCache({ dir }), ...discriminated },
+        );
+        expect(only).toMatchObject({
+          ok: true,
+          cacheHits: 1,
+          cacheMisses: 0,
+          extractionAccuracy: full.extractionAccuracy,
+          extractedUnitCount: full.extractedUnitCount,
+        });
+        expect(replayAnthropic.messages.create).not.toHaveBeenCalled();
+        expect(entriesIn(dir)).toEqual([`${key}.json`]);
+
+        // And the other way round: an extraction-only entry serves the full flow.
+        const other = mkdtempSync(join(cacheDir, "keys-"));
+        const cold = await runExtractionForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: EXTRACTION_ONLY_JD_ID },
+          { anthropicClient: makeMockAnthropic([extraction]), openaiClient: makeMockOpenAi(), cache: new StageCache({ dir: other }), ...discriminated },
+        );
+        expect(cold).toMatchObject({ ok: true, cacheHits: 0, cacheMisses: 1 });
+        expect(entriesIn(other)).toEqual([`${key}.json`]);
+        const fullAnthropic = makeMockAnthropic([parsing]);
+        const warmFull = await runForFixture(
+          { resumeFixtureId: "nathan-2026", jdFixtureId: "google-compute-spm-2026" },
+          { anthropicClient: fullAnthropic, openaiClient: makeMockOpenAi(), cache: new StageCache({ dir: other }), ...discriminated },
+        );
+        expect(warmFull.ok).toBe(true);
+        expect(warmFull.cacheHits).toBe(1); // extraction only; the rest is cold
+        expect(fullAnthropic.messages.create).toHaveBeenCalledTimes(1); // parsing only
+        expect(warmFull.extractionAccuracy).toBe(cold.extractionAccuracy);
+      }
+    });
+  });
+});
+
+describe("withEffort (#495)", () => {
+  afterEach(() => clearEffortOverrides());
+
+  const keyInput = {
+    stage: "extraction",
+    provider: "anthropic",
+    model: "claude-sonnet-5-5",
+    promptVersion: "v1",
+    input: "resume text",
+  };
+
+  it("leaves the key untouched when no effort is set, so existing entries stay valid", () => {
+    expect(withEffort(undefined, "extraction")).toBeUndefined();
+    expect(withEffort({ tokenSource: "cli" }, "extraction")).toEqual({ tokenSource: "cli" });
+  });
+
+  it("adds the effort to the key when one is set, so efforts never share an entry", () => {
+    setEffortOverrides({ extraction: "low" });
+    const low = withEffort(undefined, "extraction");
+    expect(low).toEqual({ effort: "low" });
+    expect(cacheKey({ ...keyInput, discriminators: low })).not.toBe(cacheKey(keyInput));
+    setEffortOverrides({ extraction: "high" });
+    expect(cacheKey({ ...keyInput, discriminators: withEffort(undefined, "extraction") })).not.toBe(
+      cacheKey({ ...keyInput, discriminators: low }),
+    );
+  });
+
+  it("scopes the effort to its own stage", () => {
+    setEffortOverrides({ extraction: "low" });
+    expect(withEffort(undefined, "requirement_parsing")).toBeUndefined();
   });
 });

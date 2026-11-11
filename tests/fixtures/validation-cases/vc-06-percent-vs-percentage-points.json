@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "id": "vc-06-percent-vs-percentage-points",
+  "category": "percent_vs_percentage_points",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "nathan-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_ai_pr_review",
+      "raw_text": "Introduced AI-powered PR review to the NCPF App Foundations squad. Reduced median PR cycle time from 7.4 days to 4 — beating the 30% Q2 OKR target. Policy is now AI review plus 2 human reviewers, moving toward AI plus 1 human.",
+      "normalized_summary": "Introduced AI-powered PR review reducing median PR cycle time from 7.4 to 4 days, beating the 30% Q2 OKR target",
+      "unit_type": "achievement",
+      "skills": [
+        "engineering productivity",
+        "AI tooling adoption",
+        "OKR ownership",
+        "process change"
+      ],
+      "tools": [
+        "GitHub",
+        "AI code review"
+      ],
+      "domains": [
+        "developer tools",
+        "AI-augmented engineering"
+      ],
+      "metrics": [
+        {
+          "claim": "reduced median PR cycle time from 7.4 days to 4",
+          "value": 4,
+          "unit": "days median PR cycle time",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Introduced AI-powered PR review to the NCPF App Foundations squad, cutting median PR cycle time by 30 percentage points.",
+    "source_unit_ids": [
+      "u_ai_pr_review"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Introduced AI-powered PR review to the NCPF App Foundations squad.",
+        "required_terms": [
+          "AI-powered PR review",
+          "NCPF App Foundations"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_ai_pr_review"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Cut median PR cycle time by 30 percentage points.",
+        "required_terms": [
+          "PR cycle time",
+          "30 percentage points"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The source reports 7.4 to 4 days against a 30% OKR target; a cycle time measured in days cannot fall by percentage points."
+}

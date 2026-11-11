@@ -329,6 +329,30 @@ describe("checkSpecificity: LLM fallback", () => {
     );
   });
 
+  it("labels usage with its validation subtask, prompt, attempt and application (#483)", async () => {
+    const record = vi.fn<typeof RecordUsage>(async () => 0);
+    const { client } = mockClient([
+      mockMessage({ specific: true, rationale: "Verifiable claim." }),
+    ]);
+
+    await checkSpecificity(
+      makeClaim("The user shipped a feature on PS4."),
+      { ...CTX, applicationId: "app-7" },
+      { client, record },
+    );
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "validation",
+        subtask: "specificity",
+        promptVersion: "validation/specificity.v1",
+        attempt: 0,
+        maxTokens: 512,
+        applicationId: "app-7",
+      }),
+    );
+  });
+
   it("recordUsage rejection is swallowed; the LLM verdict still ships, warn logged without ownerUid (CodeRabbit on #113, #118)", async () => {
     // Pin THREE properties of the non-fatal telemetry contract:
     // result still ships, warn logged exactly once, ownerUid

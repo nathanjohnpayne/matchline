@@ -22,6 +22,7 @@ import type { ExperienceUnit, UnitMatch } from "../../types/capability.ts";
 import type { Application, Role } from "../../types/crm.ts";
 
 import ApplicationsTab, {
+  type ApplicationsTabProps,
   type ApplicationsTabStatus,
 } from "./ApplicationsTab.tsx";
 import MatchesTab from "./MatchesTab.tsx";
@@ -121,6 +122,18 @@ export interface RoleDetailViewProps {
   readonly generationStatus: ApplicationsTabStatus;
   readonly generationError: Error | null;
   readonly onGenerate: () => void;
+  /** Add a follow-up task to an Application (#34). */
+  readonly onAddTask?: ApplicationsTabProps["onAddTask"];
+  readonly defaultDueAtFor?: ApplicationsTabProps["defaultDueAtFor"];
+}
+
+/**
+ * True when the Role carries a JD. A Role saved from `/roles/new`
+ * with only a title stores `jd_raw: ""` (#431); the `?? ""` also
+ * covers a document written before `jd_raw` was always stamped.
+ */
+function roleHasJd(role: Role): boolean {
+  return (role.jd_raw ?? "").trim() !== "";
 }
 
 const TAB_DEFS: ReadonlyArray<{ id: Tab; label: string }> = [
@@ -159,6 +172,8 @@ export default function RoleDetailView({
   generationStatus,
   generationError,
   onGenerate,
+  onAddTask,
+  defaultDueAtFor,
 }: RoleDetailViewProps): ReactElement {
   // CodeRabbit Nit on PR #133: both derivations depend only on
   // `requirements` + `matches`; memoize so unrelated re-renders
@@ -267,7 +282,8 @@ export default function RoleDetailView({
       >
         {activeTab === "requirements" && (
           <RequirementsTab
-            jdRaw={role.jd_raw}
+            // `?? ""`: same legacy-document guard as `roleHasJd`.
+            jdRaw={role.jd_raw ?? ""}
             draft={jdDraft}
             onDraftChange={onJdDraftChange}
             requirements={requirements}
@@ -293,6 +309,7 @@ export default function RoleDetailView({
             unitsById={unitsById}
             onApprovalStateChange={onApprovalStateChange}
             computingMatches={computingMatches}
+            hasJd={roleHasJd(role)}
           />
         )}
         {activeTab === "applications" && (
@@ -302,6 +319,8 @@ export default function RoleDetailView({
             status={generationStatus}
             error={generationError}
             onGenerate={onGenerate}
+            {...(onAddTask !== undefined && { onAddTask })}
+            {...(defaultDueAtFor !== undefined && { defaultDueAtFor })}
           />
         )}
       </div>

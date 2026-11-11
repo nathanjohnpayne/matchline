@@ -23,6 +23,21 @@ This applies to every hand-rolled, mid-session investigative query, not just the
 
 The shipped gate scripts already bake this in --- `fetch_api_array` wraps `gh api --paginate` for the REST arrays, and the GraphQL reads use cursor loops --- so this rule is aimed at the ad-hoc queries those helpers do not cover. When in doubt, add `--paginate`: it is a no-op on a short list and the only safe default on a long one.
 
+## GitHub REST and GraphQL rate limits are separate budgets
+
+GitHub meters REST and GraphQL separately. A user token gets 5,000 REST requests per hour and, independently, 5,000 GraphQL points per hour; exhausting one leaves the other intact. When a GraphQL call fails on the primary rate limit, switch that work to the equivalent REST endpoints and keep going, rather than waiting for the GraphQL window to reset.
+
+Several `gh` commands are GraphQL under the hood and spend that budget: `gh pr view --json`, `gh pr list`, `gh issue view --json`, `gh issue list`, `gh project ...` and `gh api graphql`. Their REST equivalents are plain `gh api` paths, for example `repos/OWNER/REPO/pulls/N`, `.../pulls/N/reviews`, `.../pulls/N/comments`, `.../issues/N`, `.../issues/N/comments` and `.../commits/SHA/check-runs`, each with `--paginate` under the rule above.
+
+Board moves are the exception: defer them until `resources.graphql.reset` rather than switching. GitHub does publish Projects (v2) REST endpoints, but the board helpers under `scripts/gh-projects/` are GraphQL-only and verify the author identity before every write, which a raw `gh api` call skips. The user-owned board endpoint also rejects fine-grained PATs. Never report a board move as done if it has not happened.
+
+Classify the failure by its message, not by its HTTP status. A GraphQL error can arrive as HTTP 200 with an `errors` entry as well as a 403 or 429. Check for a secondary limit first, because it can arrive with the primary budget also at zero:
+
+1. **Secondary (abuse) limit:** the message mentions a secondary rate limit, or the response carries `Retry-After`. It applies across both APIs, so switching to REST just hits it again. Back off instead: wait for `Retry-After` when present; otherwise, if `x-ratelimit-remaining` is 0, wait until `x-ratelimit-reset`; otherwise wait at least one minute. Lengthen the wait on each repeat. Most `gh` commands hide the response headers (`gh api --include` shows them); when you cannot see them, use the one-minute floor and lengthen it. Do not call `gh api rate_limit` until the wait is over: the probe itself counts against the secondary limit, and it can read healthy during one.
+2. **Primary limit:** otherwise, when the message says `API rate limit exceeded`, or `gh api rate_limit --jq '.resources | {core, graphql}'` shows that API's `remaining` at 0. Switching APIs works.
+
+GitHub App installation tokens (CI workflows) have their own separate budget.
+
 ## Background jobs and expected duration
 
 A backgrounded command must have an expected duration stated when it is launched, and must be checked against that expectation. Never report "still running" as a status without comparing elapsed time to the expectation. A completion notification fires only on completion; a hung job produces no notification and no error — it is indistinguishable from a job legitimately working. Passive waiting has no failure detection by default.
@@ -50,7 +65,7 @@ Then follow this procedure:
 2. **Check if preflight was run.** If `OP_PREFLIGHT_DONE` is not set, suggest running the preflight script:
    > "1Password auth failed. Would you like to run credential preflight to cache all credentials at once? `eval \"$(scripts/op-preflight.sh --agent {your-agent} --mode review)\"`"
    >
-   > (Use `--mode deploy` or `--mode all` instead if a deploy is in scope; the default is now `review` per nathanjohnpayne/mergepath#282.)
+   > (`--mode deploy` is not an approved deployment setup: a cache hit can export review PATs, and evaluating its output exposes credentials to the caller's whole shell. Do not use `--mode all` for builds or deployment. Wait for separately reviewed post-build tooling that selects only deploy credentials and scopes them to one consuming subprocess after artifact verification. See [Build and deploy isolation](#build-and-deploy-isolation). The default is `review` per nathanjohnpayne/mergepath#282.)
 3. **If preflight was already run** but credentials expired (rare — only after 1Password locks or the 12-hour hard limit), prompt the human and suggest re-running preflight:
    > "Preflight credentials appear to have expired. Could you re-run preflight when you're back? I need to resume the review."
 4. **Wait for the human to confirm** they are present and ready before re-running preflight (not individual `op read` commands).
@@ -60,7 +75,7 @@ This rule applies only to 1Password CLI sign-in and authentication errors. Other
 
 ## Cloud agent sessions
 
-A Claude Code cloud session or a Codex cloud task has no 1Password and no gh keyring, and the Claude cloud GitHub proxy's ambient token writes as `claude[bot]`, not as you. Before writing to GitHub from one, follow [Cloud Agent Environments](cloud-environments.md): provision the dedicated author and reviewer PATs it names, run `scripts/agent-capability-probe.sh` to learn what the session can do, and hand anything it cannot do (GraphQL-only helpers, multi-branch or cross-repo work) to a local session or CI. A cloud session may merge through the same gates as a local session; on Claude cloud that waits on a REST write path, because `gh pr` subcommands are GraphQL there.
+A Claude Code cloud session or a Codex cloud task has no 1Password and no gh keyring, and the Claude cloud GitHub proxy's ambient token writes as `claude[bot]`, not as you. Before writing to GitHub from one, follow [Cloud Agent Environments](cloud-environments.md): provision the dedicated author and reviewer PATs it names, run `scripts/agent-capability-probe.sh` to learn what the session can do, and hand anything it cannot do (GraphQL-only helpers, multi-branch or cross-repo work) to a local session or CI. On a cloud surface the write wrappers run the guarded `gh pr` / `gh issue` verbs as REST calls and read each byline back, because those subcommands are GraphQL and the Claude cloud proxy refuses them; `gh pr merge` stays refused there, because the merge gates read GraphQL, so a merge is parked with a handback for a local session.
 
 ## Secret handling
 
@@ -69,6 +84,16 @@ These three rules hold in every repository, whatever it deploys and however it d
 1. **Never move a secret through a human.** Do not ask anyone to paste a raw credential, token, or key into chat, an issue, or a PR comment, and never print a resolved secret value in logs or command output. A credential manager hands the value to the tool that needs it; it does not pass through a transcript.
 2. **No long-lived keys by convenience.** Do not introduce long-lived service-account keys or on-disk deploy keys into repo docs, scripts, or secret stores unless the project explicitly requires them and a human has approved that requirement. Short-lived, manager-resolved credentials are the default form.
 3. **Do not downgrade a repo's auth model unilaterally.** Where a repository's deploy or CI auth is 1Password-backed — the fleet default — switching it back to routine browser login, an interactive CLI login, or an unmanaged on-disk key needs explicit human approval. Reaching for the downgrade because a credential lookup failed is the specific move this rule forbids; see the pause-and-prompt procedure above.
+
+### Build and deploy isolation
+
+Production artifact builds run on a separate CI runner or account before deployment credentials are acquired. Repository build code and dependencies must have no deployment credentials, author/reviewer PATs, or filesystem access to the operator's credential-manager files and preflight caches, including through host mounts. Unsetting variables in a same-user shell or restricting cache-file permissions does not establish this isolation.
+
+Publish an immutable artifact with a digest and attestation bound to the intended repository and full source revision. Trusted post-build tooling verifies that binding and artifact integrity before acquiring deployment credentials, then deploys the verified artifact without rebuilding or executing the candidate checkout. Each repository owns its artifact format, verification implementation and platform-specific deploy adapter.
+
+Acquire each deployment credential only after successful build and artifact verification, and inject it only into the subprocess that consumes it. Author/reviewer PATs are not deployment credentials and must not be injected into build or deploy subprocesses. Credential preflight belongs in trusted post-build tooling; review/all-mode credential loading is not a build or deployment step. Retain the repository's approved authentication model and fail closed on failed build, verification or credential acquisition.
+
+Before marking a consumer migrated, exercise its real build and use fake credentials to prove both environment absence and denied filesystem/cache reachability. Verify credential acquisition occurs after build completion and each credential reaches only its intended subprocess. Shared guidance alone is not evidence that a consumer's adapter satisfies this boundary.
 
 ## Mutating MCP tool calls need explicit confirmation
 
@@ -146,6 +171,67 @@ Which issue to act on:
 
 The rollup is per-repo: the workflow runs in the repository it is installed in and opens its issues there. Cross-repo aggregation is an explicit non-goal; the per-repo design preserves operator focus on the repo whose context they are currently in.
 
+## End of session: no pull request left on an unanswered verdict
+
+Measured in the hub (nathanjohnpayne/mergepath#2165): across the fourteen most recently merged multi-commit pull requests, 57% of created-to-merged wall-clock was idle gaps of ninety minutes or more, and every gap between nine and thirteen and a half hours began with a reviewer verdict — a Codex or CodeRabbit review, or a reviewer-identity comment — that no session was alive to act on. The verdict was ready within minutes; the pull request then waited for someone to open a session. The review loop itself is fast when a session is driving it; the cost is the session ending with the ball in the agent's court.
+
+A session therefore does not end with a pull request in either of these states unless it has posted a handoff:
+
+- the pull request's newest event is a verdict — a bot review, a bot verdict comment, a reviewer-identity review or comment, or a human reply — with no push, reply or review request after it; or
+- the pull request's head is CI-green, approved and unmerged.
+
+Finish the round instead: fix or rebut the findings and push, request the next review, or run the pre-merge gates and merge, in the order `REVIEW_POLICY.md` § Workflow prescribes. When the round genuinely cannot be finished in the session — the fix needs a human decision, the external reviewer has not answered, or the session has hit a capability ceiling — post a pull-request comment that names the next action and the identity expected to take it, and carries the tag `[mergepath-handoff]` on its own line so tooling can recognize it. The Phase 4b handoff (the `## External Review Required` comment) and the local-agent handback (`<!-- mergepath-handback: … -->`) already count as handoffs; the `human-hold`, `needs-human-review` and `policy-violation` labels already count as a human stop.
+
+A pull request with no handoff is fair game for any later session, including a scheduled resume routine, to pick up and continue from its newest event; a pull request with a handoff is left to the identity the handoff names. A handoff stays in force for as long as its marker is on the pull request, whatever happens after it; no later push, review or comment clears it. The identity it names clears it when the round is taken back, by editing or deleting the handoff comment so it no longer carries the marker. This rule is about the state a session leaves behind, not about who caused the wait: a session that is waiting on CI or on a requested review may end, because a machine acts next; a session that is holding an answered-for verdict may not.
+
+## Filing an issue: fill out every triage field at creation
+
+The agent that files an issue holds the context a later board-triage pass would have to reconstruct from a cold read, so it fills out every triage field when it creates the issue, using only evidence it can name. Where a field cannot be decided from that evidence, the issue gets `decision-needed` and the open question in its body; a field is never filled by guessing. Issue writes go through `scripts/gh-as-author.sh` as `nathanjohnpayne`, with the body passed by `--body-file`.
+
+1. **Labels.** Exactly one `size:` label, exactly one `priority:` label, and exactly one of `agent-action` / `human-action`, plus `decision-needed` when the issue cannot proceed until a human decides something. Choose each by its canonical description. The canonical label set has one source, the `BOOTSTRAP_LABELS` list in the hub's new-repo bootstrap, specified in [`specs/bootstrap_label_seeding.md`](https://github.com/nathanjohnpayne/mergepath/blob/main/specs/bootstrap_label_seeding.md) (hub-only, so the link is absolute), which names the file that holds it; the fleet label sync keeps every repository's labels in step with it. `priority:normal` is the default; `priority:high` and `priority:critical` need the evidence their descriptions require, cited in the body, and `priority:low` applies only when the issue itself says the work is optional. Add the repository's own type or area labels where it defines them, and never create a label outside the canonical set and the repository's own. Do not add or remove the merge-gate labels (`needs-external-review`, `needs-human-review`, `policy-violation`, `human-hold`) or `needs-local-agent` when filing.
+2. **Dependencies.** Record every blocked-by / blocking relationship with GitHub's native issue relationships (the issue's *Relationships* sidebar, or `POST repos/OWNER/REPO/issues/N/dependencies/blocked_by` with the blocker's numeric database `id`, not its number), not as body text. A dependency exists only when one issue cannot be completed until the other lands. A shared topic is not a dependency, and neither is a sub-issue link.
+3. **Lane.** Leave the issue in `Backlog`, where the board's *Item added to project* workflow puts it, unless the `Ready` entry rule in [`scripts/gh-projects/README.md` § Status lanes](../../scripts/gh-projects/README.md#status-lanes) is met (the issue states the problem, the expected outcome, and how to verify it, and every blocker is closed) and, for a `size:L` issue, its sub-issues are filed. Move it with `scripts/gh-projects/move-item.sh` (`--add-if-missing` when it is not on the board yet), then place it as [Ordering the Ready column](#ordering-the-ready-column) says.
+4. **Routing.** Unless the issue is a `size:L` parent, pick its tier from [Model Routing § Routing tiers](model-routing.md#routing-tiers) and write both of that tier's routes into the body as the [route marker](#the-route-marker). When the repository's board has the four routing fields, set them to the same values in the same step. When the evidence does not settle the tier, leave the marker and the fields unset and add `decision-needed` with the question; the issue stays in `Backlog` and is not started until its route is decided.
+5. **`size:L` decomposition.** File a `size:L` issue together with its `size:S` / `size:M` sub-issues. Create each sub-issue through the author wrapper like any other issue, then link it to the parent as a native sub-issue: `POST repos/OWNER/REPO/issues/<parent>/sub_issues` with the child's numeric database `id` as `sub_issue_id`, which `link_sub_issue` in `scripts/gh-projects/lib.sh` wraps. Each sub-issue has **Inputs**, **Outputs**, **Acceptance criteria**, and **Validation** sections and its own labels, dependencies, and route. If the scope cannot be split without inventing it, file the parent alone with `decision-needed`, leave it in `Backlog`, and list the questions that would unblock the split.
+6. **Body.** Acceptance criteria an agent can verify, and a validation step (a test, command, or check) or a note on why none applies.
+
+### The route marker
+
+An issue's model and effort route lives on the issue, as one hidden line in its body. The board's routing fields mirror it but are not its source: a Claude cloud session can read an issue body with one REST call (`GET repos/OWNER/REPO/issues/N`), but it cannot read the boards, which belong to the `nathanjohnpayne` user account, outside the `repos/<owner>/<repo>/...` paths its GitHub proxy allows. The format is:
+
+```markdown
+<!-- mergepath-route: anthropic=<model>/<effort> openai=<model>/<effort> -->
+```
+
+Each value is the board option's name, lowercased, with spaces replaced by `-`. These are the only valid values:
+
+| Half | Model: board option → value (fields `Anthropic model`, `OpenAI model`) | Effort (fields `Anthropic effort`, `OpenAI effort`) |
+|---|---|---|
+| `anthropic` | Haiku 4.5 → `haiku-4.5`, Sonnet 5.5 → `sonnet-5.5`, Opus 5.5 → `opus-5.5`, Fable 5.1 → `fable-5.1` | `low`, `medium`, `high` |
+| `openai` | GPT-6 Luna → `gpt-6-luna`, GPT-6.1 Sol → `gpt-6.1-sol`, GPT-6 Astra → `gpt-6-astra` | `low`, `medium`, `high`, `xhigh` |
+
+- An issue carries exactly one marker, on its own line, with both halves.
+- A `size:L` parent carries no marker; each of its sub-issues does.
+- Changing a route means replacing the marker line in place, never adding a second one, and updating the board fields in the same step when the board has them. Replacing the marker is the only routing edit a triage pass makes to an existing issue body.
+- When the marker and the board fields disagree, the marker wins. Whoever notices reports the drift to the owner instead of silently rewriting either side.
+
+### Ordering the Ready column
+
+The `Ready` entry rule says an issue can be started, not that it should be next, and no workflow orders the column. So an agent that moves an issue to `Ready`, whether at filing, in triage, or when its last blocker closes, also places it in the column: by priority tier first (`priority:critical`, then `high`, `normal`, `low`), then in dependency order within a tier, blockers above what they block, so an issue that other open issues are waiting on sits above one that nothing waits on. The top `Ready` item is then the next one to take, skipping any `size:L` parent: a parent never gets a branch of its own, so its work is taken through its sub-issues. Whoever changes the priority of an issue already in `Ready` places it again the same way.
+
+No helper in `scripts/gh-projects/` positions items. Place one by dragging its card on the board, or with the Projects GraphQL mutation `updateProjectV2ItemPosition` (`projectId`, `itemId`, and `afterId`, the item it should follow; omit `afterId` to move it to the top), run as `nathanjohnpayne`, the identity the board helpers verify. This is the board's manual order, which a view sorted by a field does not show. A session that cannot reach GraphQL hands the placement to one that can, like any other board move.
+
+## Starting an issue: read and honor its route
+
+Before starting work on an issue, and after the claim check in [Link the issue a pull request resolves](#link-the-issue-a-pull-request-resolves), read the issue's [route marker](#the-route-marker) and honor the half for the provider your session runs on: `anthropic` for a Claude model, `openai` for an OpenAI model. Read it with `scripts/gh-projects/read-route.sh` when your checkout has that helper (nathanjohnpayne/mergepath#2848 adds it to the board kit); without it, read the issue body over REST (`gh api repos/OWNER/REPO/issues/N --jq .body`) and apply the marker rules yourself.
+
+- **No marker:** keep the session's model and effort, unless the issue carries `decision-needed` for its route, in which case it is not ready to start.
+- **A different model or effort:** a session cannot change its own model, so delegate the implementation to a subagent configured with the route's model and effort.
+- **An unavailable model:** if neither the session nor any subagent it can start runs the route's model, do not substitute another. Report the mismatch to the owner once, leave the issue unstarted, and continue with other work.
+- **A malformed or duplicated marker:** do not guess which route was meant. Report it to the owner once, leave the issue unstarted, and continue with other work.
+
+A single comment on the issue is enough for either report; check for an earlier one before posting.
+
 ## Link the issue a pull request resolves
 
 When a pull request resolves an issue, its body names that issue with a closing keyword: `Closes #N` on its own line, one line per issue, or `Closes OWNER/REPO#N` for an issue in another repository (the same qualification applies to `Refs`). An issue number in the title, a `(#N)` suffix, or `Refs #N` mentions the issue without linking it. GitHub honors a closing keyword only when the pull request targets the repository's default branch; for a pull request into any other branch the keyword links nothing, so move the issue between lanes by hand.
@@ -153,6 +239,25 @@ When a pull request resolves an issue, its body names that issue with a closing 
 The link is what moves the issue on the repository's Project board. The board's *Pull request linked to issue* workflow moves the issue to `In review` when the pull request opens, and the merge closes it, which moves it to `Done`. Without the link the issue sits in `Ready` or `In progress` through the whole review and has to be closed by hand.
 
 Use `Refs #N` instead when the pull request is only part of the work, so the merge does not close an issue that still has work left; move that issue between lanes by hand. What each lane means, and which moves are manual: `scripts/gh-projects/README.md` § Status lanes.
+
+One issue, one open pull request. `scripts/gh-as-author.sh -- gh pr create` refuses to open a pull request whose body links an issue that another open pull request in the same repository already links with any of those keywords, and names that pull request (exit `7`). Two sessions implementing one issue, discovered only by a merge conflict, is the failure it catches (nathanjohnpayne/mergepath#2562). When the second pull request is a deliberate split or a stacked tranche, name the first in `GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=<number>` and say so in the body; an open-PR list the wrapper cannot read refuses rather than passes. The check sees only open pull requests, so before starting on an issue read its newest comments and any open linked pull request, and leave a one-line claim through the reviewer wrapper, `<!-- mergepath-claim: <agent> <YYYY-MM-DD> -->` on its own line, so a session arriving in the window before your pull request exists sees who holds it; do not start on an issue whose newest claim is another identity's while that identity's pull request is still open or its claim is less than a day old.
+
+## Visual evidence for reader-visible UI changes
+
+A pull request that makes a meaningful reader-visible UI change carries screenshots of the changed state, in its body or in a comment on it. By default that means a desktop capture and a phone capture; a ticket may require more widths or states, and a reviewer may ask for more. When screenshots would add no useful evidence, or cannot be produced, the pull request says so, in the same places, with a concrete explanation (what was tried, or why the change has no visible state to capture). Silence does not satisfy the requirement, and neither does a bare "N/A".
+
+Upload with `scripts/pr-assets-upload.sh`, then paste the Markdown lines it prints into the PR body or a comment. They are pinned to the full commit SHA of the upload, so they keep rendering after later uploads:
+
+```
+eval "$(scripts/op-preflight.sh --agent <agent> --mode pr-assets)"
+scripts/pr-assets-upload.sh --repo nathanjohnpayne/<name> --pr <N> desktop.png phone.png
+```
+
+`--mode pr-assets` caches the identity-checked author credential scoped to the assets repository; the script uses no other credential. `scripts/pr-assets-upload.sh --help` lists the accepted file types, the naming rules and the exit codes.
+
+- **Never in the code repository.** Do not commit screenshots to the repository the pull request targets, and do not push them as a branch of it. The script writes only to `nathanjohnpayne/pr-assets` and never touches the source repository's refs.
+- **Public-only.** Everything in `nathanjohnpayne/pr-assets` is public, so a screenshot must meet the bar of a public PR body: nothing from signed-in analytics or vendor dashboards, no personal data, nothing from a private repository. The script refuses a private or internal source repository. For a private repository, use an approved private method for visual evidence, or report the blocker on the pull request; do not substitute the public store and do not silently omit the evidence.
+- **Keep everything.** Never delete or rewrite history in `nathanjohnpayne/pr-assets`: older pull requests embed SHA-pinned URLs into it, and removing a commit breaks them. Upload under a new name rather than replacing a file.
 
 ## PR and issue titles/descriptions: describe the work, not the session
 
@@ -166,3 +271,7 @@ Titles and descriptions — for both pull requests and issues — must describe 
 - Exactly one annotation is exempt *outside* that heading, because the same document requires it to stay where the criterion is rather than move under the record: an acceptance criterion the change discarded is struck in place, keeping its checkbox, with the dated reason appended — `- [ ] ~~<criterion>~~ — Discarded YYYY-MM-DD: <reason>`. It qualifies on the same terms and for the same reason as the heading does: a cold reader needs it to tell a criterion dropped for cause from one that was never asked for, and deleting the criterion instead would make it look as though nobody ever asked. It is exempt only when a path record was triggered in the first place, and it does not license any other dated session note in the criteria list.
 
 This is advisory guidance for judgment, not a `repo_lint`/CI gate — the narration-vs-rationale distinction is not reliably lintable, and a reviewer (human or bot) should apply it as judgment rather than minting false-positive findings from words like "originally" or "instead." See nathanjohnpayne/mergepath#654, and nathanjohnpayne/mergepath#788 for the carve-out above.
+
+## CodeRabbit rate-limit substitution
+
+When CodeRabbit is rate-limited, request Codex immediately through the canonical requester rather than waiting out the provider window. A request grants no clearance: under-threshold approval requires a completed exact-head Codex review or affirmative verdict with required findings handled, and records the provider substitution and full SHA. Phase 4 keeps its usual independent-review and escalation gates; [mergepath#2120](https://github.com/nathanjohnpayne/mergepath/issues/2120) permits its adapter review after a bare CodeRabbit refusal. If Codex is unavailable too, alert the human. See `REVIEW_POLICY.md` § Rate-limit → Codex failover and [mergepath#2139](https://github.com/nathanjohnpayne/mergepath/issues/2139) for the full workflow.

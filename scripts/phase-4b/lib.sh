@@ -16,7 +16,14 @@
 p4b_log()  { echo "[phase-4b] $*" >&2; }
 p4b_warn() { echo "[phase-4b] WARN: $*" >&2; }
 # p4b_die <exit-code> <message...>
-p4b_die()  { local c="$1"; shift; echo "[phase-4b] ERROR: $*" >&2; exit "$c"; }
+p4b_die() {
+  local c="$1"; shift
+  echo "[phase-4b] ERROR: $*" >&2
+  # The orchestrator can retain a validated but unpublished verdict (#2790).
+  # Diagnostics are advisory: never replace the original refusal's exit code.
+  if declare -F p4b_die_diagnostic >/dev/null 2>&1; then p4b_die_diagnostic "$c" "$@" || true; fi
+  exit "$c"
+}
 
 # --- config location -------------------------------------------------------
 
@@ -25,6 +32,19 @@ p4b_die()  { local c="$1"; shift; echo "[phase-4b] ERROR: $*" >&2; exit "$c"; }
 # lib.sh (e.g. verdict.schema.json) are resolved relative to this, so they
 # are found regardless of $PWD or how the caller was invoked.
 P4B_LIB_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# #939: share the waiter's positive StatusContext description predicate.
+# Missing/partial propagation cannot corroborate rc-7 completion; the ordinary
+# bounded not-yet path remains available without changing other exit classes.
+P4B_CODERABBIT_STATUS_DESCRIPTION_OK=false
+if [ -r "$P4B_LIB_DIR/../lib/coderabbit-fence.sh" ]; then
+  # shellcheck source=../lib/coderabbit-fence.sh
+  if . "$P4B_LIB_DIR/../lib/coderabbit-fence.sh" \
+      && declare -F crw_normalize_status_description >/dev/null \
+      && declare -F crw_status_description_permits_clearance >/dev/null; then
+    P4B_CODERABBIT_STATUS_DESCRIPTION_OK=true
+  fi
+fi
 
 # #1085 durable Phase 4a timeout grammar. The orchestrator's manifest requires
 # this helper alongside the Phase 4b kit; retain an explicit readiness bit so
@@ -48,13 +68,18 @@ if [ -r "$P4B_LIB_DIR/../lib/gh-api-array.sh" ]; then
   P4B_GH_API_ARRAY_OK=true
 fi
 
+# The policy parser behind p4b_policy_block_field (#2913). Without it every
+# policy read refuses, so nothing reads as a default.
+if [ -r "$P4B_LIB_DIR/../lib/feedback-policy-helpers.sh" ]; then
+  # shellcheck source=../lib/feedback-policy-helpers.sh
+  . "$P4B_LIB_DIR/../lib/feedback-policy-helpers.sh"
+fi
+
 # #1305 request-budget readers. The barrier must use the same exact-command
 # counter and governing-base-policy parser as the requester itself.
 P4B_CODEX_REQUEST_BUDGET_OK=false
 if [ -r "$P4B_LIB_DIR/../lib/feedback-policy-helpers.sh" ] \
    && [ -r "$P4B_LIB_DIR/../lib/codex-request-evidence.sh" ]; then
-  # shellcheck source=../lib/feedback-policy-helpers.sh
-  . "$P4B_LIB_DIR/../lib/feedback-policy-helpers.sh"
   # shellcheck source=../lib/codex-request-evidence.sh
   . "$P4B_LIB_DIR/../lib/codex-request-evidence.sh"
   P4B_CODEX_REQUEST_BUDGET_OK=true
@@ -95,30 +120,26 @@ p4b_config() {
   printf '%s/.github/review-policy.yml' "$(p4b_repo_root)"
 }
 
-# --- YAML readers (awk; mirrors the codex_field/policy_top_field style) ----
+# --- YAML readers --------------------------------------------------------
 
-# p4b_automation_field <field> — scalar under the top-level
+# p4b_automation_field <field> [kind] — scalar under the top-level
 # `phase_4b_automation:` block. Empty string if absent; caller defaults.
-# Nesting-aware (#615 Codex round 3): only DIRECT children of the block
-# match. The block carries nested sub-blocks (e.g. `accounting.enabled`),
-# and the previous flat scan matched a nested key as the parent-level
-# field — a downstream policy that omitted or reordered the parent
-# `enabled` would read the accounting sub-toggle as the master switch and
-# wrongly run the orchestrator. The direct-child indent is captured from
-# the first key line inside the block (so 2- and 4-space styles both
-# work); deeper-indented lines belong to sub-blocks and never match —
-# sub-block readers (p4b_acct_config_field, mirroring codex_p1_gate_field)
-# own those.
+# Only DIRECT children of the block match (#615 Codex round 3): the block
+# carries nested sub-blocks (e.g. `accounting.enabled`), and a flat scan once
+# read a nested key as the parent-level field — a downstream policy that
+# omitted or reordered the parent `enabled` would read the accounting
+# sub-toggle as the master switch and wrongly run the orchestrator.
+# Sub-block readers (p4b_acct_config_field) own the nested keys.
 p4b_automation_field() {
-  p4b_policy_block_field phase_4b_automation "$1"
+  p4b_policy_block_field phase_4b_automation "$1" "${2:-scalar}"
 }
 
-# p4b_policy_block_field <block> <field> — the same reader, generalized over
-# the top-level block name (#814). Needed because the same-head barrier reads
-# `codex.enabled` and `coderabbit.enabled`, and neither has a sourceable
-# reader: the existing per-script `codex_field` / `coderabbit_field` copies
-# live inside scripts whose top level runs work on source, and both are
-# hardcoded to one block.
+# p4b_policy_block_field <block> <field> [kind] — the same reader,
+# generalized over the top-level block name (#814). Needed because the
+# same-head barrier reads `codex.enabled` and `coderabbit.enabled`, and
+# neither has a sourceable reader: the per-script `codex_field` /
+# `coderabbit_field` copies live inside scripts whose top level runs work on
+# source, and both are hardcoded to one block.
 #
 # The direct-child scoping is load-bearing for exactly the keys the barrier
 # needs. `coderabbit.severity_gate.enabled`, `codex.p1_gate.enabled` and
@@ -126,30 +147,29 @@ p4b_automation_field() {
 # a flat block scan returns whichever comes first in document order — a
 # consumer that omits the optional top-level `enabled` would read a sub-gate
 # toggle as the master switch and the barrier would guard on the wrong thing.
+#
+# It reads the parsed policy (#2913). The line-oriented awk reader it
+# replaces matched only an unquoted, block-style `field:` key, so a quoted key
+# or a flow mapping (`codex: {allow_phase_4b_substitute: false}`) read as
+# unset: the barrier then treated a forbidden substitute as allowed. Prints
+# nothing when the file, the block or the key is absent, and the caller
+# applies its default only then. Returns 1 with a reason on stderr when no
+# parser is available, the policy cannot be parsed, or the value is not of
+# <kind> (bool|int|string|scalar, see policy_json_field; default scalar);
+# every caller refuses on that.
 p4b_policy_block_field() {
-  local block="$1" field="$2" cfg
+  local block="$1" field="$2" kind="${3:-scalar}" cfg json
   cfg="$(p4b_config)"
   [ -f "$cfg" ] || return 0
-  awk -v block="$block" -v field="$field" '
-    /^[^[:space:]#]/ {
-      if ($0 ~ "^" block ":") { inblk=1; child_indent=-1; next }
-      inblk=0
-    }
-    inblk {
-      if ($0 ~ /^[[:space:]]*(#|$)/) next
-      indent = match($0, /[^[:space:]]/) - 1
-      if (child_indent < 0) child_indent = indent
-      if (indent > child_indent) next
-      if ($1 == field":") {
-        sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
-        gsub(/^["\047]/, "", $0)
-        gsub(/["\047][[:space:]]*(#.*)?$/, "", $0)
-        gsub(/[[:space:]]*#.*$/, "", $0)
-        sub(/[[:space:]]+$/, "", $0)
-        print; exit
-      }
-    }
-  ' "$cfg"
+  if ! command -v policy_json_field >/dev/null 2>&1; then
+    echo "ERROR: scripts/lib/feedback-policy-helpers.sh is not loaded; cannot read $block.$field from $cfg" >&2
+    return 1
+  fi
+  json="$(policy_yaml_to_json "$cfg")" && [ -n "$json" ] || {
+    echo "ERROR: policy $cfg could not be parsed; cannot read $block.$field" >&2
+    return 1
+  }
+  policy_json_field "$json" "$block.$field" "$kind"
 }
 
 # p4b_top_field <field> — a column-0 top-level scalar (author_identity,
@@ -193,7 +213,7 @@ p4b_top_field() {
 # is a bounded, self-clearing wait; `escalate` goes to the human immediately.
 # `rate-limited` is the one class the CLASSIFIER cannot resolve on its own —
 # it names the provider's state and the composer decides, because the answer
-# depends on whether the OTHER provider reported. See p4b_same_head_barrier.
+# depends on whether the Codex arm independently blocks. See p4b_same_head_barrier.
 #
 # `waived` is deliberately a separate class rather than reuse of `reported`,
 # which would claim a report that never happened, or of `will-not-report`,
@@ -207,9 +227,10 @@ p4b_top_field() {
 
 # p4b_barrier_class_coderabbit <head> <rc> <json>
 # Maps one scripts/coderabbit-wait.sh result — polling or --probe — to a
-# class. Pure: jq over the passed string only, no I/O, always returns 0.
+# class. Pure: shared description predicate + jq over the passed string only;
+# no provider I/O, always returns 0.
 p4b_barrier_class_coderabbit() {
-  local head="$1" rc="$2" json="$3" probe_head probe_observed
+  local head="$1" rc="$2" json="$3" probe_head probe_observed probe_description
   case "$rc" in
     0)
       # Terminal, but only for the head about to be approved. An rc 0
@@ -322,14 +343,17 @@ p4b_barrier_class_coderabbit() {
       # terminal. A missing or unmodelled observed fails closed to
       # not-yet.
       #
-      # With all conjuncts the claim matches what the Codex arm accepts
-      # (#684): CodeRabbit has reviewed AND completed the head about to be
-      # approved. Inline findings stay owned by
-      # coderabbit-severity-gate.sh, so counting the set as reported skips
-      # no disposition; the disclosed residual is a spurious success
-      # (#595) landing on this exact head AND postdating the head's own
-      # review object while its summary is still in flight WITH no adverse
-      # notice pending, which would skip the #535 summary-only escalation.
+      # #939: the same sampled description must positively name a completed
+      # review, using the waiter's one predicate. Explicit empty strings retain
+      # its optional-metadata escape; absent/null/nonstring fields from older
+      # probes stay bounded not-yet. State/time alone cannot distinguish a
+      # refusal success from a completed review. No adverse notice, head, run,
+      # endpoint or temporal conjunct is relaxed by the description check.
+      # The checked jq projection appends one local suffix so a successful but
+      # empty decoder output cannot borrow the explicit-empty escape. Strip
+      # exactly that suffix before applying the unchanged predicate; trailing
+      # description whitespace/newlines and punctuation retain their meaning.
+      # Inline findings remain owned by coderabbit-severity-gate.sh.
       # endpoint must be "reviews": the probe's "issues" evidence on rc 7
       # is a pending notice or a prior-head summary, never head-anchored
       # terminality. The head equality is belt-and-braces on top of the
@@ -374,6 +398,10 @@ p4b_barrier_class_coderabbit() {
          && { [ "$probe_observed" = "awaiting-summary" ] || [ "$probe_observed" = "terminal" ]; } \
          && [ "$(printf '%s' "$json" | jq -r '.review.endpoint // empty' 2>/dev/null || true)" = "reviews" ] \
          && [ "$(printf '%s' "$json" | jq -r '.probe.context_state // empty' 2>/dev/null || true)" = "success" ] \
+         && [ "${P4B_CODERABBIT_STATUS_DESCRIPTION_OK:-false}" = true ] \
+         && probe_description="$(printf '%s' "$json" | jq -er '.probe.context_description | select(type == "string") | . + "."' 2>/dev/null)" \
+         && [ "$probe_description" != "${probe_description%.}" ] \
+         && crw_status_description_permits_clearance "${probe_description%.}" \
          && [ "$(printf '%s' "$json" | jq -r '
                   (.review.submitted_at // "") as $r
                   | (.probe.context_updated_at // "") as $c
@@ -549,8 +577,8 @@ p4b_codex_timeout_determination() {
 # Read the PR tuple that binds both the reviewed head and the policy source.
 p4b_pr_policy_tuple() { # <repo> <pr>
   local out
-  out=$(gh api "repos/$1/pulls/$2" --jq \
-    '{head_sha:.head.sha,base_ref:.base.ref,base_sha:.base.sha,default_branch:.base.repo.default_branch}' 2>/dev/null) \
+  out=$(gh_api_scalar "PR policy tuple for $1#$2" "repos/$1/pulls/$2" --jq \
+    '{head_sha:.head.sha,base_ref:.base.ref,base_sha:.base.sha,default_branch:.base.repo.default_branch}') \
     || return 1
   printf '%s' "$out" | jq -ce '
     type == "object"
@@ -567,7 +595,7 @@ p4b_pr_policy_tuple() { # <repo> <pr>
 # request freshness anchor. `final-request-pending` preserves the last
 # request's legitimate wait; it never manufactures a timeout determination.
 p4b_codex_request_budget_state() {
-  local repo="$1" pr="$2" head="$3" config author resolver budget comments generation count cap
+  local repo="$1" pr="$2" head="$3" config author resolver budget comments generation count cap heads
   local initial_tuple final_tuple base_ref base_sha default_branch committed timeline threshold seconds epoch anchor selected select_rc=0
   if [ "$P4B_CODEX_REQUEST_BUDGET_OK" != true ] \
      || ! command -v crqe_governing_budget crqe_trigger_generation crqe_count_triggers crqe_select_trigger >/dev/null 2>&1 \
@@ -596,7 +624,22 @@ p4b_codex_request_budget_state() {
     || { jq -nc '{state:"unreadable",reason:"comments-read-failed"}'; return 2; }
   generation=$(crqe_trigger_generation "$comments" "$author") \
     || { jq -nc '{state:"unreadable",reason:"request-generation-invalid"}'; return 2; }
-  count=$(crqe_count_triggers "$comments" "$author") \
+  # A CodeRabbit failover marker exempts its trigger only when it names a head
+  # this PR had (#2553); the head set is read only when a marker is present,
+  # and an unreadable one exempts nothing.
+  heads='[]'
+  if command -v crqe_failover_markers_present crqe_pr_head_set >/dev/null 2>&1 \
+     && crqe_failover_markers_present "$comments" "$author"; then
+    local fo_commits fo_timeline fo_forced
+    # Force-push heads come from GraphQL (#2591); a failed read leaves only
+    # them out.
+    fo_forced=$(crqe_force_push_heads "$repo" "$pr" 2>/dev/null) || fo_forced='[]'
+    if fo_commits=$(gh_api_array "repos/$repo/pulls/$pr/commits" "PR commits for failover markers" 2>/dev/null) \
+       && fo_timeline=$(gh_api_array "repos/$repo/issues/$pr/timeline" "PR timeline for failover markers" 2>/dev/null); then
+      heads=$(crqe_pr_head_set "$fo_commits" "$fo_timeline" "$head" "$fo_forced") || heads='[]'
+    fi
+  fi
+  count=$(crqe_count_triggers "$comments" "$author" "$heads") \
     || { jq -nc '{state:"unreadable",reason:"request-count-invalid"}'; return 2; }
   cap=$(printf '%s' "$budget" | jq -r '.max_request_attempts')
   final_tuple=$(p4b_pr_policy_tuple "$repo" "$pr") \
@@ -652,11 +695,11 @@ p4b_codex_request_budget_state() {
   fi
 }
 
-# p4b_governing_codex_enabled <repo> <pr>
-# Prints true or false for codex.enabled in the PR's GOVERNING base policy,
-# the policy the substitute merge gate applies, rather than the local
-# checkout's (#1598). Returns 2 when the policy cannot be resolved.
-p4b_governing_codex_enabled() {
+# p4b_governing_policy_json <repo> <pr>
+# Materialize the PR's governing base policy, even when the caller's trusted
+# checkout has another author or targets another repository (#1618). Returns
+# 2 on an unreadable policy; removes only the resolver's materialized copy.
+p4b_governing_policy_json() {
   local repo="$1" pr="$2" config resolver base_cfg base_json rc=0
   command -v policy_yaml_to_json >/dev/null 2>&1 || return 2
   config="$(p4b_config)"
@@ -668,23 +711,173 @@ p4b_governing_codex_enabled() {
   base_json=$(policy_yaml_to_json "$base_cfg" 2>/dev/null) || rc=$?
   [ "$base_cfg" = "$config" ] || rm -f "$base_cfg" 2>/dev/null || true
   [ "$rc" -eq 0 ] && [ -n "$base_json" ] || return 2
-  printf '%s' "$base_json" | jq -er '
-    if type != "object" then error("policy")
-    elif ((.codex | type) == "object") and (.codex.enabled == false) then "false"
+  printf '%s' "$base_json" | jq -ce 'select(type == "object")' 2>/dev/null || return 2
+}
+
+# The run id a Phase 4b review carries (#2663): the marker the orchestrator
+# writes on its own line directly before its footer. A marker-shaped example
+# quoted earlier in the review text (a finding about this very ledger, say)
+# is not it. Prints null when the body has no such marker.
+P4B_RUN_MARKER_JQ='def p4b_run_marker:
+  [(. // "") | capture("<!-- mergepath-p4b-run: (?<r>[A-Za-z0-9._-]+) -->\\s+_Posted by scripts/phase-4b-review\\.sh"; "g") | .r]
+  | last;'
+
+# p4b_completed_rounds_from_reviews <reviews-json> <author-login>
+# Pure (#2663). Count the completed automated Phase 4b rounds on a PR from its
+# GitHub reviews, the only store every machine, session and restart shares. A
+# round is a non-author review whose body opens with the orchestrator's
+# `**Automated Phase 4b review**` heading, carries its `_Posted by
+# scripts/phase-4b-review.sh` footer, and records a verdict: APPROVED,
+# CHANGES_REQUESTED, or DISMISSED (a dismissed verdict was still delivered).
+# The login is deliberately NOT checked against the current available_reviewers,
+# so rotating or removing a reviewer never erases its historical rounds. A
+# forged review can only inflate the count, which stops rounds early (a
+# liveness risk), never lets one past the cap. Holds, polls and attempts that
+# published nothing leave no review and are never counted. Each round reports
+# the run nonce it carries, which marks its reservation consumed. Prints
+# {completed, rounds:[{id,head,state,run}]}; returns 1 on a non-array or on
+# any record that is not a review object with a numeric id and a string state
+# (fail closed: malformed history never reads as empty history).
+p4b_completed_rounds_from_reviews() {
+  printf '%s' "${1:-}" | jq -ce --arg author "${2:-}" "$P4B_RUN_MARKER_JQ"'
+    if type != "array" then error("reviews are not an array") else . end
+    # Every record must look like a GitHub review before any is filtered out:
+    # silently skipping junk would read malformed history as empty history.
+    | if all(.[]; type == "object" and (.id | type) == "number" and (.state | type) == "string"
+                  and ((.body | type) as $t | $t == "string" or $t == "null")
+                  and ((.user | type) as $t | $t == "object" or $t == "null"))
+      then . else error("malformed review record") end
+    | [ .[]
+        | select(((.user.login // "") | ascii_downcase) != ($author | ascii_downcase))
+        | select(.state as $s | ["APPROVED","CHANGES_REQUESTED","DISMISSED"] | index($s) != null)
+        | select((.body // "") | startswith("**Automated Phase 4b review**"))
+        | select((.body // "") | contains("_Posted by scripts/phase-4b-review.sh"))
+        | {id, head:(.commit_id // null), state,
+           run:(.body | p4b_run_marker)} ]
+    | unique_by(.id)
+    | {completed: length, rounds: .}' 2>/dev/null
+}
+
+# --- #2663 round ledger ------------------------------------------------------
+# The authoritative per-PR slot ledger is a git ref,
+#   refs/mergepath/p4b-rounds/pr-<N>
+# whose tip commit message carries the whole ledger as one JSON line:
+#   {"schema":"p4b-round-ledger/v1","pr":N,"entries":[{"run","head","state"}]}
+# state is "reserved" or "released" (released only by its own writer, before
+# it attempted any review POST). Every update is a single-parent commit on the
+# observed tip, published with force:false, so GitHub accepts it only as a
+# fast-forward: of two writers building on one tip exactly one wins, and the
+# other must re-read and re-evaluate. The ref is organisational state, not a
+# security boundary: anyone who can push can rewrite it, as they can a review.
+
+# p4b_round_ledger_parse <commit-message> -> entries JSON array, or rc 1.
+p4b_round_ledger_parse() {
+  # One jq pass, no early-exit pipeline: `grep | head` under pipefail can
+  # SIGPIPE the producer and read a valid ledger as malformed.
+  jq -cen --arg msg "${1:-}" '
+    [$msg | split("\n")[] | select(startswith("{\"schema\":\"p4b-round-ledger/v1\""))]
+    | if length != 1 then error("ledger line missing or repeated") else .[0] | fromjson end
+    | if .schema == "p4b-round-ledger/v1" and (.entries | type) == "array"
+         and all(.entries[]; (.run | type) == "string" and (.run | test("^[A-Za-z0-9._-]+$"))
+                            and (.state == "reserved" or .state == "released"))
+      then .entries else error("malformed ledger") end' 2>/dev/null
+}
+
+# p4b_round_ledger_message <pr> <entries-json> -> the commit message.
+p4b_round_ledger_message() {
+  local line
+  line=$(jq -nce --argjson pr "$1" --argjson e "$2" '{schema:"p4b-round-ledger/v1",pr:$pr,entries:$e}' 2>/dev/null) || return 1
+  printf 'mergepath Phase 4b round ledger (#2663)\n\n%s\n' "$line"
+}
+
+# p4b_round_occupancy <entries-json> <rounds-json> <cap>
+# Pure. A slot is occupied by every reserved ledger entry (consumed or still
+# in flight, and including an uncertain POST, which never frees its slot) and
+# by every completed round no reserved entry accounts for: a legacy review, a
+# review with no run id, or a review by a run whose entry reads released (a
+# writer that published anyway is counted, never dropped). Released entries
+# free their slot only while no review carries their run id. A reserved run
+# occupies max(its entries, its reviews): duplicate entries each keep a slot,
+# and several reviews carrying one run id each count, so one reservation
+# never absorbs a surplus publication. Prints {occupied, in_flight,
+# completed, legacy, cap}.
+p4b_round_occupancy() {
+  local rounds_default='{"rounds":[]}'
+  jq -nce --argjson e "${1:-[]}" --argjson r "${2:-$rounds_default}" --argjson cap "${3:-0}" '
+    ([$e[] | select(.state == "reserved")]) as $res
+    | ([$res[].run] | unique) as $ledger_runs
+    | ([$r.rounds[] | .run as $rr | select($rr == null or (($ledger_runs | index($rr)) == null))]) as $legacy
+    | ([$r.rounds[].run | strings]) as $done
+    # A reserved run occupies one slot per entry or per review carrying its
+    # id, whichever is more: one reservation never absorbs a second review.
+    | ([$ledger_runs[] as $u
+          | [([$res[] | select(.run == $u)] | length), ([$done[] | select(. == $u)] | length)] | max]
+       | add // 0) as $reserved_slots
+    | {occupied: ($reserved_slots + ($legacy | length)),
+       in_flight: ([$res[] | .run as $rr | select(($done | index($rr)) == null)] | length),
+       completed: ($r.rounds | length), legacy: ($legacy | length), cap: $cap}' 2>/dev/null
+}
+
+# p4b_reconcile_posted_review <reviews-json> <reviewer-login> <head-sha> <run-id>
+# Pure (#2663). After a review POST with an uncertain outcome, find THIS run's
+# publication: a review by the actual reviewer, on this head, whose run
+# marker (p4b_run_marker, the one before the footer) is this run's unique id.
+# A quoted example of the marker elsewhere in a body never matches. Prints it
+# only when exactly one matches; zero (not landed, or not yet visible) or
+# several (ambiguous) print nothing, and the caller then neither adopts nor
+# reposts.
+p4b_reconcile_posted_review() {
+  [ -n "${4:-}" ] || return 0
+  printf '%s' "${1:-[]}" | jq -c --arg who "${2:-}" --arg head "${3:-}" --arg run "${4:-}" "$P4B_RUN_MARKER_JQ"'
+    if type != "array" then empty else
+    [ .[] | select(type == "object")
+      | select(((.user.login // "") | ascii_downcase) == ($who | ascii_downcase))
+      | select(.commit_id == $head and ((.body | p4b_run_marker) == $run)) ]
+    | if length == 1 then .[0] else empty end end' 2>/dev/null
+}
+
+# p4b_governing_round_cap <governing-policy-json>
+# Pure (#2663). Print phase_4b_automation.max_review_rounds from the PR's
+# GOVERNING base policy, so a PR cannot raise its own cap, or "none" when the
+# key is absent (the cap is then unenforced, as before). Returns 2 when the
+# value is present but is not a positive integer, and when the block itself is
+# present but is not a mapping: a scalar or list there is a malformed policy,
+# not "no cap", the same as crqe_governing_budget treats `codex` (#2746).
+p4b_governing_round_cap() {
+  printf '%s' "${1:-}" | jq -er '
+    if .phase_4b_automation == null then "none"
+    elif (.phase_4b_automation | type) != "object" then error("invalid")
+    elif (.phase_4b_automation | has("max_review_rounds") | not) then "none"
+    elif (.phase_4b_automation.max_review_rounds | type) == "number"
+         and .phase_4b_automation.max_review_rounds >= 1
+         and (.phase_4b_automation.max_review_rounds | floor) == .phase_4b_automation.max_review_rounds
+      then (.phase_4b_automation.max_review_rounds | tostring)
+    else error("invalid") end' 2>/dev/null || return 2
+}
+
+# p4b_governing_codex_enabled <repo> <pr>
+# Prints true or false for codex.enabled in the PR's GOVERNING base policy,
+# the policy the substitute merge gate applies, rather than the local
+# checkout's (#1598). Returns 2 when the policy cannot be resolved.
+p4b_governing_codex_enabled() {
+  local policy
+  policy=$(p4b_governing_policy_json "$1" "$2") || return 2
+  printf '%s' "$policy" | jq -er '
+    if ((.codex | type) == "object") and (.codex.enabled == false) then "false"
     else "true" end' 2>/dev/null || return 2
 }
 
 # p4b_live_request_generation <repo> <pr>
-# The configured author's Codex request generation as it stands now: a sorted
+# The governing base policy author's Codex request generation: a sorted
 # array of request comment ids (#1598). An approval records the generation it
 # was authorized under, and the substitute merge gate refuses it once the live
 # generation holds a request outside that record. Returns 2 when the read or
 # the selector fails.
 p4b_live_request_generation() {
-  local repo="$1" pr="$2" author comments
+  local repo="$1" pr="$2" policy author comments
   command -v crqe_trigger_generation gh_api_array >/dev/null 2>&1 || return 2
-  author="$(p4b_top_field author_identity)"
-  author="${author:-nathanjohnpayne}"
+  policy=$(p4b_governing_policy_json "$repo" "$pr") || return 2
+  author=$(crqe_policy_author "$policy" 2>/dev/null) || return 2
   comments=$(gh_api_array "repos/$repo/issues/$pr/comments" "Codex request generation for the approval record") \
     || return 2
   crqe_trigger_generation "$comments" "$author" 2>/dev/null | jq -ce 'select(type == "array")' 2>/dev/null \
@@ -1014,10 +1207,12 @@ p4b_barrier_coderabbit_carryforward() {
 
 # Wall-clock bound for the pending wait, from coderabbit.max_wait_seconds.
 # A malformed value falls back to the default rather than failing closed: this
-# governs only when a human is called, so a bad parse must not deadlock.
+# governs only when a human is called, so a bad parse must not deadlock. A
+# policy that cannot be read at all takes the default too, for the same
+# reason; the barrier's provider switches refuse on it separately (#2913).
 p4b_barrier_budget_seconds() {
   local raw
-  raw="$(p4b_policy_block_field coderabbit max_wait_seconds)"
+  raw="$(p4b_policy_block_field coderabbit max_wait_seconds scalar 2>/dev/null)" || raw=""
   case "$raw" in
     ''|*[!0-9]*) printf '1245' ;;
     *) printf '%s' "$raw" ;;
@@ -1253,6 +1448,38 @@ p4b_barrier_self_pid() {
   esac
 }
 
+# p4b_barrier_atomic_mkdir <path>
+# Create ONE directory with the mkdir(2) system call: 0 only to the caller
+# that created it, non-zero when it already exists or cannot be made. The
+# claim below depends on that exclusivity, and mkdir(1) no longer provides it
+# everywhere: uutils coreutils (the default coreutils on Ubuntu 25.10 and
+# later, including the ubuntu-26.04 hosted runners) checks for the directory
+# and then creates it, and swallows the EEXIST of a creator that lands in
+# between. Two concurrent `mkdir DIR` calls then BOTH exit 0 (112 of 300
+# trials on ubuntu:26.04, uutils 0.10.0), so two claimants each took the
+# claim, or each took the reap lock, and both posted (#846).
+#
+# perl's and python's mkdir are the bare system call. mkdir(1) is never a
+# fallback, not even where it is GNU or BSD today: which coreutils a host
+# ships is exactly what changed under this code. With neither interpreter, or
+# when the call errors, the result is non-zero and the caller DECLINES, which
+# is the bounded-escalation direction rather than a possible double write. The
+# no-interpreter case says so on stderr, since every claim on that host will
+# decline and the barrier will escalate rather than post.
+p4b_barrier_atomic_mkdir() {
+  [ -n "${1:-}" ] || return 1
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'mkdir($ARGV[0]) or exit 1' -- "$1" 2>/dev/null
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os, sys; os.mkdir(sys.argv[1])' "$1" 2>/dev/null
+    return
+  fi
+  echo "p4b_barrier_atomic_mkdir: neither perl nor python3 is available; declining the claim" >&2
+  return 1
+}
+
 # p4b_barrier_claim <path>
 # mkdir(2) is create-or-fail with no window between test and set: exactly one
 # caller creates the directory, every concurrent other gets EEXIST. Returns 0
@@ -1293,7 +1520,7 @@ p4b_barrier_claim() {
   # does not depend on winning. Ordered this way the window is one printf.
   p4b_barrier_self_pid
   mkdir -p "$(dirname "$1")" 2>/dev/null || return 1
-  if ! mkdir "$1" 2>/dev/null; then
+  if ! p4b_barrier_atomic_mkdir "$1"; then
     local owner
     owner="$(cat "$1/pid" 2>/dev/null || true)"
     case "$owner" in
@@ -1308,14 +1535,14 @@ p4b_barrier_claim() {
     # the bounded-escalation direction, never a double post. Re-reading the
     # owner under the lock is what closes the both-read-dead window: the
     # second reaper sees the winner's live PID and declines.
-    mkdir "$1.reaplock" 2>/dev/null || return 1
+    p4b_barrier_atomic_mkdir "$1.reaplock" || return 1
     owner="$(cat "$1/pid" 2>/dev/null || true)"
     if [ -z "$owner" ] || kill -0 "$owner" 2>/dev/null; then
       rmdir "$1.reaplock" 2>/dev/null || true
       return 1
     fi
     rm -rf "$1" 2>/dev/null || true
-    if ! mkdir "$1" 2>/dev/null; then
+    if ! p4b_barrier_atomic_mkdir "$1"; then
       rmdir "$1.reaplock" 2>/dev/null || true
       return 1
     fi
@@ -1483,8 +1710,9 @@ p4b_barrier_write_count() {
   # The bare form is the CONFIGURED bot's exact command, compared as a string
   # — a wildcard mention pattern counted any trusted reviewer's `@renovate
   # resume` as the CodeRabbit recovery and suppressed the real one (Codex P2,
-  # round 4). Same login source and [bot]-strip as the poster.
-  bot="$(p4b_policy_block_field coderabbit bot_login)"
+  # round 4). Same login source and [bot]-strip as the poster. A login that
+  # cannot be read prints no count and returns 1 (#2913).
+  bot="$(p4b_policy_block_field coderabbit bot_login string)" || return 1
   bot="${bot:-coderabbitai}"
   bot="${bot%\[bot\]}"
   printf '%s' "${4:-[]}" | jq --arg m "$m" --arg fam "$fam" --arg legacy "$legacy" \
@@ -1504,8 +1732,10 @@ p4b_barrier_write_count() {
     | length' 2>/dev/null || printf '0'
 }
 
-p4b_barrier_write_posted() {
-  [ "$(p4b_barrier_write_count "$1" "$2" "$3" "$4")" -gt 0 ]
+p4b_barrier_write_posted() {  # returns 2 when the count is unreadable
+  local n
+  n="$(p4b_barrier_write_count "$1" "$2" "$3" "$4")" || return 2
+  [ "$n" -gt 0 ]
 }
 
 # p4b_barrier_should_trigger <observed>
@@ -1562,7 +1792,7 @@ p4b_barrier_post_trigger() {
   # that never answers while the probe keeps observing `none` — the barrier
   # then burns its whole budget and escalates on every PR in that repo. Strip
   # the REST-only `[bot]` suffix, as the existing retry and resume paths do.
-  bot="$(p4b_policy_block_field coderabbit bot_login)"
+  bot="$(p4b_policy_block_field coderabbit bot_login string)" || return 1
   bot="${bot:-coderabbitai}"
   bot="${bot%\[bot\]}"
   body="$(printf '@%s %s\n\n%s\n' "$bot" "$verb" "$(p4b_barrier_marker "$kind" "$head")")"
@@ -1633,7 +1863,8 @@ p4b_barrier_maybe_write() {
     '['*) ;;
     *) p4b_barrier_release "$claim"; printf '%s-read-failed' "$kind"; return 0 ;;
   esac
-  n="$(p4b_barrier_write_count "$kind" "$key" "$reviewer" "$comments" "$since" "$family")"
+  n="$(p4b_barrier_write_count "$kind" "$key" "$reviewer" "$comments" "$since" "$family")" \
+    || { p4b_barrier_release "$claim"; printf '%s-read-failed' "$kind"; return 0; }
   if [ "$n" -gt 1 ]; then
     # Two markers can only mean two checkouts raced before this change, or a
     # write reported failed actually landed and was retried. Surfaced, not
@@ -1757,7 +1988,8 @@ p4b_barrier_maybe_resume() {
 # The human-stop conditions a spent request ceiling must clear before it may
 # dispatch the automated adapter (#1560 slice 3, S3-4): the blocking-review
 # budget, a runaway, an untested rebuttal, and a disagreement, as crl_human_stops defines
-# them over the Codex review ledger. Prints {state: "clear"|"stop", stops,
+# them over the Codex review ledger, with the owner's tiebreak markers applied
+# through crl_resolved_human_stops (#2558). Prints {state: "clear"|"stop", stops,
 # blocking_reviews, max_blocking_reviews, untested_rebuttals, disagreements,
 # governing_tuple} and returns 0, or {state: "unsafe", reason} and returns 2
 # when any input is missing, unreadable, malformed, or moved during the read.
@@ -1766,7 +1998,8 @@ p4b_codex_human_stops() {
   local repo="$1" pr="$2" head="$3" config author resolver tuple final_tuple budget max
   local ledger_cmd ledger stops base_ref base_sha default_branch fp ceiling
   if [ "$P4B_CODEX_REQUEST_BUDGET_OK" != true ] || [ "$P4B_CODEX_LEDGER_OK" != true ] \
-     || ! command -v crqe_governing_budget crl_human_stops >/dev/null 2>&1; then
+     || ! command -v crqe_governing_budget crl_human_stops crl_owner_tiebreaks crl_apply_owner_tiebreaks \
+                     crl_resolved_human_stops >/dev/null 2>&1; then
     jq -nc '{state:"unsafe",reason:"human-stop-helper-unavailable"}'
     return 2
   fi
@@ -1807,7 +2040,12 @@ p4b_codex_human_stops() {
   # still reads a ceiling of blocking reviews as a runaway (#1560 canary).
   ceiling=$(printf '%s' "$budget" | jq -r '.max_request_attempts // empty')
   case "$ceiling" in ''|*[!0-9]*) jq -nc '{state:"unsafe",reason:"request-ceiling-invalid"}'; return 2 ;; esac
-  stops=$(crl_human_stops "$ledger" "$head" "$author" "$max" "$ceiling") \
+  # The one consumer-facing stop calculation, shared with Cockpit (#2558): an
+  # owner tiebreak settles a dispute stop (#2511) or a runaway (#2534) for this
+  # head. The markers are read only when one of those holds, and a failed read
+  # leaves the stop standing: missing evidence never reads as a decision.
+  stops=$(crl_resolved_human_stops "$ledger" "$head" "$author" "$max" "$ceiling" \
+      "https://github.com/$repo/pull/$pr" gh_api_array "repos/$repo/issues/$pr/comments" "owner tiebreak markers") \
     || { jq -nc '{state:"unsafe",reason:"ledger-malformed"}'; return 2; }
   final_tuple=$(p4b_pr_policy_tuple "$repo" "$pr") \
     || { jq -nc '{state:"unsafe",reason:"pr-policy-tuple-reread-failed"}'; return 2; }
@@ -1904,7 +2142,7 @@ p4b_barrier_ceiling_route() { # <repo> <pr> <head> <clear-evidence> <stop-eviden
 # p4b_same_head_barrier <repo> <pr> <head> <reviewer> [dry_run]
 #
 # Emits one JSON object on stdout and returns:
-#   0  open      — every ENABLED provider is terminal on this exact head
+#   0  open      — provider ordering permits the independent adapter review
 #   1  pending   — at least one is not yet, still inside the bound
 #   2  escalate  — a provider needs the ordinary manual Phase 4b fallback
 #   3  tiebreak  — Codex request ceiling spent and a human stop holds
@@ -1917,6 +2155,375 @@ p4b_barrier_ceiling_route() { # <repo> <pr> <head> <clear-evidence> <stop-eviden
 # #814 ships with no new review-policy keys. A provider disabled in policy is
 # simply not consulted — that, and not any rc, is the only route to
 # will-not-report, and it cannot flip mid-flight on a live PR.
+# --- same-head provider barrier: wave-audit request binding (#2771) ----------
+#
+# A wave audit binds its Codex arm to the request it created
+# (phase-4b-review.sh --wave-codex-request <comment-id>). The unbound arm
+# clears on ANY current-head Codex signal, so an unsolicited App review could
+# clear it while the audit's own request was still unanswered; narrowing that
+# window did not converge over four review rounds. Binding only ever removes
+# ways to clear (an answer still needs today's rc 0), so the flag needs no
+# authority of its own. Only scripts/phase-4b-review.sh sets it, and sourcing
+# this library resets it so an inherited environment value is ignored.
+P4B_BARRIER_WAVE_CODEX_REQUEST=""
+
+# p4b_codex_summary_versions <comments-json> <bot>
+# Every version of Codex's Review Summary comment(s) as [{at, body}]: each
+# GraphQL userContentEdits entry (its diff is the full body at that edit,
+# #2598) plus the live body. Prints `null` when any history cannot be read in
+# full (a failed query, or more edits than one page returns), which the
+# binding treats as a hold, never as an empty history.
+p4b_codex_summary_versions() {
+  local marked nid edits all='[]' query
+  marked="$(printf '%s' "${1:-[]}" | jq -c --arg bot "${2:-}" '[ .[]
+    | select((.user.login // "") == $bot)
+    | select((.body // "") | startswith("<!-- codex-pull-request-review-summary -->"))
+    | {node_id, at: (.updated_at // .created_at // ""), body} ]' 2>/dev/null)" || { printf 'null\n'; return 0; }
+  query='query($id:ID!){node(id:$id){... on IssueComment{userContentEdits(first:100){totalCount nodes{editedAt diff}}}}}'
+  while IFS= read -r nid; do
+    [ -n "$nid" ] || continue
+    edits="$(gh api graphql -f query="$query" -f id="$nid" 2>/dev/null \
+      | jq -ce '.data.node.userContentEdits
+          | select(type == "object" and (.nodes | type) == "array" and .totalCount == (.nodes | length)
+                   and all(.nodes[]; (.diff | type) == "string"))
+          | [ .nodes[] | {at: (.editedAt // ""), body: .diff} ]' 2>/dev/null)" \
+      || { printf 'null\n'; return 0; }
+    all="$(jq -nc --argjson a "$all" --argjson e "$edits" '$a + $e')"
+  done < <(printf '%s' "$marked" | jq -r '.[] | .node_id // "missing"')
+  jq -nc --argjson a "$all" --argjson m "$marked" '$a + [ $m[] | {at, body} ]'
+}
+
+# p4b_comment_history_snapshot <repo> <pr> <bot> [<skip-json>]
+# One paginated GraphQL read of every non-bot PR comment's edit metadata:
+# {edited: {"<id>": <mentioned>}, counts: {"<id>": <edits>}}, keyed by
+# fullDatabaseId (databaseId is a nullable 32-bit Int in the schema, and
+# comment ids are past 2^31). <skip-json> is a JSON array of review-bot
+# logins left out of `edited` (p4b_wave_binding_skip_logins); they stay in
+# `counts`, so their edits are still stability evidence.
+# `edited` names every EDITED comment (lastEditedAt set or any recorded
+# edit), with true when any readable revision mentions Codex's handle; an
+# unedited comment is absent. The binding no longer reconstructs when a
+# mention appeared or disappeared: an edited comment that mentions Codex now
+# or in any revision makes it hold (owner decision on #2888, after five
+# edit-history findings in a row). REST timestamps have second precision and
+# miss an edit inside the creation second, so edit status comes from this
+# metadata as well. `counts` changes with every edit, even two inside one
+# second, so it is the binding's stability evidence (p4b_wave_binding_stable).
+# Prints `null` when any page or any edited comment's history cannot be read
+# in full: a truncated history, a withheld or deleted revision (diff null),
+# or a history that does not include the comment's original version
+# (includesCreatedEdit false), since an unknown body is not "no mention".
+# GraphQL logins drop the "[bot]" suffix, so the bot is compared without it.
+p4b_comment_history_snapshot() {
+  local repo="$1" pr="$2" bot="${3:-}" skip="${4:-[]}" owner name pages query
+  owner="${repo%%/*}"; name="${repo#*/}"
+  query='query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){comments(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{fullDatabaseId author{login} lastEditedAt includesCreatedEdit userContentEdits(first:100){totalCount nodes{diff}}}}}}}'
+  pages="$(gh api graphql --paginate -f query="$query" -f owner="$owner" -f name="$name" -F pr="$pr" 2>/dev/null)" \
+    || { printf 'null\n'; return 0; }
+  # Not `jq -e`: an empty map is a valid result.
+  printf '%s\n' "$pages" | jq -sc --arg bot "${bot%\[bot\]}" --argjson skip "$skip" '
+    [ $skip[] | sub("\\[bot\\]$"; "") ] as $out
+    | [ .[] | .data.repository.pullRequest.comments | if type == "object" then . else error("page") end
+      | .nodes[] ]
+    | if all(.[]; (.fullDatabaseId | type) == "string" and (.fullDatabaseId | test("^[0-9]+$"))) | not then error("ids") else . end
+    | [ .[] | ((.author.login // "") | sub("\\[bot\\]$"; "")) as $l | select($l != $bot) | . + {skipped: any($out[]; . == $l)} ]
+    | if all(.[]; (.userContentEdits.totalCount | type) == "number") | not then error("counts") else . end
+    | {counts: ([ .[] | {key: .fullDatabaseId, value: .userContentEdits.totalCount} ] | from_entries),
+       edited: ([ .[]
+        | select(.skipped | not)
+        | select(.lastEditedAt != null or .userContentEdits.totalCount > 0)
+        | .userContentEdits as $e
+        | if (.includesCreatedEdit != true) or ($e.nodes | type) != "array" or $e.totalCount != ($e.nodes | length)
+             or any($e.nodes[]; (.diff | type) != "string")
+          then error("history")
+          else {key: .fullDatabaseId, value: any($e.nodes[]; .diff | test("@codex"; "i"))} end ]
+        | from_entries)}' 2>/dev/null \
+    || printf 'null\n'
+}
+
+# p4b_wave_binding_stamps <comments-json> <bot> -> {"<id>": "<updated_at>"}
+# for every comment not by Codex's bot: the comment set and edit times two
+# REST reads must agree on.
+p4b_wave_binding_stamps() {
+  printf '%s' "${1:-[]}" | jq -cS --arg bot "${2:-}" \
+    '[ .[] | select((.user.login // "") != $bot) | {key: (.id | tostring), value: (.updated_at // "")} ] | from_entries' 2>/dev/null
+}
+
+# p4b_wave_binding_skip_logins -> JSON array of review-bot logins, besides
+# Codex's own, whose comments are neither requests nor edited requests: today
+# coderabbit.bot_login. A review bot's summary is edited in place on every
+# push and routinely quotes "@codex review" when the diff is about Codex
+# requests, so counting it as an edited request held every such canary to
+# the barrier's exit 4 (swipewatch#218). This is an observed-behaviour
+# assumption like the FIFO one below: a review bot's mention of the handle
+# is prose, never a review request (swipewatch#218's summary history shows
+# one Manual-request run, for the one author request). Their edits still
+# count as stability evidence (owner decision on #2888: any comment moving
+# between the reads holds, CodeRabbit's included).
+p4b_wave_binding_skip_logins() {
+  local cr
+  cr="$(p4b_policy_block_field coderabbit bot_login string)" || return 1
+  cr="${cr:-coderabbitai[bot]}"
+  jq -nc --arg cr "$cr" '[ $cr ]'
+}
+
+# p4b_wave_binding_evaluate <repo> <pr> <head> <request-id>
+# All the reads the binding needs, then p4b_wave_codex_binding_state. Shared
+# by the barrier and the orchestrator's publication fence, so both decide on
+# identical evidence. On a clear, the comments and the edit metadata are
+# read again, and the clear stands only if nothing moved: the same comments
+# with the same updated_at in both REST reads, the same edit metadata in
+# both GraphQL reads, and the final GraphQL read covering exactly the
+# comments of the final REST read (a request that arrived, or an edit that
+# happened, while the reads ran was not in the evidence; Phase 4b and Codex
+# on #2888). An unreadable comment list is `unreadable`.
+p4b_wave_binding_evaluate() {
+  local repo="$1" pr="$2" head="$3" rid="$4" comments after author bot skip versions snap snap_after edited result
+  author="$(p4b_top_field author_identity)"; author="${author:-nathanjohnpayne}"
+  if ! bot="$(p4b_policy_block_field codex bot_login string)" \
+     || ! skip="$(p4b_wave_binding_skip_logins)"; then
+    jq -nc '{state:"unreadable",reason:"policy-unreadable"}'
+    return 0
+  fi
+  bot="${bot:-chatgpt-codex-connector[bot]}"
+  if ! command -v gh_api_array >/dev/null 2>&1 \
+     || ! comments="$(gh_api_array "repos/$repo/issues/$pr/comments" "wave Codex request binding" 2>/dev/null)"; then
+    jq -nc '{state:"unreadable",reason:"comments-read-failed"}'
+    return 0
+  fi
+  versions="$(p4b_codex_summary_versions "$comments" "$bot")"
+  snap="$(p4b_comment_history_snapshot "$repo" "$pr" "$bot" "$skip")"
+  edited="$(printf '%s' "$snap" | jq -c 'if type == "object" then .edited else null end' 2>/dev/null || printf null)"
+  result="$(p4b_wave_codex_binding_state "$comments" "$author" "$bot" "$head" "$rid" "$versions" "${edited:-null}" "$skip")"
+  printf '%s' "$result" | jq -e '.state == "clear"' >/dev/null 2>&1 || { printf '%s\n' "$result"; return 0; }
+  if ! after="$(gh_api_array "repos/$repo/issues/$pr/comments" "wave Codex request binding recheck" 2>/dev/null)"; then
+    jq -nc '{state:"unreadable",reason:"comments-reread-failed"}'
+    return 0
+  fi
+  snap_after="$(p4b_comment_history_snapshot "$repo" "$pr" "$bot" "$skip")"
+  if [ "$(p4b_wave_binding_stamps "$comments" "$bot")" != "$(p4b_wave_binding_stamps "$after" "$bot")" ] \
+     || ! jq -en --argjson a "${snap:-null}" --argjson b "${snap_after:-null}" '($b | type) == "object" and $a == $b' >/dev/null 2>&1 \
+     || ! printf '%s' "$after" | jq -e --arg bot "$bot" --argjson s "${snap_after:-null}" \
+          '($s | type) == "object" and ([ .[] | select((.user.login // "") != $bot) | .id | tostring ] | sort) == ($s.counts | keys | sort)' >/dev/null 2>&1; then
+    printf '%s' "$result" | jq -c 'del(.generation) + {state:"hold",reason:"requests-changed-during-evaluation"}'
+    return 0
+  fi
+  # A clear carries the edit count of every comment its final read saw, so
+  # a later one-read check (p4b_wave_binding_stable) can tell whether any
+  # comment appeared or was edited since.
+  printf '%s' "$result" | jq -c --argjson s "$snap_after" '. + {stability: {counts: $s.counts}}'
+}
+
+# p4b_wave_binding_stable <repo> <pr> <stability-json>
+# One GraphQL read of every comment's edit count, compared with what a
+# clear's final read saw (p4b_wave_binding_evaluate's .stability.counts).
+# Exit 0 only when the same comments exist with the same counts: the
+# orchestrator runs the full evaluation inside its feedback-accounting
+# fences and only this at the POST (Phase 4b on #2888). Any new or edited
+# comment, of any body, may carry or have carried a mention, and a count
+# moves even for edits inside one second, so any change returns 1, as do
+# missing stability and an unreadable read. A request that moved is not
+# re-evaluated here; the run holds and a rerun decides on fresh evidence.
+p4b_wave_binding_stable() {
+  local repo="$1" pr="$2" stability="${3:-}" bot skip counts now
+  bot="$(p4b_policy_block_field codex bot_login string)" || return 1
+  bot="${bot:-chatgpt-codex-connector[bot]}"
+  skip="$(p4b_wave_binding_skip_logins)" || return 1
+  counts="$(printf '%s' "$stability" | jq -ce '.counts | objects' 2>/dev/null)" || return 1
+  now="$(p4b_comment_history_snapshot "$repo" "$pr" "$bot" "$skip")"
+  jq -en --argjson a "$counts" --argjson b "${now:-null}" '($b | type) == "object" and $b.counts == $a' >/dev/null 2>&1
+}
+
+# p4b_wave_codex_binding_state <comments-json> <author> <bot> <head> <request-id> <summary-versions-json> <edited-json> [<skip-json>]
+# Pure. Prints {state, reason, bound_request, requests, runs[, edited, generation]}:
+# state is "clear", "hold" or "unreadable"; requests and runs are the
+# evidence the decision paired (machine-readable for whoever surfaces a hold);
+# generation, on a clear, is the author request generation the decision read
+# (crqe_trigger_generation's grammar), handed to the run's later fences.
+#
+# <summary-versions-json> is every version of Codex's Review Summary comment,
+# [{at, body}], from its GraphQL edit history plus the live body (it is
+# edited in place), or `null` when that history could not be read in full.
+# <edited-json> is p4b_comment_history_snapshot's `edited` map (each edited
+# non-bot comment -> whether any readable revision mentions Codex's handle),
+# or `null` when an edited comment's history could not be read.
+# <skip-json> is a JSON array of further review-bot logins whose comments,
+# like Codex's own, are neither requests nor edits
+# (p4b_wave_binding_skip_logins); default [].
+#
+# Edited comments are not evaluated (owner decision on #2888). A comment is
+# edited when the edit metadata names it or its REST updated_at differs from
+# its created_at. One that mentions Codex now or in any readable revision
+# may be, or may have been, a request whose time and lifetime no single read
+# establishes, so it makes the binding hold (`edited-request`), as does an
+# edited comment with no readable history. Only never-edited comments are
+# requests, each at its created_at.
+#
+# Evidence, and what it does NOT prove. Each version carries
+# `codex-review-state:v1` JSON (full commit, status) and a row whose Review
+# trigger cell reads "PR opened" / "New commits" for the App's automatic runs
+# and "Manual request" for a review-request comment; a Running version stamps
+# the run's start. Across the full edit histories of swipewatch#205-#213 and
+# mergepath#2868/#2875 no automatic run was "Manual request" and all five
+# manual runs started 10-17 s after an author request. That is a strong
+# observed correlation, not a provider-guaranteed request id: "Manual request"
+# never says WHICH request, and nothing documents a maximum queue age.
+#
+# So runs are tied to requests by order, never by a time window. Every
+# never-edited non-bot comment mentioning Codex's handle is a request (any
+# age, any author: Codex may treat it as one). Oldest first, each request takes the
+# earliest Manual-request run that started at or after it and after the run
+# the previous request took (FIFO). R clears only when:
+#   - no request comes after R (a superseding, overlapping or same-second
+#     later request would make R's run ambiguous);
+#   - every request before R has a run of its own (an older request still
+#     queued would take the run that starts after R: the owner's adversarial
+#     case, closed structurally rather than by a longer window);
+#   - R's own run is on exactly <head> and reached Completed.
+# Residual assumption (an owner decision, specs/codex_request_evidence.md):
+# Codex serves review requests on a PR in the order they were posted, one run
+# per request. A provider that reordered queued requests, or coalesced two
+# into one run, would break the pairing; coalescing makes R hold (no run left
+# for it), and reordering is the residual. A request comment DELETED outright
+# leaves no trace in the API and is the other residual.
+#
+#   hold        any of the above unmet, an edited Codex-mentioning comment,
+#               runs that overlap (a new run opening before the previous one
+#               ended), an unreadable / incomplete history or comment edit
+#               history,
+#               an unparseable version, an inconsistent history (a terminal
+#               version with no Running start, or a commit or trigger change
+#               inside one run), or a request time that does not parse. The
+#               barrier's bounded budget then ends in the existing fail-open
+#               exit 4; nothing retries on its own.
+#   unreadable  R missing, not the author's, not an exact request, or its
+#               time unreadable. Fail closed.
+p4b_wave_codex_binding_state() {
+  local out
+  # A jq path that ends in `empty` prints nothing; nothing is never a state,
+  # so it is unreadable rather than silently read as a hold.
+  out="$(p4b_wave_codex_binding_eval "$@")"
+  case "$out" in
+    *'"state":"clear"'*|*'"state":"hold"'*|*'"state":"unreadable"'*) printf '%s\n' "$out" ;;
+    *) jq -nc '{state: "unreadable", reason: "binding-evaluation-failed"}' ;;
+  esac
+}
+
+p4b_wave_codex_binding_eval() {
+  printf '%s\n' "${1:-[]}" | jq -c --arg author "${2:-}" --arg bot "${3:-}" \
+    --arg head "${4:-}" --arg rid "${5:-}" --argjson versions "${6:-null}" \
+    --argjson edited "${7:-null}" --argjson skip "${8:-[]}" '
+    def secs: try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null;
+    def counted: (.user.login // "") as $l | $l != $bot and (any($skip[]; . == $l) | not);
+    def exact_request: (.user.login // "") == $author and ((.body // "") | test("\\A@codex review\\z"; "i"));
+    # One summary version -> {at, commit, status, trigger, time} or null.
+    def version:
+      ((try ((.body // "") | capture("<!-- codex-review-state:v1 (?<j>\\{.*\\}) -->").j | fromjson) catch null) // null) as $sj
+      | ((.body // "")
+          | capture("(?m)^\\|[[:space:]]*📝[[:space:]]*\\*\\*Code Review\\*\\*[[:space:]]*\\|[[:space:]]*(?<status>[^|]+)[[:space:]]*\\|[[:space:]]*`(?<commit>[0-9A-Fa-f]{7,40})`[[:space:]]*\\|[[:space:]]*(?<trigger>[^|]+)[[:space:]]*\\|[[:space:]]*$")?
+          // null) as $row
+      | if $sj == null or ($sj.code_review | type) != "object" or $row == null then null
+        else
+          (($sj.code_review.commit_sha // "") | ascii_downcase) as $jc
+          | if ($jc | test("^[0-9a-f]{40}$") | not) or ($jc | startswith($row.commit | ascii_downcase) | not) then null
+            else {at: (.at // ""), commit: $jc,
+                  status: ($sj.code_review.status // "unknown" | tostring),
+                  trigger: ($row.trigger | gsub("^[[:space:]]+|[[:space:]]+$"; "") | ascii_downcase),
+                  time: (($row.status | capture("datetime=\"(?<d>[^\"]+)\"")? // null) | if . == null then null else (.d | secs) end)}
+            end
+        end;
+    ($head | ascii_downcase) as $h
+    | if type != "array" then {state: "unreadable", reason: "comments-not-array"} else
+      . as $comments
+      | ([ .[] | select((.id | tostring) == $rid) ] | first) as $r
+      | if $r == null then {state: "unreadable", reason: "bound-request-missing"}
+        elif ($r | exact_request | not) then {state: "unreadable", reason: "bound-request-not-author-request"}
+        elif ($r.created_at | secs) == null then {state: "unreadable", reason: "bound-request-time-unreadable"}
+        else
+          ([ $comments[] | select(exact_request) | .id ] | unique) as $generation
+          # Edited comments: named by the edit metadata, or by a REST
+          # updated_at that differs from created_at. Each one that mentions
+          # Codex now or in a readable revision holds the binding; so does
+          # one the metadata does not cover (no readable history).
+          | ([ $comments[] | select(counted)
+               | (.id | tostring) as $k
+               | select((($edited | type) == "object" and ($edited | has($k))) or ((.updated_at // .created_at) != .created_at))
+               | {id, mentioned: (((.body // "") | test("@codex"; "i")) or (($edited | type) == "object" and $edited[$k] == true)),
+                  covered: (($edited | type) == "object" and ($edited | has($k)))} ]) as $edits
+          # Requests: never-edited comments mentioning the handle, at their
+          # creation; comment ids follow creation within a second.
+          | ([ $comments[] | select(counted)
+               | (.id | tostring) as $k
+               | select(((.body // "") | test("@codex"; "i"))
+                        and ((($edited | type) == "object" and ($edited | has($k))) | not)
+                        and ((.updated_at // .created_at) == .created_at))
+               | {id, at: (.created_at // ""), t: ((.created_at // "") | secs)} ] | sort_by(.t, .id)) as $reqs
+          | {bound_request: $r.id, requests: [ $reqs[] | {id, at} ], runs: [], edited: [ $edits[] | select(.mentioned or (.covered | not)) | .id ]} as $base
+          | if ($edited | type) != "object" then $base + {state: "hold", reason: "comment-edit-history-unreadable"}
+            elif any($edits[]; .mentioned) then $base + {state: "hold", reason: "edited-request"}
+            elif any($edits[]; .covered | not) then $base + {state: "hold", reason: "edited-comment-without-history"}
+            elif any($reqs[]; .t == null) then $base + {state: "hold", reason: "request-time-unreadable"}
+            elif ($versions | type) != "array" then $base + {state: "hold", reason: "summary-history-unreadable"}
+            else
+              [ $versions[] | version ] as $parsed
+              | if any($parsed[]; . == null) then $base + {state: "hold", reason: "summary-version-unparseable"}
+                else
+                  # Rebuild runs from the versions in edit order: a Running
+                  # version opens a run (repeats of the same run are edits);
+                  # a terminal version updates the open run.
+                  ($parsed | sort_by(.at)
+                    | reduce .[] as $x ({runs: [], cur: null, bad: false, overlap: false};
+                        if $x.status == "running" then
+                          if .cur != null and .cur.status == "running" and .cur.start == $x.time
+                             and .cur.commit == $x.commit and .cur.trigger == $x.trigger then .
+                          else
+                            # A new run opening while the previous one is
+                            # still Running overlaps it: a later terminal
+                            # version cannot then say which run it ended,
+                            # since FIFO starts do not imply FIFO completion
+                            # (Phase 4b on #2875).
+                            (if .cur != null and .cur.status == "running" then .overlap = true else . end)
+                            | (if .cur != null then .runs += [.cur] else . end)
+                            | .cur = {start: $x.time, commit: $x.commit, trigger: $x.trigger, status: "running"}
+                          end
+                        elif .cur == null or .cur.commit != $x.commit or .cur.trigger != $x.trigger then .bad = true
+                        else .cur.status = $x.status end)
+                    | (if .cur != null then .runs += [.cur] else . end)) as $built
+                  | ([ $built.runs[] | select(.trigger == "manual request") ]) as $manual
+                  | ($base + {runs: [ $manual[] | {start: (.start | if . == null then null else todate end), commit: .commit[0:12], trigger, status} ]}) as $detail
+                  | if $built.bad or any($built.runs[]; .start == null)
+                    then $detail + {state: "hold", reason: "summary-history-inconsistent"}
+                    elif $built.overlap then $detail + {state: "hold", reason: "summary-runs-overlap"}
+                    else
+                      # FIFO pairing: oldest request first, each takes the
+                      # earliest manual run starting at or after it and after
+                      # the previous request s run.
+                      (reduce $reqs[] as $q ({next: 0, out: []};
+                         . as $acc
+                         | ([ range($acc.next; ($manual | length)) as $j
+                              | select($manual[$j].start >= $q.t) | $j ] | first) as $j
+                         | if $j == null then .out += [{id: $q.id, run: null}]
+                           else .out += [{id: $q.id, run: $j}] | .next = $j + 1 end)).out as $paired
+                      | ($detail + {requests: [ range(0; $reqs | length) as $k | {id: $reqs[$k].id, at: $reqs[$k].at, run: $paired[$k].run} ]}) as $detail
+                      | ([ range(0; $paired | length) | select(($paired[.].id | tostring) == $rid) ] | first) as $ri
+                      | if $ri == null then {state: "unreadable", reason: "bound-request-missing"}
+                        elif ($ri + 1) < ($paired | length) then $detail + {state: "hold", reason: "request-after-bound-request"}
+                        elif any($paired[0:$ri][]; .run == null) then $detail + {state: "hold", reason: "older-request-without-its-own-run"}
+                        elif $paired[$ri].run == null then $detail + {state: "hold", reason: "no-run-for-bound-request"}
+                        else
+                          $manual[$paired[$ri].run] as $run
+                          | if $run.commit != $h then $detail + {state: "hold", reason: "bound-run-on-another-commit"}
+                            elif $run.status == "completed"
+                            then $detail + {state: "clear", reason: "bound-request-answered", generation: $generation}
+                            else $detail + {state: "hold", reason: ("bound-run-" + $run.status)} end
+                        end
+                    end
+                end
+            end
+        end
+      end' 2>/dev/null
+}
+
 p4b_same_head_barrier() {
   # cap-only is the read-only GitHub guard for an unavailable adapter: it
   # shares the Codex decision and local final-request wait bound, but never
@@ -1929,11 +2536,24 @@ p4b_same_head_barrier() {
   local cx_terminal_json="" cx_terminal_rc=0 cx_terminal_state="" live_report_head=""
   local initial_cls_cx="" initial_cx_evidence=""
   local pending=false why="" coderabbit_cause="" trigger="skipped" resume="skipped" cls_cr="disabled" cls_cx="disabled"
+  local wave_binding_json=null
   local cx_evidence="disabled" cr_carry="" cr_carry_json="null"
   local cap_exhausted=false final_request_pending=false human_tiebreaker=false
   local cx_human_stops_json="null"
   local budget_unsafe=false
   local elapsed budget remaining=0
+  local pol_cx_enabled pol_cx_substitute pol_cr_enabled
+  # The provider switches, read once from the parsed policy (#2913). A policy
+  # that cannot be read decides nothing: no review authority follows, and the
+  # stderr reason says why. Absent keys keep their defaults (enabled,
+  # substitute allowed).
+  if ! pol_cx_enabled="$(p4b_policy_block_field codex enabled bool)" \
+     || ! pol_cx_substitute="$(p4b_policy_block_field codex allow_phase_4b_substitute bool)" \
+     || ! pol_cr_enabled="$(p4b_policy_block_field coderabbit enabled bool)"; then
+    jq -nc '{decision:"error",reason:"the review policy could not be read, so the codex/coderabbit switches are unknown",
+      coderabbit:"unknown",codex:"unknown",codex_evidence:"policy-unreadable",coderabbit_cause:"",request_budget:null,wave_binding:null}'
+    return 4
+  fi
   root="$(p4b_repo_root)"
   cr_bin="${P4B_CODERABBIT_WAIT:-$root/scripts/coderabbit-wait.sh}"
   cx_bin="${P4B_CODEX_REVIEW_CHECK:-$root/scripts/codex-review-check.sh}"
@@ -1941,7 +2561,7 @@ p4b_same_head_barrier() {
   # Codex arm. The five overrides turn a merge-gate verdict into "has Codex
   # itself spoken on THIS head" — see p4b_barrier_class_codex for why each is
   # required, and why the diagnostic switch is a flag rather than an env var.
-  if [ "$(p4b_policy_block_field codex enabled)" != "false" ]; then
+  if [ "$pol_cx_enabled" != "false" ]; then
     rc=0
     CODEX_REVIEW_CHECK_SKIP_CI=1 \
     CODEX_REVIEW_CHECK_REQUIRE_APPROVAL_ON_HEAD=1 \
@@ -1951,22 +2571,30 @@ p4b_same_head_barrier() {
     initial_cls_cx="$cls_cx"
     case "$initial_cls_cx" in
       reported)
-        live_report_head=$(gh_api_scalar --shape sha "Codex reported-signal live PR head" \
-          "repos/$repo/pulls/$pr" --jq '.head.sha') || live_report_head=""
-        if [ -z "$live_report_head" ]; then
+        if ! command -v gh_api_scalar >/dev/null 2>&1; then
           cls_cx="escalate"
-          cx_evidence="head-read-failed"
+          cx_evidence="scalar-reader-unavailable"
           budget_unsafe=true
-          cx_budget_json='{"state":"unreadable","reason":"reported-signal-head-read-failed"}'
-          why="Codex reported, but the live PR head could not be verified; refusing authority for the reviewed head"
-        elif [ "$live_report_head" != "$head" ]; then
-          cls_cx="escalate"
-          cx_evidence="drift"
-          budget_unsafe=true
-          cx_budget_json="$(jq -nc --arg h "$head" --arg l "$live_report_head" '{state:"drift",reason:"head-moved",reviewed_head:$h,live_head:$l}')"
-          why="PR head moved after the Codex report check (reviewing $head, live $live_report_head) — rerun on the new head"
+          cx_budget_json='{"state":"unreadable","reason":"scalar-reader-unavailable"}'
+          why="Codex reported, but the scalar reader is unavailable; refusing authority for the reviewed head"
         else
-          cx_evidence="signal"
+          live_report_head=$(gh_api_scalar --shape sha "Codex reported-signal live PR head" \
+            "repos/$repo/pulls/$pr" --jq '.head.sha') || live_report_head=""
+          if [ -z "$live_report_head" ]; then
+            cls_cx="escalate"
+            cx_evidence="head-read-failed"
+            budget_unsafe=true
+            cx_budget_json='{"state":"unreadable","reason":"reported-signal-head-read-failed"}'
+            why="Codex reported, but the live PR head could not be verified; refusing authority for the reviewed head"
+          elif [ "$live_report_head" != "$head" ]; then
+            cls_cx="escalate"
+            cx_evidence="drift"
+            budget_unsafe=true
+            cx_budget_json="$(jq -nc --arg h "$head" --arg l "$live_report_head" '{state:"drift",reason:"head-moved",reviewed_head:$h,live_head:$l}')"
+            why="PR head moved after the Codex report check (reviewing $head, live $live_report_head) — rerun on the new head"
+          else
+            cx_evidence="signal"
+          fi
         fi
         ;;
       *)
@@ -2077,6 +2705,48 @@ p4b_same_head_barrier() {
         fi
         ;;
     esac
+    # #2771: a wave audit's Codex arm clears only on the answer to its own
+    # request (p4b_wave_codex_binding_state). Applied to the reported arm and
+    # to a Phase 4a timeout waiver; the account-block waiver (rc 2: no request
+    # can be answered) and every request-cap path are unchanged.
+    if [ -n "$P4B_BARRIER_WAVE_CODEX_REQUEST" ] && [ -z "$why" ] && [ "$cap_exhausted" != true ]; then
+      case "$cls_cx:$cx_evidence" in
+        reported:*|waived:timeout|not-yet:*)
+          local wb_json wb_state wb_reason
+          wb_json="$(p4b_wave_binding_evaluate "$repo" "$pr" "$head" "$P4B_BARRIER_WAVE_CODEX_REQUEST")"
+          wb_state="$(printf '%s' "$wb_json" | jq -r '.state // "unreadable"' 2>/dev/null || printf unreadable)"
+          # Every outcome carries the binding's evidence (#2771, liveness): a
+          # hold that runs out the budget is surfaced with its reason, the
+          # requests and the runs it paired, not just "did not reach".
+          wave_binding_json="$(printf '%s' "$wb_json" | jq -c 'del(.generation, .stability)' 2>/dev/null || printf null)"
+          wb_reason="$(printf '%s' "$wb_json" | jq -r '.reason // "unknown"' 2>/dev/null || printf unknown)"
+          case "$cls_cx:$wb_state" in
+            *:unreadable)
+              cls_cx="escalate"
+              budget_unsafe=true
+              cx_evidence="wave-request-$wb_reason"
+              cx_budget_json="$(jq -nc --arg r "$wb_reason" --arg id "$P4B_BARRIER_WAVE_CODEX_REQUEST" \
+                '{state:"unreadable",reason:("wave-request-" + $r),wave_codex_request:$id}')"
+              why="The wave audit's Codex request $P4B_BARRIER_WAVE_CODEX_REQUEST cannot be bound on $head ($wb_reason); refusing to infer that it was answered"
+              ;;
+            reported:clear)
+              cx_evidence="wave-request-answered"
+              # Hand the generation this decision verified to the run's
+              # later fences (capture_authorized_request_generation adopts
+              # request_budget.request_generation); a request that arrives
+              # after this read then reads as a moved generation, not as
+              # authorized (Phase 4b on #2875).
+              cx_budget_json="$(printf '%s' "$wb_json" | jq -c --arg id "$P4B_BARRIER_WAVE_CODEX_REQUEST" \
+                '{state:"wave-request-answered",wave_codex_request:$id,request_generation:.generation}')"
+              ;;
+            *)
+              cls_cx="not-yet"
+              cx_evidence="wave-request-$wb_reason"
+              ;;
+          esac
+          ;;
+      esac
+    fi
     # Waiving an account-blocked Codex only helps where a Phase 4b APPROVED can
     # actually clear gate (c). With codex.allow_phase_4b_substitute: false the
     # merge gate rejects that review by design, so opening the barrier would
@@ -2085,7 +2755,7 @@ p4b_same_head_barrier() {
     # accomplished nothing (Codex P2 on #842). In that configuration a block is
     # exactly what it looks like: something a human has to fix.
     if [ "$cls_cx" = waived ] \
-       && [ "$(p4b_policy_block_field codex allow_phase_4b_substitute)" = "false" ]; then
+       && [ "$pol_cx_substitute" = "false" ]; then
       cls_cx="escalate"
       if [ "$cx_evidence" = timeout ]; then
         why="Phase 4a timed out on $head, but codex.allow_phase_4b_substitute=false, so no Phase 4b review could clear gate (c)"
@@ -2103,10 +2773,19 @@ p4b_same_head_barrier() {
     esac
   fi
 
+  # Disabled Codex also depends on the substitute path to clear gate (c).
+  # Reject an explicitly forbidden substitute before probing/triggering
+  # CodeRabbit or dispatching an adapter that could never clear that gate.
+  if [ "$cls_cx" = disabled ] \
+     && [ "$pol_cx_substitute" = false ]; then
+    cls_cx=escalate
+    why="Codex is disabled and codex.allow_phase_4b_substitute=false, so no Phase 4b review could clear gate (c)"
+  fi
+
   # CodeRabbit arm: probe (read-only, zero allowance) -> conditional trigger
   # -> bounded retry. The probe resolves the live head itself, so classifying
   # against "$head" is also what catches a push landing mid-run.
-  if [ "$scope" = all ] && [ -z "$why" ] && [ "$(p4b_policy_block_field coderabbit enabled)" != "false" ]; then
+  if [ "$scope" = all ] && [ -z "$why" ] && [ "$pol_cr_enabled" != "false" ]; then
     rc=0
     json="$("$cr_bin" --probe "$pr" "$repo" 2>/dev/null)" || rc=$?
     # Head drift, detected BEFORE any trigger (Codex P2 on #842). The probe
@@ -2149,33 +2828,13 @@ p4b_same_head_barrier() {
       case "$cls_cr" in
         reported|will-not-report|waived|carried) ;;
         rate-limited)
-          # #1178. The classifier has established that CodeRabbit REFUSED
-          # this head and that no wait available to this run lifts the
-          # refusal. That is exactly the question the rc-5 arm already
-          # answers for the polling mode — waived when the #489 Codex
-          # failover engaged, escalate otherwise — and the reason it was
-          # unreachable here is only that --probe never returns rc 5 and
-          # never sets codex_failover_requested.
-          #
-          # Resolve it against the Codex arm THIS run already classified,
-          # which is the same claim the failover flag makes and is better
-          # evidence: the flag says a request was sent, cls_cx == reported
-          # says Codex actually spoke on the exact head about to be
-          # approved. That, and not CodeRabbit's participation, is what the
-          # barrier's ordering guarantee requires — see the rc-5 note on
-          # why waived is the right class for a stall the other provider
-          # has already covered.
-          #
-          # A Codex arm still `not-yet` is the one case that keeps waiting,
-          # and the wait is honest because it is a wait on CODEX: that arm
-          # is self-clearing, and the next probe can find it reported and
-          # open the barrier on it. Escalating here instead would page a
-          # human on a PR whose Codex round was about to land — the #835
-          # objection to escalating a rate limit unconditionally, which
-          # holds just as well when the failover's role is played by the
-          # barrier's own Codex arm. What the head-anchored budget already
-          # bounds, it keeps bounding; only the reason it escalates with
-          # changes, below.
+          # #2120: a bare provider refusal cannot stop the independent
+          # Phase 4b adapter review. The adapter is itself the external
+          # reviewer; a Codex report is not required to corroborate it.
+          # Reported, waived and disabled Codex arms therefore let it run.
+          # A still-active Codex arm owns its existing bounded wait; its
+          # human stops, unreadable budgets and escalation are decided
+          # above and cannot be overridden by this refusal.
           #
           # WHAT MAKES THE OPEN ARM SAFE, and where that safety lives:
           # `observed: rate_limit` has to mean "refused, with nothing unread
@@ -2192,25 +2851,18 @@ p4b_same_head_barrier() {
           # precondition for this arm — a probe without the guard must not be
           # paired with it.
           #
-          # Every OTHER cls_cx escalates now, `waived` and `disabled`
-          # included: in those states nothing will read this head at all, so
-          # opening would post an approval with no external corroboration
-          # and waiting would spend a budget with nothing to wait on. That
-          # is the routing #839 gave the account-blocked Codex, for the same
-          # reason — no marker is written, so no budget starts.
-          #
-          # (`escalate` is unreachable: the Codex arm sets `why`, and this
-          # whole block is guarded on `why` being empty.)
+          # Recognized included-review quota notices use the same rate_limit
+          # class; unfamiliar quota text is not promoted to a bare refusal.
           #
           # No trigger and no resume on any of these paths: should_trigger
           # declines on rate_limit anyway, and a resume answers a pause, not
           # a limit. The class spends no CodeRabbit allowance in either
           # direction.
           case "$cls_cx" in
-            reported) ;;
+            reported|will-not-report|waived|disabled) ;;
             not-yet)  pending=true ;;
             *)
-              why="CodeRabbit refused to review $head (rate limited) and no wait this run can make lifts that, while Codex is '$cls_cx' rather than reported — nothing has read this head, so a human must review it or clear the limit"
+              why="Codex arm '$cls_cx' does not permit the independent Phase 4b review on $head"
               ;;
           esac
           ;;
@@ -2293,7 +2945,7 @@ p4b_same_head_barrier() {
               why="$coderabbit_cause"
             else
               case "$cls_cr" in
-                not-yet|rate-limited) why="external review did not reach the current head within ${budget}s" ;;
+                not-yet) why="external review did not reach the current head within ${budget}s" ;;
               esac
             fi
             ;;
@@ -2312,7 +2964,7 @@ p4b_same_head_barrier() {
                 why="$coderabbit_cause"
               else
                 case "$cls_cr" in
-                  not-yet|rate-limited) why="external review did not reach the current head within ${budget}s" ;;
+                  not-yet) why="external review did not reach the current head within ${budget}s" ;;
                 esac
               fi
             fi
@@ -2328,6 +2980,10 @@ p4b_same_head_barrier() {
         esac
       else
         why="external review did not reach the current head within ${budget}s"
+        # A bound wave arm that held for its whole budget says why (#2771).
+        if [ "$wave_binding_json" != null ]; then
+          why="$why (wave Codex request $P4B_BARRIER_WAVE_CODEX_REQUEST held: $(printf '%s' "$wave_binding_json" | jq -r '.reason // "unknown"' 2>/dev/null))"
+        fi
       fi
       # Name the REFUSAL, not just the clock (#1178). This exhaustion is
       # reachable with cls_cr=rate-limited whenever Codex stayed not-yet for
@@ -2339,7 +2995,9 @@ p4b_same_head_barrier() {
       # below is appended to it for the same reason.
       case "$cls_cr:$cls_cx" in
         rate-limited:reported) ;;
-        rate-limited:*) why="$why (CodeRabbit refused this head as rate limited and cannot be re-asked; the wait was on Codex, which stayed '$cls_cx')" ;;
+        rate-limited:*)
+          [ -z "$why" ] || why="$why (CodeRabbit refused this head as rate limited and cannot be re-asked; the wait was on Codex, which stayed '$cls_cx')"
+          ;;
       esac
       # The recovery this same run just sent must survive into the manual
       # fallback, whose renderer carries only the reason — an operator who
@@ -2358,7 +3016,7 @@ p4b_same_head_barrier() {
   # invariant to the final classification so a late timeout never opens a
   # Phase 4b path whose approval cannot satisfy gate (c).
   if [ -z "$why" ] && [ "$cls_cx" = waived ] \
-     && [ "$(p4b_policy_block_field codex allow_phase_4b_substitute)" = "false" ]; then
+     && [ "$pol_cx_substitute" = "false" ]; then
     cls_cx="escalate"
     case "$cx_evidence" in
       request-ceiling*) why="The Codex request ceiling is spent on $head, but codex.allow_phase_4b_substitute=false, so no Phase 4b review could clear gate (c); a human must decide" ;;
@@ -2413,30 +3071,31 @@ p4b_same_head_barrier() {
     fi
     if [ "$budget_unsafe" = true ]; then
       jq -nc --arg r "$why" --arg cr "$cls_cr" --arg cx "$cls_cx" --arg ce "$cx_evidence" \
-        --arg cc "$coderabbit_cause" --argjson b "${cx_budget_json:-null}" \
-        '{decision:"error",reason:$r,coderabbit:$cr,codex:$cx,codex_evidence:$ce,coderabbit_cause:$cc,request_budget:$b}'
+        --arg cc "$coderabbit_cause" --argjson b "${cx_budget_json:-null}" --argjson wb "${wave_binding_json:-null}" \
+        '{decision:"error",reason:$r,coderabbit:$cr,codex:$cx,codex_evidence:$ce,coderabbit_cause:$cc,request_budget:$b,wave_binding:$wb}'
       return 4
     fi
     # The request budget and human stops travel on an escalation too (#1579):
     # a spent-ceiling waiver that escalates (CodeRabbit refusal, no substitute)
     # still needs its recheck before the manual handoff is rendered.
     jq -nc --arg r "$why" --arg cr "$cls_cr" --arg cx "$cls_cx" --arg ce "$cx_evidence" --arg cc "$coderabbit_cause" --arg t "$trigger" --arg rs "$resume" \
-      --argjson b "${cx_budget_json:-null}" --argjson hs "${cx_human_stops_json:-null}" \
+      --argjson b "${cx_budget_json:-null}" --argjson hs "${cx_human_stops_json:-null}" --argjson wb "${wave_binding_json:-null}" \
       '{decision:"escalate", reason:$r, coderabbit:$cr, codex:$cx, codex_evidence:$ce, coderabbit_cause:$cc, trigger:$t, resume:$rs,
-        request_budget:$b, human_stops:$hs}'
+        request_budget:$b, human_stops:$hs, wave_binding:$wb}'
     return 2
   fi
   if [ "$pending" = true ]; then
     jq -nc --argjson ra "$remaining" --arg cr "$cls_cr" --arg cx "$cls_cx" --arg ce "$cx_evidence" --arg cc "$coderabbit_cause" --arg t "$trigger" --arg rs "$resume" \
-      '{decision:"pending", retry_after:$ra, coderabbit:$cr, codex:$cx, codex_evidence:$ce, coderabbit_cause:$cc, trigger:$t, resume:$rs}'
+      --argjson wb "${wave_binding_json:-null}" \
+      '{decision:"pending", retry_after:$ra, coderabbit:$cr, codex:$cx, codex_evidence:$ce, coderabbit_cause:$cc, trigger:$t, resume:$rs, wave_binding:$wb}'
     return 1
   fi
   # `coderabbit_carryforward` is present only on an open barrier and is null
   # unless the CodeRabbit arm carried (#1335): the orchestrator records the
   # source commit and fingerprint in the approval it posts.
   jq -nc --arg cr "$cls_cr" --arg cx "$cls_cx" --arg ce "$cx_evidence" --argjson cf "$cr_carry_json" \
-    --argjson b "${cx_budget_json:-null}" --argjson hs "${cx_human_stops_json:-null}" \
-    '{decision:"open", coderabbit:$cr, codex:$cx, codex_evidence:$ce, coderabbit_carryforward:$cf,request_budget:$b,human_stops:$hs}'
+    --argjson b "${cx_budget_json:-null}" --argjson hs "${cx_human_stops_json:-null}" --argjson wb "${wave_binding_json:-null}" \
+    '{decision:"open", coderabbit:$cr, codex:$cx, codex_evidence:$ce, coderabbit_carryforward:$cf,request_budget:$b,human_stops:$hs,wave_binding:$wb}'
   return 0
 }
 
@@ -2464,8 +3123,8 @@ P4B_MAX_ADAPTER_TIMEOUT_SECONDS=3600
 # by the orchestrator, not here.
 p4b_resolve_adapter_timeout() {
   local adapter="$1" val
-  val="$(p4b_automation_field "${adapter}_timeout_seconds")"
-  [ -n "$val" ] || val="$(p4b_automation_field adapter_timeout_seconds)"
+  val="$(p4b_automation_field "${adapter}_timeout_seconds")" || return 1
+  [ -n "$val" ] || val="$(p4b_automation_field adapter_timeout_seconds)" || return 1
   [ -n "$val" ] || { printf '%s' "$P4B_DEFAULT_ADAPTER_TIMEOUT_SECONDS"; return 0; }
   case "$val" in
     ''|*[!0-9]*) return 1 ;;
@@ -2488,7 +3147,7 @@ p4b_resolve_adapter_timeout() {
 # invalid configured value so the caller fails closed.
 p4b_resolve_adapter_effort() {
   local adapter="$1" val
-  val="$(p4b_automation_field "${adapter}_effort")"
+  val="$(p4b_automation_field "${adapter}_effort")" || return 1
   case "$adapter" in
     claude)
       [ -n "$val" ] || { printf 'medium'; return 0; }
@@ -2536,6 +3195,9 @@ p4b_feedback_policy_mode() {
 # p4b_feedback_priority_value <p0|p1|p2|p3|nitpick>
 # Returns the configured disposition value under feedback_policy.priorities,
 # or the parser default if absent: P0/P1 required, lower tiers discretionary.
+# This answers disposition policy, not the legacy merge-gate blocking set.
+# See the resolve_required_tiers header in scripts/lib/feedback-policy-helpers.sh:
+# its absent-block p1-only default is intentional; keep these parsers separate.
 p4b_feedback_priority_value() {
   local tier="$1" cfg value
   cfg="$(p4b_config)"
@@ -2880,25 +3542,174 @@ p4b_extract_json_block() {
 }
 
 # p4b_run_with_timeout <seconds> <command> [args...]
-# Portable bounded execution for reviewer CLIs/adapters. GNU coreutils
-# `timeout` is common on Linux; macOS has perl, and the inherited alarm
-# timer survives exec so the target process is still bounded.
+# Bounded execution for reviewer CLIs and adapters (#3007). The command runs
+# as the leader of its own process group. When <seconds> pass, the WHOLE group
+# gets SIGTERM (plus SIGCONT, so a stopped member can act on it), and
+# P4B_TIMEOUT_KILL_GRACE_SECONDS later (default 2) SIGKILL, so no member
+# still running when the bound fires (a stuck command, or a grandchild holding
+# a caller's `$( ... )` pipe) can outlive it by more than the grace period. A
+# command that finishes on its own is left as timeout(1) leaves it: the
+# supervisor returns at once and does not wait for or kill what it started. A
+# timed-out run returns 124. Otherwise the command's own status comes back
+# (128+N when signal N killed it; 127/126 when it could not be found or
+# executed, as GNU timeout reports).
+#
+# timeout(1) is no longer used. Which coreutils a host ships is what changed
+# under this code. On the ubuntu-26.04 hosted runners (bash 5.3.9, uutils
+# coreutils 0.10.0) an adapter bash that took timeout's SIGTERM could run its
+# EXIT trap and then spin at 100% CPU with SIGCHLD blocked and its children
+# unreaped. timeout(1) has no bound on its own wait for the child unless it
+# is given -k, so it waited forever, and the deep-safety (phase-4b) self-test
+# hung to the 60-minute job timeout on three consumers. The old perl
+# fallback was weaker still: its alarm reached only the exec'd process, so a
+# grandchild kept the pipe open for its full runtime. The supervisor is perl,
+# else python3 (the same order as p4b_barrier_atomic_mkdir); with neither, the
+# run is refused with exit 3 rather than run unbounded.
+#
+# p4b_is_timeout_rc keeps accepting 142 (SIGALRM) as a timeout, so a status
+# from the pre-#3007 perl path still reads as one.
 p4b_run_with_timeout() {
-  local seconds="$1"
+  local seconds="$1" grace="${P4B_TIMEOUT_KILL_GRACE_SECONDS:-2}"
   shift
   case "$seconds" in
     ''|0) "$@"; return $? ;;
     *[!0-9]*) p4b_die 3 "timeout seconds must be a non-negative integer; got '$seconds'" ;;
   esac
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "$seconds" "$@"
-    return $?
-  fi
+  case "$grace" in
+    ''|*[!0-9]*|0) grace=2 ;;
+  esac
+  [ "$#" -gt 0 ] || p4b_die 3 "p4b_run_with_timeout: no command given"
   if command -v perl >/dev/null 2>&1; then
-    perl -e 'alarm shift @ARGV; exec @ARGV or die "exec failed: $!\n"' "$seconds" "$@"
+    perl -e '
+      use strict; use warnings; use POSIX (); use Time::HiRes ();
+      my $secs = shift @ARGV; my $grace = shift @ARGV;
+      # Hold ALRM/TERM/INT/HUP across the fork: one that lands before the
+      # handlers below exist must not kill the supervisor and orphan the group.
+      my $held = POSIX::SigSet->new(POSIX::SIGALRM(), POSIX::SIGTERM(), POSIX::SIGINT(), POSIX::SIGHUP());
+      POSIX::sigprocmask(POSIX::SIG_BLOCK(), $held);
+      my $pid = fork;
+      defined $pid or do { print STDERR "p4b_run_with_timeout: fork failed: $!\n"; exit 125 };
+      if (!$pid) {
+        POSIX::setpgid(0, 0);
+        # The command always starts with SIGPIPE/SIGXFSZ at their defaults,
+        # whatever the caller ignored (GitHub runner steps ignore SIGPIPE).
+        $SIG{$_} = "DEFAULT" for qw(ALRM TERM INT HUP PIPE XFSZ);
+        POSIX::sigprocmask(POSIX::SIG_UNBLOCK(), $held);
+        { no warnings "exec"; exec { $ARGV[0] } @ARGV; }
+        print STDERR "p4b_run_with_timeout: cannot run $ARGV[0]: $!\n";
+        POSIX::_exit($!{ENOENT} ? 127 : 126);
+      }
+      # Both sides set the group, so no signal can land before it exists.
+      POSIX::setpgid($pid, $pid);
+      # phase 1: timed out; phase 2: a forwarded TERM/INT/HUP (typically an
+      # enclosing p4b_run_with_timeout timing out) is being escalated.
+      my ($phase, $termed_at, $limit) = (0, 0, $grace);
+      $SIG{ALRM} = sub {
+        if ($phase == 0) {
+          $phase = 1; $termed_at = Time::HiRes::time();
+          kill "TERM", -$pid; kill "CONT", -$pid;
+          alarm $grace;
+        } else {
+          kill "KILL", -$pid;
+        }
+      };
+      # A forwarded signal also starts an escalation here, on half the grace
+      # period. An enclosing supervisor SIGKILLs its own group at the full
+      # grace; that group holds this supervisor but not the command group
+      # below it, so the command group has to be gone before then.
+      for my $sig (qw(TERM INT HUP)) {
+        $SIG{$sig} = sub {
+          kill $sig, -$pid; kill "CONT", -$pid;
+          if ($phase == 0) {
+            $phase = 2; $termed_at = Time::HiRes::time(); $limit = $grace / 2;
+            Time::HiRes::alarm($limit);
+          }
+        };
+      }
+      alarm $secs;
+      POSIX::sigprocmask(POSIX::SIG_UNBLOCK(), $held);
+      my $r;
+      do { $r = waitpid($pid, 0) } while ($r == -1 && $!{EINTR});
+      my $st = $?;
+      alarm 0;
+      if ($phase) {
+        # The rest of the group gets what is left of the grace period to act
+        # on the signal, then SIGKILL.
+        Time::HiRes::sleep(0.05) while kill(0, -$pid) && Time::HiRes::time() - $termed_at < $limit;
+        kill "KILL", -$pid;
+        exit 124 if $phase == 1;
+      }
+      $r == $pid or exit 125;
+      exit(($st & 127) ? 128 + ($st & 127) : $st >> 8);
+    ' "$seconds" "$grace" "$@"
     return $?
   fi
-  p4b_die 3 "bounded review execution requires GNU timeout or perl"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import os, signal, sys, time
+secs, grace = int(sys.argv[1]), int(sys.argv[2]); argv = sys.argv[3:]
+held = {signal.SIGALRM, signal.SIGTERM, signal.SIGINT, signal.SIGHUP}
+signal.pthread_sigmask(signal.SIG_BLOCK, held)
+pid = os.fork()
+if pid == 0:
+    try:
+        os.setpgid(0, 0)
+        # Python starts with SIGPIPE and SIGXFSZ ignored, and an ignored
+        # signal stays ignored across exec; as in the perl path, the command
+        # gets the defaults.
+        for s in held | {signal.SIGPIPE, signal.SIGXFSZ}:
+            signal.signal(s, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
+        os.execvp(argv[0], argv)
+    except OSError as e:
+        sys.stderr.write("p4b_run_with_timeout: cannot run %s: %s\n" % (argv[0], e))
+        os._exit(127 if isinstance(e, FileNotFoundError) else 126)
+try:
+    os.setpgid(pid, pid)
+except OSError:
+    pass
+phase = [0, 0.0, float(grace)]
+def group(sig):
+    try:
+        os.killpg(pid, sig)
+    except OSError:
+        pass
+def on_alarm(_s, _f):
+    if phase[0] == 0:
+        phase[0] = 1; phase[1] = time.time()
+        group(signal.SIGTERM); group(signal.SIGCONT)
+        signal.alarm(grace)
+    else:
+        group(signal.SIGKILL)
+def forward(s, _f):
+    group(s); group(signal.SIGCONT)
+    if phase[0] == 0:
+        phase[0] = 2; phase[1] = time.time(); phase[2] = grace / 2.0
+        signal.setitimer(signal.ITIMER_REAL, phase[2])
+signal.signal(signal.SIGALRM, on_alarm)
+for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(s, forward)
+signal.alarm(secs)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, held)
+_, st = os.waitpid(pid, 0)
+signal.setitimer(signal.ITIMER_REAL, 0)
+def group_alive():
+    try:
+        os.killpg(pid, 0)
+        return True
+    except OSError:
+        return False
+if phase[0]:
+    while group_alive() and time.time() - phase[1] < phase[2]:
+        time.sleep(0.05)
+    group(signal.SIGKILL)
+    if phase[0] == 1:
+        sys.exit(124)
+sys.exit(128 + os.WTERMSIG(st) if os.WIFSIGNALED(st) else os.WEXITSTATUS(st))
+' "$seconds" "$grace" "$@"
+    return $?
+  fi
+  p4b_die 3 "bounded review execution requires perl or python3"
 }
 
 p4b_is_timeout_rc() {
@@ -2953,7 +3764,7 @@ p4b_resolve_diff_max_bytes() {
     printf '%s' "$P4B_DIFF_MAX_BYTES"
     return 0
   fi
-  val="$(p4b_automation_field diff_max_bytes)"
+  val="$(p4b_automation_field diff_max_bytes)" || return 1
   [ -n "$val" ] || { printf '%s' "$P4B_DEFAULT_DIFF_MAX_BYTES"; return 0; }
   case "$val" in
     *[!0-9]*) return 1 ;;

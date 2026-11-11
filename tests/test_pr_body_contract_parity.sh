@@ -11,6 +11,11 @@
 # guard, and evaluated by merge-clearance as if the same-agent Codex-reaction
 # fallback were eligible. Parity is the property under test.
 
+# These cases drive the gh transport. Pin it so a cloud session's
+# CLAUDE_CODE_REMOTE (or MERGEPATH_AGENT_SURFACE) cannot switch the wrappers
+# to the REST transport, which tests/test_gh_rest_transport.sh covers.
+export MERGEPATH_GH_TRANSPORT=gh
+
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -18,6 +23,223 @@ cd "$ROOT"
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "PASS: $1"; }
 bad()  { fail=$((fail+1)); echo "FAIL: $1" >&2; }
+
+# Focused process-boundary regressions also run inside the full parity suite.
+parser_failure_tests() {
+  python3 - "$ROOT" "$@" <<'PY_PARSER_FAILURES'
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(sys.argv.pop(1))
+VALID = "Authoring-Agent: codex\n\n## Self-Review\nok\n"
+MISSING = "Authoring-Agent: codex\n\nordinary prose\n"
+
+
+class ParserFailures(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.preload = Path(cls.temp.name) / "child-boundary.cjs"
+        cls.preload.write_text(r"""
+const cp = require('node:child_process');
+const original = cp.spawnSync;
+cp.spawnSync = (command, args, options) => {
+  const kind = process.env.PR_BODY_FIXTURE_KIND;
+  if (!kind) return original(command, args, options);
+  if (kind === 'actual-start') return original('/nonexistent-pr-body-parser-1309', args, options);
+  const mode = args[args.length - 1];
+  if (process.env.PR_BODY_FIXTURE_REVIEW_ONLY && mode !== '--has-self-review') {
+    return {pid: 42, status: 0, stdout: mode === '--author-count' ? '1\n' : 'codex\n'};
+  }
+  const result = {pid: 42, status: null, stdout: 'UNTRUSTED PARTIAL ANSWER\n', stderr: 'fixture child stderr\n'};
+  if (kind === 'start') { result.pid = 0; result.error = {code: 'ENOENT'}; }
+  if (kind === 'execution') result.error = {code: 'ENOBUFS'};
+  if (kind === 'timeout') result.error = {code: 'ETIMEDOUT'};
+  if (kind === 'signal') result.signal = 'SIGTERM';
+  if (kind === 'exit') result.status = 2;
+  if (kind === 'exit-one') result.status = 1;
+  return result;
+};
+// Fault the actual generated CLI entry, not a substitute implementation.
+if (process.env.PR_BODY_FIXTURE_THROW && process.argv[1] === process.env.PR_BODY_FIXTURE_RUNTIME) {
+  const fs = require('node:fs');
+  const read = fs.readFileSync;
+  fs.readFileSync = (fd, ...args) => {
+    if (fd === 0) throw new Error('fixture parser exception');
+    return read(fd, ...args);
+  };
+  require('node:module').syncBuiltinESMExports();
+}
+""")
+
+    def run_process(self, command, body=VALID, **extra):
+        env = dict(os.environ, NODE_OPTIONS="--require=" + json.dumps(str(self.preload)))
+        env.update(extra)
+        return subprocess.run(command, input=body, text=True, capture_output=True,
+                              cwd=ROOT, env=env, timeout=15)
+
+    def helper(self, helper, body=VALID, parser=None, **extra):
+        program = '. "$1/scripts/lib/pr-body-contract.sh"; PR_BODY_CONTRACT_TIMEOUT_SECONDS=2; '
+        if parser is not None:
+            program += 'PR_BODY_CONTRACT_PARSER="$3"; '
+        program += '"$2" "$(cat)"'
+        return self.run_process(['bash', '-c', program, 'fixture', str(ROOT), helper,
+                                 str(parser or '')], body, **extra)
+
+    def test_real_generated_valid_and_absent_answers(self):
+        for body, present in ((VALID, True), (MISSING, False)):
+            with self.subTest(present=present):
+                result = self.helper('pr_body_has_self_review', body)
+                self.assertEqual(result.returncode, 0 if present else 1, result.stderr)
+                self.assertEqual(result.stdout, '')
+                direct = self.run_process(['node', str(ROOT/'scripts/lib/pr-body-contract.mjs'), '--json'], body)
+                self.assertEqual(direct.returncode, 0, direct.stderr)
+                self.assertEqual(json.loads(direct.stdout),
+                                 dict(author='codex', authorCount=1, hasSelfReview=present))
+
+    def test_helper_process_failures_suppress_partial_answers(self):
+        for kind, expected in (('start', 125), ('actual-start', 125), ('execution', 126), ('signal', 126),
+                               ('exit', 126), ('timeout', 124)):
+            for helper in ('pr_body_authoring_agent', 'pr_body_authoring_agent_count', 'pr_body_has_self_review'):
+                with self.subTest(kind=kind, helper=helper):
+                    result = self.helper(helper, PR_BODY_FIXTURE_KIND=kind)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    self.assertEqual(result.stdout, '')
+                    if kind != 'actual-start':
+                        self.assertIn('fixture child stderr', result.stderr)
+
+    def test_status_one_is_semantic_only_for_self_review(self):
+        for helper, expected in (('pr_body_authoring_agent', 126),
+                                 ('pr_body_authoring_agent_count', 126), ('pr_body_has_self_review', 1)):
+            with self.subTest(helper=helper):
+                result = self.helper(helper, PR_BODY_FIXTURE_KIND='exit-one')
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(result.stdout, '')
+
+    def test_public_valid_missing_and_infrastructure_diagnostics(self):
+        for flags in ([], ['--self-review-only']):
+            command = ['bash', str(ROOT/'scripts/validate-pr-body.sh'), *flags]
+            with self.subTest(flags=flags, kind='valid'):
+                self.assertEqual(self.run_process(command).returncode, 0)
+            with self.subTest(flags=flags, kind='missing'):
+                result = self.run_process(command, MISSING)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('Self-Review', result.stderr)
+                self.assertNotIn('parser', result.stderr)
+            for kind, expected in (('start', 'could not start'), ('execution', 'execution failed'),
+                                   ('signal', 'execution failed'), ('exit', 'execution failed'),
+                                   ('timeout', 'wall-clock bound')):
+                with self.subTest(flags=flags, kind=kind):
+                    result = self.run_process(command, PR_BODY_FIXTURE_KIND=kind,
+                                              PR_BODY_FIXTURE_REVIEW_ONLY='1')
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, '')
+                    self.assertIn(expected, result.stderr)
+                    self.assertNotIn('missing', result.stderr)
+                    self.assertNotIn('must contain', result.stderr)
+
+    def test_outer_node_failure_is_not_semantic_absence(self):
+        # #2772: the outer `node -e` fails before the wrapper runs (a missing
+        # NODE_OPTIONS preload exits 1). That status must not read as a
+        # completed "no Self-Review heading" answer at either boundary.
+        missing = "--require=" + json.dumps(str(Path(self.temp.name)/'absent-preload-2772.cjs'))
+        for body in (VALID, MISSING):
+            for helper in ('pr_body_authoring_agent', 'pr_body_authoring_agent_count', 'pr_body_has_self_review'):
+                with self.subTest(helper=helper, missing_heading=body is MISSING):
+                    result = self.helper(helper, body, NODE_OPTIONS=missing)
+                    self.assertEqual(result.returncode, 126, result.stderr)
+                    self.assertEqual(result.stdout, '')
+                    self.assertIn('did not complete', result.stderr)
+        for flags in ([], ['--self-review-only']):
+            with self.subTest(flags=flags):
+                result = self.run_process(['bash', str(ROOT/'scripts/validate-pr-body.sh'), *flags],
+                                          NODE_OPTIONS=missing)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('execution failed', result.stderr)
+                self.assertNotIn("missing a '## Self-Review'", result.stderr)
+
+    def test_actual_cli_exception_is_not_semantic_absence(self):
+        runtime = str(ROOT/'scripts/lib/pr-body-contract.mjs')
+        extra = dict(PR_BODY_FIXTURE_THROW='1', PR_BODY_FIXTURE_RUNTIME=runtime)
+        direct = self.run_process(['node', runtime, '--has-self-review'], **extra)
+        self.assertEqual(direct.returncode, 2, direct.stderr)
+        self.assertEqual(direct.stdout, '')
+        self.assertIn('parser execution failed', direct.stderr)
+        result = self.helper('pr_body_has_self_review', **extra)
+        self.assertEqual(result.returncode, 126, result.stderr)
+        self.assertEqual(result.stdout, '')
+
+    def test_import_time_primitive_rejections_are_infrastructure(self):
+        for primitive in ('null', 'undefined'):
+            with self.subTest(primitive=primitive):
+                parser = Path(self.temp.name)/(primitive + '.mjs')
+                parser.write_text('throw ' + primitive + ';' + chr(10))
+                result = self.helper('pr_body_has_self_review', parser=parser)
+                self.assertEqual(result.returncode, 126, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('PR-body parser execution failed: ' + primitive, result.stderr)
+                result = self.run_process(['bash', '-c',
+                    '. "$1/scripts/lib/pr-body-contract.sh"; PR_BODY_CONTRACT_PARSER="$2"; '
+                    'pr_body_validate "$(cat)" "$1/.github/review-policy.yml"',
+                    'fixture', str(ROOT), str(parser)])
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('parser execution failed', result.stderr)
+                self.assertNotIn('must contain', result.stderr)
+                self.assertNotIn('missing a', result.stderr)
+
+    def test_actual_missing_canonical_module_is_not_absence(self):
+        stage = Path(self.temp.name)/'standalone'
+        for relative in ('scripts/lib/pr-body-contract.sh', 'scripts/lib/reviewers-helpers.sh',
+                         'scripts/lib/pr-body-contract.mjs', 'scripts/validate-pr-body.sh',
+                         '.github/review-policy.yml'):
+            target = stage/relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT/relative, target)
+        commands = [['bash', str(stage/'scripts/validate-pr-body.sh'), *flags]
+                    for flags in ([], ['--self-review-only'])]
+        for command in commands:
+            self.assertEqual(self.run_process(command).returncode, 0)
+        (stage/'scripts/lib/pr-body-contract.mjs').unlink()
+        for command in commands:
+            with self.subTest(flags=command[2:]):
+                result = self.run_process(command)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, '')
+                self.assertIn('parser execution failed', result.stderr)
+                self.assertNotIn('missing a', result.stderr)
+                self.assertNotIn('must contain', result.stderr)
+
+    def test_real_child_signal_exit_and_watchdog(self):
+        for label, program, expected in (
+            ('signal', 'process.kill(process.pid, "SIGTERM");', 126),
+            ('exit', 'process.exit(2);', 126),
+            ('timeout', 'setInterval(() => {}, 1000);', 124),
+        ):
+            with self.subTest(kind=label):
+                parser = Path(self.temp.name)/(label + '.cjs')
+                parser.write_text('process.stdout.write(' + json.dumps('partial answer\n') + ');' + chr(10) + program)
+                result = self.helper('pr_body_has_self_review', parser=parser)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(result.stdout, '')
+
+
+unittest.main(verbosity=2)
+PY_PARSER_FAILURES
+}
+
+if [ "${1:-}" = --parser-failures-only ]; then
+  parser_failure_tests "${@:2}"
+  exit $?
+fi
 
 TMP_DETECTOR="$(mktemp "${TMPDIR:-/tmp}/parity-detector.XXXXXX")"
 # ONE exit handler for every temp this suite creates. A second `trap ... EXIT`
@@ -676,12 +898,12 @@ if pr_body_validate "$VALID_BODY" "/nonexistent/review-policy.yml" >/dev/null 2>
 else
   ok "an unreadable policy file still fails closed"
 fi
-if printf '%s\n' "$unreadable_out" | grep -qF 'unknown Authoring-Agent'; then
+if grep -qF 'unknown Authoring-Agent' <<<"$unreadable_out"; then
   bad "an unreadable policy is still reported as 'unknown Authoring-Agent' (blames the author)"
 else
   ok "an unreadable policy is not misreported as an unknown agent"
 fi
-if printf '%s\n' "$unreadable_out" | grep -qiE 'configuration problem|could be derived'; then
+if grep -qiE 'configuration problem|could be derived' <<<"$unreadable_out"; then
   ok "an unreadable policy names itself as the cause"
 else
   bad "an unreadable policy gives no actionable diagnostic: $unreadable_out"
@@ -716,12 +938,12 @@ prp_job=$(awk '/^  self-review-check:/{f=1;next} /^  [a-z-]+:$/{f=0} f' "$ROOT/$
 # documenting the pattern it forbids.
 prp_live=$(printf '%s\n' "$prp_job" | grep -vE '^[[:space:]]*#')
 
-if printf '%s\n' "$prp_live" | grep -qE "grep -q[A-Za-z]*[[:space:]]+.\^## Self-Review"; then
+if grep -qE "grep -q[A-Za-z]*[[:space:]]+.\^## Self-Review" <<<"$prp_live"; then
   bad "$PRP still gates Self-Review with a line grep (a fenced heading defeats it)"
 else
   ok "the Self-Review gate no longer relies on a line grep"
 fi
-if printf '%s\n' "$prp_live" | grep -qF 'scripts/validate-pr-body.sh'; then
+if grep -qF 'scripts/validate-pr-body.sh' <<<"$prp_live"; then
   ok "the Self-Review gate routes through the shared validate-pr-body entrypoint"
 else
   bad "$PRP does not call scripts/validate-pr-body.sh; the contract would have two implementations"
@@ -729,7 +951,7 @@ fi
 # Scope guard: this gate checks the HEADING only. Enforcing the identity
 # contract here is a POLICY change (#1137) and must be a deliberate edit to
 # this assertion, not a silent widening.
-if printf '%s\n' "$prp_live" | grep -qF -- '--self-review-only'; then
+if grep -qF -- '--self-review-only' <<<"$prp_live"; then
   ok "the gate asks only the heading question; the identity contract is not bundled in"
 else
   bad "$PRP no longer passes --self-review-only; widening this required check is a policy change"
@@ -739,13 +961,13 @@ fi
 # revision of this PR and got carried out with it when that guard was split to
 # #1154. Restored: removing code around assertions is exactly when they stop
 # asserting, and nothing else in the suite covers these.
-if printf '%s\n' "$prp_live" | grep -qF 'uses: actions/checkout@'; then
-  if printf '%s\n' "$prp_live" | grep -qF 'ref: ${{ github.event.repository.default_branch }}'; then
+if grep -qF 'uses: actions/checkout@' <<<"$prp_live"; then
+  if grep -qF 'ref: ${{ github.event.repository.default_branch }}' <<<"$prp_live"; then
     ok "the gate checks the validator out from the TRUSTED default branch"
   else
     bad "$PRP checks out without pinning ref to default_branch — a PR could edit its own validator"
   fi
-  if printf '%s\n' "$prp_live" | grep -qF 'persist-credentials: false'; then
+  if grep -qF 'persist-credentials: false' <<<"$prp_live"; then
     ok "the trusted validator checkout does not persist credentials"
   else
     bad "$PRP trusted checkout must set persist-credentials: false (#548)"
@@ -753,7 +975,7 @@ if printf '%s\n' "$prp_live" | grep -qF 'uses: actions/checkout@'; then
 else
   bad "$PRP self-review-check has no checkout, so it cannot run the trusted validator"
 fi
-if printf '%s\n' "$prp_live" | grep -qF 'node-version-file'; then
+if grep -qF 'node-version-file' <<<"$prp_live"; then
   bad "$PRP uses node-version-file; canonical workflows must not depend on a consumer-owned .nvmrc"
 else
   ok "the gate pins Node by literal version, not a consumer-owned .nvmrc"
@@ -1162,6 +1384,9 @@ TMP_PROD_STALL="$(mktemp "${TMPDIR:-/tmp}/parity-prod-stall.XXXXXX")"
 PROD_STALL_FIXTURE="$TMP_PROD_STALL"
 printf '%s\n' 'Authoring-Agent: codex' '' '## Self-Review' > "$PROD_STALL_FIXTURE"
 TMP_STALL_PARSER="$(mktemp "${TMPDIR:-/tmp}/parity-stall-parser.XXXXXX")"
+# Match the canonical ESM module format so this fixture reaches the watchdog.
+mv "$TMP_STALL_PARSER" "${TMP_STALL_PARSER}.mjs"
+TMP_STALL_PARSER="${TMP_STALL_PARSER}.mjs"
 printf '%s\n' 'setInterval(() => {}, 1000);' > "$TMP_STALL_PARSER"
 
 # All three helpers, because each has a different output contract: two answer on
@@ -1221,16 +1446,22 @@ prod_validate_out="$(printf '' | run_with_timeout 90 bash -c '
 
 if [ "$prod_validate_rc" -eq 0 ]; then
   bad "#1281: pr_body_validate ACCEPTED a body whose parse timed out -- fail-open"
-elif printf '%s' "$prod_validate_out" | grep -q "did not complete"; then
+elif grep -q "did not complete" <<<"$prod_validate_out"; then
   ok "#1281: pr_body_validate fails closed on a timed-out parse and names the cause"
 else
   bad "#1281: pr_body_validate failed closed but misattributed the cause: $prod_validate_out"
 fi
 
+if grep -Fq "https://github.com/nathanjohnpayne/mergepath/blob/main/specs/pr_body_contract.md" <<<"$prod_validate_out"; then
+  ok "#1310: parser timeout guidance points to the canonical specification"
+else
+  bad "#1310: parser timeout guidance is not resolvable from a consumer: $prod_validate_out"
+fi
+
 # The other half of that guarantee: the diagnosis must not be the author-blaming
 # one. Without this, rewording the timeout branch back into "missing a valid
 # Authoring-Agent" would still pass the check above.
-if printf '%s' "$prod_validate_out" | grep -q "missing a valid 'Authoring-Agent:' line"; then
+if grep -q "missing a valid 'Authoring-Agent:' line" <<<"$prod_validate_out"; then
   bad "#1281: pr_body_validate blamed the PR author for a parser timeout"
 else
   ok "#1281: pr_body_validate does not report a timeout as a missing declaration"
@@ -1243,6 +1474,12 @@ if pr_body_validate "$prod_valid_body" "$ROOT/.github/review-policy.yml" 2>/dev/
   ok "#1281: a valid body still validates through the bounded invocation path"
 else
   bad "#1281: the production bound rejected a valid body"
+fi
+
+if parser_failure_tests; then
+  ok "#1309: parser outcomes remain distinct and infrastructure emits no partial answer"
+else
+  bad "#1309: parser start/execution/timeout diagnostic boundary regressed"
 fi
 
 # --- 17. the hook timeout must outlast the parser bound (#1281) --------------
@@ -1394,7 +1631,7 @@ while IFS= read -r wf; do
   # One declared bound per file, and it must equal the lib's. Counting the
   # timeout options rather than just grepping for the constant means a file that
   # declares the constant but forgets to pass it to a second call still fails.
-  wf_opts="$(grep -cE 'timeout: PR_BODY_PARSE_TIMEOUT_MS' "$wf")"
+  wf_opts="$(grep -cE 'timeout: (PR_BODY_PARSE_TIMEOUT_MS|auditTimeout\(PR_BODY_PARSE_TIMEOUT_MS\))' "$wf")"
   wf_declared="$(sed -n 's/.*PR_BODY_PARSE_TIMEOUT_MS = \([0-9]*\);.*/\1/p' "$wf" | head -1)"
   if [ -z "$wf_declared" ]; then
     bad "#1281: $wf_name invokes the parser directly with no declared timeout -- unbounded, the spec's claim does not hold there"
@@ -1403,62 +1640,301 @@ while IFS= read -r wf; do
   elif [ "$wf_opts" -lt "$wf_calls" ]; then
     bad "#1281: $wf_name has $wf_calls parser call(s) but passes the timeout to only $wf_opts -- at least one is unbounded"
   else
-    ok "#1281: $wf_name bounds all $wf_calls parser call(s) at ${wf_declared}ms, matching the lib"
+    ok "#1281: $wf_name bounds all $wf_calls parser call(s) at most ${wf_declared}ms, matching the lib"
   fi
 done <<< "$wf_sites"
 
-# The two failure modes differ by design and the difference is load-bearing, so
-# it is pinned rather than left to a reader of the workflow.
-#
-#   pr-audit.yml rethrows timeout errors from its per-PR catch: the step fails
-#   rather than auditing a PR it could not parse.
-#   agent-review.yml catches and yields '', which cannot equal any reviewer, so
-#   ASSIGNMENT falls through to the default. Safe only because assignment is not
-#   a gate -- the same empty value would be fail-open in gate (b).
+# Parsed YAML also checks the enclosing step/job allowances, including inert
+# required-workflow templates on the hub. Generic negative fixtures run on
+# consumers; their live inventory is repo-owned and remains hub-only (#1622).
+if python3 "$ROOT/tests/test_pr_body_workflow_bounds.py"; then
+  ok "#1622: reviewed workflow routes retain their enclosing parser allowances"
+else
+  bad "#1622: workflow parser inventory or enclosing timeout floor changed"
+fi
+
+# Execute the actual weekly-audit script with fake GitHub and parser boundaries.
+# Parser infrastructure failures must survive Dependabot exemptions, later PRs
+# must still be audited, and a spent budget must report the unaudited remainder.
 if node - "$ROOT/.github/workflows/pr-audit.yml" <<'NODE'
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const source = fs.readFileSync(process.argv[2], 'utf8');
-const start = source.indexOf('              let bodyContract = { author:');
-const end = source.indexOf('\n              // Fetch all reviews for this PR once', start);
-if (start < 0 || end < 0) throw new Error('audit parser caller block not found');
-const callerImpl = new Function('pr', 'isDependabot', 'parsePrBodyContract', 'prViolations',
-  'authorIdentity', 'reviewerAccounts',
-  `${source.slice(start, end)}\nreturn { bodyContract, prViolations };`);
-// The extracted caller also validates shared-author context before reviews.
-const caller = (pr, isDependabot, parsePrBodyContract, prViolations) => callerImpl(
-  { ...pr, user: { login: isDependabot ? 'dependabot[bot]' : 'nathanjohnpayne' } },
-  isDependabot, parsePrBodyContract, prViolations,
-  'nathanjohnpayne', ['nathanpayne-codex']);
-const timeout = Object.assign(new Error('parser timed out'), { code: 'ETIMEDOUT' });
-for (const isDependabot of [false, true]) {
-  try {
-    caller({ body: 'pathological body' }, isDependabot, () => { throw timeout; }, []);
-    throw new Error(`timeout was swallowed for isDependabot=${isDependabot}`);
-  } catch (error) {
-    if (error !== timeout) throw error;
+const script = source.split('          script: |\n')[1]
+  .split('\n').map(line => line.replace(/^            /, '')).join('\n');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const execute = new AsyncFunction('require', 'github', 'context', 'core', 'Date', 'console', script);
+const startTime = new Date('2026-10-11T12:00:00Z').getTime();
+const pr = (number, login = 'nathanjohnpayne', body = 'valid') => ({
+  number, title: `Fixture PR ${number}`, user: { login }, body,
+  merged_at: new Date(startTime).toISOString(), labels: [],
+  head: { sha: 'a'.repeat(40), ref: 'fixture', repo: { full_name: 'owner/repo' } },
+});
+async function audit(prs, options = {}) {
+  const {expireAfterFirst = false, budgetMs = 25 * 60 * 1000, reserveMs = 60000,
+    elapsedClock = false, stalledEndpoint = '', failCreate = false, failSummary = false,
+    verifier = '', verifierRemainingMs = 70} = options;
+  let now = startTime;
+  const wallStart = Date.now();
+  const readNow = () => now + (elapsedClock ? Date.now() - wallStart : 0);
+  const parsed = [], reviewed = [], reports = [], failures = [], messages = [];
+  const requests = [], createAttempts = [], summaryBodies = [], verifierTimeouts = [];
+  let aborted = false;
+  class Clock extends Date {
+    constructor(...args) { super(...(args.length ? args : [readNow()])); }
+    static now() { return readNow(); }
+  }
+  const endpoints = {
+    pulls: {list: 'prs', listReviews: 'reviews', listReviewComments: 'inline'},
+    issues: {listEvents: 'events', listComments: 'comments', create: async report => {
+      createAttempts.push(report);
+      if (failCreate) throw new Error('report publication unavailable');
+      reports.push(report);
+    }},
+  };
+  const github = {rest: endpoints, paginate: async (endpoint, args) => {
+    requests.push({endpoint, args});
+    if (endpoint === stalledEndpoint) {
+      args.request?.signal?.addEventListener('abort', () => { aborted = true; });
+      return new Promise(() => {}); // Native watchdog makes a missing bound fail.
+    }
+    if (endpoint === 'prs') return verifier === 'anchor'
+      ? prs.map(pr => ({...pr, labels: [{name: 'needs-external-review'}]})) : prs;
+    if (endpoint === 'reviews') {
+      reviewed.push(args.pull_number);
+      return verifier === 'anchor' ? [{user: {login: 'chatgpt-codex-connector[bot]'},
+        state: 'COMMENTED', commit_id: 'a'.repeat(40), body: 'Codex review completed',
+        submitted_at: new Date(startTime - 1000).toISOString()}] : [];
+    }
+    if (endpoint === 'events' && verifier === 'anchor') return [{event: 'labeled',
+      label: {name: 'needs-external-review'}, created_at: new Date(startTime - 2000).toISOString()}];
+    if (endpoint === 'comments' && verifier === 'anchor' || endpoint === 'inline' && verifier === 'owner') {
+      now = startTime + budgetMs - reserveMs - verifierRemainingMs;
+    }
+    if (endpoint === 'comments' && verifier === 'owner') return [{user: {login: 'nathanjohnpayne'},
+      body: '<!-- mergepath-owner-admin-override:v1 -->'}];
+    return [];
+  }, graphql: async (_query, args) => {
+    requests.push({endpoint: 'graphql', args});
+    return {repository: {pullRequest: {reviewThreads: {nodes: [], pageInfo: {hasNextPage: false}}}}};
+  }};
+  const mockedRequire = name => {
+    if (name === 'fs') return {readFileSync: () => 'policy'};
+    if (name === 'js-yaml') return {load: () => ({
+      available_reviewers: ['nathanpayne-codex'], author_identity: 'nathanjohnpayne',
+    })};
+    if (name === 'child_process') return {execFileSync: (command, args, opts) => {
+      if (args[0] === 'scripts/lib/pr-body-contract.mjs') {
+        assert.ok(opts.timeout > 0 && opts.timeout <= 120000, 'parser bound must be positive and capped');
+        if (budgetMs === 25 * 60 * 1000) assert.equal(opts.timeout, 120000);
+        assert.equal(opts.killSignal, 'SIGKILL');
+        parsed.push(opts.input);
+        if (expireAfterFirst && parsed.length === 1) now += 25 * 60 * 1000;
+        if (opts.input.startsWith('timeout')) {
+          now += opts.timeout;
+          // Exercise Node's actual emitted error code, not an assumed shape.
+          // Shorten only this child wait after checking the production options.
+          return require('node:child_process').execFileSync(process.execPath,
+            ['-e', 'setInterval(() => {}, 1000)'], {...opts, timeout: 100});
+        }
+        if (opts.input === 'ordinary') throw new Error('ordinary parser failure');
+        return JSON.stringify({author: 'codex', authorCount: 1, hasSelfReview: true});
+      }
+      assert.equal(command, 'python3');
+      assert.ok(args[0].includes(verifier === 'anchor' ? 'resolve-codex-verdict-anchors.py' : 'owner-admin-override.py'));
+      verifierTimeouts.push({timeout: opts.timeout, killSignal: opts.killSignal});
+      // The fake child ends after five seconds; only a real remaining-budget
+      // subprocess bound can stop it promptly. Grade the actual passed options.
+      return require('node:child_process').execFileSync(process.execPath,
+        ['-e', 'setTimeout(() => console.log("[]"), 5000)'],
+        opts);
+    }};
+    throw new Error(`Unexpected require: ${name}`);
+  };
+  const boundedScript = script.replace('Date.now() + 25 * 60 * 1000', `Date.now() + ${budgetMs}`)
+    .replace('AUDIT_REPORT_RESERVE_MS = 60000', `AUDIT_REPORT_RESERVE_MS = ${reserveMs}`);
+  const invoke = new AsyncFunction('require', 'github', 'context', 'core', 'Date', 'console', boundedScript);
+  const summary = {addRaw: body => {
+    summaryBodies.push(body);
+    return {write: async () => { if (failSummary) throw new Error('summary unavailable'); }};
+  }};
+  await invoke(mockedRequire, github, {repo: {owner: 'owner', repo: 'repo'}},
+    {setFailed: message => failures.push(message), warning: message => messages.push(message), summary},
+    Clock, {log: message => messages.push(message)});
+  const chunks = messages.filter(message => message.startsWith('PR_AUDIT_REPORT_BASE64 '));
+  const encoded = chunks.map((message, index) => {
+    const match = message.match(/^PR_AUDIT_REPORT_BASE64 (\d+)\/(\d+) ([A-Za-z0-9+/=]+)$/);
+    assert.ok(match, 'report log is an encoded data record, not a runner command');
+    assert.equal(Number(match[1]), index + 1);
+    assert.equal(Number(match[2]), chunks.length, 'all report chunks must survive');
+    return match[3];
+  }).join('');
+  const loggedBody = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+  if (summaryBodies.length && loggedBody) assert.equal(loggedBody, summaryBodies[0], 'UTF-8 report round-trip');
+  const durableBody = reports[0]?.body || loggedBody;
+  return {parsed, reviewed, reports, failures, messages, durableBody, requests, aborted,
+    createAttempts, summaryBodies, verifierTimeouts, elapsedMs: Date.now() - wallStart};
+}
+
+async function legacyCases() {
+  const mixed = await audit([
+    pr(1, 'nathanjohnpayne', 'timeout-author'),
+    pr(2, 'dependabot[bot]', 'timeout-dependabot'), pr(3),
+  ]);
+  assert.equal(mixed.parsed.length, 3, 'later PR body must be parsed');
+  assert.deepEqual(mixed.reviewed, [3], 'later PR must reach policy checks');
+  assert.equal(mixed.reports.length, 1, 'infrastructure failures need a durable report');
+  const body = mixed.reports[0].body;
+  assert.match(body, /Audit coverage:\*\* incomplete/);
+  assert.match(body, /Parser infrastructure errors:\*\* 2/);
+  for (const number of [1, 2]) assert.match(body, new RegExp(`\\*\\*#${number}\\*\\*`));
+  assert.equal((body.match(/ETIMEDOUT/g) || []).length, 2);
+  assert.doesNotMatch(body, /Missing.*Self-Review|Missing, ambiguous|Could not parse PR body contract/);
+  assert.equal(mixed.failures.length, 1, 'timeouts must fail the final audit');
+  assert.ok(!mixed.messages.some(message => message.startsWith('No policy violations')));
+
+  const budget = await audit([pr(4), pr(5), pr(6, 'dependabot[bot]')], { expireAfterFirst: true });
+  assert.equal(budget.parsed.length, 1, 'spent budget must stop starting PR audits');
+  assert.equal(budget.reports.length, 0, 'an expired report allowance must not start an issue write');
+  assert.match(budget.durableBody, /Audit coverage:\*\* incomplete/);
+  assert.match(budget.durableBody, /Unaudited PRs/);
+  for (const number of [5, 6]) assert.match(budget.durableBody, new RegExp(`\\*\\*#${number}\\*\\*`));
+  assert.equal(budget.failures.length, 1);
+
+  const ordinary = await audit([pr(7, 'nathanjohnpayne', 'ordinary')]);
+  assert.match(ordinary.reports[0].body, /Could not parse PR body contract/);
+  assert.equal(ordinary.failures.length, 0, 'ordinary parser-error disposition must remain unchanged');
+  const ordinaryBot = await audit([pr(8, 'dependabot[bot]', 'ordinary')]);
+  assert.doesNotMatch(ordinaryBot.reports[0].body, /Could not parse PR body contract|ETIMEDOUT/);
+  const valid = await audit([pr(9)]);
+  assert.equal(valid.reports.length, 0);
+  assert.equal(valid.failures.length, 0);
+  assert.ok(valid.messages.includes('No policy violations found for the past 7 days.'));
+}
+
+async function deadlineCases(only = '') {
+  if (!only || only === 'zero') {
+    const zero = await audit([pr(10)], {budgetMs: 0, reserveMs: 0});
+    assert.equal(zero.parsed.length, 0);
+    assert.equal(zero.requests.length, 0, 'zero budget cannot start a read');
+    assert.match(zero.durableBody, /incomplete.*0\/unknown total/);
+    assert.equal(zero.failures.length, 1);
+  }
+  if (!only || only === 'short') {
+    const fast = await audit([pr(11)], {budgetMs: 120000});
+    assert.equal(fast.parsed.length, 1, 'a fast PR need not reserve the full parser maximum');
+    assert.equal(fast.failures.length, 0);
+    assert.ok(fast.requests.every(r => r.args.request?.signal), 'every paginated read carries cancellation');
+  }
+  if (!only || only === 'stalled') {
+    const stalled = await audit([pr(12), pr(13)], {budgetMs: 150, reserveMs: 50,
+      elapsedClock: true, stalledEndpoint: 'reviews'});
+    assert.ok(stalled.aborted, 'the in-flight API signal must be aborted');
+    assert.match(stalled.durableBody, /Audit infrastructure errors/);
+    assert.match(stalled.durableBody, /\*\*#12\*\*/);
+    assert.match(stalled.durableBody, /\*\*#13\*\*/);
+    assert.equal(stalled.failures.length, 1);
+    assert.ok(stalled.elapsedMs < 1500, 'a stalled paginated read stays bounded');
+  }
+  for (const kind of ['anchor', 'owner']) {
+    if (only && only !== kind) continue;
+    const slow = await audit([pr(14, 'nathanjohnpayne', kind === 'owner' ? 'ordinary' : 'valid')],
+      {verifier: kind, elapsedClock: true});
+    assert.equal(slow.verifierTimeouts.length, 1, `${kind} real verifier path must execute`);
+    assert.ok(slow.verifierTimeouts[0].timeout > 0 && slow.verifierTimeouts[0].timeout <= 70);
+    assert.equal(slow.verifierTimeouts[0].killSignal, 'SIGKILL');
+    assert.match(slow.durableBody, /Audit infrastructure errors/);
+    assert.equal(slow.failures.length, 1);
+  }
+  if (!only || only === 'publication') {
+    const item = {...pr(15, 'nathanjohnpayne', 'ordinary'), title: 'Ω report\n::error::DO_NOT_EMIT_RAW'};
+    assert.ok(item.title.includes(String.fromCharCode(10)), 'fixture must contain an actual newline');
+    const failed = await audit([item], {failCreate: true, failSummary: true});
+    assert.equal(failed.createAttempts.length, 1, 'an uncertain report write is not retried');
+    assert.equal(failed.failures.length, 1);
+    assert.match(failed.durableBody, /Ω report\n::error::DO_NOT_EMIT_RAW/);
+    assert.ok(!failed.messages.some(message => message.includes('::error::DO_NOT_EMIT_RAW')));
   }
 }
-const ordinary = caller({ body: 'invalid body' }, false,
-  () => { throw new Error('ordinary parser failure'); }, []);
-if (ordinary.prViolations[0] !== 'Could not parse PR body contract') {
-  throw new Error('ordinary parser-error fallback changed');
-}
-const validContract = { author: 'codex', authorCount: 1, hasSelfReview: true };
-const valid = caller({ body: 'valid body' }, false, () => validContract, []);
-if (valid.bodyContract !== validContract || valid.prViolations.length !== 0) {
-  throw new Error('successful parser result changed');
-}
+const watchdog = setTimeout(() => {console.error('actual audit exceeded the native test watchdog'); process.exit(1);}, 10000);
+(async () => {
+  const only = process.argv[3] || '';
+  if (!only) await legacyCases();
+  await deadlineCases(only);
+})().then(() => clearTimeout(watchdog)).catch(error => {
+  clearTimeout(watchdog); console.error(error); process.exitCode = 1;
+});
 NODE
 then
-  ok "#1281: pr-audit.yml propagates parser timeouts through the actual caller while retaining ordinary fallback"
+  ok "#1613: weekly audit records each timeout, audits later PRs, reports budget gaps and fails incomplete runs"
 else
-  bad "#1281: pr-audit.yml swallowed a timeout or changed the ordinary parser result"
+  bad "#1613: weekly audit lost per-PR timeout accounting or incomplete coverage"
 fi
 
 if sed -n '/const runParser/,/^            };/p' "$ROOT/.github/workflows/agent-review.yml" | grep -q "return '';"; then
   ok "#1281: agent-review.yml yields an empty agent on timeout, so assignment falls through to the default"
 else
   bad "#1281: agent-review.yml no longer degrades to the default reviewer on parser failure"
+fi
+
+# --- #1612 private comment-stripping consistency ---------------------------
+# CLI membership already excludes these hidden lines, so CLI parity alone
+# cannot prove stripping. Exercise the actual private helper without adding
+# an export or running the module's stdin-reading CLI initialization.
+if node --input-type=module - "$ROOT" <<'JS'
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import vm from 'node:vm';
+const root = process.argv[2];
+// Positions/value shapes were characterized with the pinned mdast parser:
+// 0..3 spaces remain in the HTML value/span; four spaces are a code node.
+const fixtures = Array.from({ length: 5 }, (_, indent) => {
+  const first = `${' '.repeat(indent)}<!-- hidden -->`;
+  return {
+    name: `indent${indent}`, body: `${first}\nafter\n`,
+    node: { type: indent < 4 ? 'html' : 'code',
+      value: indent < 4 ? first : '<!-- hidden -->',
+      position: { start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: first.length + 1, offset: first.length } } },
+    expected: [indent < 4 ? null : first, 'after', ''],
+  };
+});
+fixtures.push(
+  { name: 'inline-code', body: '`<!-- hidden -->`\nafter\n',
+    node: { type: 'inlineCode', value: '<!-- hidden -->',
+      position: { start: { line: 1, column: 1, offset: 0 },
+        end: { line: 1, column: 18, offset: 17 } } },
+    expected: ['`<!-- hidden -->`', 'after', ''] },
+  { name: 'fenced-code', body: '```\n<!-- hidden -->\n```\nafter\n',
+    node: { type: 'code', value: '<!-- hidden -->',
+      position: { start: { line: 1, column: 1, offset: 0 },
+        end: { line: 3, column: 4, offset: 23 } } },
+    expected: ['```', '<!-- hidden -->', '```', 'after', ''] },
+);
+const targets = ['scripts/lib/pr-body-contract.mjs'];
+const source = 'scripts/lib/pr-body-contract.source.mjs';
+if (existsSync(join(root, source))) targets.push(source);
+else assert.equal(existsSync(join(root, 'scripts/sync-to-downstream.sh')), false,
+  'hub readable parser source must exist');
+for (const target of targets) {
+  const text = readFileSync(join(root, target), 'utf8');
+  const start = text.indexOf('function visibleLinesAfterComments(');
+  const next = target === source ? '\nexport function parsePrBodyContract(' : '\nfunction parsePrBodyContract(';
+  const end = text.indexOf(next, start);
+  assert.ok(start >= 0 && end > start, `${target}: private helper boundary missing`);
+  const strip = vm.runInNewContext(text.slice(start, end) + '\nvisibleLinesAfterComments', {}, { timeout: 2000 });
+  for (const fixture of fixtures) {
+    const lines = fixture.body.split(/\r\n|\r|\n/);
+    const actual = strip(fixture.body, lines, [{ node: fixture.node }]);
+    assert.equal(JSON.stringify(actual), JSON.stringify(fixture.expected), `${target}: ${fixture.name}`);
+  }
+}
+JS
+then
+  ok "#1612: real indented flow comments are stripped; code-looking comments remain literal"
+else
+  bad "#1612: private comment stripping or literal-code preservation changed"
 fi
 
 # --- 19. generated-runtime lint regression is hub-only (#1307) --------------

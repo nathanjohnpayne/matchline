@@ -22,18 +22,26 @@ import { randomUUID } from "node:crypto";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
-import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import { effortFor, modelFor } from "../llm/config.js";
+import { toolCallRequest } from "../llm/modelProfile.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
+import { logger } from "firebase-functions";
 import { safeProgress, type ProgressReporter } from "../llm/progress.js";
-import {
-  JdParsingResponseV1Schema,
-  type JdParsingResponseV1,
-  type ParsedRequirementV1,
+import type {
+  JdParsingResponseV1,
+  ParsedRequirementV1,
 } from "../prompts/parsing/jd.v1.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import type { JobRequirementUnit } from "../types/capability.js";
+
+import { jdParsingResponseSchemaFor } from "./jdResponseSchema.js";
 
 import {
   JdParsingError,
@@ -57,6 +65,57 @@ export interface JdParsingDeps {
    * done. See the check in the retry loop for why (#436).
    */
   readonly signal?: AbortSignal;
+  /**
+   * Optional per-attempt failure sink (#656). Called once for every
+   * failed attempt, including attempts a later retry recovers from,
+   * with the attempt number, the failure kind and, for a schema error,
+   * each Zod issue's code and path. Never a message, the model's answer
+   * or the JD text. The eval harness passes it so a recovered call's
+   * schema failure is recorded; production passes none, and the request,
+   * retries and result are the same with or without it.
+   */
+  readonly onAttemptFailure?: (failure: JdAttemptFailureNotice) => void;
+}
+
+/** One Zod issue reduced to what classifies it: its code and path. */
+export interface JdAttemptIssue {
+  readonly code: string;
+  readonly path: readonly (string | number)[];
+}
+
+/** What `JdParsingDeps.onAttemptFailure` receives for one failed attempt. */
+export interface JdAttemptFailureNotice {
+  readonly attempt: number;
+  readonly kind: JdParsingAttemptFailure["kind"];
+  /** Present only for a schema error that carried Zod issues. */
+  readonly issues?: readonly JdAttemptIssue[];
+}
+
+/**
+ * Reduce an attempt failure to its notice: attempt, kind and each Zod
+ * issue's `code` and `path`. Messages, `expected`/`received` values and
+ * anything else on an issue are dropped, so the notice never carries
+ * model output. A symbol path segment becomes its string form so the
+ * notice serializes; an issue without a string `code` is skipped. Pure.
+ */
+export function attemptFailureNotice(failure: JdParsingAttemptFailure): JdAttemptFailureNotice {
+  const issues: JdAttemptIssue[] = [];
+  for (const raw of failure.zodIssues ?? []) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const { code, path } = raw as { code?: unknown; path?: unknown };
+    if (typeof code !== "string") continue;
+    const segments = Array.isArray(path)
+      ? path.map((seg: unknown) =>
+          typeof seg === "string" || typeof seg === "number" ? seg : String(seg),
+        )
+      : [];
+    issues.push({ code, path: segments });
+  }
+  return {
+    attempt: failure.attempt,
+    kind: failure.kind,
+    ...(issues.length > 0 && { issues }),
+  };
 }
 
 const MAX_ATTEMPTS = 3;
@@ -99,8 +158,11 @@ function retryReminderFor(
       return attempt >= 2 ? REPEATED_SCHEMA_ERROR_REMINDER : SCHEMA_ERROR_REMINDER;
     case "no_tool_use":
       return NO_TOOL_USE_REMINDER;
+    // A refusal ends the loop, so no attempt follows it; it is listed
+    // here only to keep the switch exhaustive.
     case "transport_error":
     case "max_tokens_exceeded":
+    case "refusal":
       return "";
   }
 }
@@ -125,9 +187,33 @@ export async function parseJobRequirements(
     );
   }
 
-  const toolSchema = zodToToolSchema(JdParsingResponseV1Schema);
+  // The schema of the prompt version actually loaded, so an eval override
+  // (`parsing/jd=v2`, #656) is constrained and validated by its own
+  // contract. Throws before any request for a version with no schema.
+  const responseSchema = jdParsingResponseSchemaFor(prompt.version);
+  const toolSchema = zodToToolSchema(responseSchema);
+  // Model-specific request shape: tool choice, output budget, effort and
+  // timeout (#495). Unchanged for the current pins; see llm/modelProfile.ts.
+  const request = toolCallRequest({
+    model,
+    toolName: TOOL_NAME,
+    baseMaxTokens: MAX_OUTPUT_TOKENS,
+    effort: effortFor("requirement_parsing"),
+  });
 
   const failures: JdParsingAttemptFailure[] = [];
+  // Every failed attempt goes through here, so the optional sink sees
+  // exactly what `failures` holds. A throwing sink is ignored: an eval
+  // hook must never change the parse outcome.
+  const noteFailure = (failure: JdParsingAttemptFailure): void => {
+    failures.push(failure);
+    if (deps.onAttemptFailure === undefined) return;
+    try {
+      deps.onAttemptFailure(attemptFailureNotice(failure));
+    } catch {
+      // Ignored by design; see above.
+    }
+  };
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // Checked before EVERY attempt, including the first: the
@@ -144,14 +230,14 @@ export async function parseJobRequirements(
     report({ stage: "analyzing", attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS });
     const start = Date.now();
     const systemWithReminder =
-      prompt.system + retryReminderFor(failures.at(-1), attempt);
+      prompt.system + request.systemSuffix + retryReminderFor(failures.at(-1), attempt);
     const userContent = `${prompt.userFewShot}\n\nJob description to parse:\n\n${text}`;
 
     let response: Anthropic.Messages.Message;
     try {
       response = await client.messages.create({
         model,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: request.max_tokens,
         system: systemWithReminder,
         tools: [
           {
@@ -160,12 +246,13 @@ export async function parseJobRequirements(
             input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
           },
         ],
-        tool_choice: { type: "tool", name: TOOL_NAME },
+        tool_choice: request.tool_choice,
+        ...(request.output_config !== undefined && { output_config: request.output_config }),
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, request.requestOptions);
     } catch (err) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "transport_error",
         message: err instanceof Error ? err.message : String(err),
@@ -199,8 +286,11 @@ export async function parseJobRequirements(
         stage: "requirement_parsing",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: request.max_tokens,
+        ...(request.effort !== undefined && { effort: request.effort }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
       }),
@@ -213,13 +303,27 @@ export async function parseJobRequirements(
     // misleading "requirements required" schema error. Retries
     // can't fix the truncation. See extraction/resume.ts for the
     // full rationale.
+    // A safety classifier declined the request (5.5 models report
+    // `stop_reason: "refusal"`). Resending the same input declines the
+    // same way, so stop here instead of spending the retry budget.
+    if (response.stop_reason === "refusal") {
+      noteFailure({
+        attempt,
+        kind: "refusal",
+        message:
+          `Anthropic declined the request (stop_reason: "refusal"` +
+          `${response.stop_details?.category ? `, category: ${response.stop_details.category}` : ""}).`,
+      });
+      break;
+    }
+
     if (response.stop_reason === "max_tokens") {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "max_tokens_exceeded",
         message:
           `Anthropic returned stop_reason: "max_tokens" — the model hit the ` +
-          `${MAX_OUTPUT_TOKENS}-token output budget mid-tool-call and the ` +
+          `${request.max_tokens}-token output budget mid-tool-call and the ` +
           `tool_use.input was truncated. Retries cannot recover; raise ` +
           `MAX_OUTPUT_TOKENS in parsing/jd.ts.`,
       });
@@ -230,7 +334,7 @@ export async function parseJobRequirements(
       (b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use",
     );
     if (!toolUse) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "no_tool_use",
         message:
@@ -239,9 +343,9 @@ export async function parseJobRequirements(
       continue;
     }
 
-    const parsed = JdParsingResponseV1Schema.safeParse(toolUse.input);
+    const parsed = responseSchema.safeParse(toolUse.input);
     if (!parsed.success) {
-      failures.push({
+      noteFailure({
         attempt,
         kind: "schema_error",
         message: parsed.error.message,
@@ -257,9 +361,19 @@ export async function parseJobRequirements(
   // Not a retry-budget exhaustion when we stopped because the
   // caller disconnected — logging it as one would misattribute
   // a deliberate stop as a failure (#436).
-  if (!abortedBeforeAttempt) logRetryExhaustion("parsing.jd", model, failures);
+  // A refusal stops after one attempt, so it is neither a retry-budget
+  // exhaustion nor "JD parsing failed after 3 attempts" (CodeRabbit on #579). Log it
+  // as what it is, without request content, and say so to the caller.
+  const refusal = failures.at(-1)?.kind === "refusal" ? failures.at(-1) : undefined;
+  if (refusal) {
+    logger.warn("parsing.jd: model declined the request", { model, detail: refusal.message });
+  } else if (!abortedBeforeAttempt) {
+    logRetryExhaustion("parsing.jd", model, failures);
+  }
   throw new JdParsingError(
-    `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
+    refusal
+      ? `JD parsing was declined by the model (stop_reason: "refusal"). See .failures for detail.`
+      : `JD parsing failed after ${MAX_ATTEMPTS} attempts. See .failures for per-attempt detail.`,
     failures,
   );
 }

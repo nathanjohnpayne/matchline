@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearEffortOverrides,
   clearModelOverrides,
   getModelOverrides,
   modelFor,
@@ -28,9 +29,11 @@ import {
 } from "../../functions/src/prompts/loader.ts";
 
 import type { RunForFixtureResult } from "./runForFixture.ts";
+import { defaultPromptVersion, SWEEP_SCOPES } from "./sweepScope.ts";
 import {
   assertModelsPriced,
   assertPromptSchemasCompatible,
+  assertVariantsCallable,
   assertPromptsExist,
   formatSweepReport,
   paretoFrontier,
@@ -46,6 +49,7 @@ import {
 
 afterEach(() => {
   clearModelOverrides();
+  clearEffortOverrides();
   clearPromptVersionOverrides();
   vi.restoreAllMocks();
 });
@@ -78,6 +82,7 @@ function variantResult(overrides: Partial<VariantResult> = {}): VariantResult {
     tokenSource: "api",
     models: {},
     promptVersions: {},
+    efforts: {},
     extractionAccuracy: 0.5,
     matchAccuracy: 0.5,
     modeledCostUsd: 1,
@@ -209,6 +214,51 @@ describe("assertPromptSchemasCompatible", () => {
     expect(() =>
       assertPromptSchemasCompatible([], { "extraction/resume": "v2" }, root),
     ).toThrow(/schema the pipeline does not enforce/);
+  });
+
+  describe("parsing/jd, whose stage picks the schema by version (#656)", () => {
+    const jdV2 = [{ label: "jd-v2", promptVersions: { "parsing/jd": "v2" } }];
+
+    it("allows v2 against the real prompts, though its schema file differs from v1's", () => {
+      expect(() => assertPromptSchemasCompatible(jdV2)).not.toThrow();
+      expect(() => assertPromptSchemasCompatible([], { "parsing/jd": "v2" })).not.toThrow();
+      expect(() => assertPromptsExist(jdV2)).not.toThrow();
+    });
+
+    it("still refuses a differing schema for a version the stage does not dispatch", () => {
+      mkdirSync(join(root, "parsing"), { recursive: true });
+      writeFileSync(join(root, "parsing", "jd.v1.schema.ts"), "export const A = 1;\n");
+      writeFileSync(join(root, "parsing", "jd.v2.schema.ts"), "export const A = 2;\n");
+      writeFileSync(join(root, "parsing", "jd.v3.schema.ts"), "export const A = 3;\n");
+      expect(() => assertPromptSchemasCompatible(jdV2, {}, root)).not.toThrow();
+      expect(() =>
+        assertPromptSchemasCompatible([{ label: "jd-v3", promptVersions: { "parsing/jd": "v3" } }], {}, root),
+      ).toThrow(/parsing\/jd=v3 has no schema registered with its stage/);
+    });
+
+    it("refuses an unregistered version whose schema is byte-identical to v1's, or absent", () => {
+      // The stage throws for any version jdResponseSchemaFor does not know,
+      // so neither the file comparison's "identical" nor its "absent" pass
+      // may let the version through.
+      mkdirSync(join(root, "parsing"), { recursive: true });
+      writeFileSync(join(root, "parsing", "jd.v1.schema.ts"), "export const A = 1;\n");
+      writeFileSync(join(root, "parsing", "jd.v3.schema.ts"), "export const A = 1;\n");
+      const v3 = [{ label: "jd-v3", promptVersions: { "parsing/jd": "v3" } }];
+      expect(() => assertPromptSchemasCompatible(v3, {}, root)).toThrow(
+        /parsing\/jd=v3 has no schema registered with its stage \(registered: v1, v2/,
+      );
+      expect(() => assertPromptSchemasCompatible([], { "parsing/jd": "v4" }, root)).toThrow(
+        /parsing\/jd=v4 has no schema registered/,
+      );
+    });
+
+    it("does not extend the exemption to extraction/resume", () => {
+      wired();
+      writeFileSync(join(root, "extraction", "resume.v2.schema.ts"), "export const A = 2;\n");
+      expect(() =>
+        assertPromptSchemasCompatible([{ label: "a", promptVersions: { "extraction/resume": "v2", "parsing/jd": "v2" } }], {}, root),
+      ).toThrow(/extraction\/resume=v2/);
+    });
   });
 });
 
@@ -606,6 +656,18 @@ describe("parseVariantFlag", () => {
     expect(v.promptVersions).toEqual({ "extraction/resume": "v1" });
   });
 
+  it("parses the #656 re-run arm: Haiku 5.5 at medium effort on the v2 JD prompt", () => {
+    const v = parseVariantFlag(
+      "jd-haiku55-med-v2:model.requirement_parsing=claude-haiku-5-5,effort.requirement_parsing=medium,prompt.parsing/jd=v2",
+      "api",
+    );
+    expect(v.label).toBe("jd-haiku55-med-v2");
+    expect(v.models?.requirement_parsing).toEqual({ provider: "anthropic", model: "claude-haiku-5-5" });
+    expect(v.efforts).toEqual({ requirement_parsing: "medium" });
+    expect(v.promptVersions).toEqual({ "parsing/jd": "v2" });
+    expect(() => assertVariantsCallable([v])).not.toThrow();
+  });
+
   it("parses several clauses in one variant", () => {
     const v = parseVariantFlag(
       "both:model.extraction=claude-haiku-4-5-20251001,prompt.extraction/resume=v1",
@@ -650,15 +712,36 @@ describe("parseVariantFlag", () => {
   });
 
   it("rejects a stage the eval corpus never exercises", () => {
-    // Codex P2: `generation` / `validation` aren't wired into
-    // runForFixture, so overriding them changes nothing while still
-    // showing up in the table.
+    // Codex P2: `generation` and the validation subtasks aren't wired
+    // into runForFixture, so overriding them changes nothing while
+    // still showing up in the table.
     expect(() => parseVariantFlag("v:model.generation=claude-sonnet-4-6", "api")).toThrow(
       /not exercised by the eval corpus/,
     );
+    // #489: the single `validation` stage was split into three, so the
+    // old key is now an unknown stage rather than a silent no-op.
     expect(() => parseVariantFlag("v:model.validation=claude-sonnet-4-6", "api")).toThrow(
+      /unknown stage "validation"/,
+    );
+    expect(() => parseVariantFlag("v:effort.validation=low", "api")).toThrow(
+      /unknown stage "validation"/,
+    );
+  });
+
+  it("rejects the separately configured validation subtasks in the corpus sweep (#489)", () => {
+    expect(() =>
+      parseVariantFlag("v:model.traceability=claude-haiku-4-5-20251001", "api"),
+    ).toThrow(/not exercised by the eval corpus/);
+    expect(() => parseVariantFlag("v:effort.specificity=low", "api")).toThrow(
       /not exercised by the eval corpus/,
     );
+  });
+
+  it("rejects the reserved rationale stage as not exercised (#489)", () => {
+    expect(() => parseVariantFlag("v:model.rationale=claude-sonnet-4-6", "api")).toThrow(
+      /not exercised/,
+    );
+    expect(() => parseVariantFlag("v:effort.rationale=low", "api")).toThrow(/not exercised/);
   });
 
   it("accepts the two stages the corpus does exercise", () => {
@@ -925,5 +1008,175 @@ describe("formatSweepReport", () => {
     expect(row(full, "full")).toContain("| 100 |");
     // The whole point: the two rows must be distinguishable.
     expect(row(smoke, "smoke")).not.toBe(row(full, "full"));
+  });
+});
+
+describe("effort variants (#495)", () => {
+  it("parses effort.<stage>=<level> alongside a model", () => {
+    const v = parseVariantFlag(
+      "s55-low:model.extraction=claude-sonnet-5-5,effort.extraction=low",
+      "api",
+    );
+    expect(v.efforts).toEqual({ extraction: "low" });
+    expect(v.models?.extraction?.model).toBe("claude-sonnet-5-5");
+  });
+
+  it("omits efforts when the variant names none", () => {
+    expect(parseVariantFlag("plain:model.extraction=claude-haiku-5-5", "api").efforts).toBeUndefined();
+  });
+
+  it("rejects an unknown level, a typo'd stage and an unexercised stage", () => {
+    expect(() => parseVariantFlag("x:effort.extraction=extreme", "api")).toThrow(/effort must be one of/);
+    expect(() => parseVariantFlag("x:effort.extracton=low", "api")).toThrow(/unknown stage/);
+    expect(() => parseVariantFlag("x:effort.generation=low", "api")).toThrow(/not exercised/);
+  });
+
+  it("refuses, before any spend, an effort the stage's model does not accept", () => {
+    // Extraction defaults to Sonnet 4.6, which takes no effort setting.
+    const v = parseVariantFlag("x:effort.extraction=low", "api");
+    expect(() => assertVariantsCallable([v])).toThrow(/does not accept effort low \(extraction\)/);
+  });
+
+  it("refuses a model with no request profile", () => {
+    const v: SweepVariant = {
+      label: "x",
+      models: { extraction: { provider: "anthropic", model: "claude-unprofiled" } },
+    };
+    expect(() => assertVariantsCallable([v])).toThrow(/no request profile for claude-unprofiled/);
+  });
+
+  it("refuses an effort clause on a subscription-CLI token source (Codex P1, #579)", () => {
+    const v = parseVariantFlag(
+      "cli-low:model.extraction=claude-sonnet-5-5,effort.extraction=low",
+      "claude-cli",
+    );
+    expect(() => assertVariantsCallable([v])).toThrow(/effort clauses need --token-source api/);
+  });
+
+  it("records no effort for a CLI row, since the CLI never sends one", async () => {
+    const result = await runVariant(
+      parseVariantFlag("cli:model.extraction=claude-sonnet-5-5", "claude-cli"),
+      { runCorpus: async () => [fixtureResult()] },
+    );
+    expect(result.efforts).toEqual({});
+  });
+
+  it("accepts a 5.5 model with an effort", () => {
+    const v = parseVariantFlag("ok:model.extraction=claude-opus-5-5,effort.extraction=high", "api");
+    expect(() => assertVariantsCallable([v])).not.toThrow();
+  });
+
+  it("records the effort a variant sent and shows it in the report", () => {
+    const rolled = rollUpVariant(
+      { label: "v", efforts: { extraction: "low" } },
+      [fixtureResult()],
+    );
+    expect(rolled.efforts).toEqual({ extraction: "low" });
+    const out = formatSweepReport([
+      variantResult({
+        label: "v",
+        models: { extraction: { provider: "anthropic", model: "claude-sonnet-5-5" } },
+        efforts: { extraction: "low" },
+      }),
+    ]);
+    expect(out).toContain("extraction=claude-sonnet-5-5 (effort low)");
+  });
+
+  it("runVariant installs the effort for the run and clears it afterwards", async () => {
+    const { effortFor } = await import("../../functions/src/llm/config.ts");
+    let seen: string | undefined;
+    const result = await runVariant(
+      parseVariantFlag("v:model.extraction=claude-sonnet-5-5,effort.extraction=low", "api"),
+      {
+        runCorpus: async () => {
+          seen = effortFor("extraction");
+          return [fixtureResult()];
+        },
+      },
+    );
+    expect(seen).toBe("low");
+    expect(effortFor("extraction")).toBeUndefined();
+    // The report records what was sent, defaults included.
+    expect(result.efforts.extraction).toBe("low");
+  });
+});
+
+// -- Suite scopes (#488) ----------------------------------------------------------
+
+describe("suite scopes for the subtask suites (#488)", () => {
+  const V = SWEEP_SCOPES.validation;
+  const G = SWEEP_SCOPES.generation;
+
+  it("parses the validation subtasks in the validation scope", () => {
+    expect(parseVariantFlag("a:model.claim_extraction=claude-haiku-4-5-20251001", "api", V).models).toEqual({
+      claim_extraction: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
+    });
+    expect(() => parseVariantFlag("b:model.traceability=claude-haiku-4-5-20251001", "api", V)).not.toThrow();
+    expect(() => parseVariantFlag("c:model.specificity=claude-haiku-4-5-20251001", "api", V)).not.toThrow();
+    expect(parseVariantFlag("d:model.traceability=claude-sonnet-5-5,effort.traceability=medium", "api", V).efforts).toEqual({
+      traceability: "medium",
+    });
+  });
+
+  it("refuses corpus stages and prompt keys in the validation scope", () => {
+    expect(() => parseVariantFlag("a:model.extraction=claude-haiku-4-5-20251001", "api", V)).toThrow(
+      /not exercised by suite validation/,
+    );
+    expect(() => parseVariantFlag("a:prompt.validation/specificity=v1", "api", V)).not.toThrow();
+    expect(() => parseVariantFlag("a:prompt.extraction/resume=v1", "api", V)).toThrow(/not exercised by suite validation/);
+  });
+
+  it("still refuses a validation subtask in the corpus scope", () => {
+    expect(() => parseVariantFlag("a:model.specificity=claude-haiku-4-5-20251001", "api")).toThrow(/not exercised/);
+  });
+
+  it("refuses an effort on generation in the generation scope", () => {
+    expect(() => parseVariantFlag("a:effort.generation=low", "api", G)).toThrow(/does not apply model profiles/);
+    expect(() => parseVariantFlag("a:model.generation=claude-sonnet-4-6", "api", G)).not.toThrow();
+  });
+
+  it("refuses the reserved rationale stage in every scope", () => {
+    for (const scope of [SWEEP_SCOPES.corpus, V, G]) {
+      expect(() => parseVariantFlag("a:model.rationale=claude-sonnet-4-6", "api", scope)).toThrow(/not exercised/);
+      expect(() => parseVariantFlag("a:effort.rationale=low", "api", scope)).toThrow(/not exercised/);
+    }
+  });
+
+  it("threads the scope through parseVariants", () => {
+    expect(parseVariants(["--variant", "a:model.specificity=claude-haiku-4-5-20251001"], "api", V)).toHaveLength(1);
+    expect(() => parseVariants(["--variant", "a:model.specificity=claude-haiku-4-5-20251001"], "api")).toThrow(/not exercised/);
+  });
+
+  it("checks effort support on the scope's stages", () => {
+    const variant = (efforts: Record<string, string>, models: Record<string, string> = {}) => ({
+      label: "v",
+      efforts: efforts as never,
+      models: Object.fromEntries(Object.entries(models).map(([s, m]) => [s, { provider: "anthropic" as const, model: m }])),
+    });
+    expect(() => assertVariantsCallable([variant({ specificity: "low" })], V)).toThrow(/does not accept effort low/);
+    expect(() =>
+      assertVariantsCallable([variant({ specificity: "low" }, { specificity: "claude-haiku-4-5-20251001" })], V),
+    ).toThrow(/does not accept effort low/);
+    expect(() =>
+      assertVariantsCallable([variant({ specificity: "low" }, { specificity: "claude-sonnet-5-5" })], V),
+    ).not.toThrow();
+  });
+
+  it("checks prompt schemas against the scope's wired versions", () => {
+    const root = mkdtempSync(join(tmpdir(), "sweep-scope-schemas-"));
+    try {
+      // Derived from the wired default, so the test still bites after the default moves.
+      const wired = defaultPromptVersion("validation/traceability");
+      const other = `v${Number(wired.slice(1)) + 1}`;
+      mkdirSync(join(root, "validation"), { recursive: true });
+      writeFileSync(join(root, "validation", `traceability.${wired}.schema.ts`), "export const A = 1;\n");
+      writeFileSync(join(root, "validation", `traceability.${other}.schema.ts`), "export const A = 2;\n");
+      const variants = [{ label: "a", promptVersions: { "validation/traceability": other } }];
+      expect(() => assertPromptSchemasCompatible(variants, {}, root, V)).toThrow(/schema the pipeline does not enforce/);
+      // The corpus scope does not wire this key, so it has nothing to compare.
+      expect(() => assertPromptSchemasCompatible(variants, {}, root)).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

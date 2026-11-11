@@ -2,7 +2,17 @@ import { logger } from "firebase-functions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getAdminDb } from "../firestore/admin.js";
-import { priceFor, recordUsage, safeRecordUsage, type UsageRecord } from "./cost.js";
+import {
+  anthropicUsageFields,
+  priceFor,
+  priceUsage,
+  pricedModelFor,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+  USAGE_SCHEMA_VERSION,
+  type UsageRecord,
+} from "./cost.js";
 
 // `recordUsage` writes to Firestore fire-and-forget through the
 // `getAdminDb()` choke point (firestore/admin.ts). Mock that module so
@@ -208,5 +218,225 @@ describe("recordUsage persistence", () => {
     await expect(
       recordUsage({ ...SAMPLE_USAGE, inputTokens: 1000, outputTokens: 1000 }),
     ).resolves.toBeGreaterThan(0);
+  });
+});
+
+// #483: cache-token categories, long-prompt rate cards, and
+// requested-versus-served model attribution.
+describe("priceFor — cache and long-prompt pricing (#483)", () => {
+  it("prices cache writes and reads on their own rates", () => {
+    // Sonnet 4.6: 1000 in @ $3 + 1000 out @ $15 + 1000 write @ $3.75
+    // + 1000 read @ $0.30, all per MTok.
+    const cost = priceFor("claude-sonnet-4-6", {
+      inputTokens: 1000,
+      outputTokens: 1000,
+      cacheCreationInputTokens: 1000,
+      cacheReadInputTokens: 1000,
+    });
+    expect(cost).toBeCloseTo((3 + 15 + 3.75 + 0.3) / 1000, 9);
+  });
+
+  it("treats unreported cache fields as no cache traffic", () => {
+    expect(priceFor("claude-sonnet-4-6", { inputTokens: 1000, outputTokens: 0 })).toBeCloseTo(
+      0.003,
+      9,
+    );
+  });
+
+  it("throws on cache tokens for a model with no cache rate", () => {
+    expect(() =>
+      priceFor("text-embedding-3-small", {
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadInputTokens: 5,
+      }),
+    ).toThrow(/No cache-read rate registered/);
+  });
+
+  it("rejects negative or non-finite cache token counts", () => {
+    expect(() =>
+      priceFor("claude-sonnet-4-6", {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheCreationInputTokens: -1,
+      }),
+    ).toThrow(/finite, non-negative/);
+    expect(() =>
+      priceFor("claude-sonnet-4-6", {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadInputTokens: Number.NaN,
+      }),
+    ).toThrow(/finite, non-negative/);
+  });
+
+  it("prices a Haiku 5.5 prompt of exactly 100,000 tokens on the short card", () => {
+    const cost = priceFor("claude-haiku-5-5", { inputTokens: 100_000, outputTokens: 1000 });
+    // 100K in @ $0.10 + 1K out @ $0.50 per MTok.
+    expect(cost).toBeCloseTo(0.01 + 0.0005, 9);
+  });
+
+  it("prices a Haiku 5.5 prompt over 100,000 tokens — cache reads included — on the long card", () => {
+    const cost = priceFor("claude-haiku-5-5", {
+      inputTokens: 90_000,
+      outputTokens: 1000,
+      cacheReadInputTokens: 10_001,
+    });
+    // 90K in @ $0.50 + 1K out @ $2.50 + 10,001 read @ $0.05 per MTok.
+    expect(cost).toBeCloseTo(0.045 + 0.0025 + 10_001 * 0.05e-6, 9);
+  });
+});
+
+describe("pricedModelFor / priceUsage (#483)", () => {
+  beforeEach(() => {
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
+  });
+
+  it("prices the requested model when no served model is reported", () => {
+    expect(pricedModelFor({ model: "claude-sonnet-4-6" })).toBe("claude-sonnet-4-6");
+  });
+
+  it("prices the served model when it differs and has a rate", () => {
+    const usage: UsageRecord = {
+      ...SAMPLE_USAGE,
+      model: "claude-sonnet-4-6",
+      servedModel: "claude-haiku-4-5-20251001",
+      inputTokens: 1000,
+      outputTokens: 1000,
+    };
+    expect(priceUsage(usage)).toEqual({
+      costUsd: priceFor("claude-haiku-4-5-20251001", usage),
+      pricedModel: "claude-haiku-4-5-20251001",
+    });
+  });
+
+  it("falls back to the requested model, and warns, when the served model has no rate", () => {
+    const warn = vi.mocked(logger.warn);
+    expect(
+      pricedModelFor({ model: "claude-sonnet-4-6", servedModel: "claude-sonnet-4-6-snapshot" }),
+    ).toBe("claude-sonnet-4-6");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("served model has no rate"),
+      expect.objectContaining({ servedModel: "claude-sonnet-4-6-snapshot" }),
+    );
+  });
+
+  it("throws when neither model has a rate", () => {
+    expect(() =>
+      priceUsage({ ...SAMPLE_USAGE, model: "nope", servedModel: "also-nope" }),
+    ).toThrow(/No rate registered for model: nope/);
+  });
+});
+
+describe("anthropicUsageFields (#483)", () => {
+  it("keeps reported cache counts — including a reported 0 — and the served model", () => {
+    expect(
+      anthropicUsageFields({
+        model: "claude-haiku-4-5-20251001",
+        usage: {
+          input_tokens: 10,
+          output_tokens: 20,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 7,
+        } as never,
+      }),
+    ).toEqual({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 7,
+      servedModel: "claude-haiku-4-5-20251001",
+    });
+  });
+
+  it("leaves cache counts the API returned as null unreported, not zero", () => {
+    const fields = anthropicUsageFields({
+      model: "claude-haiku-4-5-20251001",
+      usage: {
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+      } as never,
+    });
+    expect(fields).not.toHaveProperty("cacheCreationInputTokens");
+    expect(fields).not.toHaveProperty("cacheReadInputTokens");
+  });
+});
+
+describe("promptVersionLabel (#483)", () => {
+  it("formats stage/name.version", () => {
+    expect(promptVersionLabel({ stage: "validation", name: "traceability", version: "v1" })).toBe(
+      "validation/traceability.v1",
+    );
+  });
+});
+
+describe("recordUsage — versioned records (#483)", () => {
+  const getAdminDbMock = vi.mocked(getAdminDb);
+
+  beforeEach(() => {
+    getAdminDbMock.mockReset();
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined as never);
+    vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+  });
+
+  it("persists metadata, the schema version, and the priced model", async () => {
+    const { db, add } = mockDb();
+    getAdminDbMock.mockReturnValue(db as never);
+    const cost = await recordUsage({
+      ...SAMPLE_USAGE,
+      stage: "validation",
+      subtask: "traceability",
+      servedModel: "claude-sonnet-4-6",
+      cacheReadInputTokens: 0,
+      promptVersion: "validation/traceability.v1",
+      attempt: 1,
+      maxTokens: 1024,
+      applicationId: "app-1",
+    });
+    await Promise.resolve();
+    expect(cost).toBeGreaterThan(0);
+    const doc = add.mock.calls[0]![0] as Record<string, unknown>;
+    expect(doc).toMatchObject({
+      usageSchemaVersion: USAGE_SCHEMA_VERSION,
+      costStatus: "priced",
+      costUsd: cost,
+      pricedModel: "claude-sonnet-4-6",
+      subtask: "traceability",
+      cacheReadInputTokens: 0,
+      promptVersion: "validation/traceability.v1",
+      attempt: 1,
+      maxTokens: 1024,
+      applicationId: "app-1",
+    });
+    // Firestore rejects undefined values; absent optionals stay absent.
+    expect(Object.values(doc)).not.toContain(undefined);
+    expect(doc).not.toHaveProperty("cacheCreationInputTokens");
+  });
+
+  it("persists an unknown-rate call as unpriced, without a costUsd, and logs an error", async () => {
+    const { db, add } = mockDb();
+    getAdminDbMock.mockReturnValue(db as never);
+    const cost = await recordUsage({ ...SAMPLE_USAGE, model: "claude-unregistered" });
+    await Promise.resolve();
+    expect(cost).toBe(0);
+    expect(add).toHaveBeenCalledTimes(1);
+    const doc = add.mock.calls[0]![0] as Record<string, unknown>;
+    expect(doc).toMatchObject({ costStatus: "unpriced", inputTokens: 100, outputTokens: 200 });
+    expect(doc).not.toHaveProperty("costUsd");
+    expect(doc).not.toHaveProperty("pricedModel");
+    expect(vi.mocked(logger.error)).toHaveBeenCalledWith(
+      expect.stringContaining("pricing failed"),
+      expect.objectContaining({ model: "claude-unregistered" }),
+    );
+  });
+
+  it("drops a call with malformed token counts instead of persisting it", async () => {
+    const { db, add } = mockDb();
+    getAdminDbMock.mockReturnValue(db as never);
+    await expect(recordUsage({ ...SAMPLE_USAGE, outputTokens: -1 })).resolves.toBe(0);
+    await Promise.resolve();
+    expect(add).not.toHaveBeenCalled();
   });
 });

@@ -34,7 +34,7 @@ function mockMessage(
     id: "msg_test",
     type: "message",
     role: "assistant",
-    // Loosely mirrors `modelFor("validation")`. Pin via the
+    // Loosely mirrors `modelFor("claim_extraction")`. Pin via the
     // production-config import would couple unit tests to the
     // config module; instead we keep this string aligned by
     // inspection (CodeRabbit Trivial on PR #110).
@@ -61,7 +61,7 @@ function mockTextOnlyMessage(
     id: "msg_test",
     type: "message",
     role: "assistant",
-    // Loosely mirrors `modelFor("validation")`. Pin via the
+    // Loosely mirrors `modelFor("claim_extraction")`. Pin via the
     // production-config import would couple unit tests to the
     // config module; instead we keep this string aligned by
     // inspection (CodeRabbit Trivial on PR #110).

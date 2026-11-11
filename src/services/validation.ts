@@ -52,6 +52,8 @@ export interface ValidateAssetResponse {
  *     OR if a per-stage retry budget exhausted (claim extraction /
  *     traceability / specificity)
  *   - `aborted` if content changed during validation (TOCTOU)
+ *   - `deadline-exceeded` if the run used up its time budget before
+ *     every claim was checked; nothing is persisted (#619)
  * Client surfaces these via the rejection path; the caller decides
  * whether to log + retry or surface inline.
  */

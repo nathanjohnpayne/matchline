@@ -134,6 +134,7 @@ assert_tag() {
 }
 
 assert_tag '[mergepath-resolve: deferred-to-followup] noted'   "deferred-to-followup" "canonical form"
+assert_tag '[mergepath-resolve: deferred-to-follow-up] noted' "deferred-to-followup" "permanent deferral alias normalizes (#1677)"
 assert_tag '[mergepath-resolve:canonical-coverage] addressed'  "canonical-coverage"   "no space after colon"
 assert_tag '[mergepath-resolve:  addressed-elsewhere ] x'      "addressed-elsewhere"  "extra leading space"
 assert_tag 'no tag here'                                        ""                     "no tag → empty"
@@ -163,6 +164,7 @@ assert_action "templated-render"      "skip"      # #568: routing/skip class
 assert_action "verified-propagation"  "skip"      # #572: byte-verified propagation
 assert_action "nitpick-noted"         "surface"
 assert_action "deferred-to-followup"  "surface"
+assert_action "deferred-to-follow-up" "surface"
 assert_action "future-unknown-class"  "surface"   # spec: err on surface
 assert_action ""                       ""          # caller falls through to heuristics
 
@@ -205,6 +207,35 @@ fi
   else
     fail "is_agent_author: AGENT_AUTHORS override did not apply"
   fi
+)
+
+# ---------------------------------------------------------------------
+# is_tag_author (#2726) — whose [mergepath-resolve:] tag is honored: an
+# agent author's, or the configured CI app's own generated marker, and
+# nothing else the app (or anyone) posts.
+# ---------------------------------------------------------------------
+TAG_MARK='[mergepath-resolve: addressed-elsewhere] Addressed by abc1234.'
+assert_tag_author() {  # <want 0|1> <label> <login> <typename> <body>
+  local got=0
+  is_tag_author "$3" "$4" "$5" || got=1
+  if [ "$got" -eq "$1" ]; then pass "is_tag_author: $2"; else fail "is_tag_author: $2 (got $got, want $1)"; fi
+}
+(
+  ROLLUP_CI_APP_LOGIN=""
+  assert_tag_author 0 "agent author's tag, app unconfigured" nathanpayne-claude User "$TAG_MARK"
+  assert_tag_author 1 "app marker ignored when no app is configured" mergepath-ci Bot "$TAG_MARK"
+  assert_tag_author 1 "app REST login ignored when no app is configured" 'mergepath-ci[bot]' "" "$TAG_MARK"
+  ROLLUP_CI_APP_LOGIN='mergepath-ci[bot]'
+  assert_tag_author 0 "configured app marker, GraphQL bare slug + Bot" mergepath-ci Bot "$TAG_MARK"
+  assert_tag_author 0 "configured app marker, REST login" 'mergepath-ci[bot]' "" "$TAG_MARK"
+  assert_tag_author 0 "configured app marker with leading whitespace" mergepath-ci Bot "
+  $TAG_MARK"
+  assert_tag_author 1 "same-named User is not the app" mergepath-ci User "$TAG_MARK"
+  assert_tag_author 1 "bare slug without a typename is not the app" mergepath-ci "" "$TAG_MARK"
+  assert_tag_author 1 "another app's marker" other-app Bot "$TAG_MARK"
+  assert_tag_author 1 "app reply that only mentions a marker" mergepath-ci Bot "See $TAG_MARK"
+  assert_tag_author 1 "app reply without a marker" mergepath-ci Bot "Resolving this thread now, it was fixed."
+  assert_tag_author 0 "agent author's mid-body tag still honored" nathanpayne-claude User "Done. $TAG_MARK"
 )
 
 # ---------------------------------------------------------------------

@@ -31,6 +31,21 @@
  * part of the text: the gate checks `user_approved` directly, and the
  * validator loads approved Units only.
  *
+ * ## ev3 (#485)
+ *
+ * ev3 adds `skills`, `tools`, `domains` and `date_range` to the text,
+ * and generation now reads the same text through the same formatter.
+ * The bump is required, not cosmetic: a Unit with no tags and no date
+ * renders the same bytes as under ev2, yet its old verdict was reached
+ * under rules that did not know the literal-tag and own-dates limits.
+ * A new prefix makes every earlier verdict stop covering export.
+ *
+ * Never backfill or recompute stored versions. That would claim the
+ * validator read text it never saw; a user-triggered re-run is the only
+ * honest path. The export gate tells a version with an older prefix
+ * apart from an edited Unit and says "validation has been updated"
+ * (`src/routes/ApplicationEditor/exportGate.ts`).
+ *
  * Dependency-free on purpose: the app imports this file across the
  * package boundary (as it does `../types/capability.ts`), so the
  * server and the editor compute the same value from one definition.
@@ -44,9 +59,11 @@ export type UnitEvidenceFields = UnitPromptFields;
 
 /**
  * Bump when the field list or encoding changes, so a verdict recorded
- * under the old definition reads as changed rather than colliding.
+ * under the old definition reads as outdated rather than colliding.
+ * Exported so the export gate can tell an outdated verdict from an
+ * edited Unit.
  */
-const VERSION_PREFIX = "ev2:";
+export const UNIT_EVIDENCE_VERSION_PREFIX = "ev3:";
 
 export function unitEvidenceVersion(unit: UnitEvidenceFields): string {
   // The exact text the traceability prompt shows the model for this
@@ -55,5 +72,5 @@ export function unitEvidenceVersion(unit: UnitEvidenceFields): string {
   // `NaN` and an omitted value all render differently there, and so
   // hash differently here (Codex P2s on #506). SHA-256 makes a crafted
   // collision infeasible (`./sha256.ts`).
-  return VERSION_PREFIX + sha256Hex(formatUnit(unit));
+  return UNIT_EVIDENCE_VERSION_PREFIX + sha256Hex(formatUnit(unit));
 }

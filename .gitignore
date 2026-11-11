@@ -14,6 +14,8 @@ functions/lib/
 # DEPLOYMENT.md § Owner allowlist). The Firebase CLI also writes here
 # when it prompts for a missing param.
 functions/.env.*
+# op:// templates restored by scripts/bootstrap.sh; they hold references, not values.
+!functions/.env.*.tpl
 *.pem
 *.key
 

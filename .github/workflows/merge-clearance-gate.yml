@@ -19,6 +19,18 @@ name: Merge Clearance Gate
 # PRs and when the relevant knob is off — so it is safe as a required
 # check on every PR.
 #
+# Pending is not a failure of the job-native run (#2247). When the only
+# reason for exit 1 is that external review has not cleared yet, the script
+# says so explicitly (MERGEPATH_GATE_VERDICT_FILE), and the event-driven job
+# concludes its native run non-failing once it has confirmed the Checks-API
+# lineage of this context is red or in progress on the head. Branch
+# protection never retires an earlier failed job-native run of a required
+# context, so every review event during a long review used to leave a failed
+# run that had to be rerun after the PR cleared. The Checks-API writes are
+# unchanged: phase 2 below, the publisher, the sweep and the dispatch job all
+# still publish failure while clearance is pending. Real blocks, infra exits
+# and unrecognised output still fail the native run.
+#
 # Gate ON/OFF is controlled per-class in .github/review-policy.yml
 # (dependabot.reviewer_gate.enabled, codex.external_review_gate.enabled).
 # Mergepath sets both true (canonical source). Downstream consumers
@@ -40,6 +52,27 @@ name: Merge Clearance Gate
 # check_run per open PR head SHA — covering the no-event transitions
 # (a 👍 reaction, a UI label resolve, the bot-relabel-doesn't-retrigger
 # case that produced #428). See scripts/ci/check_merge_clearance_gate.
+#
+# Lint completion is NOT a trigger here, by design (#2167). This gate's
+# verdict never reads `lint`: scripts/merge-clearance-gate.sh skips
+# codex-review-check.sh's CI gate (a) because a required check that waited
+# on the required-check rollup would deadlock on itself. The `lint` context
+# represents its own pending state. What a lint completion needs is a fresh
+# head-pinned re-publish of the Checks-API slot, and the single writer of
+# that slot — required-check-publisher.yml — lists repo-lint as its second
+# workflow_run parent for exactly that. A workflow_run on THIS file would
+# run the event job on a run whose head_sha is main's tip (every
+# workflow_run-triggered run is) and chain a second publisher pass per lint
+# completion. check_merge_clearance_gate fences workflow_run ABSENT here.
+#
+# No job in this file holds a runner waiting for CI (#2167): each path
+# evaluates once and exits, the only loops are the sweep's `read` loop over
+# open PRs and bounded three-attempt API retries, and the fence rejects any
+# other `while`/`until` or `--watch`. On #2112 the approval-fired run of this
+# workflow was QUEUED for 38 minutes behind account-wide runner contention and
+# then ran for 12 seconds; that queueing is the Actions scheduler's, not a
+# poll in this file, and the publisher's lint parent is what re-derives the
+# slot once `lint` lands regardless of where this run sits in the queue.
 
 on:
   pull_request:
@@ -72,11 +105,30 @@ on:
   # Keep the event type `merge-clearance-recheck` in sync with the lane.
   repository_dispatch:
     types: [merge-clearance-recheck]
+  # #2881: a Codex request or a Codex answer is a PR-level issue comment, and
+  # none of the events above fires for one. Without this trigger a green check
+  # stays green until the */30 sweep after a new configured-author request
+  # (which now holds a Phase 4b substitute), and a hold stays red until the
+  # sweep after Codex answers with only a verdict, a refusal or a Review
+  # Summary edit. App- and author-posted comments create runs; GITHUB_TOKEN
+  # ones do not, which is why #658 above could not use this trigger. The
+  # dispatch-recheck job handles these events: like a dispatch, an
+  # issue_comment run has no PR-head association, so it resolves the PR's
+  # current head and POSTs there. The default-branch event SHA is never used.
+  issue_comment:
+    types: [created, edited, deleted]
   # Periodic sweep — the only backstop for transitions that fire no
   # Actions event (👍 reaction, UI label resolve, GITHUB_TOKEN relabel).
-  # 15-min cadence mirrors codex-p1-gate.yml.
+  # */30 since #2167 (was */15, mirroring codex-p1-gate.yml): each tick runs
+  # this sweep job AND chains one publisher full pass, about 390 installation-
+  # token requests at 8 open PRs, and the three */15 sweeps together spent
+  # about twice the 1,000/hr budget. Lint completion is event-driven through
+  # the publisher's repo-lint parent, so only no-event transitions wait for
+  # this tick: up to 30 minutes. Pinned by check_required_check_publisher,
+  # which also pins the publisher's DUE_MAX_AGE_SECONDS to this interval
+  # (A16, #2220): change the two together.
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
 
 # Least-privilege default for the whole workflow: read-only. `checks: write`
 # is granted, job-scoped, to every job that EVALUATES the gate — the
@@ -122,9 +174,14 @@ jobs:
     # So the block trades a transient wrong-verdict window for a PERMANENT
     # blocker, on a PR that emits several review events in quick succession.
     # The clobber race stays open and is recorded as residual risk instead:
-    # the native producer still carries the correct verdict for the later run,
-    # and the */15 sweep re-evaluates. Serialization is only safe once the
-    # required context has a single producer that is not a cancelable job.
+    # the native producer still carries the correct verdict for the later run
+    # on every real block, and the scheduled sweep re-evaluates. Since #2247
+    # a merely-pending verdict leaves the native run non-failing, so for that
+    # state the residual rests on the Checks-API lineage alone: the pending
+    # arm requires that lineage to be red or in progress at the moment this
+    # run concludes, and the publisher withholds a verdict whenever a newer
+    # hold was opened after its pass began. Serialization is only safe once
+    # the required context has a single producer that is not a cancelable job.
     #
     # #841: this job now ALSO publishes its verdict as a Checks-API check_run
     # under the required-check name, so `checks: write` is needed here.
@@ -144,9 +201,110 @@ jobs:
     if: >-
       github.event_name != 'schedule'
       && github.event_name != 'repository_dispatch'
+      && github.event_name != 'issue_comment'
     steps:
+      # #2920: a review event whose inputs have not changed since the newest
+      # published verdict leaves that verdict standing. This checkout carries
+      # only the fingerprint library, from the default branch (never the PR
+      # head: a PR could otherwise make every run skip), and is shallow so
+      # the hold below opens a few seconds later at most. It is an
+      # optimization, so its failure is tolerated: without the library the
+      # comparison step finds nothing to read and every later step runs
+      # exactly as before, phase 1 included (Phase 4b on #2924). Without
+      # continue-on-error a failed checkout would skip phase 1 and the gate.
+      - name: Checkout the input-fingerprint library (#2920)
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .gate-input-fingerprint
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/workflow/gate-input-fingerprint.sh
+            scripts/workflow/installation-budget.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Compare review inputs with the published verdict (#2920)
+        # Never fails the job and never decides a verdict: it sets skip=true
+        # only for a review or review-comment event whose live input
+        # fingerprint equals the one recorded on the newest Checks-API run of
+        # this context on the head, and that run is a completed success under
+        # 30 minutes old (scripts/workflow/gate-input-fingerprint.sh states
+        # each condition). Every other outcome, including a missing library,
+        # a failed read or any mismatch, evaluates in full as before. A push
+        # (pull_request events), the sweep and the dispatch path always
+        # recompute. `before` is the fingerprint read before the evaluation;
+        # phase 2 records it only if a second read after the evaluation
+        # matches.
+        id: fp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECK_NAME: "Merge clearance gate"
+          # The comparison's own reads (five paginated REST lists, the PR
+          # read, one check-run listing; one GraphQL point), against the same
+          # reserve as the budget guard below, so an optional comparison
+          # never spends what that guard keeps back (Codex P2 on #2924).
+          FP_BUDGET_REQUESTS: "8"
+          FP_BUDGET_RESERVE_REQUESTS: "200"
+          FP_BUDGET_GRAPHQL_POINTS: "1"
+          FP_BUDGET_GRAPHQL_RESERVE_POINTS: "75"
+        run: |
+          set -uo pipefail
+          lib=.gate-input-fingerprint/scripts/workflow/gate-input-fingerprint.sh
+          budget=.gate-input-fingerprint/scripts/workflow/installation-budget.sh
+          if [ ! -r "$lib" ]; then
+            echo "::notice::$lib is not on the default branch yet; evaluating in full (#2920)."
+            exit 0
+          fi
+          # A short budget skips the comparison, never the evaluation: the
+          # guarded path below runs exactly as without it. An unreadable
+          # budget compares, the guard's own direction.
+          fp_limit=""
+          if [ -r "$budget" ]; then
+            # shellcheck source=scripts/workflow/installation-budget.sh
+            . "$budget" || exit 0
+            ib_read "$FP_BUDGET_REQUESTS" "$FP_BUDGET_RESERVE_REQUESTS" \
+              "$FP_BUDGET_GRAPHQL_POINTS" "$FP_BUDGET_GRAPHQL_RESERVE_POINTS"
+            if ! ib_affordable 1; then
+              echo "::notice::The installation budget does not cover the input comparison beyond the reserve; evaluating in full (#2920)."
+              exit 0
+            fi
+            # The reads are paginated, so FP_BUDGET_REQUESTS is a floor, not
+            # a bound: the library counts each request as it happens and
+            # stops at the reserve, which then evaluates in full (Phase 4b
+            # on #2924). An unknown budget sets no limit.
+            [ "${budget_known:-0}" -ne 1 ] || fp_limit=$(( rl_remaining - FP_BUDGET_RESERVE_REQUESTS ))
+          fi
+          # shellcheck source=scripts/workflow/gate-input-fingerprint.sh
+          . "$lib" || exit 0
+          gif_budget "$fp_limit" || exit 0
+          revision=$(git -C .gate-input-fingerprint rev-parse HEAD 2>/dev/null) || exit 0
+          case "$EVENT_NAME" in
+            pull_request_review|pull_request_review_comment)
+              if gif_decide "$REPO" "$PR_NUMBER" "$HEAD_SHA" "$CHECK_NAME" "$revision"; then
+                echo "::notice::Review inputs on $HEAD_SHA are unchanged since the published verdict ($GIF_REASON); leaving it standing without re-evaluating (#2920)."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Evaluating in full: ${GIF_REASON:-no decision} (#2920)."
+              ;;
+            *)
+              GIF_HEX=$(gif_compute "$REPO" "$PR_NUMBER" "$HEAD_SHA" "$CHECK_NAME" "$revision") || GIF_HEX=""
+              ;;
+          esac
+          if [ -n "${GIF_HEX:-}" ]; then
+            echo "before=$GIF_HEX" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
       - name: Open the required check_run (#841 phase 1)
         id: open
+        if: ${{ steps.fp.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -197,7 +355,7 @@ jobs:
             # PRs, and Dependabot PRs — which are same-repo, so IS_FORK is
             # false for them. Degrade to the pre-#841 shape in both: this job's
             # NATIVE check still carries the verdict under the required name on
-            # the PR head, and the */15 sweep still refreshes the Checks-API
+            # the PR head, and the scheduled sweep still refreshes the Checks-API
             # entry. Not fixed, but not regressed either.
             #
             # `[ = ]` rather than a case pattern: "dependabot[bot]" in a case
@@ -212,6 +370,7 @@ jobs:
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repo (default branch — trusted gate scripts)
+        if: ${{ steps.fp.outputs.skip != 'true' }}
         # Pin to the default branch, NOT the PR HEAD. This is a REQUIRED
         # status check: if it ran scripts/merge-clearance-gate.sh (and the
         # codex-review-check.sh it delegates to) from the PR's own
@@ -250,12 +409,70 @@ jobs:
           fi
           echo "number=$pr" >> "$GITHUB_OUTPUT"
 
+      - name: Installation budget guard (#2286)
+        if: ${{ steps.fp.outputs.skip != 'true' }}
+        # Reads GET /rate_limit (free) through the publisher's own reader,
+        # scripts/workflow/installation-budget.sh. When the installation
+        # budget cannot cover one evaluation plus the reserve, this run does
+        # NOT evaluate: skip=true skips the gate step, phase 2 closes this
+        # run's own Checks-API hold with the publisher's back-off red (never
+        # a green; its title records the reset, so the publisher's due()
+        # leaves the PR alone until then and its first pass after the reset
+        # re-evaluates it with no manual rerun), and the report step makes
+        # the job-native run non-failing only when the lineage step confirms
+        # that red blocks the head (the #2247 rule). Only a run that opened
+        # its own hold can skip: a fork or Dependabot run (restricted token,
+        # no hold) evaluates as before. An unreadable budget, or a default
+        # branch without the library, evaluates as before too.
+        id: budget
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OPEN_ID: ${{ steps.open.outputs.id }}
+          CHECK_NAME: "Merge clearance gate"
+          # One evaluation costs 3 to 19 REST requests and up to one GraphQL
+          # point in scripts/merge-clearance-gate.sh (measured on #2249,
+          # #2265, #2292, #2226, #2232 and #2225), plus phase 2's two reads
+          # and PATCH and the lineage read. The reserve is the publisher's own
+          # floor for one event-head evaluation (60 per PR plus its 100
+          # reserve) plus room for the skip-path writes of the other gate
+          # workflows the same review event starts, so an event workflow
+          # stops spending before the publisher has to.
+          # #2920: plus six for the input fingerprint re-read after a green.
+          BUDGET_PER_EVAL_REQUESTS: "36"
+          BUDGET_RESERVE_REQUESTS: "200"
+          BUDGET_PER_EVAL_GRAPHQL_POINTS: "5"
+          BUDGET_GRAPHQL_RESERVE_POINTS: "75"
+        run: |
+          set -uo pipefail
+          if [ -z "$OPEN_ID" ]; then
+            echo "No Checks-API hold of this run's own (fork or Dependabot token); evaluating without the budget guard (#2286)."
+            exit 0
+          fi
+          if [ ! -r scripts/workflow/installation-budget.sh ]; then
+            echo "::notice::scripts/workflow/installation-budget.sh is not on the default branch yet; evaluating without the budget guard (#2286)."
+            exit 0
+          fi
+          # shellcheck source=scripts/workflow/installation-budget.sh
+          . scripts/workflow/installation-budget.sh
+          ib_read "$BUDGET_PER_EVAL_REQUESTS" "$BUDGET_RESERVE_REQUESTS" \
+            "$BUDGET_PER_EVAL_GRAPHQL_POINTS" "$BUDGET_GRAPHQL_RESERVE_POINTS"
+          if ib_affordable 1; then
+            exit 0
+          fi
+          reset=$(ib_short_bucket_reset)
+          echo "::notice::Budget guard (#2286): $rl_remaining REST request(s) and ${gql_remaining:-?} GraphQL point(s) remain, short of one evaluation ($BUDGET_PER_EVAL_REQUESTS requests) plus the $BUDGET_RESERVE_REQUESTS-request reserve; not evaluating. The publisher re-evaluates this head after ${reset:-the window resets}."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "title=$(ib_backoff_title "$CHECK_NAME" 2 "$reset")" >> "$GITHUB_OUTPUT"
+
       - name: Run scripts/merge-clearance-gate.sh
         id: gate
+        if: ${{ steps.budget.outputs.skip != 'true' && steps.fp.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
+          CHECK_NAME: "Merge clearance gate"
         run: |
           set -uo pipefail
           # The script is the source of truth for what blocks merge.
@@ -268,6 +485,15 @@ jobs:
           # conclusion is set by "Report gate verdict" below, so that phase 2
           # can run in between and publish the same verdict to the Checks-API
           # slot (#841).
+          #
+          # #2247: the script's explicit pending verdict travels in a file
+          # this step owns, never in the output (which carries delegated,
+          # attacker-influenceable text). The script writes exactly
+          # `pending` there from its one not-yet-cleared site and touches it
+          # nowhere else; removing it first means a stale file cannot speak.
+          verdict_file="$RUNNER_TEMP/mcg-verdict"
+          rm -f "$verdict_file"
+          export MERGEPATH_GATE_VERDICT_FILE="$verdict_file"
           set +e
           output=$(scripts/merge-clearance-gate.sh "$PR_NUMBER" "$REPO" 2>&1)
           rc=$?
@@ -292,6 +518,31 @@ jobs:
             *"Merge clearance: BLOCKED"*) verdict=blocked ;;
           esac
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          # Pending is a positive verdict, never an inference (#2247): rc 1,
+          # the BLOCKED line, and the file reading exactly `pending`. Any
+          # other combination (an older script that never writes the file, a
+          # real block, an infra exit, an unreadable file) is not pending and
+          # the native run fails exactly as before.
+          pending=false
+          if [ "$rc" -eq 1 ] && [ "$verdict" = blocked ] && [ -f "$verdict_file" ] \
+             && [ "$(cat "$verdict_file" 2>/dev/null)" = pending ]; then
+            pending=true
+          fi
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          # #2286: the script stops at its first failed read, so an rc 2 on
+          # the exhausted installation budget is the end of this run's
+          # evaluation. Phase 2 closes the hold with the publisher's back-off
+          # red (the reset read from a refused probe's X-RateLimit-* headers,
+          # see installation-budget.sh), and the native run follows the
+          # lineage confirmation like a budget skip.
+          if [ "$rc" -eq 2 ] && [ -r scripts/workflow/installation-budget.sh ]; then
+            # shellcheck source=scripts/workflow/installation-budget.sh
+            . scripts/workflow/installation-budget.sh
+            if ib_rate_limited "$output"; then
+              echo "rate_limited=true" >> "$GITHUB_OUTPUT"
+              echo "budget_title=$(ib_backoff_title "$CHECK_NAME" 2 "$(ib_exhausted_reset "$output")")" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
       - name: Close the required check_run (#841 phase 2)
         # !cancelled(), NOT always(): on cancellation we deliberately leave the
@@ -305,39 +556,102 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RC: ${{ steps.gate.outputs.rc }}
           VERDICT: ${{ steps.gate.outputs.verdict }}
+          # #2286: a run that did not evaluate closes its hold with the
+          # publisher's back-off red, whichever way it stopped.
+          BUDGET_SKIP: ${{ steps.budget.outputs.skip }}
+          BUDGET_SKIP_TITLE: ${{ steps.budget.outputs.title }}
+          RATE_LIMITED: ${{ steps.gate.outputs.rate_limited }}
+          RATE_LIMITED_TITLE: ${{ steps.gate.outputs.budget_title }}
+          # #2920: the input fingerprint read before the evaluation, and the
+          # reserve its re-read must leave untouched (the budget guard's).
+          FP_BEFORE: ${{ steps.fp.outputs.before }}
+          FP_BUDGET_RESERVE_REQUESTS: "200"
+          FP_BUDGET_GRAPHQL_RESERVE_POINTS: "75"
         run: |
           set -uo pipefail
-          # ONE request (gh pr view), not `gh pr list --limit 500` (5+
-          # paginated calls, and a PR past position 500 reads as unknown).
-          current=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-                      --json headRefOid --jq .headRefOid 2>/dev/null || true)
-          if [ "$current" != "$HEAD_SHA" ]; then
-            # Head moved, or could not be read. Do NOT publish nothing: a
-            # silent skip leaves whatever verdict is standing on $HEAD_SHA, and
-            # a force-push back to $HEAD_SHA would then merge on it. Close the
-            # run we opened as a FAILURE, pinned to the head we bound to. That
-            # SHA is no longer the PR head so the red blocks nothing current,
-            # and it retires any stale green sitting there.
+          if [ "${BUDGET_SKIP:-}" = true ] || [ "${RATE_LIMITED:-}" = true ]; then
+            # Not evaluated (#2286): a failure, never a success, and no
+            # further read. The title carries the publisher's back-off mark
+            # and the reset, so due() re-evaluates the PR after the reset.
+            # The one PATCH below closes it.
             conclusion="failure"
-            title="Merge clearance gate — head moved during evaluation (${HEAD_SHA:0:7} -> ${current:0:7}); awaiting re-evaluation on the new head"
-            summary="$title"
+            if [ "${BUDGET_SKIP:-}" = true ]; then
+              title="${BUDGET_SKIP_TITLE:-}"
+              summary="Not evaluated: the installation API budget could not cover this evaluation plus the reserve kept for the publisher (#2286). The publisher re-evaluates this head after the reset in the title."
+            else
+              title="${RATE_LIMITED_TITLE:-}"
+              summary=$(cat "$RUNNER_TEMP/mcg-summary.txt" 2>/dev/null || echo "(no gate output captured)")
+            fi
+            [ -n "$title" ] || title="Merge clearance gate — installation API budget exhausted (rc=2)"
           else
-            case "$RC" in
-              0)
-                if [ "$VERDICT" = "pass" ]; then
-                  conclusion="success"
-                  title="Merge clearance gate (event-driven re-evaluation)"
-                else
-                  conclusion="failure"
-                  title="Merge clearance gate — infra/config error (rc=0 with no PASS verdict line)"
-                fi
-                ;;
-              1) conclusion="failure"
-                 title="Merge clearance gate (event-driven re-evaluation)" ;;
-              *) conclusion="failure"
-                 title="Merge clearance gate — infra/config error (rc=$RC)" ;;
-            esac
-            summary=$(cat "$RUNNER_TEMP/mcg-summary.txt" 2>/dev/null || echo "(no gate output captured)")
+            # ONE request (gh pr view), not `gh pr list --limit 500` (5+
+            # paginated calls, and a PR past position 500 reads as unknown).
+            current=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+                        --json headRefOid --jq .headRefOid 2>/dev/null || true)
+            trusted_revision=$(git rev-parse HEAD 2>/dev/null || true)
+            current_trusted=$(gh api "repos/$REPO/commits/HEAD" --jq .sha 2>/dev/null || true)
+            if [ -z "$trusted_revision" ] || [ "$current_trusted" != "$trusted_revision" ]; then
+              conclusion="failure"
+              title="Merge clearance gate — trusted revision changed or unreadable"
+              summary="$title"
+            elif [ "$current" != "$HEAD_SHA" ]; then
+              # Head moved, or could not be read. Do NOT publish nothing: a
+              # silent skip leaves whatever verdict is standing on $HEAD_SHA, and
+              # a force-push back to $HEAD_SHA would then merge on it. Close the
+              # run we opened as a FAILURE, pinned to the head we bound to. That
+              # SHA is no longer the PR head so the red blocks nothing current,
+              # and it retires any stale green sitting there.
+              conclusion="failure"
+              title="Merge clearance gate — head moved during evaluation (${HEAD_SHA:0:7} -> ${current:0:7}); awaiting re-evaluation on the new head"
+              summary="$title"
+            else
+              case "$RC" in
+                0)
+                  if [ "$VERDICT" = "pass" ]; then
+                    conclusion="success"
+                    title="Merge clearance gate (event-driven re-evaluation)"
+                  else
+                    conclusion="failure"
+                    title="Merge clearance gate — infra/config error (rc=0 with no PASS verdict line)"
+                  fi
+                  ;;
+                1) conclusion="failure"
+                   title="Merge clearance gate (event-driven re-evaluation)" ;;
+                *) conclusion="failure"
+                   title="Merge clearance gate — infra/config error (rc=$RC)" ;;
+              esac
+              summary=$(cat "$RUNNER_TEMP/mcg-summary.txt" 2>/dev/null || echo "(no gate output captured)")
+            fi
+          fi
+          # #2920: a green verdict records the input fingerprint it was
+          # computed from, so a later review event with unchanged inputs can
+          # leave it standing. Only when a second read, after the evaluation,
+          # matches the one before it (a state change during the evaluation
+          # records nothing), and only in output.text, which no gate output
+          # reaches. Any failure records nothing: the next event evaluates.
+          fp_args=()
+          if [ "$conclusion" = success ] && [ -n "${FP_BEFORE:-}" ] \
+             && [ -r scripts/workflow/gate-input-fingerprint.sh ]; then
+            # The re-read is bounded the same way as the first read: by the
+            # live budget above the guard's reserve, counted per request
+            # (Phase 4b on #2924); an unknown budget sets no limit.
+            fp_limit=""
+            if [ -r scripts/workflow/installation-budget.sh ] \
+               && . scripts/workflow/installation-budget.sh \
+               && ib_read 1 "$FP_BUDGET_RESERVE_REQUESTS" 1 "$FP_BUDGET_GRAPHQL_RESERVE_POINTS" \
+               && [ "${budget_known:-0}" -eq 1 ]; then
+              fp_limit=$(( rl_remaining - FP_BUDGET_RESERVE_REQUESTS ))
+            fi
+            # shellcheck source=scripts/workflow/gate-input-fingerprint.sh
+            if . scripts/workflow/gate-input-fingerprint.sh \
+               && gif_budget "$fp_limit" \
+               && fp_after=$(gif_compute "$REPO" "$PR_NUMBER" "$HEAD_SHA" "Merge clearance gate" "$trusted_revision") \
+               && [ "$fp_after" = "$FP_BEFORE" ] \
+               && fp_marker=$(gif_marker "Merge clearance gate" "$fp_after"); then
+              fp_args=(-f "output[text]=$fp_marker")
+            else
+              echo "Review inputs changed during the evaluation or could not be re-read; recording no input fingerprint (#2920)."
+            fi
           fi
           # A PATCH that never lands leaves the run in_progress = the required
           # context PENDING = merge blocked. Fail-closed in BOTH verdict
@@ -348,20 +662,106 @@ jobs:
               -f status="completed" \
               -f conclusion="$conclusion" \
               -f "output[title]=$title" \
-              -f "output[summary]=$summary" >/dev/null && exit 0
+              -f "output[summary]=$summary" ${fp_args[@]+"${fp_args[@]}"} >/dev/null && exit 0
             sleep $((attempt * 5))
           done
-          echo "::warning::Could not close check_run $CHECK_ID; the required context stays PENDING until the */15 sweep supersedes it (#841)."
+          echo "::warning::Could not close check_run $CHECK_ID; the required context stays PENDING until the scheduled sweep supersedes it (#841)."
+          exit 0
+
+      - name: Confirm the Checks-API lineage blocks while pending (#2247)
+        # Runs only for the script's explicit pending verdict, and only when
+        # this run opened its own Checks-API hold (a fork or Dependabot run
+        # cannot, and keeps the pre-#2247 failing native run). Reads the
+        # head's current runs of this context and sets api_blocking=true only
+        # when the Checks-API lineage blocks on its own: every current
+        # Checks-API run is in progress or red, and none shares this run's
+        # check suite (scripts/gate-api-lineage-blocking.sh states each
+        # condition and why). A missing helper, a failed read or any unmet
+        # condition leaves the output unset, so the native run fails as
+        # before. Never fails the job itself: the next step decides. No
+        # status function in the condition, so the implicit success() also
+        # skips it after any earlier failed step or a cancellation.
+        #
+        # #2286: it also runs for a run that did not evaluate (the budget
+        # guard skipped it, or the script failed on the exhausted
+        # installation budget), whose phase 2 closed this run's own hold
+        # with the publisher's back-off red. The same confirmation decides
+        # whether that run's job-native conclusion may be non-failing.
+        id: lineage
+        if: ${{ (steps.gate.outputs.pending == 'true' || steps.budget.outputs.skip == 'true' || steps.gate.outputs.rate_limited == 'true') && steps.open.outputs.id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          CHECK_NAME: "Merge clearance gate"
+        run: |
+          set -uo pipefail
+          helper=scripts/gate-api-lineage-blocking.sh
+          if [ ! -x "$helper" ]; then
+            echo "::warning::$helper is not on the default branch; the native run stays failing while clearance is pending (#2247)."
+            exit 0
+          fi
+          if "$helper" "$REPO" "$HEAD_SHA" "$CHECK_NAME" "$RUN_ID"; then
+            echo "api_blocking=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Could not confirm the Checks-API lineage blocks $HEAD_SHA; the native run stays failing (#2247)."
+          fi
           exit 0
 
       - name: Report gate verdict
         # The job's NATIVE check conclusion. Mapping is identical to pre-#841
-        # except for the sentinel guard.
+        # except for the sentinel guard and the #2247 pending arm.
+        #
+        # #2247: while clearance is merely pending, this run concludes
+        # non-failing. Actions jobs cannot conclude `neutral`, and a skipped
+        # job would need a second job keyed on this one's output, so the
+        # pending arm exits 0 and says why in the log. Branch protection keeps
+        # every earlier failed job-native run of a required context on the
+        # head until it is rerun, so a run that failed only because review
+        # was still in progress used to block the PR after it cleared. The
+        # block now lives only in the Checks-API lineage, which the
+        # previous step confirmed is red or in progress on this head; the
+        # publisher and the scheduled sweep turn it green only from their own
+        # evaluation of a cleared head. Every other non-green state (a
+        # human-controlled hold, a Dependabot head without approval, a
+        # fail-closed applicability fallback, an infra exit, a missing
+        # verdict line) still fails here.
         env:
           RC: ${{ steps.gate.outputs.rc }}
           VERDICT: ${{ steps.gate.outputs.verdict }}
+          PENDING: ${{ steps.gate.outputs.pending }}
+          API_BLOCKING: ${{ steps.lineage.outputs.api_blocking }}
+          BUDGET_SKIP: ${{ steps.budget.outputs.skip }}
+          RATE_LIMITED: ${{ steps.gate.outputs.rate_limited }}
+          FP_SKIP: ${{ steps.fp.outputs.skip }}
         run: |
           set -euo pipefail
+          # #2920: the review inputs on this head match the newest published
+          # verdict, a completed success carrying their fingerprint, so this
+          # run evaluated nothing and left that verdict standing. A success is
+          # the only verdict ever reused, so this native run is a success too.
+          if [ "${FP_SKIP:-}" = true ]; then
+            echo "::notice::Merge clearance inputs are unchanged since the published green verdict on this head; not re-evaluated (#2920)."
+            exit 0
+          fi
+          # #2286: a run that did not evaluate (budget guard skip, or the
+          # script failed on the exhausted installation budget). Its phase 2
+          # closed this run's hold with the publisher's back-off red; the
+          # job-native run is non-failing ONLY when the lineage step
+          # confirmed that red (or a newer non-green) blocks the head outside
+          # this run's suite, exactly the #2247 condition. Otherwise it fails
+          # as before. Never a success computed from no evaluation: the
+          # Checks-API run carries the block until the publisher's first
+          # pass after the reset re-evaluates the head.
+          if [ "${BUDGET_SKIP:-}" = true ] || [ "${RATE_LIMITED:-}" = true ]; then
+            if [ "${API_BLOCKING:-}" = true ]; then
+              echo "::notice::Merge clearance was NOT evaluated on this head: the installation API budget is short or exhausted (#2286). This job-native run concludes non-failing by design; the Checks-API run of the same name carries the block until the publisher re-evaluates the head after the budget resets."
+              exit 0
+            fi
+            echo "::error::Merge clearance was not evaluated (installation API budget, #2286), and the Checks-API lineage could not be confirmed to block, so the job-native run fails."
+            exit 1
+          fi
           if [ "$RC" -eq 0 ] && [ "$VERDICT" != "pass" ]; then
             echo "::error::merge-clearance-gate.sh exited 0 without a PASS verdict line (query mode reached?)"
             exit 1
@@ -369,6 +769,11 @@ jobs:
           if [ "$RC" -eq 2 ]; then
             echo "::error::merge-clearance-gate.sh exited 2 (config/usage/infra error)"
             exit 1
+          fi
+          if [ "$RC" -eq 1 ] && [ "$VERDICT" = blocked ] && [ "$PENDING" = true ] \
+             && [ "$API_BLOCKING" = true ]; then
+            echo "::notice::Merge clearance is PENDING: external review has not cleared this head yet. This job-native run concludes non-failing by design (#2247); the Checks-API run of the same name carries the block until clearance."
+            exit 0
           fi
           exit "$RC"
 
@@ -412,6 +817,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          . scripts/workflow/required-check-generation.sh
           # List ALL open PRs. The gate script itself short-circuits to a
           # clean pass when both per-class knobs are off, so we don't
           # filter by label/author here. `--limit 500` mirrors
@@ -461,6 +867,7 @@ jobs:
           CHECK_NAME: "Merge clearance gate"
         run: |
           set -euo pipefail
+          . scripts/workflow/required-check-generation.sh
           had_infra_error=0
           while IFS=$'\t' read -r PR head_sha; do
             [ -z "$PR" ] && continue
@@ -481,6 +888,11 @@ jobs:
               continue
             fi
 
+            if ! generation_id=$(rcg_open "$REPO" "$PR" "$head_sha" "$CHECK_NAME"); then
+              had_infra_error=1
+              echo "::endgroup::"
+              continue
+            fi
             set +e
             output=$(scripts/merge-clearance-gate.sh "$PR" "$REPO" 2>&1)
             rc=$?
@@ -523,14 +935,7 @@ jobs:
             # clearance transition (or pins a fail-closed red on infra
             # error). A failed POST means the sweep did not do its job;
             # that's an infra error.
-            if ! gh api -X POST "repos/$REPO/check-runs" \
-              -f name="$CHECK_NAME" \
-              -f head_sha="$head_sha" \
-              -f status="completed" \
-              -f conclusion="$conclusion" \
-              -f "output[title]=$check_title" \
-              -f "output[summary]=$summary" \
-              >/dev/null; then
+            if ! rcg_close "$REPO" "$PR" "$head_sha" "$CHECK_NAME" "$generation_id" "$conclusion" "$check_title" "$summary"; then
               echo "::error::Failed to post check_run for PR #$PR — stale required check not refreshed."
               had_infra_error=1
             fi
@@ -548,7 +953,7 @@ jobs:
     # v2 head/base-pinned marker. The marker itself is a GITHUB_TOKEN
     # issue comment, which creates no workflow run — so the lane nudges the
     # gate with a PAT-driven dispatch instead (best-effort; if it never
-    # arrives, the */15 sweep still recovers the gate). This job does NOT
+    # arrives, the scheduled sweep still recovers the gate). This job does NOT
     # trust the diagnostic marker or dispatch for clearance: it only re-runs
     # scripts/merge-clearance-gate.sh, which re-derives clearance from the
     # trusted live byte verification via lane_verified() on the
@@ -557,7 +962,28 @@ jobs:
     # a pass — so no guard on the payload is needed beyond validating it is a
     # PR number. Label events are still not a trigger (not head-pinned proof —
     # #429 round-3 P1).
-    if: github.event_name == 'repository_dispatch'
+    #
+    # #2881: the same job re-evaluates an open PR when a PR-level comment that
+    # can move gate (c) is created, edited or deleted: anything from the Codex
+    # App (a verdict, a refusal, a findings comment, or a Review Summary edit
+    # such as Running to Completed), or a comment whose current or previous
+    # body contains `@codex review` (a request created, edited or deleted).
+    # The filter only selects which events pay for an evaluation; the gate
+    # still re-derives everything, including whether the commenter is the
+    # configured author or the configured Codex bot. It admits any App bot
+    # except CodeRabbit (whose frequent summary edits would spend the
+    # installation budget) and Actions, so a consumer policy that names a
+    # different codex.bot_login still wakes the gate (Phase 4b on #2886).
+    if: >-
+      github.event_name == 'repository_dispatch'
+      || (github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.issue.state == 'open'
+          && ((endsWith(github.event.comment.user.login, '[bot]')
+               && github.event.comment.user.login != 'coderabbitai[bot]'
+               && github.event.comment.user.login != 'github-actions[bot]')
+              || contains(github.event.comment.body, '@codex review')
+              || contains(github.event.changes.body.from, '@codex review')))
     runs-on: ubuntu-latest
     # checks:write to POST the check_run (same as the sweep). issues:read for
     # the gate script's /issues/{pr}/comments marker read + the delegated
@@ -567,6 +993,10 @@ jobs:
       pull-requests: read
       issues: read
       checks: write
+    # #2918: the PR to nominate to auto-clear, or empty. See the
+    # nominate-auto-clear job below.
+    outputs:
+      autoclear_pr: ${{ steps.recheck.outputs.autoclear_pr }}
     steps:
       - name: Checkout repo (default branch — trusted gate scripts)
         # Same trusted-checkout posture as the other jobs: run the gate script
@@ -579,12 +1009,24 @@ jobs:
           persist-credentials: false
 
       - name: Re-evaluate gate for the dispatched PR and post check_run
+        id: recheck
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The PR number the lane put in the dispatch payload. Passed via env
           # (not interpolated into the script) and validated as a positive
           # integer below, so an arbitrary client_payload cannot inject shell.
           PR: ${{ github.event.client_payload.pr }}
+          # #2881: on issue_comment the PR is the commented issue. Both are
+          # validated as a positive integer below, and the head comes from the
+          # open-PR list, never from the event.
+          PR_COMMENTED: ${{ github.event.issue.number }}
+          # #2918: whether the commented PR carried needs-external-review when
+          # the comment landed, read from the event payload (no request). It
+          # only decides whether to nominate the PR to auto-clear, which
+          # re-derives everything from live state; a label added after the
+          # comment is left to the auto-clear sweep.
+          PR_LABELED: ${{ github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'needs-external-review') }}
+          EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           # Check name MUST match the event-driven job name above AND the
           # sweep CHECK_NAME so branch protection resolves every source as the
@@ -599,12 +1041,18 @@ jobs:
           CHECK_NAME: "Merge clearance gate"
         run: |
           set -euo pipefail
+          . scripts/workflow/required-check-generation.sh
+          check_title="Merge clearance gate (propagation-lane dispatch re-evaluation)"
+          if [ "${EVENT_NAME:-}" = issue_comment ]; then
+            PR="${PR_COMMENTED:-}"
+            check_title="Merge clearance gate (Codex request/answer comment re-evaluation)"
+          fi
           # Validate the dispatched PR number before it reaches any API call —
           # the payload is attacker-influenceable (anyone with repo write can
           # dispatch), so reject anything that is not a bare positive integer.
           case "$PR" in
             ''|*[!0-9]*)
-              echo "::error::repository_dispatch client_payload.pr is not a positive integer: '$PR'"
+              echo "::error::${EVENT_NAME:-repository_dispatch} PR number is not a positive integer: '$PR'"
               exit 1
               ;;
           esac
@@ -627,12 +1075,12 @@ jobs:
             echo "::error::PR #$PR not found in the open-PR list; cannot resolve its head to refresh the Merge clearance gate (fail closed, #658/#465)."
             exit 1
           fi
+          generation_id=$(rcg_open "$REPO" "$PR" "$head_sha" "$CHECK_NAME") || exit 1
           set +e
           output=$(scripts/merge-clearance-gate.sh "$PR" "$REPO" 2>&1)
           rc=$?
           set -e
           echo "$output"
-          check_title="Merge clearance gate (propagation-lane dispatch re-evaluation)"
           case "$rc" in
             0) conclusion="success" ;;
             1) conclusion="failure" ;;
@@ -652,14 +1100,65 @@ jobs:
           # the stale required check on the PR head after the marker lands
           # (or pins a fail-closed red on infra error). A failed POST means the
           # job did not do its job; that's an infra error.
-          if ! gh api -X POST "repos/$REPO/check-runs" \
-            -f name="$CHECK_NAME" \
-            -f head_sha="$head_sha" \
-            -f status="completed" \
-            -f conclusion="$conclusion" \
-            -f "output[title]=$check_title" \
-            -f "output[summary]=$summary" \
-            >/dev/null; then
+          if ! rcg_close "$REPO" "$PR" "$head_sha" "$CHECK_NAME" "$generation_id" "$conclusion" "$check_title" "$summary"; then
             echo "::error::Failed to post check_run for PR #$PR — stale required check not refreshed."
             exit 1
+          fi
+          # #2918: a Codex answer that turns the gate green is often the last
+          # input a labeled PR needs, and this run is invisible to auto-clear:
+          # its workflow_run carries the default branch's head_sha (no PR
+          # resolves) and the publisher skips issue_comment-originated runs.
+          # Nominate the PR so the label comes off within one run instead of
+          # waiting for the auto-clear sweep. Only a published green verdict
+          # on a labeled PR nominates.
+          if [ "${EVENT_NAME:-}" = issue_comment ] && [ "$conclusion" = success ] \
+             && [ "${PR_LABELED:-}" = true ]; then
+            echo "PR #$PR: green clearance verdict on a PR carrying needs-external-review; nominating it to auto-clear (#2918)."
+            echo "autoclear_pr=$PR" >> "$GITHUB_OUTPUT"
+          fi
+
+  # #2918. Sends one `auto-clear-evaluate` repository_dispatch for the PR
+  # dispatch-recheck nominated (a green verdict, published by a Codex comment,
+  # on a PR carrying needs-external-review), carrying only the PR number. The
+  # mirror of required-check-publisher.yml's nominate-auto-clear job (#2239),
+  # which never sees these runs. auto-clear-blocking-labels.yml handles the
+  # event on its default-branch definition, re-derives clearance from live
+  # state and fences the live head/base before any label DELETE.
+  #
+  # A SEPARATE job because POST /dispatches needs `contents: write`, and a job
+  # is the narrowest scope a GITHUB_TOKEN permission can have: dispatch-recheck
+  # runs the gate scripts and must not hold it. This job checks out nothing and
+  # runs one inline step over an integer it validates, so no repository code
+  # ever executes with that grant. It writes no check-run, is not a producer of
+  # the required context, and is skipped (no runner) whenever dispatch-recheck
+  # nominated nothing, which is almost every run. No PAT: a GITHUB_TOKEN
+  # repository_dispatch starts the run.
+  nominate-auto-clear:
+    name: nominate-auto-clear
+    needs: dispatch-recheck
+    if: ${{ !cancelled() && needs.dispatch-recheck.outputs.autoclear_pr != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Dispatch auto-clear evaluation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          AUTOCLEAR_PR: ${{ needs.dispatch-recheck.outputs.autoclear_pr }}
+        run: |
+          set -euo pipefail
+          # Best effort, single attempt: the auto-clear */5 sweep still bounds
+          # a dropped nomination. A failed dispatch warns instead of reddening
+          # this run, whose verdict was already published.
+          if ! [[ "$AUTOCLEAR_PR" =~ ^[1-9][0-9]{0,9}$ ]]; then
+            echo "::warning::Ignoring malformed auto-clear nomination '$AUTOCLEAR_PR'."
+            exit 0
+          fi
+          if gh api -X POST "repos/$REPO/dispatches" \
+              -f event_type=auto-clear-evaluate \
+              -F "client_payload[pr]=$AUTOCLEAR_PR" >/dev/null; then
+            echo "Dispatched auto-clear-evaluate for PR #$AUTOCLEAR_PR."
+          else
+            echo "::warning::Could not dispatch auto-clear-evaluate for PR #$AUTOCLEAR_PR; the auto-clear sweep covers it."
           fi

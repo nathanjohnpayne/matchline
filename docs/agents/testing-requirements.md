@@ -33,6 +33,8 @@ a follow-on ticket.
    reason, never a commit-message afterthought. CI enforces this via
    `scripts/ci/` checks.
 
+**LLM-stage evaluations.** A change to a validation subtask or to generation (prompt, schema, model, effort or output cap) keeps its mocked-provider unit tests and, when it claims a quality or cost effect, cites an `npm run eval:subtasks` run (`tests/eval/README.md` § Generation and validation-subtask suites). Start with `--dry-run`, which needs no keys; a paid run needs `--max-usd` and a projection posted on #495 first. Labeled cases and snapshots are immutable for a comparison: a relabel bumps `label_version`, updates `tests/fixtures/eval-labels.lock.json`, and lands as its own reviewed PR.
+
 ## Spec alignment
 
 Every spec file under `specs/` must have a corresponding test file
@@ -72,6 +74,11 @@ test, not a metric — it moves from pass to fail the moment it regresses.
   Playwright smoke tests for the critical paths (flag resolution,
   drag-to-stage, export-blocked-on-flag). Extraction variants
   (LinkedIn, long-form) reuse the Phase 1 fixture harness.
+  Smoke specs live in `tests/e2e/*.e2e.ts` and run with
+  `npm run test:e2e`: Playwright drives the real app against the
+  Auth + Firestore emulators (offline `demo-matchline-e2e`
+  project; see `playwright.config.ts`). CI runs them in the
+  `e2e smoke` job of `.github/workflows/test.yml`.
 - **Phase 3** (`#37`): prompt-tuning changes run the full eval
   harness on every push and block merge if 80/80 regresses. Cost and
   latency telemetry (`#41`) ships with a fixture test that proves the

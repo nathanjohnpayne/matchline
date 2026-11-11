@@ -22,11 +22,15 @@ fail() { echo "FAIL: $*" >&2; FAIL=$((FAIL + 1)); }
 # predating it. The marker literal must match the one in the REAL
 # synced workflow — assert that first so the audit can't silently
 # diverge from what pr-review-policy.yml actually ships.
+# Since #2727 slice 3b the workflow runs the lane from the classifier script,
+# so the marker lives there and the workflow names the script.
 MARKER='PROP_ENABLED=${PROP_ENABLED:-true}'
-if grep -qF "$MARKER" "$ROOT/.github/workflows/pr-review-policy.yml"; then
-  pass "lane default-ON marker present in the real pr-review-policy.yml"
+CLASSIFIER_PATH='scripts/workflow/external_review_classify.sh'
+if grep -qF "$CLASSIFIER_PATH" "$ROOT/.github/workflows/pr-review-policy.yml" \
+   && grep -qF "$MARKER" "$ROOT/$CLASSIFIER_PATH"; then
+  pass "the real pr-review-policy.yml delegates to $CLASSIFIER_PATH, which carries the default-ON marker"
 else
-  fail "lane default-ON marker missing from .github/workflows/pr-review-policy.yml — audit marker and workflow have diverged"
+  fail "the real workflow must name $CLASSIFIER_PATH and the script must carry the marker — audit and lane have diverged"
 fi
 
 WF_NEW="$WORKDIR/wf-new.yml"
@@ -51,15 +55,49 @@ printf 'propagation_prs:\n  enabled: true\nauthor_identity: nathanpayne-claude\n
 POLICY_CASED="$WORKDIR/policy-cased.yml"  # YAML-boolean-ish but not the lane's exact match
 printf 'propagation_prs:\n  enabled: TRUE\nauthor_identity: nathanjohnpayne\n' >"$POLICY_CASED"
 
-run_check() {  # <policy> <workflow> — sets OUT and RC
+run_check() {  # <policy> <workflow> [<classifier>] — sets OUT and RC
   set +e
-  OUT=$("$SCRIPT" --check-files "$1" "$2" 2>&1)
+  OUT=$("$SCRIPT" --check-files "$@" 2>&1)
   RC=$?
   set -e
 }
 
+# A delegating workflow (#2727 slice 3b): the marker is read from the
+# classifier script it runs, not from the workflow.
+WF_DELEGATING="$WORKDIR/wf-delegating.yml"
+printf 'jobs:\n  x:\n    run: bash %s\n' "$CLASSIFIER_PATH" >"$WF_DELEGATING"
+CLS_NEW="$WORKDIR/classify-new.sh"
+printf '%s\n' "$MARKER" >"$CLS_NEW"
+CLS_OLD="$WORKDIR/classify-old.sh"
+printf 'PROP_ENABLED=$(prop_field f propagation_prs enabled)\n' >"$CLS_OLD"
+
+run_check "$POLICY_BARE" "$WF_DELEGATING" "$CLS_NEW"
+if [ "$RC" = "0" ] && grep -q "default-ON" <<<"$OUT"; then
+  pass "a delegating workflow fires the lane when its classifier carries the marker"
+else
+  fail "delegating workflow with a default-ON classifier should fire; got rc=$RC, out: $OUT"
+fi
+run_check "$POLICY_BARE" "$WF_DELEGATING"
+if [ "$RC" = "1" ] && grep -q "$CLASSIFIER_PATH, which is ABSENT" <<<"$OUT"; then
+  pass "a delegating workflow without its classifier fails the audit"
+else
+  fail "delegating workflow without the classifier should fail as absent; got rc=$RC, out: $OUT"
+fi
+run_check "$POLICY_BARE" "$WF_DELEGATING" "$CLS_OLD"
+if [ "$RC" = "1" ] && grep -q "$CLASSIFIER_PATH predates the #434 default-ON lane" <<<"$OUT"; then
+  pass "a delegating workflow whose classifier lacks the marker fails the audit"
+else
+  fail "delegating workflow with a pre-#434 classifier should fail; got rc=$RC, out: $OUT"
+fi
+run_check "$POLICY_BARE" "$WF_NEW" "$CLS_OLD"
+if [ "$RC" = "0" ]; then
+  pass "an inline-lane workflow is judged by its own text, whatever the classifier file holds"
+else
+  fail "inline-lane workflow carrying the marker should fire; got rc=$RC, out: $OUT"
+fi
+
 run_check "$POLICY_BARE" "$WF_NEW"
-if [ "$RC" = "0" ] && echo "$OUT" | grep -q "default-ON"; then
+if [ "$RC" = "0" ] && grep -q "default-ON" <<<"$OUT"; then
   pass "absent propagation_prs block fires the lane under the default-ON workflow"
 else
   fail "absent block should fire (rc=0, default-ON); got rc=$RC, out: $OUT"
@@ -73,21 +111,21 @@ else
 fi
 
 run_check "$POLICY_OFF" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "explicit opt-out"; then
+if [ "$RC" = "1" ] && grep -q "explicit opt-out" <<<"$OUT"; then
   pass "explicit enabled: false is flagged as an opt-out and fails the audit"
 else
   fail "explicit enabled: false should fail with opt-out message; got rc=$RC, out: $OUT"
 fi
 
 run_check "$POLICY_BARE" "$WF_OLD"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "predates the #434"; then
+if [ "$RC" = "1" ] && grep -q "predates the #434" <<<"$OUT"; then
   pass "pre-#434 workflow without the default-ON marker fails the audit"
 else
   fail "pre-#434 workflow should fail with marker message; got rc=$RC, out: $OUT"
 fi
 
 run_check "$POLICY_NO_AUTHOR" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "no author_identity"; then
+if [ "$RC" = "1" ] && grep -q "no author_identity" <<<"$OUT"; then
   pass "missing author_identity fails the audit"
 else
   fail "missing author_identity should fail; got rc=$RC, out: $OUT"
@@ -101,7 +139,7 @@ else
 fi
 
 run_check "$POLICY_ALT_PREFIX" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "never match a real sync PR"; then
+if [ "$RC" = "1" ] && grep -q "never match a real sync PR" <<<"$OUT"; then
   pass "overridden branch_prefix that sync never opens fails the audit"
 else
   fail "non-sync branch_prefix should fail; got rc=$RC, out: $OUT"
@@ -115,14 +153,14 @@ else
 fi
 
 run_check "$POLICY_WRONG_AUTHOR" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "sync PRs are authored by"; then
+if [ "$RC" = "1" ] && grep -q "sync PRs are authored by" <<<"$OUT"; then
   pass "author_identity that is not the sync actor fails the audit"
 else
   fail "non-sync author_identity should fail; got rc=$RC, out: $OUT"
 fi
 
 run_check "$POLICY_CASED" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "only fires on exactly"; then
+if [ "$RC" = "1" ] && grep -q "only fires on exactly" <<<"$OUT"; then
   pass "non-lowercase enabled value fails the audit (lane matches exactly 'true')"
 else
   fail "enabled: TRUE should fail; got rc=$RC, out: $OUT"
@@ -152,7 +190,7 @@ fi
 POLICY_QUOTED_WRONG="$WORKDIR/policy-quoted-wrong.yml"
 printf 'propagation_prs:\n  enabled: true\nauthor_identity: "nathanpayne-claude"\n' >"$POLICY_QUOTED_WRONG"
 run_check "$POLICY_QUOTED_WRONG" "$WF_NEW"
-if [ "$RC" = "1" ] && echo "$OUT" | grep -q "sync PRs are authored by"; then
+if [ "$RC" = "1" ] && grep -q "sync PRs are authored by" <<<"$OUT"; then
   pass "#452: quoted-but-WRONG author_identity still fails (quote-strip is not author-blind)"
 else
   fail "#452: quoted wrong author should fail; got rc=$RC, out: $OUT"
@@ -164,7 +202,7 @@ set +e
 OUT=$(env -u GH_TOKEN "$SCRIPT" --check-files "$POLICY_BARE" "$WF_NEW" 2>&1)
 RC=$?
 set -e
-if [ "$RC" = "0" ] && ! echo "$OUT" | grep -qi "reviewer token"; then
+if [ "$RC" = "0" ] && ! grep -qi "reviewer token" <<<"$OUT"; then
   pass "#454: --check-files mode stays credential-free (no GH_TOKEN required)"
 else
   fail "#454: --check-files should not need GH_TOKEN; got rc=$RC, out: $OUT"
@@ -190,7 +228,7 @@ OUT=$( cd "$ROOT" && PATH="$STUB_BIN:$PATH" OP_PREFLIGHT_CACHE_DIR="$EMPTY_CACHE
   MERGEPATH_AGENT="nobody-xyz" env -u GH_TOKEN "$SCRIPT" --repos __none__ 2>&1 )
 RC=$?
 set -e
-if [ "$RC" = "3" ] && echo "$OUT" | grep -qi "reviewer token"; then
+if [ "$RC" = "3" ] && grep -qi "reviewer token" <<<"$OUT"; then
   pass "#454: live mode fails closed (exit 3) with no token + no fresh cache"
 else
   fail "#454: live mode should fail closed w/o a token; got rc=$RC, out: $OUT"
@@ -212,9 +250,9 @@ OUT=$( cd "$NO_MANIFEST_DIR" && PATH="$NOYQ_PATH_521" OP_PREFLIGHT_CACHE_DIR="$E
   MERGEPATH_AGENT="nobody-xyz" env -u GH_TOKEN -u GITHUB_TOKEN -u OP_PREFLIGHT_REVIEWER_PAT "$SCRIPT" --repos __none__ 2>&1 )
 RC=$?
 set -e
-if [ "$RC" = "3" ] && echo "$OUT" | grep -qi "reviewer token" \
-   && ! echo "$OUT" | grep -qi "yq is required" \
-   && ! echo "$OUT" | grep -qi "not found"; then
+if [ "$RC" = "3" ] && grep -qi "reviewer token" <<<"$OUT" \
+   && ! grep -qi "yq is required" <<<"$OUT" \
+   && ! grep -qi "not found" <<<"$OUT"; then
   pass "#521: missing token fails fast (exit 3) BEFORE the yq/manifest checks"
 else
   fail "#521: token check should precede manifest/yq prereqs; got rc=$RC, out: $OUT"
@@ -273,8 +311,8 @@ GH
   RC=$?
   set -e
   VERDICT_LINE=$(echo "$OUT" | grep "live-mode token identity" || true)
-  if [ "$RC" = "3" ] && echo "$VERDICT_LINE" | grep -q "'<unresolvable>'" \
-     && ! echo "$VERDICT_LINE" | grep -q '"message"'; then
+  if [ "$RC" = "3" ] && grep -q "'<unresolvable>'" <<<"$VERDICT_LINE" \
+     && ! grep -q '"message"' <<<"$VERDICT_LINE"; then
     pass "#799: an unreadable token-identity read reports <unresolvable>, not the error body (gh exit $lane_rc)"
   else
     fail "#799: token-identity diagnostic leaked the error body at gh exit $lane_rc; got rc=$RC, out: $OUT"

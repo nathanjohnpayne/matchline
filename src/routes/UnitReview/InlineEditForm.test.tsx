@@ -118,6 +118,23 @@ describe("InlineEditForm", () => {
     expect(html).toContain('data-edit-state="editing"');
   });
 
+  it("offers the artifact source type and selects it for an artifact Unit (#518)", () => {
+    const u = unit({
+      id: "a",
+      source_type: "artifact",
+      source_ref: "artifact://users/u/artifacts/deck.pptx#slide-4",
+    });
+    const html = render(draftOf(u), "editing");
+
+    expect(html).toContain(
+      '<option value="artifact" selected="">artifact</option>',
+    );
+    expect(html).toContain('<option value="resume">resume</option>');
+    expect(html).toContain(
+      'value="artifact://users/u/artifacts/deck.pptx#slide-4"',
+    );
+  });
+
   it("renders the Save button as 'Save' in editing mode", () => {
     const html = render(draftOf(unit({ id: "x" })), "editing");
     expect(html).toContain('data-action="save"');
@@ -233,6 +250,15 @@ describe("InlineEditForm", () => {
     for (const input of dateInputs) {
       expect(input).not.toMatch(/disabled/);
     }
+  });
+
+  it("labels a blank end date as no end date, not ongoing (#485 review)", () => {
+    // Generation and validation cannot tell a user's blank end from an
+    // end extraction never found, so neither reads a start-only range
+    // as current work; the label must not promise that it is.
+    const html = render(draftOf(unit({ id: "x", date_range: { start: "2024-01-01" } })), "editing");
+    expect(html).toContain("End date (blank = no end date)");
+    expect(html).not.toMatch(/ongoing/i);
   });
 
   it("renders an empty date input for a Unit without a date_range", () => {

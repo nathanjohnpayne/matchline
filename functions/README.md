@@ -1,7 +1,7 @@
 # Matchline Functions
 
 Backend for Matchline's AI pipeline, deployed as Firebase Cloud
-Functions v2 on Node 20.
+Functions v2 on Node 24.
 
 ## Layout
 

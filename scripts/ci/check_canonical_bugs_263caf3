@@ -116,7 +116,7 @@ out=$(PATH="$SCRATCH:$PATH" OP_PREFLIGHT_REVIEWER_PAT="ghp_fake-reviewer-pat" \
 rc=$?
 set -e
 
-if [ "$rc" = "0" ] && echo "$out" | grep -q "STUB_GH_COMMENT_REACHED"; then
+if [ "$rc" = "0" ] && echo "$out" | grep "STUB_GH_COMMENT_REACHED" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: no-\`--repo\` invocation reaches \`gh pr comment\` (rc=0)"
 else
@@ -134,7 +134,7 @@ out=$(PATH="$SCRATCH:$PATH" OP_PREFLIGHT_REVIEWER_PAT="ghp_fake-reviewer-pat" \
 rc=$?
 set -e
 
-if [ "$rc" = "0" ] && echo "$out" | grep -q "STUB_GH_COMMENT_REACHED"; then
+if [ "$rc" = "0" ] && echo "$out" | grep "STUB_GH_COMMENT_REACHED" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: --repo invocation reaches \`gh pr comment\` (rc=0)"
 else
@@ -826,7 +826,7 @@ else
   echo "  FAIL: enabled Codex accepted unanchored PR reaction clearance" >&2
 fi
 
-if grep -Fq 'CODEX_ENABLED=$(codex_field enabled)' "$CODEX_CHECK_SCRIPT" && \
+if grep -Fq 'CODEX_ENABLED=$(codex_field enabled bool) || exit 3' "$CODEX_CHECK_SCRIPT" && \
    grep -Fq 'codex.enabled=false — ignoring Codex bot review/reaction signals' "$CODEX_CHECK_SCRIPT" && \
    grep -Fq 'same-agent anchored Codex fallback unavailable because codex.enabled=false' "$CODEX_CHECK_SCRIPT"; then
   pass=$((pass + 1))
@@ -996,7 +996,9 @@ JSON
         #
         # `ref` non-null carrying `refUpdateRule: null` is the honest shape
         # for this fixture repo: the ref was OBSERVED (so the surface really
-        # was read) and carries no classic protection rule. A null `ref`
+        # was read) and carries no classic protection rule. The response also
+        # proves a personal-repository WRITE reader, so the projection is
+        # complete without administrative bypass ambiguity (#2571). A null `ref`
         # would mean nothing was learned, which br_required_checks correctly
         # records as an UNREAD surface — and an unread surface resolves to
         # `unknown`, which makes gate (a) fail closed on an unresolved
@@ -1004,7 +1006,7 @@ JSON
         for gql_arg in "$@"; do
           case "$gql_arg" in
             *qualifiedName*)
-              printf '{"data":{"repository":{"ref":{"refUpdateRule":null}}}}\n'
+              printf '{"data":{"repository":{"isInOrganization":false,"viewerPermission":"WRITE","ref":{"refUpdateRule":null}}}}\n'
               exit 0
               ;;
           esac
@@ -1078,7 +1080,7 @@ set +e
 out=$(run_codex_check_fixture false disabled_bot_only 2>&1)
 rc=$?
 set -e
-if [ "$rc" = "1" ] && echo "$out" | grep -q "codex.enabled=false and no Phase 4b substitute APPROVED"; then
+if [ "$rc" = "1" ] && echo "$out" | grep "codex.enabled=false and no Phase 4b substitute APPROVED" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: actual codex-review-check blocks disabled Codex despite fresh bot 👍"
 else
@@ -1091,7 +1093,7 @@ set +e
 out=$(run_codex_check_fixture false disabled_4b 2>&1)
 rc=$?
 set -e
-if [ "$rc" = "0" ] && echo "$out" | grep -q "Phase 4b substitute"; then
+if [ "$rc" = "0" ] && echo "$out" | grep "Phase 4b substitute" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: actual codex-review-check accepts Phase 4b substitute when Codex is disabled"
 else
@@ -1114,7 +1116,7 @@ set +e
 out=$(run_codex_check_fixture true enabled_bot 2>&1)
 rc=$?
 set -e
-if [ "$rc" = "0" ] && echo "$out" | grep -q "latest Codex signal is COMMENTED review"; then
+if [ "$rc" = "0" ] && echo "$out" | grep "latest Codex signal is COMMENTED review" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: actual enabled checker accepts a current-head clean Codex review"
 else
@@ -1331,6 +1333,7 @@ case "$1" in
           cat <<JSON
 [
   {
+    "id": 1,
     "context": "CodeRabbit",
     "state": "success",
     "created_at": "$status_created_at",
@@ -1447,8 +1450,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: StatusContext success does not clear a current-head rate-limit comment"
 else
@@ -1472,8 +1475,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: a later status alone cannot clear the current unscoped rate-limit comment (#956)"
 else
@@ -1497,8 +1500,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: an edited unscoped rate-limit comment still requires a HEAD review (#956)"
 else
@@ -1524,8 +1527,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: unscoped non-HEAD rate-limit comment created AFTER the status success suppresses the fast-path (#446)"
 else
@@ -1548,8 +1551,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: a StatusContext success 1s after a current-head rate-limit notice is suppressed within the published 10-minute window (630s, window-aware grace) (#596/#599)"
 else
@@ -1574,8 +1577,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "5" ] &&
-   echo "$out" | grep -q '"status": "rate_limit_stalled"' &&
-   echo "$out" | grep -q "clearance remains suppressed"; then
+   echo "$out" | grep '"status": "rate_limit_stalled"' >/dev/null &&
+   echo "$out" | grep "clearance remains suppressed" >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: status-only success beyond the grace/window cannot clear a current refusal (#956)"
 else
@@ -1599,8 +1602,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "0" ] &&
-   echo "$out" | grep -q '"status": "cleared"' &&
-   echo "$out" | grep -q 'body-bearing review id=8801 is pinned'; then
+   echo "$out" | grep '"status": "cleared"' >/dev/null &&
+   echo "$out" | grep 'body-bearing review id=8801 is pinned' >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: an actual current-HEAD review clears despite the lingering refusal (#956)"
 else
@@ -1623,7 +1626,7 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "0" ] &&
-   echo "$out" | grep -q '"status": "cleared"'; then
+   echo "$out" | grep '"status": "cleared"' >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: StatusContext fast path ignores pre-head inline findings remapped to HEAD"
 else
@@ -1646,8 +1649,8 @@ out=$(
 rc=$?
 set -e
 if [ "$rc" = "2" ] &&
-   echo "$out" | grep -q '"status": "findings"' &&
-   echo "$out" | grep -q '"potential_issue_count": 1'; then
+   echo "$out" | grep '"status": "findings"' >/dev/null &&
+   echo "$out" | grep '"potential_issue_count": 1' >/dev/null; then
   pass=$((pass + 1))
   echo "  PASS: StatusContext fast path still reports fresh current-head inline findings"
 else

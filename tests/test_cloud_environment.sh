@@ -58,13 +58,13 @@ else
 fi
 
 out="$(CLAUDE_CODE_REMOTE=true PROBE_LOG="$WORKDIR/probe.log" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'capability tier `author-writes`' \
-   && printf '%s' "$out" | grep -q -- '- push-multi-branch: no, documented (proxy ceiling: hand this step to a local session or CI)' \
-   && printf '%s' "$out" | grep -q -- '- reviewer-writes: no, no-verified-token (fix the credential, tools or setup, then re-run' \
-   && printf '%s' "$out" | grep -q -- '- graphql: no, viewer query returned 500 (fix the credential, tools or setup' \
-   && printf '%s' "$out" | grep -q -- '- cross-repo: no, GET repos/x/y returned 403 (fix the credential, tools or setup' \
-   && printf '%s' "$out" | grep -q -- '- author-writes: yes, a$' \
-   && ! printf '%s' "$out" | grep -q -- 'may be transient' \
+if [ "$rc" -eq 0 ] && grep -q 'capability tier `author-writes`' <<<"$out" \
+   && grep -q -- '- push-multi-branch: no, documented (proxy ceiling: hand this step to a local session or CI)' <<<"$out" \
+   && grep -q -- '- reviewer-writes: no, no-verified-token (fix the credential, tools or setup, then re-run' <<<"$out" \
+   && grep -q -- '- graphql: no, viewer query returned 500 (fix the credential, tools or setup' <<<"$out" \
+   && grep -q -- '- cross-repo: no, GET repos/x/y returned 403 (fix the credential, tools or setup' <<<"$out" \
+   && grep -q -- '- author-writes: yes, a$' <<<"$out" \
+   && ! grep -q -- 'may be transient' <<<"$out" \
    && grep -q -- '--quiet' "$WORKDIR/probe.log"; then
   pass "hook, cloud session: classifies each no from the probe's basis and reason (a documented denial is a ceiling; a GraphQL 500 or a bare cross-repo 403 is fix-first)"
 else
@@ -74,10 +74,10 @@ fi
 # A run with a transient failure (a rate-limited 403 among them) re-probes its
 # measured "no" answers before calling them a setup problem or a ceiling.
 out="$(CLAUDE_CODE_REMOTE=true PROBE_TRANSIENT=true PROBE_LOG="$WORKDIR/probe.log" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q -- '- cross-repo: no, GET repos/x/y returned 403 (may be transient: re-run' \
-   && printf '%s' "$out" | grep -q -- '- graphql: no, viewer query returned 500 (may be transient' \
-   && printf '%s' "$out" | grep -q -- '- push-multi-branch: no, documented (proxy ceiling' \
-   && ! printf '%s' "$out" | grep -q -- 'fix the credential, tools or setup, then'; then
+if [ "$rc" -eq 0 ] && grep -q -- '- cross-repo: no, GET repos/x/y returned 403 (may be transient: re-run' <<<"$out" \
+   && grep -q -- '- graphql: no, viewer query returned 500 (may be transient' <<<"$out" \
+   && grep -q -- '- push-multi-branch: no, documented (proxy ceiling' <<<"$out" \
+   && ! grep -q -- 'fix the credential, tools or setup, then' <<<"$out"; then
   pass "hook, transient run: a measured no is marked may-be-transient, a documented ceiling stays a ceiling"
 else
   fail "hook transient: rc=$rc out=$out"
@@ -87,16 +87,16 @@ fi
 # and the wrappers accept it, so it is not sent round the fix-and-re-probe
 # loop (Codex on #1552).
 out="$(CLAUDE_CODE_REMOTE=true PROBE_RW_BASIS=unverifiable PROBE_LOG="$WORKDIR/probe.log" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q -- "- reviewer-writes: no, no-verified-token (not provable: GitHub does not expose this token type's permissions; the wrappers still verify" \
-   && ! printf '%s' "$out" | grep -q -- '- reviewer-writes: .*fix the credential' \
-   && ! printf '%s' "$out" | grep -qi -- 'any other no'; then
+if [ "$rc" -eq 0 ] && grep -q -- "- reviewer-writes: no, no-verified-token (not provable: GitHub does not expose this token type's permissions; the wrappers still verify" <<<"$out" \
+   && ! grep -q -- '- reviewer-writes: .*fix the credential' <<<"$out" \
+   && ! grep -qi -- 'any other no' <<<"$out"; then
   pass "hook, unverifiable token: reported as not provable, not as a setup problem to fix and re-probe"
 else
   fail "hook unverifiable: rc=$rc out=$out"
 fi
 
 out="$(CLAUDE_CODE_REMOTE=true PROBE_MODE=fail PROBE_LOG="$WORKDIR/probe.log" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "capabilities unknown"; then
+if [ "$rc" -eq 0 ] && grep -q "capabilities unknown" <<<"$out"; then
   pass "hook, probe failure: still exits 0 and says the capabilities are unknown"
 else
   fail "hook probe failure: rc=$rc out=$out"
@@ -114,15 +114,18 @@ case "${SETUP_MODE:-noop}" in
 esac
 exit 0
 SETUP
-# A PATH with only the tools the hook and its fixtures run, so whether
-# `timeout` exists is decided here, not by the host: HBIN has a pass-through
-# `timeout` that records its bound, HBIN_NT has none.
+# A PATH with only the tools the hook and its fixtures run, so timeout command
+# selection is decided here, not by the host: HBIN has `timeout`, HBIN_GT has
+# only `gtimeout`, and HBIN_NT has neither.
 HBIN="$WORKDIR/hook-bin"
+HBIN_GT="$WORKDIR/hook-bin-gtimeout"
 HBIN_NT="$WORKDIR/hook-bin-notimeout"
-mkdir -p "$HBIN" "$HBIN_NT"
+mkdir -p "$HBIN" "$HBIN_GT" "$HBIN_NT"
 for tool in bash env cat sed paste tail head dirname jq; do
   real="$(command -v "$tool" 2>/dev/null || true)"
-  case "$real" in /*) ln -sf "$real" "$HBIN/$tool"; ln -sf "$real" "$HBIN_NT/$tool" ;; esac
+  case "$real" in
+    /*) ln -sf "$real" "$HBIN/$tool"; ln -sf "$real" "$HBIN_GT/$tool"; ln -sf "$real" "$HBIN_NT/$tool" ;;
+  esac
 done
 cat >"$HBIN/timeout" <<T
 #!/usr/bin/env bash
@@ -131,14 +134,22 @@ shift
 exec "\$@"
 T
 chmod +x "$HBIN/timeout"
+cat >"$HBIN_GT/gtimeout" <<T
+#!/usr/bin/env bash
+echo "gtimeout \$1" >>"$WORKDIR/timeout.log"
+shift
+exec "\$@"
+T
+chmod +x "$HBIN_GT/gtimeout"
 : >"$WORKDIR/probe.log"
 : >"$WORKDIR/timeout.log"
 out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" PATH="$HBIN" bash "$HOOK")"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | head -1 | grep -qx 'mergepath cloud session: installed yq v4.53.6 (scripts/cloud-setup.sh).' \
-   && printf '%s' "$out" | grep -q 'capability tier `author-writes`' \
+   && grep -q 'capability tier `author-writes`' <<<"$out" \
    && [ "$(head -1 "$WORKDIR/probe.log")" = "setup ran" ] && grep -q '^probe ' "$WORKDIR/probe.log" \
-   && [ "$(cat "$WORKDIR/timeout.log")" = "timeout 60" ]; then
-  pass "hook, cloud session: runs setup under a 60-second timeout before the probe and reports what it installed"
+   && [ "$(head -1 "$WORKDIR/timeout.log")" = "timeout 60" ] \
+   && [ "$(tail -1 "$WORKDIR/timeout.log")" = "timeout 90" ]; then
+  pass "hook, cloud session: bounds setup and probe before reporting what setup installed"
 else
   fail "hook setup install: rc=$rc out=$out log=$(cat "$WORKDIR/probe.log") timeout=$(cat "$WORKDIR/timeout.log")"
 fi
@@ -150,35 +161,173 @@ for case_spec in "30:30:no" "500:60:yes" "0:60:yes" "abc:60:yes" "060:60:yes"; d
   : >"$WORKDIR/probe.log"; : >"$WORKDIR/timeout.log"
   out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" MERGEPATH_CLOUD_SETUP_TIMEOUT="$requested" PATH="$HBIN" bash "$HOOK")"; rc=$?
   noticed=no
-  printf '%s' "$out" | grep -q 'MERGEPATH_CLOUD_SETUP_TIMEOUT must be a whole number of seconds from 1 to 60' && noticed=yes
-  if [ "$rc" -eq 0 ] && [ "$(cat "$WORKDIR/timeout.log")" = "timeout $expected" ] && [ "$noticed" = "$notice" ] && grep -q '^probe ' "$WORKDIR/probe.log"; then
+  grep -q 'MERGEPATH_CLOUD_SETUP_TIMEOUT must be a whole number of seconds from 1 to 60' <<<"$out" && noticed=yes
+  if [ "$rc" -eq 0 ] && [ "$(head -1 "$WORKDIR/timeout.log")" = "timeout $expected" ] \
+     && [ "$(wc -l <"$WORKDIR/timeout.log" | tr -d ' ')" = "2" ] \
+     && [ "$noticed" = "$notice" ] && grep -q '^probe ' "$WORKDIR/probe.log"; then
     pass "hook, MERGEPATH_CLOUD_SETUP_TIMEOUT=$requested: setup bound $expected, notice $notice, the probe still runs"
   else
     fail "hook setup bound $requested: rc=$rc out=$out timeout=$(cat "$WORKDIR/timeout.log")"
   fi
 done
-# Without `timeout` nothing bounds setup, which could outlast the hook's own
-# 120-second limit and lose the summary: setup is skipped with a notice and
-# the probe still runs.
+# With neither timeout executable setup is skipped and the probe keeps its
+# existing unbounded fallback behavior.
 : >"$WORKDIR/probe.log"
+: >"$WORKDIR/timeout.log"
 out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" PATH="$HBIN_NT" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | head -1 | grep -qx 'mergepath cloud session: tool setup skipped because timeout is not available to bound it; run bash scripts/cloud-setup.sh by hand.' \
-   && ! printf '%s' "$out" | grep -q 'installed yq' \
-   && printf '%s' "$out" | grep -q 'capability tier `author-writes`' \
-   && ! grep -q 'setup ran' "$WORKDIR/probe.log" && grep -q '^probe ' "$WORKDIR/probe.log"; then
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | sed -n '1p' | grep -x 'mergepath cloud session: tool setup skipped because timeout is not available to bound it; run bash scripts/cloud-setup.sh by hand.' >/dev/null \
+   && ! printf '%s' "$out" | grep 'installed yq' >/dev/null \
+   && printf '%s' "$out" | grep 'capability tier `author-writes`' >/dev/null \
+   && ! grep -q 'setup ran' "$WORKDIR/probe.log" && grep -q '^probe ' "$WORKDIR/probe.log" \
+   && [ ! -s "$WORKDIR/timeout.log" ]; then
   pass "hook, no timeout available: skips setup with a one-line notice, the probe still runs, the hook still exits 0"
 else
   fail "hook no timeout: rc=$rc out=$out log=$(cat "$WORKDIR/probe.log")"
 fi
+# gtimeout-only hosts receive the same setup and probe bounds.
+: >"$WORKDIR/probe.log"
+: >"$WORKDIR/timeout.log"
+out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" PATH="$HBIN_GT" bash "$HOOK")"; rc=$?
+if [ "$rc" -eq 0 ] && [ "$(head -1 "$WORKDIR/timeout.log")" = "gtimeout 60" ] \
+   && [ "$(tail -1 "$WORKDIR/timeout.log")" = "gtimeout 90" ] && grep -q '^probe ' "$WORKDIR/probe.log"; then
+  pass "hook, gtimeout-only host: bounds setup and probe"
+else
+  fail "hook gtimeout-only: rc=$rc out=$out timeout=$(cat "$WORKDIR/timeout.log")"
+fi
+# The timeout requested for the probe is limited by the elapsed setup budget.
+# Virtual elapsed time is injected only into this copied hook at its single
+# asserted pre-probe timing seam; production has no clock-injection setting.
+HFIX_VIRTUAL="$WORKDIR/hook-repo-virtual-clock"
+cp -R "$HFIX" "$HFIX_VIRTUAL"
+HOOK_VIRTUAL="$HFIX_VIRTUAL/scripts/hooks/cloud-session-start.sh"
+if [ "$(grep -Fxc 'probe_elapsed=$((SECONDS - hook_started))' "$HOOK_VIRTUAL")" = "1" ]; then
+  sed 's/probe_elapsed=$((SECONDS - hook_started))/SECONDS=$((hook_started + ${TEST_VIRTUAL_ELAPSED:-0})); probe_elapsed=$((SECONDS - hook_started))/' \
+    "$HOOK_VIRTUAL" >"$HOOK_VIRTUAL.tmp"
+  mv "$HOOK_VIRTUAL.tmp" "$HOOK_VIRTUAL"
+  : >"$WORKDIR/timeout.log"
+  out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" TEST_VIRTUAL_ELAPSED=60 PATH="$HBIN" bash "$HOOK_VIRTUAL")"; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$(head -1 "$WORKDIR/timeout.log")" = "timeout 60" ] \
+     && awk -v line="$(tail -1 "$WORKDIR/timeout.log")" 'BEGIN { split(line, a, " "); exit !(a[1] == "timeout" && a[2] > 0 && a[2] <= 55) }'; then
+    pass "hook, virtual full setup budget: probe receives at most 55 seconds and retains five seconds for the summary"
+  else
+    fail "hook virtual elapsed budget: rc=$rc out=$out timeout=$(cat "$WORKDIR/timeout.log")"
+  fi
+  : >"$WORKDIR/probe.log"
+  : >"$WORKDIR/timeout.log"
+  out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" TEST_VIRTUAL_ELAPSED=120 PATH="$HBIN" bash "$HOOK_VIRTUAL")"; rc=$?
+  if [ "$rc" -eq 0 ] && grep -q 'capabilities unknown' <<<"$out" \
+     && [ "$(cat "$WORKDIR/timeout.log")" = "timeout 60" ] && ! grep -q '^probe ' "$WORKDIR/probe.log"; then
+    pass "hook, exhausted budget: skips the probe and prints the existing unknown summary"
+  else
+    fail "hook exhausted budget: rc=$rc out=$out timeout=$(cat "$WORKDIR/timeout.log") probe=$(cat "$WORKDIR/probe.log")"
+  fi
+
+  for case_spec in "1:1:no" "030:30:no" "119:deadline:no" "0:90:yes" "120:90:yes" "999999999999999999999:90:yes" "0000000000000000001:90:yes" "abc:90:yes"; do
+    requested="${case_spec%%:*}"; rest="${case_spec#*:}"; expected="${rest%%:*}"; notice="${rest#*:}"
+    : >"$WORKDIR/timeout.log"
+    out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=install PROBE_LOG="$WORKDIR/probe.log" TEST_VIRTUAL_ELAPSED=0 MERGEPATH_CLOUD_PROBE_TIMEOUT="$requested" PATH="$HBIN" bash "$HOOK_VIRTUAL")"; rc=$?
+    noticed=no
+    grep -q 'MERGEPATH_CLOUD_PROBE_TIMEOUT must be a positive whole number below 120' <<<"$out" && noticed=yes
+    if [ "$expected" = deadline ]; then
+      bound_ok=no
+      if awk -v line="$(tail -1 "$WORKDIR/timeout.log")" 'BEGIN { split(line, a, " "); exit !(a[1] == "timeout" && a[2] > 0 && a[2] <= 115) }'; then
+        bound_ok=yes
+      fi
+    else
+      [ "$(tail -1 "$WORKDIR/timeout.log")" = "timeout $expected" ] && bound_ok=yes || bound_ok=no
+    fi
+    if [ "$rc" -eq 0 ] && [ "$bound_ok" = yes ] && [ "$noticed" = "$notice" ]; then
+      pass "hook, MERGEPATH_CLOUD_PROBE_TIMEOUT=$requested: effective bound $expected, notice $notice"
+    else
+      fail "hook probe override $requested: rc=$rc out=$out timeout=$(cat "$WORKDIR/timeout.log")"
+    fi
+  done
+else
+  fail "hook test fixture: expected exactly one pre-probe elapsed-time seam for virtual-clock evidence"
+fi
+# Exercise a real deadline with an isolated sleeper and a test-only Perl alarm
+# shim, so the regression does not depend on GNU coreutils being installed.
+if ! command -v perl >/dev/null 2>&1; then
+  fail "test prerequisite: perl is required to prove the sleeping-probe alarm path"
+else
+HFIX_SLEEP="$WORKDIR/hook-repo-sleeper"
+mkdir -p "$HFIX_SLEEP/scripts/hooks"
+cp "$HOOK" "$HFIX_SLEEP/scripts/hooks/cloud-session-start.sh"
+cat >"$HFIX_SLEEP/scripts/agent-capability-probe.sh" <<'SLEEPER'
+#!/usr/bin/env bash
+printf 'started\n' >>"$PROBE_SLEEP_LOG"
+exec sleep "${PROBE_SLEEP:-5}"
+SLEEPER
+chmod +x "$HFIX_SLEEP/scripts/agent-capability-probe.sh"
+HBIN_REAL="$WORKDIR/hook-bin-real-timeout"
+mkdir -p "$HBIN_REAL"
+for tool in bash env sleep perl dirname jq sed paste tail head; do
+  real="$(command -v "$tool" 2>/dev/null || true)"
+  case "$real" in /*) ln -sf "$real" "$HBIN_REAL/$tool" ;; esac
+done
+cat >"$HBIN_REAL/timeout" <<'REALTIMEOUT'
+#!/usr/bin/env bash
+seconds="$1"; shift
+printf '%s\n' "$seconds" "$@" >"$TEST_TIMEOUT_COMMAND"
+exec perl -e '
+  my $seconds = shift;
+  my $pid = fork();
+  die "fork failed" unless defined $pid;
+  if (!$pid) {
+    sleep($ENV{TEST_TIMEOUT_CHILD_START_DELAY} || 0);
+    exec @ARGV or die "exec failed: $!";
+  }
+$SIG{ALRM} = sub {
+  my $sent = kill "TERM", $pid;
+  if ($sent) {
+    waitpid($pid, 0);
+    if (open my $fh, ">>", $ENV{TEST_TIMEOUT_MARKER}) {
+      print $fh "124\n";
+      close $fh;
+    }
+    exit 124;
+  }
+  waitpid($pid, 0);
+  exit 127;
+};
+  alarm $seconds;
+  waitpid($pid, 0);
+  alarm 0;
+  exit(($? >> 8) & 255);
+' "$seconds" "$@"
+REALTIMEOUT
+chmod +x "$HBIN_REAL/timeout"
+# A correct deadline may expire before the child gets scheduled. Verify the
+# exact dispatched command rather than requiring the child's first write.
+# The hook derives its root with `cd ... && pwd`, which collapses the double
+# slash a trailing-slash TMPDIR (macOS) puts in WORKDIR; canonicalize the same
+# way so the comparison stays byte-exact on every platform.
+printf '1\n%s\n--quiet\n' "$(cd "$HFIX_SLEEP" && pwd)/scripts/agent-capability-probe.sh" >"$WORKDIR/expected-probe-command"
+for startup_delay in 0 2; do
+  rm -f "$WORKDIR/probe-start.log" "$WORKDIR/alarm.log" "$WORKDIR/probe-command.log"
+  started="$(date +%s)"
+  out="$(CLAUDE_CODE_REMOTE=true MERGEPATH_CLOUD_PROBE_TIMEOUT=1 PROBE_SLEEP_LOG="$WORKDIR/probe-start.log" TEST_TIMEOUT_MARKER="$WORKDIR/alarm.log" TEST_TIMEOUT_COMMAND="$WORKDIR/probe-command.log" TEST_TIMEOUT_CHILD_START_DELAY="$startup_delay" PATH="$HBIN_REAL" bash "$HFIX_SLEEP/scripts/hooks/cloud-session-start.sh")"; rc=$?
+  elapsed=$(( $(date +%s) - started ))
+  if [ "$rc" -eq 0 ] && [ "$elapsed" -le 3 ] \
+     && cmp -s "$WORKDIR/probe-command.log" "$WORKDIR/expected-probe-command" \
+     && [ "$(cat "$WORKDIR/alarm.log")" = "124" ] \
+     && printf '%s' "$out" | grep 'capabilities unknown' >/dev/null \
+     && { [ "$startup_delay" -eq 0 ] || [ ! -s "$WORKDIR/probe-start.log" ]; }; then
+    pass "hook, sleeping probe (startup delay ${startup_delay}s): exact dispatch, alarm/124 and unknown summary within the shortened bound"
+  else
+    fail "hook sleeping probe: delay=$startup_delay rc=$rc elapsed=${elapsed}s command=$(cat "$WORKDIR/probe-command.log" 2>/dev/null) start=$(cat "$WORKDIR/probe-start.log" 2>/dev/null) alarm=$(cat "$WORKDIR/alarm.log" 2>/dev/null) out=$out"
+  fi
+done
+fi
 out="$(CLAUDE_CODE_REMOTE=true SETUP_MODE=fail PROBE_LOG="$WORKDIR/probe.log" PATH="$HBIN" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'tool setup failed or timed out (bash scripts/cloud-setup.sh to see why): cloud-setup: checksum mismatch for yq' \
-   && printf '%s' "$out" | grep -q 'capability tier `author-writes`'; then
+if [ "$rc" -eq 0 ] && grep -q 'tool setup failed or timed out (bash scripts/cloud-setup.sh to see why): cloud-setup: checksum mismatch for yq' <<<"$out" \
+   && grep -q 'capability tier `author-writes`' <<<"$out"; then
   pass "hook, setup failure: reported in the summary, the probe still runs, the hook still exits 0"
 else
   fail "hook setup failure: rc=$rc out=$out"
 fi
 out="$(CLAUDE_CODE_REMOTE=true PROBE_LOG="$WORKDIR/probe.log" PATH="$HBIN" bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q 'cloud-setup\|tool setup'; then
+if [ "$rc" -eq 0 ] && ! grep -q 'cloud-setup\|tool setup' <<<"$out"; then
   pass "hook, setup with nothing to install: adds nothing to the summary"
 else
   fail "hook setup noop: rc=$rc out=$out"
@@ -187,7 +336,7 @@ rm -f "$HFIX/scripts/cloud-setup.sh"
 
 rm -f "$HFIX/scripts/agent-capability-probe.sh"
 out="$(CLAUDE_CODE_REMOTE=true bash "$HOOK")"; rc=$?
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "probe missing"; then
+if [ "$rc" -eq 0 ] && grep -q "probe missing" <<<"$out"; then
   pass "hook, probe absent: exits 0 and says so"
 else
   fail "hook probe absent: rc=$rc out=$out"
@@ -270,7 +419,7 @@ SBIN="$WORKDIR/setup-bin"
 mkdir -p "$SBIN"
 # gzip: GNU tar runs it from PATH for -z (bsdtar on macOS does not), so a
 # hermetic PATH without it fails every unpack on Linux (Codex on #1552).
-for tool in bash awk tar gzip mkdir cp chmod mktemp rm head sha256sum shasum perl sed tr cat env jq dirname; do
+for tool in bash awk tar gzip mkdir cp chmod mktemp mv rm head sha256sum shasum perl sed tr cat env jq dirname cmp stat; do
   real="$(command -v "$tool" 2>/dev/null || true)"
   case "$real" in /*) ln -sf "$real" "$SBIN/$tool" ;; esac
 done
@@ -308,6 +457,11 @@ run_setup() { # <prefix> [env...]  (MERGEPATH_GH_VERSION defaults to the unpinne
   local prefix="$1"; shift
   env -i HOME="$WORKDIR" PATH="$SBIN" MERGEPATH_GH_VERSION="$VER" MERGEPATH_TOOL_PREFIX="$prefix" "$@" \
     "$SBIN/bash" "$SETUP"
+}
+run_setup_dry() { # <prefix> [env...]
+  local prefix="$1"; shift
+  env -i HOME="$WORKDIR" PATH="$prefix/bin:$NOYQ" MERGEPATH_GH_VERSION="$VER" MERGEPATH_TOOL_PREFIX="$prefix" "$@" \
+    "$SBIN/bash" "$SETUP" --dry-run
 }
 
 set +e
@@ -532,6 +686,44 @@ mkdir -p "$PYYQ"
 printf '#!/usr/bin/env bash\necho "yq 0.0.0"\n' >"$PYYQ/yq"
 chmod +x "$PYYQ/yq"
 
+# The release tag is validated before dry-run success. A checksum-shaped
+# override cannot make an older, unprefixed or malformed tag look installable.
+for spec in "y-dry-old:v4.52.0:v-prefixed v4 tag at least v4.53.6" "y-dry-invalid:v4.bad.0:v-prefixed v4 tag at least v4.53.6" "y-dry-unprefixed:4.54.1:v-prefixed v4 tag at least v4.53.6" "y-dry-leading-zero-major:v04.54.0:v-prefixed v4 tag at least v4.53.6" "y-dry-leading-zero-minor:v4.054.0:v-prefixed v4 tag at least v4.53.6" "y-dry-leading-zero-patch:v4.54.00:v-prefixed v4 tag at least v4.53.6" "y-dry-unsupported-major:v5.0.0:v-prefixed v4 tag at least v4.53.6"; do
+  dir="${spec%%:*}"; rest="${spec#*:}"; version="${rest%%:*}"; want="${rest#*:}"
+  : >"$WORKDIR/curl.log"
+  set +e
+  run_setup_dry "$WORKDIR/$dir" MERGEPATH_YQ_VERSION="$version" MERGEPATH_YQ_SHA256="$(printf 'a%.0s' {1..64})" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+  set -e
+  if [ "$rc" -eq 1 ] && grep -q "$want" "$WORKDIR/setup.err" && [ ! -s "$WORKDIR/curl.log" ]; then
+    pass "setup dry-run, yq $version: refuses before download"
+  else
+    fail "setup dry-run yq $version: rc=$rc err=$(cat "$WORKDIR/setup.err") curl=$(cat "$WORKDIR/curl.log")"
+  fi
+done
+
+# Canonical v-prefixed release tags, including valid zero components, pass.
+for version in v4.54.0 v4.54.1 v4.9223372036854775808.0; do
+  : >"$WORKDIR/curl.log"
+  set +e
+  run_setup_dry "$WORKDIR/y-dry-tag-${version//./-}" MERGEPATH_YQ_VERSION="$version" MERGEPATH_YQ_SHA256="$(printf 'a%.0s' {1..64})" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+  set -e
+  if [ "$rc" -eq 0 ] && grep -q "would install yq $version" "$WORKDIR/setup.err" && [ ! -s "$WORKDIR/curl.log" ]; then
+    pass "setup dry-run, yq $version: accepts a valid v-prefixed stable release tag"
+  else
+    fail "setup dry-run yq $version: rc=$rc err=$(cat "$WORKDIR/setup.err") curl=$(cat "$WORKDIR/curl.log")"
+  fi
+done
+
+: >"$WORKDIR/curl.log"
+set +e
+run_setup_dry "$WORKDIR/y-dry-default" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+if [ "$rc" -eq 0 ] && grep -q "would install yq v4.53.6" "$WORKDIR/setup.err" && [ ! -s "$WORKDIR/curl.log" ]; then
+  pass "setup dry-run, default yq version: still plans the pinned v4.53.6 install without downloading"
+else
+  fail "setup default yq dry-run: rc=$rc err=$(cat "$WORKDIR/setup.err") curl=$(cat "$WORKDIR/curl.log")"
+fi
+
 : >"$WORKDIR/curl.log"
 set +e
 run_setup "$WORKDIR/y-absent" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$yqsum" PATH="$WORKDIR/y-absent/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
@@ -594,7 +786,7 @@ if [ "$rc" -eq 0 ] && [ -x "$WORKDIR/y-rc/bin/yq" ] && grep -q "installed yq $YQ
 else
   fail "setup prerelease yq: rc=$rc err=$(cat "$WORKDIR/setup.err") curl=$(cat "$WORKDIR/curl.log")"
 fi
-for keep in v4.53.6 v4.100.0; do
+for keep in v4.53.6 v4.100.0 v4.9223372036854775808.0; do
   yq_stub_dir "$WORKDIR/yq-keep-$keep" "$keep"
   : >"$WORKDIR/curl.log"
   set +e
@@ -619,16 +811,54 @@ else
   fail "setup yq pinned mismatch: rc=$rc err=$(cat "$WORKDIR/setup.err")"
 fi
 
-# An override that installs an older v4 does not report success with a yq the
-# checks cannot use.
+# Exercise the default release's install path with a fake download and a
+# checksum-tool boundary stub. The stub reports the official pinned digest so
+# the test reaches binary validation; these fixture bytes are not a copy of the
+# official release and this does not claim to verify that release's contents.
+printf '#!/usr/bin/env bash\necho "yq (https://github.com/mikefarah/yq/) version v4.53.6"\n' >"$REL/yq/yq_linux_amd64"
+DEFAULT_YQ_FIXTURE="$WORKDIR/default-yq-fixture"
+cp "$REL/yq/yq_linux_amd64" "$DEFAULT_YQ_FIXTURE"
+DEFAULT_SUM_BIN="$WORKDIR/default-sum-bin"
+mkdir -p "$DEFAULT_SUM_BIN"
+for f in "$SBIN"/*; do case "$(basename "$f")" in sha256sum|yq) ;; *) ln -sf "$f" "$DEFAULT_SUM_BIN/$(basename "$f")" ;; esac; done
+cat >"$DEFAULT_SUM_BIN/sha256sum" <<'SUM'
+#!/usr/bin/env bash
+printf '%s  %s\n' c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385 "$1"
+printf '%s  %s\n' c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385 "$1" >>"$CHECKSUM_LOG"
+SUM
+chmod +x "$DEFAULT_SUM_BIN/sha256sum"
+: >"$WORKDIR/default-checksum.log"
+: >"$WORKDIR/curl.log"
+set +e
+run_setup "$WORKDIR/y-default-install" CHECKSUM_LOG="$WORKDIR/default-checksum.log" PATH="$DEFAULT_SUM_BIN:$WORKDIR/y-default-install/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+installed_mode="$(stat -c %a "$WORKDIR/y-default-install/bin/yq" 2>/dev/null || stat -f %Lp "$WORKDIR/y-default-install/bin/yq" 2>/dev/null || true)"
+if [ "$rc" -eq 0 ] && [ -x "$WORKDIR/y-default-install/bin/yq" ] \
+   && [ "$installed_mode" = 755 ] \
+   && cmp -s "$DEFAULT_YQ_FIXTURE" "$WORKDIR/y-default-install/bin/yq" \
+   && "$WORKDIR/y-default-install/bin/yq" --version | grep -q 'version v4.53.6' \
+   && grep -q 'releases/download/v4.53.6/yq_linux_amd64' "$WORKDIR/curl.log" \
+   && grep -q 'c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385' "$WORKDIR/default-checksum.log"; then
+  pass "setup, default yq v4.53.6: installs fixture bytes through the checksum stub with mode 755, expected URL and version"
+else
+  fail "setup default yq install: rc=$rc err=$(cat "$WORKDIR/setup.err") curl=$(cat "$WORKDIR/curl.log") checksum=$(cat "$WORKDIR/default-checksum.log")"
+fi
+
+# A checksum-verified older mikefarah/yq binary must be rejected before
+# replacing an existing prefix binary. The release tag itself is valid and
+# above minimum, so this exercises validation of the downloaded artifact.
 printf '#!/usr/bin/env bash\necho "yq (https://github.com/mikefarah/yq/) version v4.52.0"\n' >"$REL/yq/yq_linux_amd64"
 oldsum="$(sha256sum "$REL/yq/yq_linux_amd64" 2>/dev/null | awk '{print $1}')"
 [ -n "$oldsum" ] || oldsum="$(shasum -a 256 "$REL/yq/yq_linux_amd64" | awk '{print $1}')"
+mkdir -p "$WORKDIR/y-oldinstall/bin"
+printf 'existing yq must survive\n' >"$WORKDIR/y-oldinstall/bin/yq"
 set +e
-run_setup "$WORKDIR/y-oldinstall" MERGEPATH_YQ_VERSION=v4.52.0 MERGEPATH_YQ_SHA256="$oldsum" PATH="$WORKDIR/y-oldinstall/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+run_setup "$WORKDIR/y-oldinstall" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$oldsum" PATH="$WORKDIR/y-oldinstall/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
 set -e
-if [ "$rc" -eq 1 ] && grep -q "does not run as mikefarah/yq v4 at v4.53.6 or later" "$WORKDIR/setup.err" && ! grep -q "installed yq" "$WORKDIR/setup.err"; then
-  pass "setup, an override installing yq v4.52.0: fails instead of reporting a yq older than the minimum"
+if [ "$rc" -eq 1 ] && grep -q "verified download for yq $YQVER does not run as mikefarah/yq v4 at v4.53.6 or later" "$WORKDIR/setup.err" \
+   && ! grep -q "installed yq" "$WORKDIR/setup.err" \
+   && [ "$(cat "$WORKDIR/y-oldinstall/bin/yq")" = "existing yq must survive" ]; then
+  pass "setup, a valid release tag with mikefarah/yq v4.52.0: refuses before replacing the existing prefix binary"
 else
   fail "setup yq old install: rc=$rc err=$(cat "$WORKDIR/setup.err")"
 fi
@@ -644,6 +874,86 @@ if [ "$rc" -eq 1 ] && grep -q "does not run as mikefarah/yq v4" "$WORKDIR/setup.
 else
   fail "setup yq not v4: rc=$rc err=$(cat "$WORKDIR/setup.err")"
 fi
+
+# #2754 / #2772: validation runs where the binary will run. The fixture models
+# a noexec filesystem hermetically: it refuses to run (status 126, as exec
+# does) when its own path is under YQ_FIXTURE_NOEXEC. Staging files are
+# `.yq-stage.*` in the prefix's bin directory and must never outlive a run.
+cat >"$REL/yq/yq_linux_amd64" <<'NOEXEC_FIXTURE'
+#!/usr/bin/env bash
+case "$0" in "${YQ_FIXTURE_NOEXEC:-/nonexistent-2754}"/*) echo "$0: Permission denied" >&2; exit 126 ;; esac
+echo "yq (https://github.com/mikefarah/yq/) version v4.99.0"
+NOEXEC_FIXTURE
+nxsum="$(sha256sum "$REL/yq/yq_linux_amd64" 2>/dev/null | awk '{print $1}')"
+[ -n "$nxsum" ] || nxsum="$(shasum -a 256 "$REL/yq/yq_linux_amd64" | awk '{print $1}')"
+no_stage() { ! ls -A "$1/bin" 2>/dev/null | grep -q '^\.yq-stage\.'; }
+
+mkdir -p "$WORKDIR/noexec-tmp" "$WORKDIR/y-noexec-tmp/bin"
+printf 'existing yq replaced only after validation\n' >"$WORKDIR/y-noexec-tmp/bin/yq"
+set +e
+run_setup "$WORKDIR/y-noexec-tmp" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$nxsum" \
+  TMPDIR="$WORKDIR/noexec-tmp" YQ_FIXTURE_NOEXEC="$WORKDIR/noexec-tmp" \
+  PATH="$WORKDIR/y-noexec-tmp/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+if [ "$rc" -eq 0 ] && grep -q "installed yq $YQVER" "$WORKDIR/setup.err" \
+   && cmp -s "$REL/yq/yq_linux_amd64" "$WORKDIR/y-noexec-tmp/bin/yq" \
+   && no_stage "$WORKDIR/y-noexec-tmp" && [ -z "$(ls -A "$WORKDIR/noexec-tmp")" ]; then
+  pass "setup, noexec TMPDIR with an executable prefix: validates the staged yq in the prefix and installs it"
+else
+  fail "setup noexec TMPDIR: rc=$rc err=$(cat "$WORKDIR/setup.err") bin=$(ls -A "$WORKDIR/y-noexec-tmp/bin")"
+fi
+
+# The ordinary case still installs, and leaves no staging file.
+set +e
+run_setup "$WORKDIR/y-exec-tmp" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$nxsum" \
+  PATH="$WORKDIR/y-exec-tmp/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+if [ "$rc" -eq 0 ] && cmp -s "$REL/yq/yq_linux_amd64" "$WORKDIR/y-exec-tmp/bin/yq" && no_stage "$WORKDIR/y-exec-tmp"; then
+  pass "setup, executable TMPDIR: installs from the prefix staging file and leaves none behind"
+else
+  fail "setup exec TMPDIR: rc=$rc err=$(cat "$WORKDIR/setup.err") bin=$(ls -A "$WORKDIR/y-exec-tmp/bin")"
+fi
+
+# A non-executable destination still fails closed, keeping the prior binary.
+mkdir -p "$WORKDIR/y-noexec-dest/bin"
+printf 'existing yq must survive a noexec prefix\n' >"$WORKDIR/y-noexec-dest/bin/yq"
+set +e
+run_setup "$WORKDIR/y-noexec-dest" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$nxsum" \
+  YQ_FIXTURE_NOEXEC="$WORKDIR/y-noexec-dest/bin" \
+  PATH="$WORKDIR/y-noexec-dest/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+if [ "$rc" -eq 1 ] && grep -q "does not run as mikefarah/yq v4" "$WORKDIR/setup.err" \
+   && ! grep -q "installed yq" "$WORKDIR/setup.err" \
+   && [ "$(cat "$WORKDIR/y-noexec-dest/bin/yq")" = "existing yq must survive a noexec prefix" ] \
+   && no_stage "$WORKDIR/y-noexec-dest"; then
+  pass "setup, non-executable prefix: fails closed, keeps the prior yq, removes the staging file"
+else
+  fail "setup noexec prefix: rc=$rc err=$(cat "$WORKDIR/setup.err") bin=$(ls -A "$WORKDIR/y-noexec-dest/bin")"
+fi
+
+# A bad checksum never stages anything and keeps the prior binary.
+mkdir -p "$WORKDIR/y-badsum/bin"
+printf 'existing yq must survive a bad checksum\n' >"$WORKDIR/y-badsum/bin/yq"
+set +e
+run_setup "$WORKDIR/y-badsum" MERGEPATH_YQ_VERSION="$YQVER" MERGEPATH_YQ_SHA256="$(printf '0%.0s' $(seq 64))" \
+  PATH="$WORKDIR/y-badsum/bin:$NOYQ" >/dev/null 2>"$WORKDIR/setup.err"; rc=$?
+set -e
+if [ "$rc" -eq 1 ] && grep -q "checksum mismatch for yq $YQVER" "$WORKDIR/setup.err" \
+   && [ "$(cat "$WORKDIR/y-badsum/bin/yq")" = "existing yq must survive a bad checksum" ] \
+   && no_stage "$WORKDIR/y-badsum"; then
+  pass "setup, bad yq checksum: keeps the prior yq and stages nothing"
+else
+  fail "setup yq bad checksum: rc=$rc err=$(cat "$WORKDIR/setup.err") bin=$(ls -A "$WORKDIR/y-badsum/bin")"
+fi
+
+# The earlier unsuitable-binary cases left no staging file either.
+for d in y-oldinstall y-notv4; do
+  if no_stage "$WORKDIR/$d"; then
+    pass "setup, $d: the refused download left no staging file in the prefix"
+  else
+    fail "setup $d: staging file left behind: $(ls -A "$WORKDIR/$d/bin")"
+  fi
+done
 
 echo
 echo "test_cloud_environment: $PASS passed, $FAIL failed"

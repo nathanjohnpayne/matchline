@@ -11,6 +11,11 @@
 #
 # Bash 3.2 portable.
 
+# These cases drive the gh transport. Pin it so a cloud session's
+# CLAUDE_CODE_REMOTE (or MERGEPATH_AGENT_SURFACE) cannot switch the wrappers
+# to the REST transport, which tests/test_gh_rest_transport.sh covers.
+export MERGEPATH_GH_TRANSPORT=gh
+
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,9 +30,11 @@ pass() { echo "PASS: $*"; PASS=$((PASS + 1)); }
 fail() { echo "FAIL: $*" >&2; FAIL=$((FAIL + 1)); }
 
 FIX="$WORKDIR/repo"
-mkdir -p "$FIX/scripts/lib" "$FIX/.github"
+mkdir -p "$FIX/scripts/lib" "$FIX/scripts/workflow" "$FIX/.github"
 cp "$ROOT/scripts/post-local-agent-handback.sh" "$ROOT/scripts/gh-as-reviewer.sh" "$ROOT/scripts/identity-check.sh" "$FIX/scripts/"
-cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$ROOT/scripts/lib/credential-class.sh" "$FIX/scripts/lib/"
+cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$ROOT/scripts/lib/credential-class.sh" "$ROOT/scripts/lib/gh-rest-transport.sh" "$FIX/scripts/lib/"
+cp "$ROOT/scripts/lib/gh-comment-trigger-guard.sh" "$FIX/scripts/lib/"
+cp "$ROOT/scripts/workflow/gh-comment-trigger-guard.py" "$FIX/scripts/workflow/"
 cat >"$FIX/scripts/agent-capability-probe.sh" <<'P'
 #!/usr/bin/env bash
 printf 'export MERGEPATH_AGENT_TIER=%s\nexport MERGEPATH_AGENT_SURFACE_MEASURED=%s\n' "${STUB_TIER:-author-writes,reviewer-writes}" "${STUB_SURFACE:-claude-cloud}"
@@ -92,14 +99,14 @@ rc=$?
 set -e
 body="$(cat "$WORKDIR/body.md" 2>/dev/null || true)"
 if [ "$rc" -eq 0 ] \
-   && printf '%s' "$body" | grep -q "<!-- mergepath-handback: v1 head=$HEAD blocked=graphql -->" \
-   && printf '%s' "$body" | grep -q 'Blocked capability:\*\* `graphql`' \
-   && printf '%s' "$body" | grep -q 'Session tier:\*\* `author-writes,reviewer-writes` (surface: `claude-cloud`)' \
-   && printf '%s' "$body" | grep -q "Review feedback at this head:\*\* 7 posted, 7 accounted" \
-   && printf '%s' "$body" | grep -q "https://claude.ai/code/session_abc123" \
-   && printf '%s' "$body" | grep -q "scripts/resolve-pr-threads.sh 12 --resolve-actioned" \
-   && printf '%s' "$body" | grep -q "only once the step it stands for has completed: a dispatch that returned is not completion" \
-   && printf '%s' "$body" | grep -qF 'scripts/dispatch-thread-resolution-lane.sh 12` dispatches the lane and waits for its own run'; then
+   && grep -q "<!-- mergepath-handback: v1 head=$HEAD blocked=graphql -->" <<<"$body" \
+   && grep -q 'Blocked capability:\*\* `graphql`' <<<"$body" \
+   && grep -q 'Session tier:\*\* `author-writes,reviewer-writes` (surface: `claude-cloud`)' <<<"$body" \
+   && grep -q "Review feedback at this head:\*\* 7 posted, 7 accounted" <<<"$body" \
+   && grep -q "https://claude.ai/code/session_abc123" <<<"$body" \
+   && grep -q "scripts/resolve-pr-threads.sh 12 --resolve-actioned" <<<"$body" \
+   && grep -q "only once the step it stands for has completed: a dispatch that returned is not completion" <<<"$body" \
+   && grep -qF 'scripts/dispatch-thread-resolution-lane.sh 12` dispatches the lane and waits for its own run' <<<"$body"; then
   pass "handback comment records capability, tier, head, accounting, session URL and the next command"
 else
   fail "happy path: rc=$rc err=$(cat "$WORKDIR/err") body=$body"
@@ -139,7 +146,7 @@ set +e
 out="$(run STUB_LABEL_MISSING=1 STUB_LABEL_CREATE_FAIL=1 -- --blocked graphql --next x 2>"$WORKDIR/err")"; rc=$?
 set -e
 if [ "$rc" -eq 4 ] && ! grep -q $'POST\trepos/o/r/issues/12/comments' "$WORKDIR/gh.log" \
-   && printf '%s' "$out" | grep -q "## Needs a local agent" && grep -q "nothing was posted" "$WORKDIR/err"; then
+   && grep -q "## Needs a local agent" <<<"$out" && grep -q "nothing was posted" "$WORKDIR/err"; then
   pass "label cannot be created: exit 4, nothing posted (no duplicate on retry), body on stdout"
 else
   fail "label create failure: rc=$rc err=$(cat "$WORKDIR/err")"
@@ -174,9 +181,9 @@ out="$(run STUB_SURFACE=codex-cloud -- --blocked graphql --next x --print 2>/dev
 out2="$(run STUB_SURFACE=codex-cloud -- --blocked graphql --next x --session-url https://chatgpt.com/codex/tasks/task_e_1 --print 2>/dev/null)"; r2=$?
 run -- --blocked graphql --next x --session-url javascript:alert --print >/dev/null 2>&1; r3=$?
 set -e
-if [ "$r1" -eq 0 ] && printf '%s' "$out" | grep -q 'Session:\*\* `codex-cloud` session; no transcript URL was supplied (pass --session-url)' \
-   && ! printf '%s' "$out" | grep -qi 'not a cloud session' \
-   && [ "$r2" -eq 0 ] && printf '%s' "$out2" | grep -q 'Session:\*\* https://chatgpt.com/codex/tasks/task_e_1' \
+if [ "$r1" -eq 0 ] && grep -q 'Session:\*\* `codex-cloud` session; no transcript URL was supplied (pass --session-url)' <<<"$out" \
+   && ! grep -qi 'not a cloud session' <<<"$out" \
+   && [ "$r2" -eq 0 ] && grep -q 'Session:\*\* https://chatgpt.com/codex/tasks/task_e_1' <<<"$out2" \
    && [ "$r3" -eq 1 ]; then
   pass "a Codex task records its surface, takes --session-url, and refuses a non-https URL"
 else
@@ -217,7 +224,7 @@ fi
 set +e
 out="$(run STUB_POST_FAIL=1 -- --blocked author-writes --next x 2>/dev/null)"; rc=$?
 set -e
-if [ "$rc" -eq 4 ] && printf '%s' "$out" | grep -q "## Needs a local agent"; then
+if [ "$rc" -eq 4 ] && grep -q "## Needs a local agent" <<<"$out"; then
   pass "post failure: exit 4 with the rendered handback on stdout"
 else
   fail "post failure: rc=$rc out=$out"
@@ -238,10 +245,23 @@ fi
 set +e
 out="$(run -- --blocked cross-repo --next "scripts/sync-to-downstream.sh --apply" --print 2>/dev/null)"; rc=$?
 set -e
-if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'blocked=cross-repo' && ! grep -q -- "-X"$'\t'"POST" "$WORKDIR/gh.log"; then
+if [ "$rc" -eq 0 ] && grep -q 'blocked=cross-repo' <<<"$out" && ! grep -q -- "-X"$'\t'"POST" "$WORKDIR/gh.log"; then
   pass "--print renders the handback and posts nothing"
 else
   fail "--print: rc=$rc"
+fi
+
+# A command containing the renderer's fence delimiter is refused before any
+# GitHub read or write, keeping the handback body structurally valid.
+: >"$WORKDIR/gh.log"
+set +e
+run -- --blocked graphql --next 'echo ```' >/dev/null 2>"$WORKDIR/err"; rc=$?
+set -e
+if [ "$rc" -eq 1 ] && grep -q -- '--next must not contain triple backticks' "$WORKDIR/err" \
+   && [ ! -s "$WORKDIR/gh.log" ]; then
+  pass "--next containing triple backticks is refused before posting or reading GitHub state"
+else
+  fail "--next fence refusal: rc=$rc err=$(cat "$WORKDIR/err") calls=$(cat "$WORKDIR/gh.log")"
 fi
 
 # --- the CI lane that resumes a graphql handback (#1057 G) ---------------------
@@ -254,7 +274,7 @@ if [ -r "$LANE" ] && yq --version 2>/dev/null | grep -q 'mikefarah/yq'; then
   ref="$(yq -r '.jobs.resolve.steps[0].with.ref' "$LANE")"
   persist="$(yq -r '.jobs.resolve.steps[0].with."persist-credentials"' "$LANE")"
   perms="$(yq -o=json -I=0 '.permissions' "$LANE")"
-  if [ "$guard" = "github.ref_name == github.event.repository.default_branch" ] \
+  if [ "$guard" = "github.ref_name == github.event.repository.default_branch && needs.route.outputs.app != 'true'" ] \
      && [ "$ref" = '${{ github.event.repository.default_branch }}' ] \
      && [ "$persist" = "false" ] && [ "$perms" = '{"contents":"read"}' ]; then
     pass "lane runs only the default branch's definition and scripts, read-only, with no persisted checkout token"
@@ -277,9 +297,9 @@ if [ -r "$LANE" ] && yq --version 2>/dev/null | grep -q 'mikefarah/yq'; then
     fail "lane run-name drifted: $(yq -r '."run-name"' "$LANE")"
   fi
   run_step="$(yq -r '.jobs.resolve.steps[] | select(.name == "Resolve actioned threads") | .run' "$LANE")"
-  if printf '%s' "$run_step" | grep -q -- '--resolve-actioned' \
-     && ! printf '%s' "$run_step" | grep -q -- '--auto-resolve-bots' \
-     && ! printf '%s' "$run_step" | grep -q -- '--resolve-verified-propagation'; then
+  if grep -q -- '--resolve-actioned' <<<"$run_step" \
+     && ! grep -q -- '--auto-resolve-bots' <<<"$run_step" \
+     && ! grep -q -- '--resolve-verified-propagation' <<<"$run_step"; then
     pass "lane resolves only demonstrably-actioned threads; deferral stays a local decision"
   else
     fail "lane runs a resolve mode other than --resolve-actioned"
@@ -294,7 +314,7 @@ if [ -r "$LANE" ] && yq --version 2>/dev/null | grep -q 'mikefarah/yq'; then
   # step against a gh stub and a resolver stub that records what it was given.
   LFIX="$WORKDIR/lane"
   mkdir -p "$LFIX/scripts/lib" "$LFIX/bin" "$LFIX/.github"
-  cp "$ROOT/scripts/lib/reviewers-helpers.sh" "$LFIX/scripts/lib/"
+  cp "$ROOT/scripts/lib/reviewers-helpers.sh" "$ROOT/scripts/lib/credential-class.sh" "$LFIX/scripts/lib/"
   printf 'available_reviewers:\n  - nathanpayne-claude\n  - nathanpayne-codex\n' >"$LFIX/.github/review-policy.yml"
   printf '%s\n' "$run_step" >"$LFIX/step.sh"
   cat >"$LFIX/scripts/resolve-pr-threads.sh" <<'R'
@@ -307,10 +327,10 @@ R
 exit 9
 G
   chmod +x "$LFIX/scripts/resolve-pr-threads.sh" "$LFIX/bin/gh"
-  lane_run() { # <login>
+  lane_run() { # <login> [token] [GH_TOKEN, when it differs from the token]
     : >"$LFIX/lane.log"
     ( cd "$LFIX" && env -u MERGEPATH_AGENT -u GH_AS_REVIEWER_IDENTITY PATH="$LFIX/bin:$PATH" LANE_LOG="$LFIX/lane.log" LANE_LOGIN="$1" \
-        GH_TOKEN=x OP_PREFLIGHT_REVIEWER_PAT=x PR_NUMBER=12 REPO=o/r GITHUB_STEP_SUMMARY="$LFIX/summary" bash step.sh ) >/dev/null 2>&1
+        GH_TOKEN="${3:-${2:-x}}" OP_PREFLIGHT_REVIEWER_PAT="${2:-x}" PR_NUMBER=12 REPO=o/r GITHUB_STEP_SUMMARY="$LFIX/summary" bash -eo pipefail step.sh ) >/dev/null 2>&1
   }
   set +e
   lane_run nathanpayne-codex; c1=$?; l1="$(cat "$LFIX/lane.log")"
@@ -318,11 +338,80 @@ G
   lane_run ""; c3=$?; l3="$(cat "$LFIX/lane.log")"
   lane_run nathanpayne-rogue; c4=$?; l4="$(cat "$LFIX/lane.log")"
   set -e
-  if [ "$c1" -eq 0 ] && [ "$l1" = "agent=codex identity=nathanpayne-codex args=12 --repo o/r --resolve-actioned" ] \
+  if [ "$c1" -eq 0 ] && [ "$l1" = "agent=codex identity=nathanpayne-codex args=12 --repo o/r --resolve-actioned --bind-head" ] \
      && [ "$c2" -ne 0 ] && [ -z "$l2" ] && [ "$c3" -ne 0 ] && [ -z "$l3" ] && [ "$c4" -ne 0 ] && [ -z "$l4" ]; then
     pass "lane resolves as the listed reviewer its token reads as, and refuses an author, unlisted reviewer-shaped or unreadable token before resolving"
   else
     fail "lane identity: codex rc=$c1 '$l1'; author rc=$c2 '$l2'; empty rc=$c3 '$l3'; unlisted rc=$c4 '$l4'"
+  fi
+  # #2726: an installation token takes the bounded CI-app mode: the resolver
+  # gets --resolve-actioned --ci-app-identity and no reviewer identity, and its
+  # identity check (not the lane) decides whether the policy names this app.
+  # Whatever `GET /user` would say is irrelevant, and a user PAT never gets
+  # the flag. The lane classifies the token the resolver authenticates with,
+  # ${OP_PREFLIGHT_REVIEWER_PAT:-$GH_TOKEN}, not GH_TOKEN alone.
+  set +e
+  lane_run "" ghs_installation; c5=$?; l5="$(cat "$LFIX/lane.log")"
+  lane_run nathanpayne-codex ghs_installation; c6=$?; l6="$(cat "$LFIX/lane.log")"
+  lane_run nathanpayne-codex ghp_reviewer; c7=$?; l7="$(cat "$LFIX/lane.log")"
+  lane_run "" ghs_installation ghp_other; c8=$?; l8="$(cat "$LFIX/lane.log")"
+  set -e
+  if [ "$c5" -eq 0 ] && [ "$l5" = "agent= identity= args=12 --repo o/r --resolve-actioned --bind-head --ci-app-identity" ] \
+     && [ "$c6" -eq 0 ] && [ "$l6" = "$l5" ] \
+     && [ "$c7" -eq 0 ] && [ "$l7" = "agent=codex identity=nathanpayne-codex args=12 --repo o/r --resolve-actioned --bind-head" ] \
+     && [ "$c8" -eq 0 ] && [ "$l8" = "$l5" ]; then
+    pass "lane runs an installation token only in the bounded --ci-app-identity mode, with no reviewer identity (#2726)"
+  else
+    fail "lane CI-app routing: app rc=$c5 '$l5'; app reading as reviewer rc=$c6 '$l6'; PAT rc=$c7 '$l7'; app as the resolver's token only rc=$c8 '$l8'"
+  fi
+  # #2727 / #2732: the CI-app path. The route job decides from the trust
+  # policy alone; the PAT and app jobs are mutually exclusive on its output.
+  r_guard="$(yq -r '.jobs.route.if' "$LANE")"
+  r_ref="$(yq -r '.jobs.route.steps[0].with.ref' "$LANE")"
+  r_perms="$(yq -o=json -I=0 '.jobs.route.permissions // {}' "$LANE")"
+  a_guard="$(yq -r '.jobs."resolve-app".if' "$LANE")"
+  a_perms="$(yq -o=json -I=0 '.jobs."resolve-app".permissions' "$LANE")"
+  a_ref="$(yq -r '.jobs."resolve-app".steps[0].with.ref' "$LANE")"
+  a_sts="$(yq -r '.jobs."resolve-app".steps[] | select(.id == "sts") | .uses + " " + .with.identity' "$LANE")"
+  if [ "$r_guard" = "github.ref_name == github.event.repository.default_branch" ] && [ "$r_ref" = '${{ github.workflow_sha }}' ] \
+     && [ "$r_perms" = '{}' ] \
+     && [ "$a_guard" = "github.ref_name == github.event.repository.default_branch && needs.route.outputs.app == 'true'" ] \
+     && [ "$a_perms" = '{"contents":"read","id-token":"write"}' ] && [ "$a_ref" = '${{ github.workflow_sha }}' ] \
+     && [ "$a_sts" = "octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 thread-resolution" ]; then
+    pass "lane routes to the CI-app job only on the route job's output, and only that job requests id-token: write (#2727)"
+  else
+    fail "lane CI-app routing drifted: route=$r_guard ref=$r_ref perms=$r_perms app=$a_guard perms=$a_perms ref=$a_ref sts=$a_sts"
+  fi
+  route_step="$(yq -r '.jobs.route.steps[] | select(.id == "route") | .run' "$LANE")"
+  RFIX="$WORKDIR/route"; mkdir -p "$RFIX"
+  printf '%s\n' "$route_step" >"$RFIX/step.sh"
+  ( cd "$RFIX" && GITHUB_OUTPUT="$RFIX/out" bash -eo pipefail step.sh ) >/dev/null 2>&1
+  r_off="$(cat "$RFIX/out")"
+  mkdir -p "$RFIX/.github/chainguard" && : >"$RFIX/.github/chainguard/thread-resolution.sts.yaml"
+  ( cd "$RFIX" && GITHUB_OUTPUT="$RFIX/out2" bash -eo pipefail step.sh ) >/dev/null 2>&1
+  r_on="$(cat "$RFIX/out2")"
+  if [ "$r_off" = "app=false" ] && [ "$r_on" = "app=true" ]; then
+    pass "the route step selects the CI app only when the lane's trust policy exists"
+  else
+    fail "route step: without policy '$r_off', with policy '$r_on'"
+  fi
+  app_step="$(yq -r '.jobs."resolve-app".steps[] | select(.name == "Resolve actioned threads as the CI app") | .run' "$LANE")"
+  printf '%s\n' "$app_step" >"$LFIX/app-step.sh"
+  app_run() { # <token>
+    : >"$LFIX/lane.log"
+    ( cd "$LFIX" && env -u MERGEPATH_AGENT -u GH_AS_REVIEWER_IDENTITY PATH="$LFIX/bin:$PATH" LANE_LOG="$LFIX/lane.log" \
+        GH_TOKEN="$1" OP_PREFLIGHT_REVIEWER_PAT="$1" PR_NUMBER=12 REPO=o/r GITHUB_STEP_SUMMARY="$LFIX/summary" bash -eo pipefail app-step.sh ) >/dev/null 2>&1
+  }
+  set +e
+  app_run ghs_installation; a1=$?; m1="$(cat "$LFIX/lane.log")"
+  app_run ghp_reviewer; a2=$?; m2="$(cat "$LFIX/lane.log")"
+  app_run ""; a3=$?; m3="$(cat "$LFIX/lane.log")"
+  set -e
+  if [ "$a1" -eq 0 ] && [ "$m1" = "agent= identity= args=12 --repo o/r --resolve-actioned --bind-head --ci-app-identity" ] \
+     && [ "$a2" -ne 0 ] && [ -z "$m2" ] && [ "$a3" -ne 0 ] && [ -z "$m3" ]; then
+    pass "the CI-app job resolves only with an installation token, bound and in --ci-app-identity mode, and never falls back to a PAT"
+  else
+    fail "CI-app step: app rc=$a1 '$m1'; PAT rc=$a2 '$m2'; empty rc=$a3 '$m3'"
   fi
 else
   fail "thread-resolution-lane.yml missing, or no mikefarah/yq v4 to check it (yq on PATH: $(yq --version 2>&1 | head -1 || echo none); bash scripts/cloud-setup.sh installs it)"
@@ -335,8 +424,8 @@ fi
 DFIX="$WORKDIR/dispatch"
 mkdir -p "$DFIX/scripts/lib" "$DFIX/scripts/workflow" "$DFIX/bin"
 cp "$ROOT/scripts/dispatch-thread-resolution-lane.sh" "$ROOT/scripts/gh-as-author.sh" "$ROOT/scripts/identity-check.sh" "$DFIX/scripts/"
-cp "$ROOT/scripts/workflow/owner-admin-override.py" "$DFIX/scripts/workflow/"
-for f in gh-token-resolver.sh credential-class.sh gh-command-classifier.sh pr-body-contract.sh pr-body-contract.mjs reviewers-helpers.sh feedback-policy-helpers.sh; do
+cp "$ROOT/scripts/workflow/owner-admin-override.py" "$ROOT/scripts/workflow/gh-comment-trigger-guard.py" "$DFIX/scripts/workflow/"
+for f in gh-comment-trigger-guard.sh gh-token-resolver.sh credential-class.sh gh-command-classifier.sh gh-rest-transport.sh pr-body-contract.sh pr-body-contract.mjs reviewers-helpers.sh feedback-policy-helpers.sh; do
   [ -f "$ROOT/scripts/lib/$f" ] && cp "$ROOT/scripts/lib/$f" "$DFIX/scripts/lib/"
 done
 cat >"$DFIX/bin/gh" <<'G'
@@ -389,6 +478,19 @@ drun() { # <env...> -- <args...>
     DISPATCH_LANE_POLL_INTERVAL=1 ${envs[@]+"${envs[@]}"} \
     "$DFIX/scripts/dispatch-thread-resolution-lane.sh" 12 --repo o/r "$@"
 }
+assert_invalid_dispatch() { # <label> <diagnostic needle> <drun arguments...>
+  local label="$1" needle="$2" rc calls error
+  shift 2
+  drun "$@" >/dev/null 2>"$DFIX/err"; rc=$?
+  calls="$(cat "$DFIX/d.log")"
+  error="$(cat "$DFIX/err")"
+  if [ "$rc" -eq 1 ] && grep -q -e "$needle" <<<"$error" \
+     && ! grep -q $'\t-X\tPOST' <<<"$calls"; then
+    pass "$label is rejected as a whole value before dispatch"
+  else
+    fail "$label: rc=$rc err=$error calls=$calls"
+  fi
+}
 set +e
 drun D_APPEAR_AT=3 -- >/dev/null 2>"$DFIX/err"; rc=$?
 set -e
@@ -404,21 +506,43 @@ else
 fi
 set +e
 drun -- --appear-timeout 2 >/dev/null 2>"$DFIX/err"; r_none=$?
+drun -- --appear-timeout 08 >/dev/null 2>"$DFIX/err"; r_appear_zero=$?
+appear_calls="$(cat "$DFIX/d.log")"
+appear_err="$(cat "$DFIX/err")"
+drun D_APPEAR_AT=1 -- --watch-timeout 010 >/dev/null 2>"$DFIX/err"; r_watch_zero=$?
+watch_calls="$(cat "$DFIX/d.log")"
+watch_err="$(cat "$DFIX/err")"
+drun D_APPEAR_AT=1 DISPATCH_LANE_POLL_INTERVAL=abc -- --no-wait >/dev/null 2>"$DFIX/err"; r_poll_text=$?
+poll_text_calls="$(cat "$DFIX/d.log")"
+poll_text_err="$(cat "$DFIX/err")"
+drun D_APPEAR_AT=1 DISPATCH_LANE_POLL_INTERVAL=0 -- --no-wait >/dev/null 2>"$DFIX/err"; r_poll_zero=$?
+poll_zero_calls="$(cat "$DFIX/d.log")"
+poll_zero_err="$(cat "$DFIX/err")"
+assert_invalid_dispatch "--appear-timeout with embedded newline" "--appear-timeout" D_APPEAR_AT=1 -- --appear-timeout $'abc\n5' --no-wait
+assert_invalid_dispatch "--appear-timeout with trailing newline" "--appear-timeout" D_APPEAR_AT=1 -- --appear-timeout $'5\n' --no-wait
+assert_invalid_dispatch "--watch-timeout with embedded newline" "--watch-timeout" D_APPEAR_AT=1 -- --watch-timeout $'abc\n5' --no-wait
+assert_invalid_dispatch "--watch-timeout with trailing newline" "--watch-timeout" D_APPEAR_AT=1 -- --watch-timeout $'5\n' --no-wait
+assert_invalid_dispatch "DISPATCH_LANE_POLL_INTERVAL with embedded newline" "DISPATCH_LANE_POLL_INTERVAL" D_APPEAR_AT=1 $'DISPATCH_LANE_POLL_INTERVAL=abc\n5' -- --no-wait
+assert_invalid_dispatch "DISPATCH_LANE_POLL_INTERVAL with trailing newline" "DISPATCH_LANE_POLL_INTERVAL" D_APPEAR_AT=1 $'DISPATCH_LANE_POLL_INTERVAL=5\n' -- --no-wait
 drun D_APPEAR_AT=1 D_RUN_FAILS=1 -- >/dev/null 2>/dev/null; r_fail=$?
 drun D_DISPATCH_FAIL=1 -- >/dev/null 2>/dev/null; r_refused=$?
 drun D_APPEAR_AT=1 D_RUN_HANGS=1 -- --watch-timeout 2 >/dev/null 2>/dev/null; r_hang=$?
-# Request time counts against the deadline: with 2s requests and a 3s
-# budget, sleep-only accounting would poll about four times (8s+).
-t0=$SECONDS
+# Request time counts against the watch deadline: 2s requests and a 3s
+# budget allow one or two requests; sleep-only accounting polls about four.
+# Count before drun resets the stub, excluding author-wrapper startup time.
 drun D_APPEAR_AT=1 D_RUN_HANGS=1 D_SLOW_REQUEST=2 -- --watch-timeout 3 >/dev/null 2>/dev/null; r_slow=$?
-t_slow=$(( SECONDS - t0 ))
+slow_watch_calls="$(cat "$DFIX/d.log.w" 2>/dev/null || echo 0)"
 out="$(drun D_APPEAR_AT=1 -- --no-wait 2>/dev/null)"; r_nowait=$?
 set -e
-if [ "$r_none" -eq 6 ] && [ "$r_hang" -eq 9 ] && [ "$r_slow" -eq 9 ] && [ "$t_slow" -le 6 ] \
+if [ "$r_none" -eq 6 ] && [ "$r_hang" -eq 9 ] && [ "$r_slow" -eq 9 ] && [ "$slow_watch_calls" -ge 1 ] && [ "$slow_watch_calls" -le 2 ] \
+   && [ "$r_appear_zero" -eq 1 ] && grep -q -e '--appear-timeout' <<<"$appear_err" && ! grep -q $'\t-X\tPOST' <<<"$appear_calls" \
+   && [ "$r_watch_zero" -eq 1 ] && grep -q -e '--watch-timeout' <<<"$watch_err" && ! grep -q $'\t-X\tPOST' <<<"$watch_calls" \
+   && [ "$r_poll_text" -eq 1 ] && grep -q -e 'DISPATCH_LANE_POLL_INTERVAL' <<<"$poll_text_err" && ! grep -q $'\t-X\tPOST' <<<"$poll_text_calls" \
+   && [ "$r_poll_zero" -eq 1 ] && grep -q -e 'DISPATCH_LANE_POLL_INTERVAL' <<<"$poll_zero_err" && ! grep -q $'\t-X\tPOST' <<<"$poll_zero_calls" \
    && [ "$r_fail" -eq 8 ] && [ "$r_refused" -eq 4 ] && [ "$r_nowait" -eq 0 ] && [ "$out" = "222" ]; then
-  pass "dispatch: own run never listed -> exit 6 (the older run is not watched); run failed -> 8; never completes -> 9 (a wall-clock deadline that counts request time); dispatch refused -> 4; --no-wait prints the run id"
+  pass "dispatch validates positive decimal timeouts and poll intervals before dispatch; own run never listed -> 6; run failed -> 8; never completes -> 9; dispatch refused -> 4; --no-wait prints the run id"
 else
-  fail "dispatch exits: none=$r_none hang=$r_hang slow=$r_slow/${t_slow}s fail=$r_fail refused=$r_refused nowait=$r_nowait out=$out"
+  fail "dispatch exits: invalid appear=$r_appear_zero watch=$r_watch_zero poll_text=$r_poll_text poll_zero=$r_poll_zero; none=$r_none hang=$r_hang slow=$r_slow/${slow_watch_calls}requests fail=$r_fail refused=$r_refused nowait=$r_nowait out=$out"
 fi
 
 # Nothing sent is not GitHub refusing: a missing author token is named as

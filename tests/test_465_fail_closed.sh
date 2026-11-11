@@ -439,6 +439,12 @@ if [ -f "$W/daily-feedback-rollup.yml" ]; then
     else
       fail "D13 runtime: dry_run=false incorrectly changed the arguments"
     fi
+    if run_rollup_step 2000-02-29 2024-02-29 false \
+       && [ "$(tr '\n' ' ' <"$D13/args")" = "--since 2000-02-29 --until 2024-02-29 " ]; then
+      pass "D13 runtime: Gregorian leap days are accepted and preserved as quoted arguments"
+    else
+      fail "D13 runtime: valid Gregorian leap days were rejected or changed"
+    fi
     if ! run_rollup_step "2026-09-01\"; touch $D13/pwned; \"" "" "" \
        && [ ! -e "$D13/pwned" ] && [ ! -e "$D13/args" ]; then
       pass "D13 runtime: a shell-bearing since input is rejected before anything runs"
@@ -463,6 +469,11 @@ until command substitution||$(touch pwned)|false
 until backticks||`touch pwned`|
 dry_run command substitution|||$(touch pwned)
 invalid date shape|2026-1-1||
+impossible February date|2026-02-30||
+non-leap century February 29|1900-02-29||
+impossible month|2026-13-01||
+zero day|2026-01-00||
+zero year|0000-01-01||
 INPUTS
     if ! run_rollup_step $'2026-09-01\ntouch pwned' "" "" \
        && [ ! -e "$D13/pwned" ] && [ ! -e "$D13/args" ]; then
@@ -519,65 +530,79 @@ SHIM
   rm -rf "$D14"
 fi
 
+# The External Review Check's classifier, including the propagation lane, is
+# scripts/workflow/external_review_classify.sh, run by pr-review-policy.yml's
+# `check` step (#2727 slice 3b). D11 and D12 read and execute it there.
+CLASSIFIER_SCRIPT=scripts/workflow/external_review_classify.sh
+
 # #1150: scoped sync-all branch keys retain the propagation lane while the
 # source checkout remains pinned to the SHA component. The suffix grammar is
 # exact so arbitrary text cannot widen branch recognition.
 assert_grep "D11: propagation lane accepts an exact sync-all scope digest (#1150)" \
-  "$W/pr-review-policy.yml" 'if [[ "$SYNC_KEY" =~ ^sync-all-([0-9a-f]{7,40})-[0-9a-f]{12}$ ]]; then'
+  "$CLASSIFIER_SCRIPT" 'if [[ "$SYNC_KEY" =~ ^sync-all-([0-9a-f]{7,40})-[0-9a-f]{12}$ ]]; then'
 assert_grep "D11: propagation lane preserves legacy mixed-case sync-all SHA parsing (#1150)" \
-  "$W/pr-review-policy.yml" 'elif [[ "$SYNC_KEY" =~ ^sync-all-([0-9a-fA-F]{7,40})$ ]]; then'
+  "$CLASSIFIER_SCRIPT" 'elif [[ "$SYNC_KEY" =~ ^sync-all-([0-9a-fA-F]{7,40})$ ]]; then'
 assert_grep "D11: propagation lane extracts only the source SHA (#1150)" \
-  "$W/pr-review-policy.yml" 'SYNC_SHA="${BASH_REMATCH[1]}"'
+  "$CLASSIFIER_SCRIPT" 'SYNC_SHA="${BASH_REMATCH[1]}"'
 
-# Execute the workflow's parser itself so these case-boundary vectors cannot
+# Execute the classifier's parser itself so these case-boundary vectors cannot
 # pass by merely duplicating the intended regex in this test.
-sync_key_parser="$(awk '
-  /^            if \[\[ "\$SYNC_KEY" =~ \^sync-all-/ { capture=1 }
-  capture {
-    is_end=($0 == "            fi")
-    sub(/^            /, "")
-    print
-    if (is_end) exit
-  }
-' "$W/pr-review-policy.yml")"
-parse_sync_key() {
-  local SYNC_KEY="$1" SYNC_SHA=""
-  eval "$sync_key_parser"
-  printf '%s\n' "$SYNC_SHA"
-}
-scoped_lower="$(parse_sync_key 'sync-all-abcdef1-0123456789ab')"
-scoped_upper="$(parse_sync_key 'sync-all-ABCDEF1-0123456789ab')"
-legacy_upper="$(parse_sync_key 'sync-all-ABCDEF1')"
-[ "$scoped_lower" = "abcdef1" ] \
-  && pass "D11 runtime: lowercase scoped sync-all key extracts its source SHA" \
-  || fail "D11 runtime: lowercase scoped sync-all key was rejected"
-if [[ "$scoped_upper" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
-  fail "D11 runtime: uppercase scoped sync-all key widened the new grammar"
+if [ -f "$CLASSIFIER_SCRIPT" ]; then
+  if ! sync_key_parser="$(awk '
+    /^  if \[\[ "\$SYNC_KEY" =~ \^sync-all-/ { capture=1 }
+    capture {
+      is_end=($0 == "  fi")
+      sub(/^  /, "")
+      print
+      if (is_end) exit
+    }
+  ' "$CLASSIFIER_SCRIPT")"; then
+    fail "D11 runtime: classifier parser extraction failed"
+  elif [ -z "$sync_key_parser" ]; then
+    fail "D11 runtime: classifier parser extraction is empty"
+  else
+    parse_sync_key() {
+      local SYNC_KEY="$1" SYNC_SHA=""
+      eval "$sync_key_parser"
+      printf '%s\n' "$SYNC_SHA"
+    }
+    scoped_lower="$(parse_sync_key 'sync-all-abcdef1-0123456789ab')"
+    scoped_upper="$(parse_sync_key 'sync-all-ABCDEF1-0123456789ab')"
+    legacy_upper="$(parse_sync_key 'sync-all-ABCDEF1')"
+    [ "$scoped_lower" = "abcdef1" ] \
+      && pass "D11 runtime: lowercase scoped sync-all key extracts its source SHA" \
+      || fail "D11 runtime: lowercase scoped sync-all key was rejected"
+    if [[ "$scoped_upper" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+      fail "D11 runtime: uppercase scoped sync-all key widened the new grammar"
+    else
+      pass "D11 runtime: uppercase scoped sync-all key is rejected"
+    fi
+    [ "$legacy_upper" = "ABCDEF1" ] \
+      && pass "D11 runtime: legacy uppercase sync-all SHA remains accepted" \
+      || fail "D11 runtime: legacy uppercase sync-all SHA compatibility changed"
+  fi
 else
-  pass "D11 runtime: uppercase scoped sync-all key is rejected"
+  echo "SKIP: D11 runtime: external_review_classify.sh absent"; SKIP=$((SKIP + 1))
 fi
-[ "$legacy_upper" = "ABCDEF1" ] \
-  && pass "D11 runtime: legacy uppercase sync-all SHA remains accepted" \
-  || fail "D11 runtime: legacy uppercase sync-all SHA compatibility changed"
 
 # Source-commit provenance: the branch-name SHA may name ANY commit in the
 # public mergepath repo, so the lane resolves it to ONE full commit and
 # requires it to be on mergepath's default branch before checking it out.
 assert_grep "D12: propagation lane resolves the branch-key SHA to a single full commit" \
-  "$W/pr-review-policy.yml" 'SYNC_FULL_SHA=$(git -C "$MP_DIR" rev-parse --verify --quiet "${SYNC_SHA}^{commit}" 2>/dev/null)'
+  "$CLASSIFIER_SCRIPT" 'SYNC_FULL_SHA=$(git -C "$MP_DIR" rev-parse --verify --quiet "${SYNC_SHA}^{commit}" 2>/dev/null)'
 assert_grep "D12: propagation lane requires the source commit on mergepath's default-branch first-parent history" \
-  "$W/pr-review-policy.yml" 'grep -Fxq "$SYNC_FULL_SHA" <<<"$MP_FIRST_PARENT"'
+  "$CLASSIFIER_SCRIPT" 'grep -Fxq "$SYNC_FULL_SHA" <<<"$MP_FIRST_PARENT"'
 refute_grep "D12: propagation lane does not accept generic (second-parent) ancestry" \
-  "$W/pr-review-policy.yml" 'merge-base --is-ancestor "$SYNC_FULL_SHA"'
+  "$CLASSIFIER_SCRIPT" 'merge-base --is-ancestor "$SYNC_FULL_SHA"'
 assert_grep "D12: propagation lane hands the full SHA to the base verifier" \
-  "$W/pr-review-policy.yml" 'bash "$VERIFIER" "$MP_DIR" "$PWD" "$BASE_SHA" "$HEAD_SHA" "$SYNC_FULL_SHA"'
+  "$CLASSIFIER_SCRIPT" 'bash "$VERIFIER" "$MP_DIR" "$PWD" "$BASE_SHA" "$HEAD_SHA" "$SYNC_FULL_SHA"'
 refute_grep "D12: propagation lane no longer checks out the raw branch-key SHA" \
-  "$W/pr-review-policy.yml" 'checkout --quiet "$SYNC_SHA"'
+  "$CLASSIFIER_SCRIPT" 'checkout --quiet "$SYNC_SHA"'
 
 # Execute the workflow's own resolve/ancestry/checkout condition against a
 # local fixture "mergepath" (git is wrapped only to redirect the public clone
 # URL to the fixture), so the vectors below exercise the real shell.
-if [ -f "$W/pr-review-policy.yml" ]; then
+if [ -f "$CLASSIFIER_SCRIPT" ]; then
   D12="$(mktemp -d "${TMPDIR:-/tmp}/test465-d12.XXXXXX")"
   d12_git() { git -c init.defaultBranch=main -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@"; }
   d12_git init -q "$D12/upstream"
@@ -608,12 +633,12 @@ exec "$REAL_GIT" "\${args[@]}"
 SHIM
   chmod +x "$D12/bin/git"
   lane_condition="$(awk '
-    /^              SYNC_FULL_SHA=""$/ { capture=1 }
+    /^    SYNC_FULL_SHA=""$/ { capture=1 }
     capture {
-      line=$0; sub(/^              /, "", line); print line
+      line=$0; sub(/^    /, "", line); print line
       if ($0 ~ /; then$/) exit
     }
-  ' "$W/pr-review-policy.yml")"
+  ' "$CLASSIFIER_SCRIPT")"
   run_lane_condition() {  # <sync_sha>
     ( SYNC_SHA="$1"; MP_DIR=$(mktemp -d "$D12/mp.XXXXXX"); rmdir "$MP_DIR"
       PATH="$D12/bin:$PATH"

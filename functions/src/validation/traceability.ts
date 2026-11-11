@@ -31,13 +31,19 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { zodToToolSchema } from "../llm/zodToolSchema.js";
 
 import { anthropic } from "../llm/anthropic.js";
-import { modelFor } from "../llm/config.js";
-import { recordUsage, safeRecordUsage } from "../llm/cost.js";
+import { effortFor, modelFor, type ValidationStage } from "../llm/config.js";
+import { toolCallRequest } from "../llm/modelProfile.js";
+import {
+  anthropicUsageFields,
+  promptVersionLabel,
+  recordUsage,
+  safeRecordUsage,
+} from "../llm/cost.js";
 import { sleep, transportBackoffMs } from "../llm/retry.js";
 import {
-  TraceabilityResponseV1Schema,
-  type TraceabilityResponseV1,
-} from "../prompts/validation/traceability.v1.schema.js";
+  TraceabilityResponseV2Schema,
+  type TraceabilityResponseV2,
+} from "../prompts/validation/traceability.v2.schema.js";
 import { loadPromptText } from "../prompts/loader.js";
 import type { ExperienceUnit } from "../types/capability.js";
 import { logRetryExhaustion } from "../llm/retryDiagnostics.js";
@@ -47,7 +53,19 @@ import {
   type ValidationAttemptFailure,
 } from "./errors.js";
 import type { Claim } from "./claimExtraction.js";
-import { formatUnit, quote } from "./unitPromptText.js";
+import {
+  citedEntityId,
+  formatUnitBlock,
+  promptDate,
+  quote,
+  type UnitPromptFields,
+} from "./unitPromptText.js";
+
+/** This module's separately configurable model stage (#489). */
+const STAGE: ValidationStage = "traceability";
+
+/** Output-token budget per attempt; also recorded on each usage record. */
+const MAX_OUTPUT_TOKENS = 1024;
 
 export interface TraceabilityResult {
   /** Strict binary verdict — see schema for the contract. */
@@ -59,22 +77,58 @@ export interface TraceabilityResult {
 }
 
 export interface TraceabilityContext {
+  /**
+   * Cancels the in-flight request and skips further retries: the
+   * orchestrator aborts it at its deadline or after another call fails
+   * (#619).
+   */
+  readonly signal?: AbortSignal;
   readonly ownerUid: string;
+  /** Application whose asset is being validated; recorded on usage telemetry. */
+  readonly applicationId?: string;
 }
 
 export interface TraceabilityDeps {
   readonly client?: Anthropic;
   readonly record?: typeof recordUsage;
+  /** Clock for the run date the prompt shows (`promptDate`); injectable for tests. */
+  readonly clock?: () => Date;
 }
 
 const MAX_ATTEMPTS = 3;
 const TOOL_NAME = "record_traceability";
 
-const RETRY_REMINDERS: readonly string[] = [
-  "",
-  "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields. Remember: supporting_unit_id MUST be present when supports=true and absent when supports=false.",
-  "\n\nYour previous two attempts failed. Be strict about field types and required fields. If unsure whether a Unit supports the claim, return supports=false — false-negatives are recoverable; false-positives let fabrications ship.",
-];
+/**
+ * Model-visible reminder appended to the system prompt after a failed
+ * attempt, keyed by what went wrong, as generation does
+ * (`RETRY_REMINDER` in `../generation/pipeline.ts`, #485). The previous
+ * list was keyed by attempt index, so attempt 1 blamed "schema
+ * validation" even after a transport error, when the model had sent
+ * nothing. A transport failure says nothing about the response, so the
+ * reminder comes from the latest failure that produced one
+ * (`lastResponseFailure`): after schema_error then transport_error,
+ * attempt 3 still gets the schema reminder.
+ */
+const RETRY_REMINDER: Readonly<Record<ValidationAttemptFailure["kind"], string>> = {
+  transport_error: "",
+  no_tool_use:
+    "\n\nYour previous response did not call the `record_traceability` tool. Respond only by calling it.",
+  schema_error:
+    "\n\nYour previous response failed schema validation. Return data that exactly matches the tool schema; do not add fields that aren't in the schema; do not omit required fields. Remember: supporting_unit_id MUST be present when supports=true and absent when supports=false. If unsure whether a Unit supports the claim, return supports=false.",
+};
+
+/**
+ * The reminder for the next attempt: from the latest failure whose
+ * attempt got a response from the model, or none when every failure so
+ * far was a transport error (or there is none).
+ */
+export function traceabilityRetryReminder(failures: readonly ValidationAttemptFailure[]): string {
+  for (let i = failures.length - 1; i >= 0; i--) {
+    const f = failures[i]!;
+    if (f.kind !== "transport_error") return RETRY_REMINDER[f.kind];
+  }
+  return "";
+}
 
 /**
  * The synthetic rationale emitted when `candidateUnits` is empty.
@@ -104,28 +158,46 @@ export async function checkTraceability(
   const client = deps.client ?? anthropic();
   const record = deps.record ?? recordUsage;
 
-  const prompt = loadPromptText("validation", "traceability");
-  const { provider, model } = modelFor("validation");
+  const loadedPrompt = loadPromptText("validation", "traceability");
+  const { provider, model } = modelFor(STAGE);
   if (provider !== "anthropic") {
     throw new Error(
-      `Validation stage expects an Anthropic model; modelFor("validation") returned provider=${provider}. Update config.ts.`,
+      `Validation stage "${STAGE}" expects an Anthropic model; modelFor("${STAGE}") returned provider=${provider}. Update config.ts.`,
     );
   }
+  // Model-specific request shape, built once before the retry loop so an
+  // unsupported effort refuses before any request (modelProfile.ts, #579).
+  // Never sends a manual `thinking` field: forced tool choice only where the
+  // model accepts it, otherwise `auto` plus the suffix; a text answer is the
+  // existing `no_tool_use` failure and retries (#489).
+  const request = toolCallRequest({
+    model,
+    toolName: TOOL_NAME,
+    baseMaxTokens: MAX_OUTPUT_TOKENS,
+    effort: effortFor(STAGE),
+  });
+  // The answer-by-tool suffix (empty on a forced-tool model) goes before any retry reminder.
+  const prompt = { ...loadedPrompt, system: loadedPrompt.system + request.systemSuffix };
 
-  const toolSchema = zodToToolSchema(TraceabilityResponseV1Schema);
+  const toolSchema = zodToToolSchema(TraceabilityResponseV2Schema);
 
   const failures: ValidationAttemptFailure[] = [];
+  // Rendered once: the run date and the Units do not change between attempts.
+  const today = promptDate((deps.clock ?? (() => new Date()))());
+  const userContent = `${prompt.userFewShot}\n\n${renderTraceabilityInput(claim.text, today, candidateUnits)}`;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Don't start an attempt the orchestrator has already cancelled,
+    // e.g. after a backoff that `sleep` cut short (Codex on #621).
+    ctx.signal?.throwIfAborted();
     const start = Date.now();
-    const systemWithReminder = prompt.system + (RETRY_REMINDERS[attempt] ?? "");
-    const userContent = buildUserContent(prompt.userFewShot, claim, candidateUnits);
+    const systemWithReminder = prompt.system + traceabilityRetryReminder(failures);
 
     let response: Anthropic.Messages.Message;
     try {
       response = await client.messages.create({
         model,
-        max_tokens: 1024,
+        max_tokens: request.max_tokens,
         system: systemWithReminder,
         tools: [
           {
@@ -135,11 +207,15 @@ export async function checkTraceability(
             input_schema: toolSchema as Anthropic.Messages.Tool["input_schema"],
           },
         ],
-        tool_choice: { type: "tool", name: TOOL_NAME },
+        tool_choice: request.tool_choice,
+        ...(request.output_config !== undefined && { output_config: request.output_config }),
         messages: [{ role: "user", content: userContent }],
         stream: false,
-      });
+      }, { signal: ctx.signal, ...request.requestOptions });
     } catch (err) {
+      // An abort is the orchestrator's decision, not a transport
+      // fault: no retry, no backoff.
+      if (ctx.signal?.aborted) throw err;
       failures.push({
         attempt,
         kind: "transport_error",
@@ -151,7 +227,7 @@ export async function checkTraceability(
       // backoff a single 429 quickly cascades into a window-spanning
       // burst. See functions/src/llm/retry.ts.
       if (attempt < MAX_ATTEMPTS - 1) {
-        await sleep(transportBackoffMs(attempt, err));
+        await sleep(transportBackoffMs(attempt, err), ctx.signal);
       }
       continue;
     }
@@ -166,10 +242,15 @@ export async function checkTraceability(
         stage: "validation",
         provider: "anthropic",
         model,
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
+        subtask: STAGE,
+        ...anthropicUsageFields(response),
+        promptVersion: promptVersionLabel(prompt),
+        attempt,
+        maxTokens: request.max_tokens,
+        ...(request.effort !== undefined && { effort: request.effort }),
         latencyMs: Date.now() - start,
         ownerUid: ctx.ownerUid,
+        ...(ctx.applicationId !== undefined && { applicationId: ctx.applicationId }),
       }),
       "validation.traceability",
     );
@@ -187,7 +268,7 @@ export async function checkTraceability(
       continue;
     }
 
-    const parsed = TraceabilityResponseV1Schema.safeParse(toolUse.input);
+    const parsed = TraceabilityResponseV2Schema.safeParse(toolUse.input);
     if (!parsed.success) {
       failures.push({
         attempt,
@@ -221,12 +302,16 @@ export async function checkTraceability(
  * invisible-to-them dangling reference.
  */
 function finalizeResult(
-  raw: TraceabilityResponseV1,
+  raw: TraceabilityResponseV2,
   candidateUnits: readonly ExperienceUnit[],
 ): TraceabilityResult {
-  if (raw.supports && raw.supporting_unit_id !== undefined) {
+  // A model may echo the quotes `renderEntityId` puts around an unsafe
+  // id; map that back to the raw id before the membership check.
+  const supportingUnitId =
+    raw.supporting_unit_id === undefined ? undefined : citedEntityId(raw.supporting_unit_id);
+  if (raw.supports && supportingUnitId !== undefined) {
     const candidateIds = new Set(candidateUnits.map((u) => u.id));
-    if (!candidateIds.has(raw.supporting_unit_id)) {
+    if (!candidateIds.has(supportingUnitId)) {
       return {
         supports: false,
         rationale:
@@ -238,7 +323,7 @@ function finalizeResult(
   if (raw.supports) {
     return {
       supports: true,
-      supporting_unit_id: raw.supporting_unit_id,
+      supporting_unit_id: supportingUnitId,
       rationale: raw.rationale,
     };
   }
@@ -248,12 +333,20 @@ function finalizeResult(
   };
 }
 
-function buildUserContent(
-  userFewShot: string,
-  claim: Claim,
-  candidateUnits: readonly ExperienceUnit[],
+/**
+ * The real input that follows the prompt's few-shot examples: the claim,
+ * the run date, then the Units. The Unit block is the same text
+ * generation reads and the evidence version hashes
+ * (`./unitPromptText.ts`, #485). The run date sits outside it, so it
+ * never changes an evidence version; the prompt uses it only to treat a
+ * `date_range` end later than today as no end (traceability.v2 rule 3).
+ * Exported so the few-shot examples can be pinned to it.
+ */
+export function renderTraceabilityInput(
+  claimText: string,
+  today: string,
+  candidateUnits: readonly UnitPromptFields[],
 ): string {
-  const unitsBlock = candidateUnits.map(formatUnit).join("\n\n");
-  return `${userFewShot}\n\nClaim: ${quote(claim.text)}\n\nCandidate Experience Units:\n\n${unitsBlock}`;
+  return `Claim: ${quote(claimText)}\n\nToday: ${quote(today)}\n\nCandidate Experience Units:\n\n${formatUnitBlock(candidateUnits)}`;
 }
 

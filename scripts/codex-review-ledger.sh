@@ -187,9 +187,26 @@ printf '%s\n' "$REVIEWS" >"$LEDGER_TMP/reviews.json"
 # so they open windows and are attribution candidates, but are not counted.
 REQUEST_IDS=$(crqe_trigger_generation "$ISSUE_COMMENTS" "$AUTHOR") \
   || die "a configured-author Codex request comment lacks a positive integer id"
-REQUESTS=$(jqx "issue comments" -c --argjson ids "$REQUEST_IDS" '
+# A CodeRabbit rate-limit failover request is the configured author's too, but
+# the request ceiling does not count it (#2534), so a runaway must not either.
+# Its marker must name a head this PR had (#2553); an unreadable head set
+# exempts nothing.
+FAILOVER_HEADS='[]'
+if crqe_failover_markers_present "$ISSUE_COMMENTS" "$AUTHOR"; then
+  # Force-push heads come from GraphQL (#2591); a failed read leaves only
+  # them out.
+  fo_forced=$(crqe_force_push_heads "$REPO" "$PR_NUMBER" 2>/dev/null) || fo_forced='[]'
+  if fo_commits=$(gh_api_array "repos/$REPO/pulls/$PR_NUMBER/commits" "PR commits" 2>/dev/null) \
+     && fo_timeline=$(gh_api_array "repos/$REPO/issues/$PR_NUMBER/timeline" "PR timeline" 2>/dev/null); then
+    FAILOVER_HEADS=$(crqe_pr_head_set "$fo_commits" "$fo_timeline" "$HEAD_SHA" "$fo_forced") || FAILOVER_HEADS='[]'
+  fi
+fi
+FAILOVER_IDS=$(crqe_failover_trigger_ids "$ISSUE_COMMENTS" "$AUTHOR" "$FAILOVER_HEADS") \
+  || die "cannot read Codex failover markers"
+REQUESTS=$(jqx "issue comments" -c --argjson ids "$REQUEST_IDS" --argjson fo "$FAILOVER_IDS" '
   [ .[] | select(.id as $i | $ids | index($i))
-    | {id, created_at, counted: true, source: "issue_comment", author: .user.login} ]
+    | {id, created_at, counted: true, ceiling_exempt: (.id as $i | $fo | index($i) != null),
+       source: "issue_comment", author: .user.login} ]
   | unique_by(.id)' <<<"$ISSUE_COMMENTS")
 FOREIGN=$(jqx "request mentions" -nc --slurpfile ic "$LEDGER_TMP/issue_comments.json" \
   --slurpfile rc "$LEDGER_TMP/review_comments.json" --slurpfile rv "$LEDGER_TMP/reviews.json" \
@@ -340,9 +357,87 @@ BODY_REBUTTALS=$(jqx "review acks" -c --slurpfile rv "$LEDGER_TMP/ack_reviews.js
   | group_by(.finding) | map({finding: .[0].finding, path: null, at: (map(.at) | max), sources: ["review-ack"]})' <<<"$ISSUE_COMMENTS")
 REBUTTALS=$(jqx "rebuttals" -c --argjson b "$BODY_REBUTTALS" '. + $b' <<<"$REBUTTALS")
 
+# ---- fix dispositions (#2534) ----------------------------------------------------
+# A Codex inline finding has a plain fix disposition when its root carries a
+# thumbs-up from anyone but the bot (codex-record-feedback.sh's fixed verdict),
+# no thumbs-down, no [mergepath-resolve: <class>] reply of any class except
+# addressed-elsewhere (the class resolve-pr-threads.sh records for a fix; a
+# deferral, a rebuttal or a nitpick note is not a fix), and it is not a
+# rebuttal. It is only one of the three things crl_fixed_rids needs. Only
+# blocking-tier roots are read, since no other finding can make a runaway, and
+# a reaction rollup that rules a thumbs-up out skips the read.
+FIXES='[]'
+while IFS= read -r root; do
+  [ -n "$root" ] || continue
+  rid=$(jqx "fix root" -r '.id' <<<"$root")
+  tier=$(codex_tier_of "$(jqx "fix root $rid" -r '.body // ""' <<<"$root")")
+  jq -e --arg t "${tier:-unmarked}" '$t == "p0" or index($t) != null' <<<"$REQUIRED_JSON" >/dev/null 2>&1 || continue
+  rollup_says_up=$(jqx "root $rid reactions rollup" -r '
+    (if has("reactions") then .reactions else {} end)
+    | if type != "object" then error("reactions") else (.["+1"] // 1) > 0 end' <<<"$root")
+  [ "$rollup_says_up" = true ] || continue
+  tagged=$(jqx "thread $rid replies" -r --argjson rid "$rid" '
+    any(.[]; .in_reply_to_id == $rid
+             and ((.body // "") | [ scan("\\[mergepath-resolve:\\s*([a-z][a-z-]*)\\s*\\]") | .[0] ]
+                                | any(. != "addressed-elsewhere")))' <<<"$REVIEW_COMMENTS")
+  [ "$tagged" = false ] || continue
+  # Plain jq for the two yes/no reads: a false answer is not malformed
+  # evidence, and an unreadable one leaves the finding unfixed.
+  jq -e --argjson rid "$rid" 'any(.[]; .finding == $rid) | not' <<<"$REBUTTALS" >/dev/null 2>&1 || continue
+  reactions=$(read_array "repos/$REPO/pulls/comments/$rid/reactions" "finding $rid reactions")
+  if jq -e --arg bot "$BOT" '
+       any(.[]; .content == "+1" and (.user.login // "") != $bot)
+       and (any(.[]; .content == "-1" and (.user.login // "") != $bot) | not)' <<<"$reactions" >/dev/null 2>&1; then
+    FIXES=$(jqx "fixes" -c --argjson rid "$rid" '. + [$rid]' <<<"$FIXES")
+  fi
+done <<<"$(jqx "review comments" -c '.[] | select(.in_reply_to_id == null)' <<<"$BOT_REVIEW_COMMENTS")"
+
 # ---- verdicts, reactions, provider blocks, summary ------------------------------
+ISSUE_COMMENTS=$(crqe_resolve_verdict_anchors "$ISSUE_COMMENTS" "$REPO" "$BOT") || die "cannot resolve Codex verdict anchors"
 VERDICTS=$(crqe_verdicts "$ISSUE_COMMENTS" "$BOT") || die "cannot parse Codex verdict comments"
-VERDICTS=$(jqx "verdicts" -c 'unique_by(.comment_id)' <<<"$VERDICTS")
+VERDICT_COMMENT_IDS=$(jqx "verdict ids" -c 'map(.comment_id)' <<<"$VERDICTS")
+# The resolver preserves unresolved raw prefixes. Unlike the checker's exact
+# head selector, the attribution engine accepts prefixes, so exclude their
+# entire verdict rather than turning it into an attributable anchorless one.
+# crqe_verdicts collapses a tuple with any malformed field to an empty
+# reviewed_shas, which is indistinguishable from a genuinely anchorless
+# verdict (#2742). Only a comment with no raw anchor field at all may be
+# anchorless; one whose raw fields parsed to nothing is excluded too.
+#
+# A raw anchor field is any occurrence of the phrase "reviewed commit" except
+# the plural word "reviewed commits" (#2772 item 2). That frees the common
+# anchorless prose "the reviewed commits look clean" without enumerating
+# anything else: every decorated spelling of a field (numbering, nested
+# bullets, headings, bold, code, `_emphasis_`) still contains the phrase, and
+# so does a value glued to it with no separator, which crqe_verdicts also
+# reads as a field (`Reviewed commit` + 41 hex characters; Phase 4b on #2865).
+# Anything that is not that one plural word is a field. Other prose that uses
+# the phrase ("I reviewed commit history") is excluded too, on the fail-closed
+# side: its request stays unanswered rather than gaining a response.
+RAW_ANCHOR_IDS=$(jqx "raw anchor ids" -c --arg bot "$BOT" '
+  [ .[] | select((.user.login // "") == $bot)
+    | select((.body // "") | test("(?i)reviewed commit(?!s(?![0-9a-z_]))"))
+    | .id ]' <<<"$ISSUE_COMMENTS")
+# A verdict that names two different full SHAs reviewed no single commit:
+# crqe_verdicts keeps both and consistent_anchor would read the pair as no
+# anchor, so the attribution sweep could take it as an anchorless answer to
+# the request (#2772 item 1). It is excluded before it reaches the ledger,
+# like a malformed or unresolved field, and its request stays unanswered.
+# An anchorless verdict must also carry the legacy "Codex Review:" heading.
+# crqe_verdicts selects any comment whose body mentions "reviewed commit", so
+# prose alone ("The reviewed commits look clean.") would otherwise enter as an
+# unknown_tier response that spends blocking budget (Codex P2 on #2859).
+HEADED_IDS=$(jqx "headed verdict ids" -c --arg bot "$BOT" '
+  [ .[] | select((.user.login // "") == $bot)
+    | select((.body // "") | test("(?im)^\\s*codex review:"))
+    | .id ]' <<<"$ISSUE_COMMENTS")
+VERDICTS=$(jqx "verdicts" -c --argjson raw "$RAW_ANCHOR_IDS" --argjson headed "$HEADED_IDS" '
+  map(select(if (.reviewed_shas | length) == 0
+             then (.comment_id as $id | ($raw | any(.[]; . == $id) | not)
+                                        and ($headed | any(.[]; . == $id)))
+             else all(.reviewed_shas[]; length == 40)
+                  and (.reviewed_shas | map(ascii_downcase) | unique | length) == 1 end))
+  | unique_by(.comment_id)' <<<"$VERDICTS")
 # PR-level reactions cannot establish a response or test a rebuttal. Keep the
 # legacy input field empty; request eyes and finding feedback are independent.
 REACTIONS='[]'
@@ -353,7 +448,7 @@ while IFS= read -r c; do
   [ -n "$m" ] || continue
   BLOCKS=$(jqx "blocks" -c --argjson c "$c" --arg m "$m" \
     '. + [{comment_id: $c.id, created_at: $c.created_at, reason: $m}]' <<<"$BLOCKS")
-done <<<"$(jqx "bot comments" -c --arg bot "$BOT" --argjson verdict_ids "$(jqx "verdicts" -c 'map(.comment_id)' <<<"$VERDICTS")" '
+done <<<"$(jqx "bot comments" -c --arg bot "$BOT" --argjson verdict_ids "$VERDICT_COMMENT_IDS" '
   unique_by(.id) | .[] | select(.user.login == $bot)
       # A verdict is never a block notice (codex-review-request.sh precedence),
       # and the mutable Review Summary is current state, not history.
@@ -369,18 +464,49 @@ printf '%s\n' "$REACTIONS" >"$LEDGER_TMP/in_reactions.json"
 printf '%s\n' "$BLOCKS" >"$LEDGER_TMP/in_blocks.json"
 printf '%s\n' "$SUMMARY_JSON" >"$LEDGER_TMP/in_summary.json"
 printf '%s\n' "$REBUTTALS" >"$LEDGER_TMP/in_rebuttals.json"
+printf '%s\n' "$FIXES" >"$LEDGER_TMP/in_fixes.json"
 INPUTS=$(jqx "ledger inputs" -n \
   --argjson pr "$PR_NUMBER" --arg repo "$REPO" --arg head "$HEAD_SHA" \
   --arg author "$AUTHOR" --arg bot "$BOT" --argjson required "$REQUIRED_JSON" \
   --slurpfile requests "$LEDGER_TMP/in_requests.json" --slurpfile reviews "$LEDGER_TMP/in_reviews.json" \
   --slurpfile verdicts "$LEDGER_TMP/in_verdicts.json" --slurpfile reactions "$LEDGER_TMP/in_reactions.json" \
   --slurpfile blocks "$LEDGER_TMP/in_blocks.json" --slurpfile summary "$LEDGER_TMP/in_summary.json" \
-  --slurpfile rebuttals "$LEDGER_TMP/in_rebuttals.json" \
+  --slurpfile rebuttals "$LEDGER_TMP/in_rebuttals.json" --slurpfile fixes "$LEDGER_TMP/in_fixes.json" \
   '{pr: $pr, repo: $repo, head_sha: $head, author: $author, bot: $bot,
     required_tiers: $required, requests: $requests[0], reviews: $reviews[0],
     verdicts: $verdicts[0], reactions: $reactions[0], blocks: $blocks[0],
-    summary: $summary[0], rebuttals: $rebuttals[0]}')
+    summary: $summary[0], rebuttals: $rebuttals[0], fixes: $fixes[0]}')
 LEDGER=$(crl_ledger "$INPUTS") || die "ledger computation failed"
+
+# ---- head changes (#2534) -------------------------------------------------------
+# For a blocking response whose findings all carry a fix disposition, the files
+# changed from its head to each head Codex reviewed in a later window. Only
+# those pairs are read. A compare that fails or is not "ahead" (a force-push
+# rewrote the reviewed head) proves no fix: the pair is recorded without files,
+# so the finding stays counted.
+HEAD_PAIRS=$(jqx "fixed-finding heads" -c '
+  . as $l
+  | [ $l.responses[] | . as $r
+      | select(.class == "blocking" and (.anchor | type) == "string" and (.blocking_findings | length) > 0
+               and all(.blocking_findings[]; .id as $i | $l.fixes | index($i) != null))
+      | $l.responses[] | select(.window > $r.window and (.anchor | type) == "string" and .anchor != $r.anchor)
+      | {base: $r.anchor, head: .anchor} ] | unique' <<<"$LEDGER")
+HEAD_CHANGES='[]'
+while IFS= read -r pair; do
+  [ -n "$pair" ] || continue
+  base=$(jqx "head pair" -r '.base' <<<"$pair")
+  head=$(jqx "head pair" -r '.head' <<<"$pair")
+  if change=$(gh api "repos/$REPO/compare/$base...$head" \
+       --jq '{status, files: [ .files[]? | .filename, (.previous_filename // empty) ] | unique}' 2>/dev/null) \
+     && jq -e '(.status | type) == "string" and (.files | type) == "array"' <<<"$change" >/dev/null 2>&1; then
+    :
+  else
+    change='{"status":"unreadable","files":[]}'
+  fi
+  HEAD_CHANGES=$(jqx "head changes" -c --arg b "$base" --arg h "$head" --argjson c "$change" \
+    '. + [{base: $b, head: $h, status: $c.status, files: $c.files}]' <<<"$HEAD_CHANGES")
+done <<<"$(jqx "head pairs" -c '.[]' <<<"$HEAD_PAIRS")"
+LEDGER=$(jqx "ledger" -c --argjson hc "$HEAD_CHANGES" '.head_changes = $hc' <<<"$LEDGER")
 # The evidence reads above take time; a push that lands during them would
 # leave this ledger describing a head the PR no longer has. Re-read the live
 # head once every read is done and refuse a moved one.

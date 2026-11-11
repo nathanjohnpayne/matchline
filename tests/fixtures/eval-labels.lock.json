@@ -1,0 +1,188 @@
+{
+  "lock_version": 1,
+  "files": {
+    "validation-cases/vc-01-valid-paraphrase.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "c59ba000259aad45fe009235ebe147e13ec7a1d0b013780db49c37acb928e1b5"
+        },
+        {
+          "label_version": 2,
+          "sha256": "6570a6423d2a15b05ff12a0722cac420be56fafc0f374f0bf2bd08b493fdea89"
+        }
+      ]
+    },
+    "validation-cases/vc-02-equivalent-numeric-notation.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "b46732839fedf180ee273d94d280cf0b4ec382c09f61b33c545327620eb48053"
+        }
+      ]
+    },
+    "validation-cases/vc-03-swapped-employer-project.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "42dda10447666b60c99bcc527d083f8c73fb642f2ec1309ca7dab294f9276afe"
+        }
+      ]
+    },
+    "validation-cases/vc-04-wrong-metric-magnitude.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "2a90019c788cfa1e57e855bbe6d86128ef05cb891bff574455c3333c9170b546"
+        }
+      ]
+    },
+    "validation-cases/vc-05-wrong-direction.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "f2ab8d1344af9180792d915160e76b655ac2c40e8667c41fe0f5c7d58157b662"
+        }
+      ]
+    },
+    "validation-cases/vc-06-percent-vs-percentage-points.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "a4ea497e6d46a841bb08a2cd8015e9d805d43ecc0f0822723dfc63967d57be5b"
+        }
+      ]
+    },
+    "validation-cases/vc-07-unsupported-title.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "ed1b4a0b46f3eab116f9c410c558c3201a9ccd0103db6395bb06b1d7d266fef3"
+        }
+      ]
+    },
+    "validation-cases/vc-08-unsupported-skill.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "9a226a00ee805e7d377c768c5c5a652ad616e88c2356bbd32b06ff987dc7b917"
+        }
+      ]
+    },
+    "validation-cases/vc-09-missing-cited-evidence.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "b2ef7c07570ddb6e0c0f1cd3e43637a1d5eb02f80bb10b660a26dd1f5bfb035d"
+        }
+      ]
+    },
+    "validation-cases/vc-10-vague-but-traceable.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "479d2fac5cb08ec93f1f663b80ead59b84a4efac3c5752a28ff2cba35caf44c1"
+        }
+      ]
+    },
+    "validation-cases/vc-11-cross-unit-fusion.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "74d4a971f5716c5dcc0e60a1b62f3fd741f947486c96c79a38ed6054e99d74a7"
+        },
+        {
+          "label_version": 2,
+          "sha256": "3e91da3633efc1fa0a162cd1319e2b1400eb024a6fa388811c215f6ef9955b66"
+        }
+      ]
+    },
+    "validation-cases/vc-12-embedded-prompt-instructions.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "0f85935dcb68e28cd9b7b760a1e5eec79536c93bb509cd9aac553e2b1c449031"
+        }
+      ]
+    },
+    "validation-cases/vc-13-multi-clause.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "f32ee9fcd639dda8ec364e7694f0f7b086a2e2b7ef35d476583b3321fccbe182"
+        },
+        {
+          "label_version": 2,
+          "sha256": "2400d3b5e786be99e212faaff22912346a2bf964dd6f8cd9899b0e8b59e4f0a4"
+        }
+      ]
+    },
+    "validation-cases/vc-14-adversarial-fabrication.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "ee092cd002728f3eb797d0898f2d1f94f419467963cdb8cbbd657fc7f81e1eac"
+        }
+      ]
+    },
+    "validation-cases/vc-15-date-drift.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "888f674b75ffd0eebcdfdbfad7dd977585b8c0c323515b05c17ca1668017c5ce"
+        }
+      ]
+    },
+    "generation-snapshots/gs-rich-nathan-google.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "46a43fd9fe17d2b56281e646b10909a04c4cf0c6fd141610a9db7b4c6070a8f8"
+        }
+      ]
+    },
+    "generation-snapshots/gs-sparse-sofia-openai.json": {
+      "review_status": "draft-pending-owner-review",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "2c0f90c22be465628f7ffce6def610e193c1b17b750f7f1eeeb968a05660df64"
+        }
+      ]
+    },
+    "expected-asset-traces/adversarial-fabrication.json": {
+      "review_status": "owner-reviewed",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "12d9222a6ee998ab32286726228e09c66429b689e693fb1da4930a9447c30aed"
+        }
+      ]
+    },
+    "expected-asset-traces/nathan-2026__google-compute-spm-2026__resume.json": {
+      "review_status": "owner-reviewed",
+      "history": [
+        {
+          "label_version": 1,
+          "sha256": "eb1d5a8266c4ece88a20b80596bfb1159202b9a710f9051291081c08ef37884f"
+        }
+      ]
+    }
+  }
+}

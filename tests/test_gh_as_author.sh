@@ -24,6 +24,10 @@ COMMAND_CLASSIFIER="$ROOT/scripts/lib/gh-command-classifier.sh"
 # prefixes still apply; this only changes the default.
 unset OP_PREFLIGHT_AUTHOR_PAT OP_PREFLIGHT_REVIEWER_PAT GH_TOKEN GITHUB_TOKEN GH_HOST GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
 
+# These cases drive the gh transport. Pin it so a cloud session's
+# CLAUDE_CODE_REMOTE (or MERGEPATH_AGENT_SURFACE) cannot switch the wrappers
+# to the REST transport, which tests/test_gh_rest_transport.sh covers.
+export MERGEPATH_GH_TRANSPORT=gh
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/gh-as-author-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -133,6 +137,116 @@ assert_allowed_source "a pre-verb long label value that spells merge" \
   'gh pr --label merge list'
 assert_prohibited_source "a short label value cannot hide a later merge verb" \
   'gh pr -l merge merge 7'
+
+# #1342: search queries may precede or follow the list verb. Their literal
+# value must never become a native verb, while real writes with the same
+# option placements and executable substitutions remain inspectable.
+for search_flag in --search -S; do
+  assert_allowed_source "$search_flag query before the list verb" \
+    "gh pr $search_flag merge list"
+  assert_allowed_source "$search_flag query after the list verb" \
+    "gh pr list $search_flag merge"
+  assert_allowed_source "$search_flag quoted query before the list verb" \
+    "gh pr $search_flag 'merge' list"
+  assert_allowed_source "$search_flag attached query before the list verb" \
+    "gh pr $search_flag=merge list"
+  assert_allowed_source "$search_flag attached query after the list verb" \
+    "gh pr list $search_flag=merge"
+  assert_prohibited_source "$search_flag query cannot hide a later merge verb" \
+    "gh pr $search_flag merge merge 7"
+  assert_prohibited_source "$search_flag ordinary query cannot hide a later merge verb" \
+    "gh pr $search_flag topic merge 7"
+  assert_prohibited_source "$search_flag query after a real merge verb" \
+    "gh pr merge 7 $search_flag merge"
+  assert_prohibited_source "$search_flag pre-verb query substitution still exposes a merge" \
+    "gh pr $search_flag \"\$(gh pr merge 7)\" list"
+  assert_prohibited_source "$search_flag post-verb query substitution still exposes a merge" \
+    "gh pr list $search_flag \"\$(gh pr merge 7)\""
+  assert_prohibited_source "$search_flag read cannot hide a separate native merge" \
+    "gh pr $search_flag merge list; gh pr merge 7"
+done
+
+# #1324: a separately supplied quoted scalar repo/host value is one argv
+# operand, not a dynamic command group or PR verb. Unquoted/multiword forms
+# and unknown option binding retain the classifier's conservative boundary.
+escaped_quote='\"'
+for repo_flag in -R --repo --hostname; do
+  assert_allowed_source "$repo_flag quoted scalar before the PR group" \
+    "gh $repo_flag \"\$REPO\" pr view 1"
+  assert_allowed_source "$repo_flag quoted scalar after the PR group" \
+    "gh pr $repo_flag \"\$REPO\" list"
+  assert_allowed_source "$repo_flag quoted braced scalar before the PR group" \
+    "gh $repo_flag \"\${REPO}\" pr view 1"
+  assert_allowed_source "$repo_flag quoted braced scalar after the PR group" \
+    "gh pr $repo_flag \"\${REPO}\" list"
+  assert_prohibited_source "$repo_flag quoted scalar cannot hide a native merge" \
+    "gh $repo_flag \"\$REPO\" pr merge 7"
+  assert_prohibited_source "$repo_flag quoted scalar cannot hide a PR merge verb" \
+    "gh pr $repo_flag \"\$REPO\" merge 7"
+  assert_prohibited_source "$repo_flag quoted braced scalar cannot hide a native merge" \
+    "gh $repo_flag \"\${REPO}\" pr merge 7"
+  assert_prohibited_source "$repo_flag quoted braced scalar cannot hide a PR merge verb" \
+    "gh pr $repo_flag \"\${REPO}\" merge 7"
+  assert_prohibited_source "$repo_flag global value substitution still exposes a merge" \
+    "gh $repo_flag \"\$(gh pr merge 7)\" pr view 1"
+  assert_prohibited_source "$repo_flag PR value substitution still exposes a merge" \
+    "gh pr $repo_flag \"\$(gh pr merge 7)\" list"
+  assert_prohibited_source "$repo_flag unquoted global value remains opaque" \
+    "gh $repo_flag \$REPO pr view 1"
+  assert_prohibited_source "$repo_flag unquoted PR value remains opaque" \
+    "gh pr $repo_flag \$REPO list"
+  assert_prohibited_source "$repo_flag quote-sandwiched global value can split" \
+    "gh $repo_flag \"\"\$REPO\"\" pr view 1"
+  assert_prohibited_source "$repo_flag quote-sandwiched PR value can split" \
+    "gh pr $repo_flag \"\"\$REPO\"\" list"
+  assert_prohibited_source "$repo_flag escaped global quotes do not prevent splitting" \
+    "gh $repo_flag ${escaped_quote}\$REPO${escaped_quote} pr view 1"
+  assert_prohibited_source "$repo_flag escaped PR quotes do not prevent splitting" \
+    "gh pr $repo_flag ${escaped_quote}\$REPO${escaped_quote} list"
+  assert_prohibited_source "$repo_flag quoted positional array remains opaque" \
+    "gh $repo_flag \"\$@\" pr view 1"
+  assert_prohibited_source "$repo_flag quoted named array remains opaque" \
+    "gh pr $repo_flag \"\${REPOS[@]}\" list"
+  assert_prohibited_source "$repo_flag cannot be another option's operand" \
+    "gh -q $repo_flag \"\$REPO\" pr view 1"
+  assert_prohibited_source "$repo_flag cannot restart parsing at an option's gh operand" \
+    "gh -q gh $repo_flag \"\$REPO\" pr view 1"
+  assert_prohibited_source "$repo_flag cannot restart parsing at a gh command-group operand" \
+    "gh gh $repo_flag \"\$REPO\" pr view 1"
+  assert_prohibited_source "$repo_flag cannot restart parsing at a gh PR-verb operand" \
+    "gh pr gh $repo_flag \"\$REPO\" list"
+  assert_prohibited_source "$repo_flag wrapper value cannot hide a later merge" \
+    "sudo $repo_flag \"\$REPO\" gh pr merge 7"
+  assert_allowed_source "$repo_flag static value retains its read path" \
+    "gh $repo_flag owner/repo pr view 1"
+  assert_allowed_source "$repo_flag quoted scalar with a path-qualified gh" \
+    "env FIXTURE=1 /opt/bin/gh $repo_flag \"\$REPO\" pr view 1"
+  assert_prohibited_source "$repo_flag path-qualified write stays prohibited" \
+    "env FIXTURE=1 /opt/bin/gh $repo_flag \"\$REPO\" pr merge 7"
+done
+assert_allowed_source "literal repo prefix preserves a later quoted hostname read" \
+  "gh -R owner/repo --hostname \"\$HOST\" pr view 1"
+assert_prohibited_source "literal repo prefix cannot hide a quoted hostname write" \
+  "gh -R owner/repo --hostname \"\$HOST\" pr merge 7"
+assert_allowed_source "quoted hostname preserves an explicit REST GET" \
+  "gh --hostname \"\$HOST\" api repos/o/r/pulls -X GET -f state=open"
+assert_prohibited_source "quoted hostname cannot hide an explicit REST write" \
+  "gh --hostname \"\$HOST\" api repos/o/r/pulls/7/merge -X PUT"
+assert_prohibited_source "quoted hostname cannot hide an implicit REST write" \
+  "gh --hostname \"\$HOST\" api repos/o/r/pulls/7/reviews -f event=APPROVE"
+assert_prohibited_source "quoted hostname cannot hide a GraphQL mutation" \
+  "gh --hostname \"\$HOST\" api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'"
+assert_prohibited_source "an unrelated quoted dynamic option stays opaque" \
+  "gh --unknown \"\$REPO\" pr view 1"
+assert_prohibited_source "a separate merge remains visible after a quoted repo read" \
+  "gh -R \"\$REPO\" pr view 1; gh pr merge 7"
+assert_allowed_source "quoted jq flag retains its existing value collapse" \
+  'gh pr "--jq" merge view 1'
+assert_allowed_source "quoted search flag retains its existing value collapse" \
+  'gh pr "--search" merge list'
+assert_allowed_source "quoted gh executable retains the search read path" \
+  '"gh" pr --search merge list'
+
 # The method flag is a gh option and is legal on either side of `api`; gh sends
 # the fields as a query string, so this is an explicit read.
 assert_allowed_source "an explicit GET pinned before the api command" \
@@ -407,6 +521,32 @@ if [ "${1:-}" = "pr" ] && { [ "${2:-}" = "create" ] || [ "${2:-}" = "new" ]; }; 
   echo "${GH_CREATE_PR_URL:-https://github.com/example/repo/pull/42}"
   exit "${GH_CREATE_PR_RC:-0}"
 fi
+# `gh [global flags] pr create` is the same write with a repository flag before
+# the verb (#2562); real gh prints the created URL for it too.
+if [ "${1:-}" != "pr" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "pr" ] && { [ "$a" = "create" ] || [ "$a" = "new" ]; }; then
+      echo "${GH_CREATE_PR_URL:-https://github.com/example/repo/pull/42}"
+      exit "${GH_CREATE_PR_RC:-0}"
+    fi
+    prev=$a
+  done
+fi
+
+# The duplicate-link check (#2562) resolves the repository with `gh repo view`
+# when the command names none, then reads `gh api --paginate --slurp
+# repos/<repo>/pulls` (slurped pages: an array of arrays).
+if [ "${1:-}" = "repo" ] && [ "${2:-}" = "view" ]; then
+  [ -z "${GH_REPO_VIEW_RC:-}" ] || exit "$GH_REPO_VIEW_RC"
+  printf '%s\n' "${GH_REPO_VIEW:-example/repo}"
+  exit 0
+fi
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "--paginate" ]; then
+  [ -z "${GH_API_PULLS_RC:-}" ] || exit "$GH_API_PULLS_RC"
+  printf '%s\n' "${GH_API_PULLS_JSON:-[]}"
+  exit 0
+fi
 
 if [ "${1:-}" = "pr" ] && [ "${2:-}" = "view" ]; then
   rc="${GH_VIEW_RC:-0}"
@@ -442,17 +582,17 @@ reset_log() {
 
 reset_log
 OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" GITHUB_TOKEN="ambient-token" \
-  run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+  run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  fail "merge happy path: rc=$rc"
+  fail "merge cancellation identity path: rc=$rc"
 elif grep -q $'gh\tauth\tswitch' "$WORKDIR/calls.log"; then
-  fail "merge happy path: called gh auth switch"
-elif ! grep -q $'GH_TOKEN=ghp_author-token GITHUB_TOKEN= gh\tpr\tmerge\t123\t--squash' "$WORKDIR/calls.log"; then
-  fail "merge happy path: wrapped command did not run with author token and GITHUB_TOKEN unset"
+  fail "merge cancellation identity path: called gh auth switch"
+elif ! grep -q $'GH_TOKEN=ghp_author-token GITHUB_TOKEN= gh\tpr\tmerge\t123\t--disable-auto' "$WORKDIR/calls.log"; then
+  fail "merge cancellation identity path: wrapped command did not run with author token and GITHUB_TOKEN unset"
   cat "$WORKDIR/calls.log" >&2
 else
-  pass "merge happy path: verified author token, no keyring switch, ambient GITHUB_TOKEN cleared"
+  pass "merge cancellation identity path: verified author token, no keyring switch, ambient GITHUB_TOKEN cleared"
 fi
 
 reset_log
@@ -496,6 +636,115 @@ elif grep -q $'gh\tpr\tnew' "$WORKDIR/calls.log"; then
   fail "pr new alias contract: create alias ran despite invalid body"
 else
   pass "pr new alias contract: invalid body blocked before write"
+fi
+
+# A second pull request linking an issue another open one already links is
+# refused before the write (#2562), unless GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK
+# names that pull request. Links are the shared rule's own-line keyword
+# forms; a prose mention, a different number and a cross-repository link are
+# not links here. An unreadable open-PR list refuses; an unlinked body never
+# reads it.
+DUP_BODY=$'Authoring-Agent: codex\n\n## Self-Review\n\n- Correctness: verified.\n\nCloses #12\n'
+# dup_case <name> <expected rc> <create must run: yes|no> <body> [--repo R] -- env assignments via caller
+dup_case() {
+  local name="$1" want_rc="$2" want_create="$3" body="$4"; shift 4
+  local rc=0 err
+  reset_log
+  set +e
+  err=$(OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" GH_VIEW_AUTHOR="nathanjohnpayne" \
+    run_wrapper -- gh pr create --title "t" --body "$body" "$@" 2>&1 >/dev/null)
+  rc=$?
+  set -e
+  DUP_ERR="$err"
+  if [ "$rc" -ne "$want_rc" ]; then
+    fail "duplicate link: $name: rc=$rc expected $want_rc ($err)"
+  elif [ "$want_create" = yes ] && ! grep -q $'gh\tpr\tcreate' "$WORKDIR/calls.log"; then
+    fail "duplicate link: $name: create did not run"
+  elif [ "$want_create" = no ] && grep -q $'gh\tpr\tcreate' "$WORKDIR/calls.log"; then
+    fail "duplicate link: $name: create ran"
+  else
+    pass "duplicate link: $name"
+  fi
+}
+PULLS_40_CLOSES='[[{"number":40,"body":"Authoring-Agent: claude\n\nCloses #12\n"},{"number":41,"body":"Refs #120"}]]'
+GH_API_PULLS_JSON="$PULLS_40_CLOSES" \
+  dup_case "an open PR closing the same issue refuses the create" 7 no "$DUP_BODY"
+echo "$DUP_ERR" | grep -q '#40 links #12' || fail "duplicate link: refusal does not name the other PR and the issue: $DUP_ERR"
+# Without a repository flag the check resolves the checkout's repository and
+# reads the same paginated endpoint; a capped `gh pr list` is never used.
+grep -q $'gh\trepo\tview\t--json\tnameWithOwner' "$WORKDIR/calls.log" \
+  || fail "duplicate link: implicit form did not resolve the repository with gh repo view: $(cat "$WORKDIR/calls.log")"
+grep -q $'gh\tapi\t--paginate\t--slurp\trepos/example/repo/pulls?state=open&per_page=100' "$WORKDIR/calls.log" \
+  || fail "duplicate link: implicit form did not read the paginated pulls endpoint: $(cat "$WORKDIR/calls.log")"
+grep -q $'gh\tpr\tlist' "$WORKDIR/calls.log" && fail "duplicate link: a capped gh pr list was used"
+GH_API_PULLS_JSON="$PULLS_40_CLOSES" GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40 \
+  dup_case "naming that PR in the override lets the create run" 0 yes "$DUP_BODY"
+GH_API_PULLS_JSON="$PULLS_40_CLOSES" GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=41 \
+  dup_case "an override naming another PR still refuses" 7 no "$DUP_BODY"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12"}],[{"number":243,"body":"Refs #12"}]]' GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40 \
+  dup_case "a linking PR on a later page is seen and still refuses" 7 no "$DUP_BODY"
+echo "$DUP_ERR" | grep -q '#243 links #12' || fail "duplicate link: refusal does not name the later-page PR: $DUP_ERR"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12"},{"number":43,"body":"Refs #12"}]]' GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40,43 \
+  dup_case "an override naming every linking PR lets the create run" 0 yes "$DUP_BODY"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Part one.\r\n  refs #12\r\n"}]]' \
+  dup_case "a Refs link on the other PR counts, case and CRLF included" 7 no "$DUP_BODY"
+GH_API_PULLS_JSON='[[{"number":40,"body":"see #12 for context; fixes #120 too"}]]' \
+  dup_case "a prose mention or another number is not a link" 0 yes "$DUP_BODY"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12"}]]' \
+  dup_case "a cross-repository link in the new body is not checked" 0 yes \
+  $'Authoring-Agent: codex\n\n## Self-Review\n\n- ok.\n\nCloses other/repo#12\n'
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12"}]]' \
+  dup_case "a Refs link in the new body is checked like Closes" 7 no \
+  $'Authoring-Agent: codex\n\n## Self-Review\n\n- ok.\n\nRefs #12\n'
+GH_API_PULLS_RC=1 dup_case "an unreadable open-PR list refuses rather than passes" 1 no "$DUP_BODY"
+echo "$DUP_ERR" | grep -q 'could not list open pull requests' || fail "duplicate link: unreadable-list refusal lacks its diagnostic: $DUP_ERR"
+# #2746: the allowlist cannot help when no duplicate could be read, so the
+# refusal must not offer it as a remedy, and naming a number must not pass.
+echo "$DUP_ERR" | grep -q 'or name that pull request in GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK' \
+  && fail "duplicate link: unreadable-list refusal suggests the allowlist as a remedy: $DUP_ERR"
+GH_API_PULLS_RC=1 GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40 \
+  dup_case "an unreadable open-PR list refuses even with an allowlisted number" 1 no "$DUP_BODY"
+GH_REPO_VIEW_RC=1 dup_case "a repository that cannot be resolved refuses rather than passes" 1 no "$DUP_BODY"
+GH_REPO_VIEW=not-a-slug dup_case "a resolved name that is not OWNER/REPO refuses" 1 no "$DUP_BODY"
+GH_API_PULLS_RC=1 GH_REPO_VIEW_RC=1 dup_case "a body with no link never reads the list" 0 yes \
+  $'Authoring-Agent: codex\n\n## Self-Review\n\n- ok.\n'
+grep -q $'gh\tapi\t--paginate' "$WORKDIR/calls.log" && fail "duplicate link: an unlinked body listed open PRs"
+grep -q $'gh\trepo\tview' "$WORKDIR/calls.log" && fail "duplicate link: an unlinked body resolved the repository"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12","state":"open"}]]' \
+  dup_case "with --repo the check reads the REST pulls list" 7 no "$DUP_BODY" --repo example/repo
+grep -q $'gh\tapi\t--paginate\t--slurp\trepos/example/repo/pulls?state=open&per_page=100' "$WORKDIR/calls.log" \
+  || fail "duplicate link: --repo form did not read repos/example/repo/pulls: $(cat "$WORKDIR/calls.log")"
+grep -q $'gh\trepo\tview' "$WORKDIR/calls.log" && fail "duplicate link: --repo form resolved the repository it was given"
+GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12","state":"open"}]]' GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40 \
+  dup_case "with --repo=OWNER/REPO the override is honored" 0 yes "$DUP_BODY" --repo=example/repo
+GH_API_PULLS_RC=1 dup_case "with --repo an unreadable REST list refuses" 1 no "$DUP_BODY" --repo example/repo
+# gh accepts the repository flag before the verb (`gh --repo o/r pr create`);
+# the check must read that repository, not the checkout's (Codex on #2576).
+# These two cases place the flag before the verb themselves: dup_case appends
+# its arguments after it (CodeRabbit on #2576).
+reset_log
+set +e
+OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" GH_VIEW_AUTHOR="nathanjohnpayne" GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12","state":"open"}]]' \
+  run_wrapper -- gh --repo other/repo pr create --title "t" --body "$DUP_BODY" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 7 ]; then
+  fail "duplicate link: global --repo before the verb: rc=$rc expected 7"
+elif ! grep -q $'repos/other/repo/pulls?state=open&per_page=100' "$WORKDIR/calls.log"; then
+  fail "duplicate link: global --repo before the verb did not read repos/other/repo/pulls: $(cat "$WORKDIR/calls.log")"
+else
+  pass "duplicate link: a global --repo before the verb names the repository the check reads"
+fi
+reset_log
+set +e
+OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" GH_VIEW_AUTHOR="nathanjohnpayne" GH_API_PULLS_JSON='[[{"number":40,"body":"Closes #12","state":"open"}]]' GH_AS_AUTHOR_ALLOW_DUPLICATE_LINK=40 \
+  run_wrapper -- gh -Rother/repo pr create --title "t" --body "$DUP_BODY" >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 0 ] || ! grep -q $'repos/other/repo/pulls?state=open&per_page=100' "$WORKDIR/calls.log"; then
+  fail "duplicate link: attached -R before the verb: rc=$rc; calls: $(cat "$WORKDIR/calls.log")"
+else
+  pass "duplicate link: an attached -R before the verb is read and the override honored"
 fi
 
 # Every prefix shape the pre-write guard delegates to this wrapper must still
@@ -740,7 +989,7 @@ fi
 
 reset_log
 unset OP_PREFLIGHT_AUTHOR_PAT
-run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then
   fail "fallback token: rc=$rc"
@@ -753,7 +1002,7 @@ fi
 
 reset_log
 set +e
-stderr_capture=$(OP_PREFLIGHT_AUTHOR_PAT="ghp_reviewer-token" run_wrapper -- gh pr merge 123 --squash 2>&1 >/dev/null)
+stderr_capture=$(OP_PREFLIGHT_AUTHOR_PAT="ghp_reviewer-token" run_wrapper -- gh pr merge 123 --disable-auto 2>&1 >/dev/null)
 rc=$?
 set -e
 if [ "$rc" -eq 0 ]; then
@@ -786,9 +1035,12 @@ install_wrapper_copy() {
   local dir=$1
   mkdir -p "$dir/scripts/lib" "$dir/scripts/workflow" "$dir/.github"
   cp "$ROOT/scripts/gh-as-author.sh" "$dir/scripts/gh-as-author.sh"
-  cp "$ROOT/scripts/workflow/owner-admin-override.py" "$dir/scripts/workflow/"
+  cp "$ROOT/scripts/workflow/owner-admin-override.py" "$ROOT/scripts/workflow/merge-writer.py" "$dir/scripts/workflow/"
   cp "$ROOT/scripts/lib/gh-token-resolver.sh" "$dir/scripts/lib/gh-token-resolver.sh"
   cp "$ROOT/scripts/lib/gh-command-classifier.sh" "$dir/scripts/lib/gh-command-classifier.sh"
+  cp "$ROOT/scripts/lib/gh-rest-transport.sh" "$dir/scripts/lib/gh-rest-transport.sh"
+  cp "$ROOT/scripts/lib/gh-comment-trigger-guard.sh" "$dir/scripts/lib/"
+  cp "$ROOT/scripts/workflow/gh-comment-trigger-guard.py" "$dir/scripts/workflow/"
   cp "$ROOT/scripts/lib/pr-body-contract.sh" "$dir/scripts/lib/pr-body-contract.sh"
   cp "$ROOT/scripts/lib/reviewers-helpers.sh" "$dir/scripts/lib/reviewers-helpers.sh"
   cp "$ROOT/scripts/identity-check.sh" "$dir/scripts/identity-check.sh"
@@ -824,10 +1076,10 @@ printf "author_identity: 'custom-author'\n" >"$PIN_DIR2/.github/review-policy.ym
 reset_log
 set +e
 ( cd "$PIN_DIR2" && GH_AS_AUTHOR_IDENTITY="custom-author" \
-    PATH="$STUB_DIR:$PATH" GH_CALLS_LOG="$WORKDIR/calls.log" "$PIN_DIR2/scripts/gh-as-author.sh" -- gh pr merge 9 --squash ) >/dev/null 2>&1
+    PATH="$STUB_DIR:$PATH" GH_CALLS_LOG="$WORKDIR/calls.log" "$PIN_DIR2/scripts/gh-as-author.sh" -- gh pr merge 9 --disable-auto ) >/dev/null 2>&1
 rc=$?
 set -e
-if [ "$rc" -eq 0 ] && grep -q $'GH_TOKEN=gho_fallback-custom-author-token GITHUB_TOKEN= gh\tpr\tmerge\t9\t--squash' "$WORKDIR/calls.log"; then
+if [ "$rc" -eq 0 ] && grep -q $'GH_TOKEN=gho_fallback-custom-author-token GITHUB_TOKEN= gh\tpr\tmerge\t9\t--disable-auto' "$WORKDIR/calls.log"; then
   pass "runtime pin: matching custom identity (quoted policy) proceeds with its token"
 else
   fail "runtime pin: matching custom identity should proceed; rc=$rc calls=$(cat "$WORKDIR/calls.log")"
@@ -853,11 +1105,11 @@ rm -rf "$NO_POLICY_DIR/.github"
 reset_log
 set +e
 ( cd "$NO_POLICY_DIR" && OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" \
-    PATH="$STUB_DIR:$PATH" GH_CALLS_LOG="$WORKDIR/calls.log" "$NO_POLICY_DIR/scripts/gh-as-author.sh" -- gh pr merge 9 --squash ) >/dev/null 2>&1
+    PATH="$STUB_DIR:$PATH" GH_CALLS_LOG="$WORKDIR/calls.log" "$NO_POLICY_DIR/scripts/gh-as-author.sh" -- gh pr merge 9 --disable-auto ) >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -eq 0 ]; then
-  pass "runtime pin: absent policy file keeps legacy behavior"
+  pass "runtime pin: absent policy retains cancellation behavior"
 else
   fail "runtime pin: absent policy file should not block; rc=$rc"
 fi
@@ -883,7 +1135,7 @@ reset_log
 : >"$WORKDIR/ent.log"
 set +e
 STUB_ENT_LOG="$WORKDIR/ent.log" OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" \
-  run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+  run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -eq 0 ] && grep -qx 'mergepath-guarded-write-github-com-only|mergepath-guarded-write-github-com-only|pr merge' "$WORKDIR/ent.log"; then
@@ -898,7 +1150,7 @@ fi
 # refuse, never write under the placeholder.
 reset_log
 set +e
-GITHUB_TOKEN= GH_TOKEN="proxy-injected" run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+GITHUB_TOKEN= GH_TOKEN="proxy-injected" run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -eq 0 ] && grep -q $'GH_TOKEN=gho_fallback-author-token GITHUB_TOKEN= gh\tpr\tmerge' "$WORKDIR/calls.log" \
@@ -911,7 +1163,7 @@ fi
 
 reset_log
 set +e
-STUB_NO_KEYRING=1 GITHUB_TOKEN= GH_TOKEN="proxy-injected" run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+STUB_NO_KEYRING=1 GITHUB_TOKEN= GH_TOKEN="proxy-injected" run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] && ! grep -q $'gh\tpr\tmerge' "$WORKDIR/calls.log"; then
@@ -1010,12 +1262,16 @@ if run_git_wrapper 0 "fresh bootstrap repo" git -C "$PUSHREPO" push -u origin HE
       pass "fresh bootstrap repo: pushed under the verified token, global/system/prompt/hooks closed, gh's helper alone" ;;
     *) fail "fresh bootstrap repo: unexpected push environment: $line" ;;
   esac
+else
+  fail "fresh bootstrap repo: wrapper did not complete the push"
 fi
 
 fresh_pushrepo "git@github.com:example/repo.git"
 if run_git_wrapper 0 "exact ssh spelling" git -C "$PUSHREPO" push -u origin HEAD \
    && grep -q -- '-c url.https://github.com/.insteadOf=git@github.com:' "$GIT_PUSH_LOG"; then
   pass "exact git@github.com: spelling for the expected repo: accepted and pushed over HTTPS"
+else
+  fail "exact git@github.com: spelling was not accepted and pushed over HTTPS"
 fi
 
 # The destination must be exactly the expected repository.
@@ -1046,9 +1302,12 @@ for kv in "remote.origin.pushurl=https://github.com/example/repo.git" "remote.or
 done
 fresh_pushrepo
 "$REAL_GIT" -C "$PUSHREPO" config --local "http.https://user:KEYSECRET@github.com/.extraheader" "x: y"
-run_git_wrapper 5 "redaction probe" git -C "$PUSHREPO" push -u origin HEAD \
-  && printf '%s' "$GIT_CASE_ERR" | grep -q '<redacted>@github.com' \
-  && pass "credential-bearing key name: named with its userinfo redacted"
+if run_git_wrapper 5 "redaction probe" git -C "$PUSHREPO" push -u origin HEAD \
+   && printf '%s' "$GIT_CASE_ERR" | grep -q '<redacted>@github.com'; then
+  pass "credential-bearing key name: named with its userinfo redacted"
+else
+  fail "credential-bearing key name was not named with its userinfo redacted"
+fi
 
 fresh_pushrepo
 "$REAL_GIT" -C "$PUSHREPO" config --local --add remote.origin.url https://github.com/example/repo.git
@@ -1201,13 +1460,13 @@ mkdir -p "$WORKDIR/fake-exec"
 env_out="$(GIT_EXEC_PATH="$WORKDIR/fake-exec" GIT_TRACE_CURL="$WORKDIR/trace.log" GIT_TRACE_REDACT=0 \
   GIT_SSL_NO_VERIFY=1 PATH="$CRED_DIR:$PATH" \
   bash -c '. "$1"; gh_author_git_exec ghp_env-token -c alias.showenv="!env" showenv' _ "$ROOT/scripts/lib/gh-token-resolver.sh" 2>&1)"
-if printf '%s\n' "$env_out" | grep -q "GIT_EXEC_PATH=$WORKDIR/fake-exec" \
-   || printf '%s\n' "$env_out" | grep -qE '^GIT_(TRACE_CURL|TRACE_REDACT|SSL_NO_VERIFY)='; then
+if grep -q "GIT_EXEC_PATH=$WORKDIR/fake-exec" <<<"$env_out" \
+   || grep -qE '^GIT_(TRACE_CURL|TRACE_REDACT|SSL_NO_VERIFY)=' <<<"$env_out"; then
   fail "inherited GIT_* reached the token-bearing git: $(printf '%s\n' "$env_out" | grep '^GIT_' | tr '\n' ' ')"
-elif printf '%s\n' "$env_out" | grep -q '^GH_TOKEN=ghp_env-token$'; then
+elif grep -q '^GH_TOKEN=ghp_env-token$' <<<"$env_out"; then
   pass "inherited GIT_EXEC_PATH, GIT_TRACE_CURL, GIT_TRACE_REDACT and GIT_SSL_NO_VERIFY never reach the token-bearing git"
 else
-  fail "GIT_* isolation probe did not run: $env_out"
+  fail "GIT_* isolation probe did not run: expected fixture token marker absent"
 fi
 
 # A gh the repository ships is never the credential helper, even with "."
@@ -1355,7 +1614,7 @@ MARKER="$WORKDIR/reached-marker"
 rm -f "$MARKER"; reset_log; : >"$WORKDIR/marker-env.log"
 set +e
 STUB_MARKER_ENV_LOG="$WORKDIR/marker-env.log" GH_AS_AUTHOR_TRACE_MARKER="$MARKER" OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" \
-  run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+  run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -eq 0 ] && [ -f "$MARKER" ] && grep -q $'gh\tpr\tmerge' "$WORKDIR/calls.log" && ! grep -vqx '<unset>' "$WORKDIR/marker-env.log"; then
@@ -1366,7 +1625,7 @@ fi
 rm -f "$MARKER"; reset_log
 set +e
 GITHUB_TOKEN= GH_TOKEN= GH_AS_AUTHOR_TRACE_MARKER="$MARKER" GH_AS_AUTHOR_IDENTITY=custom-author-nokeyring \
-  run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+  run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] && [ ! -e "$MARKER" ] && ! grep -q $'gh\tpr\tmerge' "$WORKDIR/calls.log"; then
@@ -1377,7 +1636,7 @@ fi
 reset_log
 set +e
 GH_AS_AUTHOR_TRACE_MARKER="$WORKDIR/no-such-dir/marker" OP_PREFLIGHT_AUTHOR_PAT="ghp_author-token" \
-  run_wrapper -- gh pr merge 123 --squash >/dev/null 2>&1
+  run_wrapper -- gh pr merge 123 --disable-auto >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -eq 70 ] && ! grep -q $'gh\tpr\tmerge' "$WORKDIR/calls.log"; then

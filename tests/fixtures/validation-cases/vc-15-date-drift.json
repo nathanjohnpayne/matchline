@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "vc-15-date-drift",
+  "category": "date_drift",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "chen-hardware-silicon-pm-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_halberd_reference_design",
+      "raw_text": "Ran the multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400). Owned the codec, ISP, and display feature matrix that OEMs took as their starting point, including AV1 decode rollout across the 8300 cycle and 8K30 HDR10+ recording on the 8400.",
+      "normalized_summary": "Ran multimedia reference design program across three flagship SoC generations (Halberd 8200, 8300, 8400) — owned codec, ISP, and display feature matrix including AV1 decode rollout and 8K30 HDR10+ recording",
+      "unit_type": "ownership",
+      "skills": [
+        "reference design ownership",
+        "soc roadmap planning",
+        "feature matrix design",
+        "oem enablement"
+      ],
+      "tools": [
+        "AV1",
+        "HDR10+"
+      ],
+      "domains": [
+        "mobile silicon",
+        "connected devices"
+      ],
+      "metrics": [],
+      "date_range": {
+        "start": "2018-01-01",
+        "end": "2022-12-31"
+      }
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "From 2016 to 2022, ran the multimedia reference design program at Halberd across three flagship SoC generations.",
+    "source_unit_ids": [
+      "u_halberd_reference_design"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Ran the multimedia reference design program at Halberd starting in 2016.",
+        "required_terms": [
+          "2016"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": null
+      },
+      {
+        "id": "a2",
+        "text": "Ran the multimedia reference design program at Halberd through 2022.",
+        "required_terms": [
+          "2022"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_halberd_reference_design"
+        ],
+        "specific": null
+      },
+      {
+        "id": "a3",
+        "text": "Ran the multimedia reference design program at Halberd across three flagship SoC generations.",
+        "required_terms": [
+          "reference design program",
+          "three flagship SoC generations"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_halberd_reference_design"
+        ],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The cited Unit's date_range starts in 2018 (the resume's Halberd Premium Mobile Tier line reads 2018 – 2022; the months are placeholders), so a 2016 start contradicts it; the earlier 2016 – 2018 Halberd role is a different, uncited Unit. Under traceability v2's date rule a date_range supports only its own start and end, by year or by month, so the 2022 end is supported and the 2016 start is not. Scored with the eval's fixed run date (2026-01-15), after both dates."
+}

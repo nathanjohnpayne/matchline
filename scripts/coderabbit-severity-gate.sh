@@ -94,15 +94,16 @@
 #   1   One or more unresolved blocking-tier findings on current HEAD —
 #       gate blocks.
 #   2   Usage / config error. Error message on stderr.
-#   3   REQUIRE_REVIEW_SUMMARY only: a completed CodeRabbit review run is on
-#       the current HEAD and NO acceptor recognised a summary for it, so the
-#       findings on that surface are not knowable. NOT a finding count.
-#       An event-driven caller treats it as non-green; the scheduled /
-#       issue_comment sweep must DECLINE TO PUBLISH rather than post a
-#       success read off the previous publication. Since the primary acceptor
-#       reads the summary out of the run object's OWN body, this no longer
-#       fires merely because the walkthrough comment has not caught up — it
-#       means the run's serialization is one this gate cannot classify.
+#   3   REQUIRE_REVIEW_SUMMARY only: hold when a completed CodeRabbit run on
+#       the current HEAD has no summary recognised by any acceptor, so its
+#       findings cannot be classified; or when an earlier recognised clean
+#       summary is in hand but a later current-HEAD run remains unrecognised.
+#       The second case withholds that stale clean verdict. Neither case is a
+#       known blocking finding or a finding count. An event-driven caller treats
+#       the hold as non-green; the scheduled / issue_comment publisher must
+#       DECLINE TO PUBLISH rather than report success from an earlier result.
+#       The primary acceptor reads the summary from the run object's own body,
+#       so a lagging walkthrough comment alone does not trigger the first case.
 #
 # Design notes:
 #   - Read-only. Only GETs against the GitHub API.
@@ -307,7 +308,94 @@ die() {
   local code=$1
   shift
   echo "[coderabbit-severity-gate] ERROR: $*" >&2
+  if [ "$code" -eq 2 ] && [ -n "${CR_FAILURE_FILE:-}" ]; then
+    case "$*" in
+      *'failed to fetch'*|*'failed to query'*|*'malformed reviewThreads'*|*'could not READ'*|*'failed to read'*)
+        printf '%s' "$*" >"$CR_FAILURE_FILE" ;;
+    esac
+  fi
   exit "$code"
+}
+
+# Narrow recovery runs only after an evidence failure, never after a readable
+# blocking verdict. The report file lets the owned publisher place machine
+# evidence ahead of quoted provider text in its check summary.
+# The release author is a governing-base identity, never candidate policy.
+cr_recovery_author() (
+  local policy json base ref default_branch
+  base=$(printf '%s' "$PR_JSON" | jq -er '.base.sha | select(type == "string" and test("^[0-9a-f]{40}$"))') || return 1
+  ref=$(printf '%s' "$PR_JSON" | jq -er '.base.ref | select(type == "string" and length > 0)') || return 1
+  default_branch=$(printf '%s' "$PR_JSON" | jq -er '.base.repo.default_branch | select(type == "string" and length > 0)') || return 1
+  policy=$("$SCRIPT_ROOT/workflow/resolve_base_policy.sh" --repo "$REPO" --base-ref "$ref" --base-sha "$base" --default-branch "$default_branch" \
+    --default-config "$CONFIG" --materialize-default) || return 1
+  [ -n "$policy" ] && [ -r "$policy" ] || return 1
+  trap '[ "$policy" = "$CONFIG" ] || rm -f "$policy"' EXIT
+  json=$(policy_yaml_to_json "$policy") || return 1
+  printf '%s' "$json" | jq -ce --arg base "$base" '
+    if type != "object" then error("policy")
+    elif has("author_identity") then
+      (if (.author_identity | type) == "string" and (.author_identity | length) > 0
+       then .author_identity else error("author_identity") end)
+    else "nathanjohnpayne" end | {author_identity:.,base_sha:$base}'
+)
+
+cr_evidence_hold() {
+  local kind="$1" evidence="$2" revision budget authority report result probe retry_after=0 rc=0
+  if [ "${CR_FINDINGS_KNOWN_CLEAN:-0}" -ne 1 ]; then
+    [ "${BLOCKING_COUNT:-0}" -eq 0 ] && [ "${SUMMARY_BLOCKING_COUNT:-0}" -eq 0 ] || return 3
+  fi
+  if [ -n "${CR_EVIDENCE_FAILURE:-}" ]; then
+    kind=unreadable
+    evidence="$CR_EVIDENCE_FAILURE:$evidence"
+  fi
+  revision=$(git rev-parse HEAD) || return 3
+  budget=$(policy_block_field_parsed coderabbit max_wait_seconds "$CONFIG") || return 3
+  budget=${budget:-1245}
+  [[ "$budget" =~ ^[0-9]+$ ]] || return 3
+  if [ "$kind" = unreadable ]; then
+    probe=$("$SCRIPT_ROOT/coderabbit-wait.sh" --probe "$PR_NUMBER" "$REPO" 2>/dev/null) || true
+    if [ -n "$probe" ]; then
+      retry_after=$(jq -er '[.. | objects | .rate_limit_remaining_seconds? // empty] | if length == 0 then 0 else max end | select(type == "number" and . >= 0)' <<<"$probe") || return 3
+    fi
+  fi
+  # Stream provider bodies through a fixed stdlib hash, so a long review
+  # history never crosses the operating system's per-argument size limit.
+  evidence=$(printf '%s' "$evidence" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())') || return 3
+  authority=$(cr_recovery_author) || return 3
+  report=$(jq -nc --arg repo "$REPO" --argjson pr "$PR_NUMBER" --arg head "$HEAD_SHA" \
+    --arg revision "$revision" --arg kind "$kind" --arg evidence "$evidence" --argjson authority "$authority" \
+    --argjson budget "$budget" --argjson retry "$retry_after" \
+    '{repo:$repo,pr:$pr,head:$head,revision:$revision,kind:$kind,evidence:$evidence,max_wait_seconds:$budget,retry_after:$retry} + $authority') || return 3
+  result=$(printf '%s' "$report" | python3 "$SCRIPT_ROOT/workflow/coderabbit-evidence-recovery.py") || rc=$?
+  if [ -n "$result" ] && jq -e 'type == "object" and (.state | IN("pending","escalate","recovery"))' <<<"$result" >/dev/null; then
+    if [ -n "${CR_EVIDENCE_REPORT:-}" ]; then
+      printf '%s\n' "$result" >"$CR_EVIDENCE_REPORT" || return 3
+    fi
+    printf 'CodeRabbit evidence hold: %s\n' "$result"
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf 'CodeRabbit gate RECOVERY (not a clean provider review): %s\n' "$(jq -r '.decision + " — " + .reason' <<<"$result")"
+    return 0
+  fi
+  return 3
+}
+
+cr_fingerprint_hold() {
+  [ -n "${CR_EVIDENCE_FAILURE:-}" ] || return 0
+  if cr_evidence_hold unreadable "$CR_EVIDENCE_FAILURE"; then exit 0; fi
+  exit 3
+}
+
+# Explicit evidence that the evaluator reached a readable provider verdict.
+# Publishers retain this header only after their final binding fence succeeds.
+cr_readable_report() {
+  [ -n "${CR_EVIDENCE_REPORT:-}" ] || return 0
+  local revision
+  revision=$(git rev-parse HEAD) || return 2
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || return 2
+  jq -nc --arg repo "$REPO" --argjson pr "$PR_NUMBER" --arg head "$HEAD_SHA" \
+    --arg revision "$revision" \
+    '{repo:$repo,pr:$pr,head:$head,revision:$revision,state:"readable"}' >"$CR_EVIDENCE_REPORT" || return 2
 }
 
 # --- nitpick-under-chill no-op warning (#577) -------------------------------
@@ -372,9 +460,34 @@ if [ -z "$HEAD_SHA" ] || [ "$HEAD_SHA" = "null" ]; then
   die 2 "could not determine HEAD sha for PR #$PR_NUMBER"
 fi
 log "HEAD = $HEAD_SHA    bot_login = $BOT_LOGIN"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CR_FAILURE_FILE=$(mktemp "${TMPDIR:-/tmp}/coderabbit-evidence-failure.XXXXXX" 2>/dev/null) || CR_FAILURE_FILE=""
+cr_evidence_exit() {
+  local original="$?" recovered=0
+  trap - EXIT
+  if [ "$BASH_SUBSHELL" -eq 0 ] && [ "$original" -eq 2 ] && [ -s "$CR_FAILURE_FILE" ]; then
+    cr_evidence_hold unreadable "$(cat "$CR_FAILURE_FILE")" && recovered=1
+  fi
+  if [ "$BASH_SUBSHELL" -eq 0 ] && [ -n "$CR_FAILURE_FILE" ]; then rm -f "$CR_FAILURE_FILE"; fi
+  if [ "$recovered" -eq 1 ]; then exit 0; fi
+  exit "$original"
+}
+trap cr_evidence_exit EXIT
 
-# --- fetch CodeRabbit blocking-tier inline comments -------------------------
 
+# --- fetch CodeRabbit review objects, then blocking-tier inline comments ----
+#
+# Read order is load-bearing. The reads are separate requests, and CodeRabbit
+# can publish a review (with its inline findings) between them. Reading the
+# review objects first means every review this gate later recognises as a
+# completed report was already published when the inline comments are read,
+# so its findings are in COMMENTS_JSON; a publication landing in between can
+# only add findings or an unrecognised newer run, both of which hold or block.
+# Reading the comments first let a status-only root accept on zero findings
+# while its Major inline was missing from the earlier snapshot (wave audit P1
+# on swipewatch#230). Why the reviews are read unconditionally is explained
+# where they are classified, below.
+REVIEWS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/reviews" "CodeRabbit review objects")
 COMMENTS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/comments" "inline comments")
 
 log "blocking tier set: $(echo "$REQUIRED_TIERS" | tr '\n' ' ')"
@@ -414,6 +527,19 @@ while [ "$i" -lt "$CAND_COUNT" ]; do
   c=$(echo "$CANDIDATES" | jq -c ".[$i]")
   body=$(echo "$c" | jq -r '.body')
   tier=$(coderabbit_tier_of "$body") || die 2 "could not classify an inline CodeRabbit finding"
+  # A severity row this classifier cannot grade is an unclassified finding,
+  # not an absent one (#2927): it gates as the top CodeRabbit tier until its
+  # thread is resolved, exactly like a known blocking finding. Checked on
+  # every body, not only an untiered one, so a recognised row elsewhere in the
+  # same body cannot lend the unclassified finding its lower tier.
+  cr_inline_scan=$(coderabbit_finding_scan "$body") \
+    || die 2 "could not read an inline CodeRabbit finding while looking for an unclassified severity row"
+  cr_unclassified_tier=$(coderabbit_unclassified_tier "$cr_inline_scan") \
+    || die 2 "could not classify an inline CodeRabbit finding's severity row"
+  if [ -n "$cr_unclassified_tier" ]; then
+    tier=$cr_unclassified_tier
+    log "inline CodeRabbit comment $(echo "$c" | jq -r '.id') carries a severity row no reader recognises — gating it as unclassified ($tier)"
+  fi
   if tier_is_required "$tier"; then
     BLOCKING_COMMENTS=$(echo "$BLOCKING_COMMENTS" | jq -c \
       --argjson c "$c" --arg tier "$tier" '
@@ -484,6 +610,57 @@ CR_PRE_MERGE_BLOCK_END='<!-- pre_merge_checks_walkthrough_end -->'
 # prose such as a chat reply must not become a summary merely because a review
 # object exists on the same head.
 CR_MARKERLESS_FULL_REVIEW_RE='^\*\*Actionable comments posted: [0-9]+\*\*(\r?\n|$)'
+# The single-batch publication root CodeRabbit has written since late October
+# 2026 (#2927). It carries neither the result line nor a commits range, so
+# neither acceptor above can see it. Measured shapes, all head-pinned run
+# bodies:
+#   - STATUS-ONLY: mergepath#2963 reviews 5747737952 and 5747872230 and
+#     mergepath#2924 review 5739983887. The body is the vendor header pair,
+#     the publication marker and the autofix checkbox, and nothing else. The
+#     run's findings are its inline comments, which GitHub publishes atomically
+#     with the review object and the inline path above already grades.
+#   - FOLLOW-UP: mergepath#2924 review 5739617104. The same envelope with a
+#     `## Follow-up Comments` section carrying body-level findings, which the
+#     summary grader below classifies line by line like any other summary.
+# The grammar is WHOLE-BODY and exact, so any other serialization stays
+# unrecognised and holds: the body opens with the vendor header at byte zero;
+# only vendor and review-status header lines and blank lines precede exactly
+# one publication marker naming batch 1/1; an optional autofix checkbox block
+# closes the body; and whatever lies between is either nothing or opens with
+# the `## Follow-up Comments` heading. A multi-batch root (1/N, N > 1) is not
+# accepted here: the root could otherwise certify the head before its later
+# batches, and their inline comments, exist. Output is the shape name, or
+# empty when the body is not this envelope.
+# shellcheck disable=SC2016 # jq variables, not shell expansions.
+CR_PUBLICATION_ROOT_JQ='
+  def uuid: "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  def header: . == "<!-- coderabbit-ai-generated:v1 -->"
+    or . == "<!-- This is an auto-generated comment by CodeRabbit for review status -->";
+  def trim_blank: until((length == 0) or (.[-1] != ""); .[:-1])
+    | until((length == 0) or (.[0] != ""); .[1:]);
+  (.body // "" | split("\n") | map(sub("\r$"; ""))) as $lines
+  | if ($lines[0] // "") != "<!-- coderabbit-ai-generated:v1 -->" then ""
+    else
+      ([range(0; $lines | length) as $i
+        | select(($lines[$i] != "") and ($lines[$i] | header | not)) | $i] | first // null) as $at
+      | if $at == null
+           or ($lines[$at] | test("^<!-- coderabbit-review-publication v1 publication=" + uuid
+                                  + " attempt=" + uuid + " batch=1/1 -->$") | not)
+        then ""
+        else
+          ($lines[$at + 1:] | trim_blank) as $rest
+          | (if ($rest | length) >= 3
+                and $rest[-3] == "<!-- autofix_checkbox_start -->"
+                and ($rest[-2] | test("^- \\[[ xX]\\] <!-- \\{\"checkboxId\":\"" + uuid
+                                      + "\"\\} --> Fix comments: Fix CodeRabbit comments on this PR$"))
+                and $rest[-1] == "<!-- autofix_checkbox_end -->"
+             then $rest[:-3] | trim_blank else $rest end) as $middle
+          | if ($middle | length) == 0 then "status-only"
+            elif $middle[0] == "## Follow-up Comments" then "follow-up"
+            else "" end
+        end
+    end
+'
 
 # --- shared fence-aware line filter ----------------------------------------
 #
@@ -878,11 +1055,16 @@ esac
 # anchored to this exact PR head, and only when the comment is fresh at-or-after
 # that run; otherwise an older markerless body can inherit a later exact-head
 # object and briefly publish a stale verdict.
+#
+# The marker is read after CodeRabbit's leading vendor header, with the same
+# shared definition the waiter's selector uses (#2734). A headered summary was
+# otherwise out of scope altogether, so a finding carried only by it was never
+# graded — a false clear of this gate.
 MARKER_SUMMARY_JSON=$(echo "$ISSUE_COMMENTS_JSON" | jq -c \
-  --arg bot "$BOT_LOGIN" --arg m "$CR_SUMMARY_MARKER" '
+  --arg bot "$BOT_LOGIN" --arg m "$CR_SUMMARY_MARKER" "$CR_STRIP_VENDOR_HEADER_JQ"'
   [ .[]
     | select(.user.login == $bot)
-    | select((.body // "") | startswith($m))
+    | select((.body // "") | cr_strip_vendor_header | startswith($m))
     | . + { fresh_at: ([.created_at, (.updated_at // .created_at)]
                         | map(select(type == "string" and . != "")) | max // "") }
   ]
@@ -913,7 +1095,7 @@ MARKER_SUMMARY_FRESH_AT=$(echo "$MARKER_SUMMARY_JSON" | jq -r '.fresh_at')
 # findings are on — a false CLEAR of a required gate rather than a saving. A
 # failed read is fetch_api_array's die 2, never an empty result read as "no
 # findings".
-REVIEWS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/reviews" "CodeRabbit review objects")
+# REVIEWS_JSON is read above, before the inline comments (read-order note).
 
 # Only a review RUN carries (and anchors) a summary — a NON-EMPTY body is the
 # discriminator, the same one mergepath#900 measured. CodeRabbit also creates a
@@ -1038,6 +1220,12 @@ fi
 #      which is strictly stronger than the marker path's one. The #880 body
 #      carries `between 21cf07b5… and 9601e872…` — the anchor the gate needed was
 #      inside the object it was already holding on.
+#   3. PUBLICATION ROOT (#2927) — the body is exactly the single-batch
+#      publication envelope CR_PUBLICATION_ROOT_JQ describes. Its scope anchor
+#      is the object's `commit_id` alone, as for acceptor 1. That serialization
+#      held every head it appeared on (mergepath#2924, #2963) behind the
+#      evidence hold with zero blocking findings, because neither acceptor
+#      above can see it.
 #
 # Acceptor 2 declines a body whose own markup says the publication produced no
 # review (a `rate limited` / `failure` / `review in progress` stanza). It does
@@ -1049,9 +1237,36 @@ fi
 # and the superseded body is dropped by the correlation filter below on the
 # review-triggered path, exactly as a superseded marker-led summary is.
 HEAD_SUMMARY_RUNS_JSON='[]'
+CR_BATCH_MARKED_JSON='[]'
 while IFS= read -r cr_run_json; do
   [ -n "$cr_run_json" ] || continue
   cr_run_body=$(printf '%s' "$cr_run_json" | jq -r '.body')
+  # Continuation intent precedes both summary acceptors: unread extra payload
+  # must not turn a rejected continuation into a new report that hides its root.
+  # Keep only authored standalone lines from the fence-filtered reader: quoted
+  # examples cannot supply intent or inflate the shared publication inventory.
+  case "$cr_run_body" in
+    *'<!-- coderabbit-review-publication'*|*'**Review continued from previous batch...**'*)
+      cr_run_unfenced=$(summary_unfenced_numbered "$cr_run_body") \
+        || die 2 "could not READ CodeRabbit continuation intent"
+      cr_run_publication=$(printf '%s' "$cr_run_unfenced" | jq -Rrcs '
+        split("\n") | map(sub("^[0-9]+\t"; "")) as $lines
+        | [$lines[] | select(startswith("<!-- coderabbit-review-publication"))] as $markers
+        | {markers: $markers,
+           continuation: (any($lines[]; . == "**Review continued from previous batch...**")
+             or (($markers | length) > 0
+                 and (($markers | length) != 1
+                      or ([$markers[] | select(test("^<!-- coderabbit-review-publication[^\r\n]* batch=1/[^\r\n]*$"))] | length) != 1)))}
+      ') || die 2 "could not CLASSIFY CodeRabbit continuation intent"
+      CR_BATCH_MARKED_JSON=$(printf '%s' "$CR_BATCH_MARKED_JSON" | jq -c \
+        --argjson run "$cr_run_json" --argjson publication "$cr_run_publication" \
+        '. + [$run + {publication_markers: $publication.markers}]') \
+        || die 2 "could not INVENTORY CodeRabbit publication metadata"
+      cr_run_continuation=$(printf '%s' "$cr_run_publication" | jq -r '.continuation') \
+        || die 2 "could not READ CodeRabbit continuation classification"
+      [ "$cr_run_continuation" != true ] || continue
+      ;;
+  esac
   cr_run_recognised_by=''
   # jq's `test` rather than a shell grep, so the acceptor keeps the exact
   # semantics the constant was written against.
@@ -1081,6 +1296,22 @@ while IFS= read -r cr_run_json; do
       fi
     fi
   fi
+  if [ -z "$cr_run_recognised_by" ]; then
+    # Acceptor 3, the single-batch publication root (#2927). Same three-way
+    # read as acceptor 2: a jq failure is an unread body, never a non-match,
+    # and a body whose own markup declares a non-review is still declined.
+    cr_root_shape=$(printf '%s' "$cr_run_json" | jq -r "$CR_PUBLICATION_ROOT_JQ") \
+      || die 2 "could not READ the body of CodeRabbit review run $(printf '%s' "$cr_run_json" | jq -r '.id') while matching the publication-root envelope — refusing to decide whether it is a completed report from a body nobody read"
+    if [ -n "$cr_root_shape" ]; then
+      cr_nonbenign_rc=0
+      summary_has_non_benign_stanza "$cr_run_body" || cr_nonbenign_rc=$?
+      if [ "$cr_nonbenign_rc" = "3" ]; then
+        die 2 "could not READ the body of CodeRabbit review run $(printf '%s' "$cr_run_json" | jq -r '.id') while checking it for a refusal stanza — refusing to accept an unread body as a completed report"
+      elif [ "$cr_nonbenign_rc" != "0" ]; then
+        cr_run_recognised_by="publication-root-$cr_root_shape"
+      fi
+    fi
+  fi
   [ -n "$cr_run_recognised_by" ] || continue
   HEAD_SUMMARY_RUNS_JSON=$(echo "$HEAD_SUMMARY_RUNS_JSON" | jq -c \
     --argjson run "$cr_run_json" --arg by "$cr_run_recognised_by" \
@@ -1088,6 +1319,44 @@ while IFS= read -r cr_run_json; do
 done <<EOF
 $(echo "$HEAD_REVIEW_RUNS_JSON" | jq -c '.[]')
 EOF
+
+# Publication continuations are metadata, not independently clean summaries.
+# Inventory only complete groups rooted in an already recognised report. Keep
+# the root in HEAD_SUMMARY_RUNS_JSON so its findings and correlation floor stay
+# authoritative. Incomplete groups receive no metadata exemption.
+CR_BATCH_INVENTORY=$(printf '%s' "$CR_BATCH_MARKED_JSON" | jq -c \
+  --argjson recognised "$HEAD_SUMMARY_RUNS_JSON" '
+  def uuid: "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  def marker:
+    "<!-- coderabbit-review-publication v1 publication=(?<publication>" + uuid
+    + ") attempt=(?<attempt>" + uuid + ") batch=(?<ordinal>[1-9][0-9]*)/(?<total>[1-9][0-9]*) -->";
+  ($recognised | map(.id)) as $roots
+  | [ .[] | select((.publication_markers | length) > 0)
+      | [.publication_markers[] | match("^" + marker + "$"; "g")] as $matches
+      | if ($matches | length) == 1 and (.publication_markers | length) == 1
+        then ($matches[0].captures | map({key: .name, value: .string}) | from_entries) as $meta
+          | . + {batch: ($meta + {ordinal: ($meta.ordinal | tonumber),
+                                  total: ($meta.total | tonumber)}),
+                 metadata_only: (.body == ("<!-- coderabbit-ai-generated:v1 -->\n\n**Review continued from previous batch...**\n\n" + $matches[0].string))}
+        else . + {batch: null, metadata_only: false}
+        end
+    ] as $marked
+  | [ $marked[] | select(.batch != null) ]
+  | group_by(.batch.publication)
+  | [ .[] | . as $group | .[0].batch as $first
+      | select(($group | length) == $first.total
+               and ($group | map(.batch.attempt) | unique | length) == 1
+               and ($group | map(.batch.total) | unique | length) == 1
+               and ($group | map(.id) | unique | length) == $first.total
+               and ($group | map(.batch.ordinal) | sort) == [range(1; $first.total + 1)])
+      | select(all($group[];
+          if .batch.ordinal == 1 then .id as $id | ($roots | index($id)) != null
+          else .metadata_only end))
+      | $group[] | .id
+    ] as $complete
+  | {continuations: [$marked[] | select(.batch != null and .batch.ordinal > 1)
+                     | .id as $id | select(($complete | index($id)) != null) | .id]}
+') || die 2 "could not READ CodeRabbit publication metadata"
 
 # The correlation floor for the same-head re-review filter below. Taken from the
 # runs that actually CARRY a recognised summary, never from any non-empty run
@@ -1150,9 +1419,10 @@ SUMMARY_CORRELATION_ID=$(echo "$HEAD_SUMMARY_RUNS_JSON" | jq -r 'last.id // 0')
 HEAD_UNRECOGNISED_NEWER_IDS=$(jq -rn \
   --argjson runs "$HEAD_REVIEW_RUNS_JSON" \
   --argjson recognised "$HEAD_SUMMARY_RUNS_JSON" \
+  --argjson batches "$CR_BATCH_INVENTORY" \
   --arg at "$SUMMARY_CORRELATION_AT" \
   --argjson atid "$SUMMARY_CORRELATION_ID" '
-  ($recognised | map(.id)) as $known
+  (($recognised | map(.id)) + $batches.continuations) as $known
   | [ $runs[]
       # `. as $run` FIRST: inside `index(...)` the input `.` is $known, the
       # ARRAY, so a bare `.id` there indexes an array with a string and aborts
@@ -1340,6 +1610,7 @@ if [ "$SUMMARY_CANDIDATE_COUNT" -eq 0 ]; then
     # ordered-publisher work this gate's two publishers need.
     echo "CodeRabbit current-HEAD review is awaiting its PR-level summary; holding this gate run. (head-pinned review run object(s): $HEAD_REVIEW_RUN_IDS)" >&2
     echo "CodeRabbit blocking-tier unresolved: pending (summary publication in flight)"
+    if cr_evidence_hold unrecognized "$HEAD_REVIEW_RUNS_JSON"; then exit 0; fi
     exit 3
   fi
   log "no CodeRabbit PR-level summary comment found — no summary findings in scope"
@@ -1407,6 +1678,16 @@ while IFS= read -r SUMMARY_JSON; do
     cr_line=${cr_numbered#*	}
     [ -n "$cr_line" ] || continue
     cr_tier=$(coderabbit_tier_of "$cr_line") || die 2 "could not classify the CodeRabbit summary"
+    if [ -z "$cr_tier" ]; then
+      case "$cr_line" in
+        *' · '*|*' | '*)
+          # An ungraded severity row is an unclassified finding (#2927), and
+          # it gates through the same summary ack channel as a known one.
+          cr_tier=$(coderabbit_unclassified_tier "$cr_line") \
+            || die 2 "could not classify a CodeRabbit summary severity row"
+          ;;
+      esac
+    fi
     if tier_is_required "$cr_tier"; then
       SUMMARY_BLOCKING=$(echo "$SUMMARY_BLOCKING" | jq -c \
         --argjson id "$SUMMARY_ID" --argjson line "$cr_line_no" \
@@ -1464,10 +1745,10 @@ log "found $SUMMARY_BLOCKING_COUNT blocking-tier summary finding(s) on HEAD"
 #
 # The channel: a PR comment whose FIRST LINE is exactly the token
 #   [mergepath-summary-ack: <HEAD sha> <finding-set fingerprint>]
-# written by a human collaborator (author_association OWNER / MEMBER /
-# COLLABORATOR — a GitHub-computed field, not something the commenter sets)
-# and, per the same reasoning that keeps bots out of the reviewer set, not by
-# a `[bot]` account. Rationale for the rebuttal or deferral goes on the lines
+# written by an eligible non-bot collaborator (author_association OWNER /
+# MEMBER / COLLABORATOR — a GitHub-computed field, not something the commenter
+# sets), consistent with the bot exclusion in the reviewer set. Rationale for
+# the rebuttal or deferral goes on the lines
 # BELOW the token.
 #
 # Head-pinned by construction, not by clock: the token names the current head
@@ -1478,8 +1759,7 @@ log "found $SUMMARY_BLOCKING_COUNT blocking-tier summary finding(s) on HEAD"
 # FINDING-PINNED as well as head-pinned. Head-pinning alone binds the ack to a
 # COMMIT, not to the finding set that was on screen when it was written, and
 # the summary surface can change WITHOUT the head changing: a same-head
-# re-review (`@coderabbitai review`, `@coderabbitai resume`, or the rate-limit
-# `try again` retry that scripts/coderabbit-wait.sh posts itself) rewrites the
+# re-review (`@coderabbitai review` or `@coderabbitai resume`) rewrites the
 # summary — in place, or as a later comment this script then selects — with a
 # finding the acking collaborator never saw. A head-only ack would clear that
 # new finding retroactively, and a required gate would pass with an
@@ -1554,11 +1834,14 @@ hold_on_unrecognised_newer_run() {
   [ -n "$HEAD_UNRECOGNISED_NEWER_IDS" ] || return 0
   echo "CodeRabbit published a later review run on $HEAD_SHA whose body matches no summary acceptor, so the clean verdict in hand is from an earlier publication; holding this gate run. (unrecognised head-pinned review run object(s): $HEAD_UNRECOGNISED_NEWER_IDS)" >&2
   echo "CodeRabbit blocking-tier unresolved: pending (summary publication in flight)"
+  if cr_evidence_hold unrecognized "$HEAD_REVIEW_RUNS_JSON"; then exit 0; fi
   exit 3
 }
 
 if [ "$BLOCKING_COUNT" -eq 0 ] && [ "$SUMMARY_BLOCKING_COUNT" -eq 0 ]; then
   hold_on_unrecognised_newer_run
+  cr_fingerprint_hold
+  cr_readable_report || exit 2
   echo "CodeRabbit blocking-tier unresolved: 0"
   exit 0
 fi
@@ -1617,6 +1900,7 @@ report_verdict() {
   fi
 
   if [ "$count" -gt 0 ]; then
+    cr_readable_report || exit 2
     echo "CodeRabbit blocking-tier unresolved: $count"
     exit 1
   fi
@@ -1624,7 +1908,10 @@ report_verdict() {
   # subject to the same unread-newer-run hold as the summary-only exit above.
   # The verdict line is printed inside each branch rather than before them
   # because the hold prints its own, and a run must emit exactly one.
+  CR_FINDINGS_KNOWN_CLEAN=1
   hold_on_unrecognised_newer_run
+  cr_fingerprint_hold
+  cr_readable_report || exit 2
   echo "CodeRabbit blocking-tier unresolved: $count"
   exit 0
 }

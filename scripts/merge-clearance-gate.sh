@@ -107,10 +107,12 @@
 #     (gate (a)) is skipped for this invocation because this gate is ITSELF
 #     a required check; waiting on the full required-check rollup (which
 #     includes this gate) would deadlock. CI green is enforced
-#     independently by the other required checks. Verified propagation PRs
-#     (trusted github-actions[bot] lane marker, label absent) are EXEMPT —
-#     the pr-review-policy.yml lane already cleared them; re-deriving would
-#     force them into Phase 4 and break the lane (#429 Codex round-2 P1).
+#     independently by the other required checks. When the force-on label is
+#     absent, a propagation PR is exempt only after this gate independently
+#     verifies the live head/base pair from its trusted checkout. The lane
+#     marker is diagnostic evidence only; a later head or base move requires
+#     fresh byte verification. Re-deriving a verified mirror would force it
+#     into Phase 4 and break the lane (#429 Codex round-2 P1).
 #
 #   Any other PR (under-threshold, non-Dependabot, or relevant knob off):
 #     CLEAN PASS (exit 0) unless a human-controlled hold is present. It can be a required
@@ -120,6 +122,20 @@
 #   0   Clearance satisfied (or gate not applicable / disabled).
 #   1   Clearance NOT satisfied on the current HEAD — gate BLOCKS.
 #   2   Usage / config / infrastructure error. Message on stderr.
+#
+# Pending verdict (#2247). Exit 1 covers two different states: a real block
+# (a human-controlled hold, a Dependabot head without a reviewer approval, a
+# Dependabot auto-merge request armed for an earlier head) and external review
+# that simply has not cleared yet. Every caller keeps treating both as exit 1.
+# A caller that needs to tell them apart sets MERGEPATH_GATE_VERDICT_FILE to a
+# path it owns, and the script writes exactly `pending` there, and nothing
+# else, from the one site where external review applies, is derived without a
+# fail-closed fallback, and codex-review-check.sh answered "not cleared" (rc
+# 1). Every other exit leaves the file untouched, so an absent, empty or
+# different file means "not pending" and the caller must fail as before. The
+# exit code and stdout are byte-identical with or without the variable.
+# Only the event-driven job of merge-clearance-gate.yml reads it, to keep its
+# job-native run non-failing while the Checks-API lineage carries the block.
 #
 # Design notes:
 #   - Read-only. Only GETs against the GitHub API (plus a read-only
@@ -354,6 +370,18 @@ block() {  # <reason>
   echo "Merge clearance: BLOCKED — $*"
   echo ""
   exit 1
+}
+
+# #2247: the explicit pending verdict. Same exit code and the same stdout as
+# block(), so no caller that does not ask for the distinction can see one; the
+# distinction exists only in MERGEPATH_GATE_VERDICT_FILE (see Exit codes
+# above). A failed write is ignored on purpose: the caller then reads no
+# `pending` and fails closed, which is the pre-#2247 behaviour.
+block_pending() {  # <reason>
+  if [ -n "${MERGEPATH_GATE_VERDICT_FILE:-}" ]; then
+    printf 'pending\n' 2>/dev/null >"$MERGEPATH_GATE_VERDICT_FILE" || true
+  fi
+  block "$@"
 }
 
 clear_pass() {  # <reason>
@@ -1027,6 +1055,15 @@ if [ "$DERIVE_ONLY" != "true" ] && [ "$PHASE_4_DERIVE_ONLY" != "true" ] && [ "$R
      && policy_list_has_unconsumed_inline_value non_reviewer_identities "$POLICY_CONFIG"; then
     die 2 "non_reviewer_identities in $POLICY_CONFIG carries an inline value this reader cannot parse (use a dash-prefixed block list, one identity per line). Refusing to run a gate that would silently pass."
   fi
+  # #2726: the CI app that may resolve review threads is a non-reviewer by
+  # construction. Its identity mode refuses to run unless the app is declared
+  # above, and this union keeps its approval from counting even in a policy
+  # that names the app but omits that declaration. Taken as written, without
+  # validation: deny-listing a malformed value costs nothing.
+  CI_APP_IDENTITY=$(read_thread_resolution_ci_app_identity "$POLICY_CONFIG")
+  if [ -n "$CI_APP_IDENTITY" ] && ! login_is_non_reviewer_identity "$CI_APP_IDENTITY" "$POLICY_CONFIG"; then
+    NON_REVIEWERS=$(printf '%s\n%s\n' "$NON_REVIEWERS" "$CI_APP_IDENTITY" | sed '/^$/d')
+  fi
   if [ -n "$NON_REVIEWERS" ]; then
     NON_REVIEWERS_JSON=$(echo "$NON_REVIEWERS" | jq -R . | jq -s .)
     NR_REVIEWS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/reviews" "reviews")
@@ -1131,6 +1168,51 @@ if [ "$PR_AUTHOR" = "dependabot[bot]" ]; then
   esac
 fi
 
+# #2874: a Dependabot-only approver (dependabot_reviewer_identities) holds
+# standing on the provenance-verified Dependabot lane and nowhere else. It is a
+# write collaborator, so GitHub's native required-review count accepts its
+# approval on ANY PR; leaving it out of available_reviewers does not stop that.
+# Outside the lane it is therefore a non-reviewer: the same latest-state,
+# whole-PR (not HEAD-pinned) deny check as non_reviewer_identities above, for
+# the same dismiss_stale_reviews reason. An identity also listed in
+# available_reviewers is a misconfiguration the docs warn against; it keeps its
+# general standing rather than blocking every PR it approves. Query modes are
+# exempt for the reason given above.
+if [ "$DEPENDABOT_LANE" != "true" ] && [ "$DERIVE_ONLY" != "true" ] && [ "$PHASE_4_DERIVE_ONLY" != "true" ] && [ "$RATE_LIMIT_PROTECTION_ONLY" != "true" ]; then
+  # An `if`, not an `&&` chain: a chain whose last entry is filtered out ends
+  # the loop with status 1, which set -euo pipefail turns into a gate exit.
+  DEPENDABOT_ONLY=$(read_dependabot_reviewer_identities "$POLICY_CONFIG" | while IFS= read -r _id; do
+    if [ -n "$_id" ] && ! login_is_available_reviewer "$_id" "$POLICY_CONFIG"; then
+      printf '%s\n' "$_id"
+    fi
+  done)
+  if [ -z "$(read_dependabot_reviewer_identities "$POLICY_CONFIG")" ] \
+     && policy_list_has_unconsumed_inline_value dependabot_reviewer_identities "$POLICY_CONFIG"; then
+    die 2 "dependabot_reviewer_identities in $POLICY_CONFIG carries an inline value this reader cannot parse (use a dash-prefixed block list, one identity per line)."
+  fi
+  if [ -n "$DEPENDABOT_ONLY" ]; then
+    DEPENDABOT_ONLY_JSON=$(echo "$DEPENDABOT_ONLY" | jq -R . | jq -s .)
+    DO_REVIEWS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/reviews" "reviews")
+    DO_APPROVERS=$(echo "$DO_REVIEWS_JSON" | jq -r \
+      --argjson deny "$DEPENDABOT_ONLY_JSON" '
+        [ .[]
+          | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+          | select(.user.login as $u | $deny | index($u))
+        ]
+        | group_by(.user.login)
+        | map(max_by(.submitted_at))
+        | map(select(.state == "APPROVED"))
+        | map(.user.login)
+        | unique
+        | join(", ")
+      ')
+    if [ -n "$DO_APPROVERS" ]; then
+      block "standing APPROVED review from a Dependabot-only approver ($DO_APPROVERS) on a PR outside the provenance-verified Dependabot lane. That identity may approve Dependabot PRs only (dependabot_reviewer_identities, mergepath#2874); its approval must not satisfy branch protection here. Dismiss the review, then find out why that token approved a non-Dependabot PR."
+    fi
+    log "Dependabot-only approver check: no standing approval on this non-Dependabot PR from [$(echo "$DEPENDABOT_ONLY" | tr '\n' ' ' | sed 's/ $//')]"
+  fi
+fi
+
 if [ "$DEPENDABOT_LANE" = "true" ]; then
   if [ "$DERIVE_ONLY" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] || [ "$RATE_LIMIT_PROTECTION_ONLY" = "true" ]; then
     # Query mode always returns FALSE for a Dependabot PR (automated-4b P1).
@@ -1160,10 +1242,17 @@ if [ "$DEPENDABOT_LANE" = "true" ]; then
   # half-threaded state the #767 review flagged. Passed explicitly rather than
   # left to the helper's $CONFIG fallback, which would resolve to the
   # default-branch path and silently reintroduce that split.
-  REVIEWERS=$(read_available_reviewers "$POLICY_CONFIG")
-  if [ -z "$REVIEWERS" ]; then
+  if [ -z "$(read_available_reviewers "$POLICY_CONFIG")" ]; then
     die 2 "no available_reviewers found in $POLICY_CONFIG"
   fi
+  # #2874: this lane, and only this lane, also accepts the Dependabot-only
+  # approver identities. A flow list or scalar would parse to nothing; fail
+  # loudly rather than let a declared identity look absent.
+  if [ -z "$(read_dependabot_reviewer_identities "$POLICY_CONFIG")" ] \
+     && policy_list_has_unconsumed_inline_value dependabot_reviewer_identities "$POLICY_CONFIG"; then
+    die 2 "dependabot_reviewer_identities in $POLICY_CONFIG carries an inline value this reader cannot parse (use a dash-prefixed block list, one identity per line)."
+  fi
+  REVIEWERS=$(read_dependabot_approvers "$POLICY_CONFIG")
   REVIEWERS_JSON=$(echo "$REVIEWERS" | jq -R . | jq -s .)
 
   REVIEWS_JSON=$(fetch_api_array "repos/$REPO/pulls/$PR_NUMBER/reviews" "reviews")
@@ -1228,6 +1317,10 @@ fi
 if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] || [ "$RATE_LIMIT_PROTECTION_ONLY" = "true" ]; then
   REQUIRES_EXTERNAL=false
   REQUIRES_REASON=""
+  # #2247: set where applicability is forced on because the derivation could
+  # not run. A not-cleared verdict reached through it is not reported as
+  # pending: the gate does not know whether external review applies at all.
+  REQUIRES_FAIL_CLOSED=false
 
   if [ "$HAS_EXTERNAL_LABEL" = "true" ]; then
     # Label present forces the arm on (a human may add it to a small PR;
@@ -1237,15 +1330,15 @@ if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] 
     REQUIRES_EXTERNAL=true
     REQUIRES_REASON="needs-external-review label present"
   elif lane_verified; then
-    # Verified propagation PR: a trusted github-actions[bot] lane marker
-    # scoped to THIS head/base pair is present (label absent). The lane already
-    # byte-verified this exact pair and exempted it from external review;
-    # defer to it and do NOT re-derive from threshold/paths (#429).
-    log "verified propagation lane (trusted pair marker for $HEAD_SHA/$BASE_SHA, label absent) — exempt from external-review derivation; deferring to pr-review-policy.yml lane"
+    # The trusted live verifier just verified THIS head/base pair. A lane
+    # marker is diagnostic only; it does not grant this exemption. A later
+    # head/base move requires fresh verification. The force-on label above
+    # still takes precedence over this predicate (#429).
+    log "verified propagation lane (trusted live byte verification for $HEAD_SHA/$BASE_SHA, label absent) — exempt from external-review derivation"
   else
     lane_rc=$?
-    # Indeterminate marker read (rc 2): in the FULL gate, falling through to
-    # threshold/paths derivation is fail-safe (external review can only be
+    # Indeterminate live verification (rc 2): in the FULL gate, falling
+    # through to threshold/paths derivation is fail-safe (external review can only be
     # ADDED, never removed, so an uncertain read at worst over-requires and
     # blocks). But in the query modes, `true` is the value that authorizes
     # the rc=5 CodeRabbit downgrade, and a verified propagation PR's real
@@ -1323,6 +1416,7 @@ if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] 
       if [ ! -f "$PARSE" ] || [ ! -f "$MATCH" ]; then
         REQUIRES_EXTERNAL=true
         REQUIRES_REASON="protected-paths check unavailable (parser/matcher missing under $WF_DIR) — failing closed"
+        REQUIRES_FAIL_CLOSED=true
       else
         set +e
         PATHS=$(bash "$PARSE" "$POLICY_CONFIG" external_review_paths)
@@ -1331,6 +1425,7 @@ if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] 
         if [ "$parse_rc" -ne 0 ]; then
           REQUIRES_EXTERNAL=true
           REQUIRES_REASON="protected-paths parse failed (rc=$parse_rc) — failing closed"
+          REQUIRES_FAIL_CLOSED=true
         elif [ -n "$PATHS" ]; then
           PATTERNS=()
           while IFS= read -r pline; do
@@ -1352,6 +1447,7 @@ if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] 
             if [ "$match_rc" -ne 0 ]; then
               REQUIRES_EXTERNAL=true
               REQUIRES_REASON="protected-paths match failed (rc=$match_rc) — failing closed"
+              REQUIRES_FAIL_CLOSED=true
             elif [ -n "$MATCHED" ]; then
               REQUIRES_EXTERNAL=true
               REQUIRES_REASON="protected paths modified: $(printf '%s' "$MATCHED" | tr '\n' ' ')"
@@ -1452,8 +1548,17 @@ if [ "$EXTERNAL_GATE_ENABLED" = "true" ] || [ "$PHASE_4_DERIVE_ONLY" = "true" ] 
     crc=$?
     set -e
     case "$crc" in
-      0) clear_pass "external review cleared on HEAD $HEAD_SHA ($REQUIRES_REASON; reviewer APPROVED + Codex/Phase-4b on HEAD)" ;;
-      1) block "external review is NOT cleared on the merge HEAD $HEAD_SHA ($REQUIRES_REASON; no APPROVED CLI review and/or no Codex clearance on this HEAD). See codex-review-check.sh stderr above (mergepath#428)." ;;
+      0) clear_pass "external review cleared on HEAD $HEAD_SHA ($REQUIRES_REASON)" ;;
+      1)
+        # The only reason this gate is not green is that clearance has not
+        # been reached yet, so it is the pending verdict (#2247)—unless
+        # applicability itself was a fail-closed fallback, which stays a
+        # plain block.
+        if [ "$REQUIRES_FAIL_CLOSED" = "true" ]; then
+          block "external review is NOT cleared on the merge HEAD $HEAD_SHA ($REQUIRES_REASON; no APPROVED CLI review and/or no Codex clearance on this HEAD). See codex-review-check.sh stderr above (mergepath#428)."
+        fi
+        block_pending "external review is NOT cleared on the merge HEAD $HEAD_SHA ($REQUIRES_REASON; no APPROVED CLI review and/or no Codex clearance on this HEAD). See codex-review-check.sh stderr above (mergepath#428)."
+        ;;
       *) die 2 "codex-review-check.sh returned rc=$crc (config/infrastructure error) on PR #$PR_NUMBER" ;;
     esac
   fi

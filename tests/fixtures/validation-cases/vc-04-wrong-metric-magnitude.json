@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "id": "vc-04-wrong-metric-magnitude",
+  "category": "wrong_metric_magnitude",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_b2b_pivot",
+      "raw_text": "Led the B2B pivot from D2C-brand-as-customer to factory-as-customer in early 2023. Ran 38 customer development calls in six weeks, rewrote the onboarding flow and pricing page, and re-targeted the GTM toward factory operations leads. ARR per logo doubled in the following two quarters and churn dropped from 4.1% to 1.8% monthly.",
+      "normalized_summary": "Led Threadline B2B pivot from D2C-brand-as-customer to factory-as-customer, ran 38 customer development calls in six weeks; ARR per logo doubled, monthly churn dropped from 4.1% to 1.8%",
+      "unit_type": "leadership",
+      "skills": [
+        "customer development",
+        "go-to-market strategy",
+        "pricing strategy",
+        "founder-led sales"
+      ],
+      "tools": [],
+      "domains": [
+        "b2b saas",
+        "founder operations"
+      ],
+      "metrics": [
+        {
+          "claim": "ran 38 customer development calls in six weeks",
+          "value": 38,
+          "unit": "calls",
+          "confidence": "high"
+        },
+        {
+          "claim": "monthly churn dropped from 4.1% to 1.8%",
+          "value": 1.8,
+          "unit": "% monthly churn",
+          "direction": "down",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Led Threadline's B2B pivot to factory-as-customer, running 380 customer development calls in six weeks.",
+    "source_unit_ids": [
+      "u_b2b_pivot"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Led Threadline's B2B pivot to factory-as-customer.",
+        "required_terms": [
+          "pivot",
+          "factory-as-customer"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_b2b_pivot"
+        ],
+        "specific": true
+      },
+      {
+        "id": "a2",
+        "text": "Ran 380 customer development calls in six weeks.",
+        "required_terms": [
+          "380",
+          "customer development calls"
+        ],
+        "supported": false,
+        "supporting_unit_ids": [],
+        "specific": true
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. The source says 38 calls; 380 is a tenfold magnitude error."
+}

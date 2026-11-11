@@ -21,5 +21,16 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "calibrationDecks",
+      "fieldPath": "deck_json",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "calibrationSessions",
+      "fieldPath": "state_json",
+      "indexes": []
+    }
+  ]
 }

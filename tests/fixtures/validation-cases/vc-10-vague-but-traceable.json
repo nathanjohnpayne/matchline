@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "vc-10-vague-but-traceable",
+  "category": "vague_but_traceable",
+  "review_status": "draft-pending-owner-review",
+  "labeled_by": "claude-draft",
+  "labeled_at": "2026-10-28",
+  "label_version": 1,
+  "source": {
+    "resume_fixture_id": "sofia-fullstack-founder-2026",
+    "derived_from": null
+  },
+  "units": [
+    {
+      "id": "u_hiring_loop",
+      "raw_text": "Owned hiring for the first eight engineers. Built the technical interview loop (a paired-programming round on a real Threadline bug, a system-design round on a real Threadline RFC), the onboarding doc, and the on-call rotation. Engineering team retention has been 100% over three years.",
+      "normalized_summary": "Owned hiring for first eight Threadline engineers — paired-programming and system-design interview loop, onboarding doc, on-call rotation; 100% engineering retention over three years",
+      "unit_type": "ownership",
+      "skills": [
+        "engineering hiring",
+        "interview loop design",
+        "team building",
+        "engineering management"
+      ],
+      "tools": [],
+      "domains": [
+        "founder operations",
+        "engineering leadership"
+      ],
+      "metrics": [
+        {
+          "claim": "engineering team retention 100% over three years",
+          "value": 100,
+          "unit": "% retention",
+          "direction": "up",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "item": {
+    "id": "b1",
+    "section": "experience",
+    "text": "Drove impactful hiring outcomes and fostered strong team culture.",
+    "source_unit_ids": [
+      "u_hiring_loop"
+    ]
+  },
+  "gold": {
+    "assertions": [
+      {
+        "id": "a1",
+        "text": "Drove impactful hiring outcomes.",
+        "required_terms": [
+          "hiring outcomes"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_hiring_loop"
+        ],
+        "specific": false
+      },
+      {
+        "id": "a2",
+        "text": "Fostered strong team culture.",
+        "required_terms": [
+          "team culture"
+        ],
+        "supported": true,
+        "supporting_unit_ids": [
+          "u_hiring_loop"
+        ],
+        "specific": false
+      }
+    ],
+    "relationships": [],
+    "expected_asset_status": "failed"
+  },
+  "notes": "Draft. Traceable to the hiring-loop Unit but stripped of every anchor (eight engineers, the loop design, 100% retention); specificity should flag both."
+}
