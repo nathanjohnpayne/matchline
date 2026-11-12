@@ -24,7 +24,8 @@ export function anthropic(): Anthropic {
   if (!client) {
     // normalizeApiKey, not the raw value: a secret written with
     // `echo` carries a trailing newline that Secret Manager mounts
-    // verbatim, producing a malformed x-api-key header (#426).
+    // verbatim, producing a malformed auth header (#426: then
+    // `x-api-key`; SDK 1.x sends the key as `Authorization: Bearer`).
     client = new Anthropic({
       apiKey: normalizeApiKey(anthropicKey.value()),
     });
