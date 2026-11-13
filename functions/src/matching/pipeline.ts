@@ -61,12 +61,19 @@ import {
  * `rationale` was generated under #435's axis-gating, so it may be
  * shown to the user as a claim.
  *
+ * Version 2 (#601) means, additionally: `rule_score` (and so
+ * `final_score`) is renormalized over the pair's applicable axes,
+ * a pair with no applicable structural axis scores 0, and the row
+ * carries `effective_weights`. Readers distinguish renormalized
+ * rows by `effective_weights` presence; the rationale floor in
+ * `matchProvenance.ts` stays at 1, which a version-2 row clears.
+ *
  * `src/routes/RoleDetail/matchProvenance.ts` holds the reader's
  * copy of this number; `tests/match-schema-version.test.ts` is the
  * only tsconfig project spanning both packages and pins them
  * together. Same arrangement as the callable timeout tables.
  */
-export const MATCH_SCHEMA_VERSION = 1;
+export const MATCH_SCHEMA_VERSION = 2;
 
 const COLLECTION = "unitMatches";
 const ROLES_COLLECTION = "roles";
@@ -275,6 +282,11 @@ async function runMatchingWith(
         // render an unevaluated axis as unavailable instead of
         // presenting its neutral as a measured score.
         component_applicability: { ...result.component_applicability },
+        // The weights `rule_score` was actually computed with
+        // (#601): renormalized over the applicable axes, all 0
+        // for a pair with no applicable structural axis. Its
+        // presence marks the row as renormalized.
+        effective_weights: { ...result.effective_weights },
         // Declares what a reader may conclude from this row —
         // notably that `rationale` was generated under the
         // axis-gated rule and can be presented as a claim (#444).

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  effectiveAxes,
+  effectiveWeights,
+  hasApplicableStructuralAxis,
   hasMappedSenioritySignal,
   hasMeasurableSeniority,
   hasStructuralEvidence,
@@ -13,7 +16,9 @@ import {
   skillOverlap,
   toolOverlap,
   domainOverlap,
+  STRUCTURAL_AXES,
   WEIGHTS,
+  type RequirementAxes,
 } from "./score.js";
 import type {
   ExperienceUnit,
@@ -655,7 +660,11 @@ describe("score (master composer)", () => {
     expect(halfConfidence.rule_score).toBe(fullConfidence.rule_score);
   });
 
-  it("rule_score is the weighted sum of components (composition pin)", () => {
+  it("rule_score is the effective-weighted sum of components (composition pin)", () => {
+    // #601: the weights are renormalized over the applicable
+    // axes. Here skill, tool and seniority are constrained;
+    // domain (no domains named) and scope (non-scope category)
+    // are not, so their placeholders (0.5 and 1.0) carry weight 0.
     const unit = makeUnit({
       skills: ["product strategy"],
       tools: ["jira"],
@@ -673,15 +682,26 @@ describe("score (master composer)", () => {
     const result = score(unit, req, {
       asOf: new Date("2025-06-01T00:00:00.000Z"),
     });
+    const applicableTotal =
+      WEIGHTS.semantic_similarity +
+      WEIGHTS.skill_overlap +
+      WEIGHTS.tool_overlap +
+      WEIGHTS.seniority_alignment +
+      WEIGHTS.recency;
     const expectedRule =
-      WEIGHTS.semantic_similarity * result.components.semantic_similarity +
-      WEIGHTS.skill_overlap * result.components.skill_overlap +
-      WEIGHTS.domain_overlap * result.components.domain_overlap +
-      WEIGHTS.tool_overlap * result.components.tool_overlap +
-      WEIGHTS.seniority_alignment * result.components.seniority_alignment +
-      WEIGHTS.scope_alignment * result.components.scope_alignment +
-      WEIGHTS.recency * result.components.recency;
+      (WEIGHTS.semantic_similarity * result.components.semantic_similarity +
+        WEIGHTS.skill_overlap * result.components.skill_overlap +
+        WEIGHTS.tool_overlap * result.components.tool_overlap +
+        WEIGHTS.seniority_alignment * result.components.seniority_alignment +
+        WEIGHTS.recency * result.components.recency) /
+      applicableTotal;
     expect(result.rule_score).toBeCloseTo(expectedRule, 9);
+    expect(result.effective_weights.domain_overlap).toBe(0);
+    expect(result.effective_weights.scope_alignment).toBe(0);
+    expect(result.effective_weights.skill_overlap).toBeCloseTo(
+      WEIGHTS.skill_overlap / applicableTotal,
+      12,
+    );
   });
 
   it("semantic_score on the result equals components.semantic_similarity", () => {
@@ -711,12 +731,18 @@ describe("score (master composer)", () => {
     //   - recency: ~10.5 months ago = 0.875y / 5y = 0.175 half-lives
     //              → 0.5^0.175 ≈ 0.886
     //
-    //   rule_score = 0.30*1.0 + 0.20*1.0 + 0.15*1.0 + 0.10*0.5
-    //              + 0.10*1.0 + 0.10*1.0 + 0.05*0.886
-    //              ≈ 0.30 + 0.20 + 0.15 + 0.05 + 0.10 + 0.10 + 0.0443
-    //              ≈ 0.9443
+    //   scope is inapplicable (non-scope category), so since #601
+    //   its 1.0 placeholder carries weight 0 and the other six
+    //   weights are renormalized over their 0.90 total:
     //
-    //   final_score = 0.95 (confidence) * 0.9443 ≈ 0.897
+    //   rule_score = (0.30*1.0 + 0.20*1.0 + 0.15*1.0 + 0.10*0.5
+    //              + 0.10*1.0 + 0.05*0.886) / 0.90
+    //              ≈ (0.30 + 0.20 + 0.15 + 0.05 + 0.10 + 0.0443) / 0.90
+    //              ≈ 0.9381
+    //   (0.9443 under the pre-#601 fixed weights; both inside the
+    //   pinned band below.)
+    //
+    //   final_score = 0.95 (confidence) * 0.9381 ≈ 0.891
     const unit = makeUnit({
       id: "unit-pin",
       skills: ["product strategy"],
@@ -879,8 +905,8 @@ describe("hasStructuralEvidence (Codex P1 rounds 1 + 3 on #435)", () => {
     // The credential shape `jd.v1.md` emits for "BS in Computer
     // Science required": no keywords, tools, domains, or
     // seniority level. Every structural axis falls back to its
-    // no-constraint default, so `rule_score` collects ~0.425
-    // nothing earned.
+    // no-constraint default. Before #601 that paid ~0.425 of
+    // rule_score nothing earned; since #601 the pair scores 0.
     const req = makeRequirement({
       category: "credential",
       keywords: [],
@@ -915,8 +941,9 @@ describe("hasStructuralEvidence (Codex P1 rounds 1 + 3 on #435)", () => {
     const unmatched = recentUnit({ skills: ["python"] });
     const result = score(unmatched, req, { asOf });
     expect(result.components.skill_overlap).toBe(0);
-    // Still clears the gap threshold on neutral credit alone —
-    // which is exactly why the flag, not the score, is the gate.
+    // Still clears the gap threshold — on semantic similarity and
+    // recency since #601 (on neutral credit before it) — which is
+    // exactly why the flag, not the score, is the gate.
     expect(result.final_score).toBeGreaterThan(0.4);
     expect(result.structural_evidence).toBe(false);
   });
@@ -1126,5 +1153,327 @@ describe("hasMeasurableSeniority: a hard zero is a measurement (Codex P2 on #435
     expect(
       hasMeasurableSeniority({ seniority_signals: ["mentored", "led"] }),
     ).toBe(true);
+  });
+});
+
+// -- effectiveWeights / renormalized rule_score (#601) ----------------------
+
+const ALL_FALSE: RequirementAxes = Object.freeze({
+  semantic_similarity: false,
+  skill_overlap: false,
+  domain_overlap: false,
+  tool_overlap: false,
+  seniority_alignment: false,
+  scope_alignment: false,
+  recency: false,
+});
+
+function axesWith(
+  overrides: Partial<Record<keyof RequirementAxes, boolean>>,
+): RequirementAxes {
+  return { ...ALL_FALSE, ...overrides };
+}
+
+function sumOf(weights: Readonly<Record<string, number>>): number {
+  return Object.values(weights).reduce((a, b) => a + b, 0);
+}
+
+describe("hasApplicableStructuralAxis (#601)", () => {
+  it("is false when only semantic similarity and recency apply", () => {
+    expect(
+      hasApplicableStructuralAxis(
+        axesWith({ semantic_similarity: true, recency: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for each structural axis on its own", () => {
+    for (const axis of STRUCTURAL_AXES) {
+      expect(
+        hasApplicableStructuralAxis(
+          axesWith({ semantic_similarity: true, [axis]: true }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("names exactly the five structural axes", () => {
+    expect([...STRUCTURAL_AXES].sort()).toEqual(
+      [
+        "domain_overlap",
+        "scope_alignment",
+        "seniority_alignment",
+        "skill_overlap",
+        "tool_overlap",
+      ].sort(),
+    );
+  });
+});
+
+describe("effectiveWeights (#601)", () => {
+  it("equals WEIGHTS when every axis applies", () => {
+    const all = axesWith({
+      semantic_similarity: true,
+      skill_overlap: true,
+      domain_overlap: true,
+      tool_overlap: true,
+      seniority_alignment: true,
+      scope_alignment: true,
+      recency: true,
+    });
+    const ew = effectiveWeights(all);
+    for (const k of Object.keys(WEIGHTS) as (keyof typeof WEIGHTS)[]) {
+      expect(ew[k]).toBeCloseTo(WEIGHTS[k], 12);
+    }
+    expect(sumOf(ew)).toBeCloseTo(1, 12);
+  });
+
+  it("renormalizes a subset proportionally and sums to 1", () => {
+    const ew = effectiveWeights(
+      axesWith({ semantic_similarity: true, skill_overlap: true, recency: true }),
+    );
+    const total =
+      WEIGHTS.semantic_similarity + WEIGHTS.skill_overlap + WEIGHTS.recency;
+    expect(ew.semantic_similarity).toBeCloseTo(
+      WEIGHTS.semantic_similarity / total,
+      12,
+    );
+    expect(ew.skill_overlap).toBeCloseTo(WEIGHTS.skill_overlap / total, 12);
+    expect(ew.recency).toBeCloseTo(WEIGHTS.recency / total, 12);
+    // Relative weights are preserved.
+    expect(ew.semantic_similarity / ew.skill_overlap).toBeCloseTo(
+      WEIGHTS.semantic_similarity / WEIGHTS.skill_overlap,
+      12,
+    );
+    expect(sumOf(ew)).toBeCloseTo(1, 12);
+  });
+
+  it("gives an inapplicable axis exactly 0", () => {
+    const ew = effectiveWeights(
+      axesWith({ semantic_similarity: true, tool_overlap: true }),
+    );
+    expect(ew.skill_overlap).toBe(0);
+    expect(ew.domain_overlap).toBe(0);
+    expect(ew.seniority_alignment).toBe(0);
+    expect(ew.scope_alignment).toBe(0);
+    expect(ew.recency).toBe(0);
+  });
+
+  it("boundary: exactly one structural axis is enough to be evaluated", () => {
+    // A lone structural axis with nothing else applicable carries
+    // the whole weight.
+    expect(effectiveWeights(axesWith({ scope_alignment: true })).scope_alignment)
+      .toBe(1);
+    const ew = effectiveWeights(
+      axesWith({ semantic_similarity: true, seniority_alignment: true }),
+    );
+    expect(ew.seniority_alignment).toBeCloseTo(0.1 / 0.4, 12);
+    expect(ew.semantic_similarity).toBeCloseTo(0.3 / 0.4, 12);
+  });
+
+  it("no applicable structural axis → every weight 0 (owner decision on #433, no semantics-only score)", () => {
+    for (const axes of [
+      axesWith({ semantic_similarity: true, recency: true }),
+      axesWith({ semantic_similarity: true }),
+      axesWith({ recency: true }),
+    ]) {
+      const ew = effectiveWeights(axes);
+      expect(Object.values(ew).every((w) => w === 0)).toBe(true);
+    }
+  });
+
+  it("failure mode: every axis false yields zeros, never NaN", () => {
+    const ew = effectiveWeights(ALL_FALSE);
+    for (const w of Object.values(ew)) {
+      expect(Number.isNaN(w)).toBe(false);
+      expect(w).toBe(0);
+    }
+  });
+
+  it("failure mode: the result is frozen", () => {
+    const ew = effectiveWeights(
+      axesWith({ semantic_similarity: true, skill_overlap: true }),
+    );
+    expect(Object.isFrozen(ew)).toBe(true);
+    expect(() => {
+      (ew as Record<string, number>).skill_overlap = 0;
+    }).toThrow();
+  });
+});
+
+describe("score: renormalized rule_score (#601 acceptance)", () => {
+  const asOf = new Date("2026-08-31T00:00:00Z");
+
+  it("AC1: a Requirement whose keywords, tools and domains canonicalize to nothing collects no rule_score from any Unit", () => {
+    const req = makeRequirement({
+      category: "credential",
+      keywords: ["xyzzy-not-a-real-skill"],
+      tools: [],
+      domains: ["frobnitz-not-a-real-domain"],
+    });
+    const units = [
+      makeUnit({
+        id: "u-a",
+        skills: ["product strategy"],
+        tools: ["jira"],
+        domains: ["streaming video"],
+        seniority_signals: ["led"],
+        date_range: { start: "2021-01-01" },
+      }),
+      makeUnit({ id: "u-b", embedding: [0.6, 0.8, 0] }),
+    ];
+    for (const unit of units) {
+      const result = score(unit, req, { asOf });
+      // The neutral placeholders are still in `components` …
+      expect(result.components.skill_overlap).toBe(0.5);
+      expect(result.components.tool_overlap).toBe(0.5);
+      expect(result.components.domain_overlap).toBe(0.5);
+      // … but none of them, and no semantics-only score, reaches
+      // rule_score.
+      expect(result.rule_score).toBe(0);
+      expect(result.final_score).toBe(0);
+      expect(Object.values(result.effective_weights).every((w) => w === 0)).toBe(
+        true,
+      );
+      // Semantic similarity is still reported on its own.
+      expect(result.semantic_score).toBe(result.components.semantic_similarity);
+      expect(result.semantic_score).toBeGreaterThan(0);
+    }
+  });
+
+  it("AC2: Requirements differing only in how many axes apply score an identical Unit-side match the same", () => {
+    // Both Requirements are matched perfectly on every axis they
+    // constrain; the second additionally constrains domain.
+    const unit = makeUnit({
+      skills: ["product strategy"],
+      domains: ["streaming video"],
+      date_range: { start: "2021-01-01" },
+    });
+    const narrow = makeRequirement({ keywords: ["product strategy"] });
+    const wide = makeRequirement({
+      keywords: ["product strategy"],
+      domains: ["streaming video"],
+    });
+    const a = score(unit, narrow, { asOf });
+    const b = score(unit, wide, { asOf });
+    expect(a.component_applicability.domain_overlap).toBe(false);
+    expect(b.component_applicability.domain_overlap).toBe(true);
+    expect(a.rule_score).toBeCloseTo(1, 12);
+    expect(b.rule_score).toBeCloseTo(1, 12);
+    expect(a.rule_score).toBeCloseTo(b.rule_score, 12);
+  });
+
+  it("AC3: effective weights sum to 1 and Σ weight × component equals rule_score", () => {
+    const unit = makeUnit({
+      skills: ["product strategy", "roadmapping"],
+      tools: ["jira", "linear"],
+      domains: ["streaming video"],
+      seniority_signals: ["led"],
+      scope_signals: ["40M users"],
+      embedding: [0.6, 0.8, 0],
+      date_range: { start: "2019-01-01", end: "2022-06-01" },
+    });
+    const reqs = [
+      makeRequirement({ keywords: ["product strategy"] }),
+      makeRequirement({ tools: ["jira"], seniority_level: "staff" }),
+      makeRequirement({
+        category: "scope",
+        keywords: ["40M users"],
+        domains: ["streaming video"],
+      }),
+      makeRequirement({
+        keywords: ["product strategy"],
+        tools: ["jira", "notion"],
+        domains: ["fintech"],
+        seniority_level: "senior",
+      }),
+    ];
+    for (const req of reqs) {
+      const result = score(unit, req, { asOf });
+      expect(sumOf(result.effective_weights)).toBeCloseTo(1, 9);
+      let sum = 0;
+      for (const k of Object.keys(WEIGHTS) as (keyof typeof WEIGHTS)[]) {
+        sum += result.effective_weights[k] * result.components[k];
+        if (!result.component_applicability[k]) {
+          expect(result.effective_weights[k]).toBe(0);
+        }
+      }
+      expect(Math.abs(sum - result.rule_score)).toBeLessThan(1e-9);
+      expect(result.final_score).toBeCloseTo(
+        unit.confidence_score * result.rule_score,
+        12,
+      );
+    }
+  });
+
+  it("AC4: confidence gating holds and rule_score is independent of confidence", () => {
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const base = makeUnit({ skills: ["product strategy"] });
+    const full = score(base, req, { asOf });
+    const zero = score({ ...base, confidence_score: 0 }, req, { asOf });
+    expect(full.rule_score).toBeGreaterThan(0);
+    expect(zero.final_score).toBe(0);
+    expect(zero.rule_score).toBe(full.rule_score);
+    expect(zero.effective_weights).toEqual(full.effective_weights);
+  });
+
+  it("an undated Unit's recency placeholder carries no weight", () => {
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const unit = makeUnit({ skills: ["product strategy"] }); // no date_range
+    const result = score(unit, req, { asOf });
+    expect(result.components.recency).toBe(0.5);
+    expect(result.component_applicability.recency).toBe(false);
+    expect(result.effective_weights.recency).toBe(0);
+    // (0.30·1 + 0.20·1) / 0.50 — the 0.5 placeholder would have
+    // pulled this below 1.
+    expect(result.rule_score).toBeCloseTo(1, 12);
+  });
+
+  it("seniority-only Requirement: a Unit with only unmapped signals is not evaluated and scores 0", () => {
+    const req = makeRequirement({ seniority_level: "senior" });
+    const unit = makeUnit({
+      seniority_signals: ["mentored"],
+      date_range: { start: "2021-01-01" },
+    });
+    const result = score(unit, req, { asOf });
+    expect(effectiveAxes(unit, req).seniority_alignment).toBe(false);
+    expect(result.rule_score).toBe(0);
+    expect(result.final_score).toBe(0);
+  });
+
+  it("seniority-only Requirement: a Unit with no signals is evaluated and its hard 0 counts", () => {
+    const req = makeRequirement({ seniority_level: "senior" });
+    const unit = makeUnit({
+      seniority_signals: [],
+      date_range: { start: "2021-01-01" },
+    });
+    const result = score(unit, req, { asOf });
+    expect(result.component_applicability.seniority_alignment).toBe(true);
+    expect(result.components.seniority_alignment).toBe(0);
+    // (0.30·1 + 0.10·0 + 0.05·1) / 0.45
+    expect(result.rule_score).toBeCloseTo(0.35 / 0.45, 12);
+  });
+
+  it("an evaluated mismatch scores lower than the same pair did on the old fixed weights", () => {
+    // Regression pin for the removed free credit: a skills-only
+    // Requirement the Unit misses. Pre-#601 it collected the
+    // three unconstrained neutrals (0.15·0.5 + 0.10·0.5 + 0.10·1
+    // + 0.10·1 = 0.325) on top of semantics and recency.
+    const req = makeRequirement({ keywords: ["product strategy"] });
+    const unit = makeUnit({
+      skills: ["python"],
+      date_range: { start: "2021-01-01" },
+    });
+    const result = score(unit, req, { asOf });
+    const fixed =
+      WEIGHTS.semantic_similarity * result.components.semantic_similarity +
+      WEIGHTS.skill_overlap * result.components.skill_overlap +
+      WEIGHTS.domain_overlap * result.components.domain_overlap +
+      WEIGHTS.tool_overlap * result.components.tool_overlap +
+      WEIGHTS.seniority_alignment * result.components.seniority_alignment +
+      WEIGHTS.scope_alignment * result.components.scope_alignment +
+      WEIGHTS.recency * result.components.recency;
+    expect(result.rule_score).toBeCloseTo(0.35 / 0.55, 12);
+    expect(result.rule_score).toBeLessThan(fixed);
   });
 });

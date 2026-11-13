@@ -6,9 +6,8 @@
  * (#99) and the rationale generator (#100) consume this; this
  * module exposes nothing but math.
  *
- * The PRD formula:
+ * The PRD weights:
  *
- *   final_score = confidence_score × (
  *     0.30 × semantic_similarity +
  *     0.20 × skill_overlap       +
  *     0.15 × domain_overlap      +
@@ -16,7 +15,22 @@
  *     0.10 × seniority_alignment +
  *     0.10 × scope_alignment     +
  *     0.05 × recency
- *   )
+ *
+ * are renormalized per pair over the axes the engine actually
+ * evaluated (#601, parent #433):
+ *
+ *   effective_weights[k] = WEIGHTS[k] / Σ_{j applicable} WEIGHTS[j]
+ *                          for each applicable axis k, else 0
+ *   rule_score  = Σ_k effective_weights[k] × components[k]
+ *   final_score = confidence_score × rule_score
+ *
+ * "Applicable" is `effectiveAxes()`, the same per-pair answer
+ * persisted as `component_applicability`. A pair with NO
+ * applicable structural axis (skill, domain, tool, seniority,
+ * scope) gets `rule_score = 0` and all-zero effective weights:
+ * the owner decision of 2026-10-21 on #433 is that such a
+ * Requirement is surfaced as "could not be evaluated" and does
+ * not get a semantics-only score. See `effectiveWeights`.
  *
  * The `confidence_score` multiplier is the zero-fabrication
  * boundary at the matching layer: a Unit with `confidence_score
@@ -88,10 +102,14 @@ export interface ScoreResult {
    * no-constraint default: `jaccard()`'s 0.5 neutral, or the
    * 1.0 from `seniorityAlignment` / `scopeAlignment`), or
    * because it constrains some and this Unit scored 0.0 on all
-   * of them. Both cases leave `final_score` resting on
-   * semantics plus up to ~0.425 of unearned neutral credit,
-   * which is enough for a recent Unit to clear the Gaps view's
-   * 0.4 threshold.
+   * of them. Before #601 both cases left `final_score` resting
+   * on semantics plus up to ~0.425 of unearned neutral credit,
+   * enough for a recent Unit to clear the Gaps view's 0.4
+   * threshold. Since #601 the first case scores 0 and the second
+   * rests on semantics and recency against a renormalized
+   * structural weight the Unit scored 0 on, but the gate stays:
+   * a high semantic score alone must still not cover a
+   * must-have.
    *
    * `computeGaps` consumes this so a must-have with no
    * evaluable signal can never be reported as covered. The
@@ -114,7 +132,20 @@ export interface ScoreResult {
    * its neutral as a measured score.
    */
   readonly component_applicability: RequirementAxes;
-  /** Weighted sum of components, BEFORE the confidence multiplier. */
+  /**
+   * The weight each component carried in `rule_score` for this
+   * pair — see `effectiveWeights`. 0 on an inapplicable axis;
+   * all 0 when no structural axis applies. Persisted on the
+   * match (#601) so readers can tell a renormalized row from a
+   * legacy fixed-weight one and so the breakdown can show the
+   * weights that were actually used.
+   */
+  readonly effective_weights: EffectiveWeights;
+  /**
+   * Σ effective_weights[k] × components[k], BEFORE the
+   * confidence multiplier. 0 for a pair with no applicable
+   * structural axis.
+   */
   readonly rule_score: number;
   /**
    * Bare semantic similarity, kept on UnitMatch per spec — the
@@ -195,19 +226,17 @@ export interface ScoreResult {
  * change stops an ontology gap from being scored as a
  * candidate deficiency in the meantime.
  *
- * **Known residual — a synthetic neutral is not free.** A
- * Requirement whose `keywords`, `tools` AND `domains` all
- * canonicalize to nothing now collects 0.5 on all three axes
- * (0.225 of rule_score) from every Unit, which is enough for a
- * recent Unit to clear the 0.4 gap threshold on semantics
- * alone. That trades the old false negative for a milder false
- * positive. The principled end state is to drop an unsignalled
- * axis and renormalize the remaining weights, so the score
- * stays comparable across Requirements instead of absorbing an
- * invented 0.5 — deferred because `ScoreComponents` is
- * persisted on `UnitMatch` and the breakdown tooltip (#131)
- * renders a fixed weight per row, so per-match effective
- * weights need a data-contract change. Tracked in #433.
+ * **The neutral is a placeholder, not credit.** A Requirement
+ * whose `keywords`, `tools` AND `domains` all canonicalize to
+ * nothing still gets 0.5 on all three axes in `components`, but
+ * since #601 an unconstrained axis is inapplicable and carries
+ * an effective weight of 0, so the 0.5 never reaches
+ * `rule_score`. Before #601 the three neutrals paid 0.225 of
+ * rule_score to every Unit, enough for a recent Unit to clear
+ * the 0.4 gap threshold on semantics alone. The value is kept
+ * in `components` because legacy readers and the breakdown
+ * tooltip read it there; `component_applicability` says it was
+ * not evaluated.
  */
 function jaccard(
   unitValues: readonly string[],
@@ -282,13 +311,73 @@ export function requirementAxes(
  * something the employer asked for, so neither can substantiate
  * a must-have on its own.
  */
-const STRUCTURAL_AXES = [
+export const STRUCTURAL_AXES = [
   "skill_overlap",
   "domain_overlap",
   "tool_overlap",
   "seniority_alignment",
   "scope_alignment",
 ] as const satisfies readonly (keyof ScoreComponents)[];
+
+/**
+ * Does at least one of the five structural axes apply to this
+ * pair (or Requirement)?
+ *
+ * False means nothing the employer asked about could be
+ * compared: the pair rests on semantics and recency alone, which
+ * the owner decision of 2026-10-21 on #433 rules out as a basis
+ * for a score. `effectiveWeights` returns all zeros for such a
+ * pair, and the Gaps view (#602) reports the Requirement as
+ * "could not be evaluated" rather than as an ordinary gap.
+ */
+export function hasApplicableStructuralAxis(axes: RequirementAxes): boolean {
+  return STRUCTURAL_AXES.some((axis) => axes[axis]);
+}
+
+/** Per-component weight actually used in one pair's `rule_score`. */
+export type EffectiveWeights = Readonly<Record<keyof ScoreComponents, number>>;
+
+const COMPONENT_KEYS = Object.keys(WEIGHTS) as (keyof ScoreComponents)[];
+
+/**
+ * The weights a pair's `rule_score` is computed with, given the
+ * pair's applicability (`effectiveAxes`). #601, parent #433.
+ *
+ *   - An inapplicable axis gets 0, so its neutral placeholder
+ *     (`jaccard()`'s 0.5, the 1.0 from an unconstrained
+ *     seniority or scope, recency's 0.5 for an undated Unit) is
+ *     no longer paid.
+ *   - The applicable axes keep the PRD's relative weights,
+ *     scaled so they sum to 1. Two Requirements that differ only
+ *     in how many axes they constrain then produce comparable
+ *     scores for the same Unit-side match.
+ *   - No applicable structural axis → every weight is 0, so
+ *     `rule_score = 0`. Semantic similarity and recency are
+ *     still applicable on such a pair, but renormalizing over
+ *     just those two would be a semantics-only score, which the
+ *     owner decision of 2026-10-21 on #433 rules out: the
+ *     Requirement is surfaced as "could not be evaluated"
+ *     instead.
+ *
+ * The scaling is proportional, so among the applicable axes the
+ * ranking of `weight × component` is the same as with the fixed
+ * WEIGHTS; `generateRationale`'s driving-axis choice does not
+ * move.
+ *
+ * The weights sum to exactly 0 or to 1 (within float rounding).
+ * The result is frozen.
+ */
+export function effectiveWeights(axes: RequirementAxes): EffectiveWeights {
+  const out = {} as Record<keyof ScoreComponents, number>;
+  if (!hasApplicableStructuralAxis(axes)) {
+    for (const k of COMPONENT_KEYS) out[k] = 0;
+    return Object.freeze(out);
+  }
+  let total = 0;
+  for (const k of COMPONENT_KEYS) if (axes[k]) total += WEIGHTS[k];
+  for (const k of COMPONENT_KEYS) out[k] = axes[k] ? WEIGHTS[k] / total : 0;
+  return Object.freeze(out);
+}
 
 /**
  * Did THIS PAIR produce real evidence on an axis the Requirement
@@ -804,14 +893,11 @@ export function score(
     scope_alignment: scopeAlignment(unit, requirement),
     recency: recency(unit, options),
   };
-  const rule_score =
-    WEIGHTS.semantic_similarity * components.semantic_similarity +
-    WEIGHTS.skill_overlap * components.skill_overlap +
-    WEIGHTS.domain_overlap * components.domain_overlap +
-    WEIGHTS.tool_overlap * components.tool_overlap +
-    WEIGHTS.seniority_alignment * components.seniority_alignment +
-    WEIGHTS.scope_alignment * components.scope_alignment +
-    WEIGHTS.recency * components.recency;
+  const effective_weights = effectiveWeights(axes);
+  let rule_score = 0;
+  for (const k of COMPONENT_KEYS) {
+    rule_score += effective_weights[k] * components[k];
+  }
   const final_score = unit.confidence_score * rule_score;
   return {
     components,
@@ -821,6 +907,7 @@ export function score(
       axes,
       seniorityMapped: hasMappedSenioritySignal(unit),
     }),
+    effective_weights,
     rule_score,
     semantic_score: components.semantic_similarity,
     final_score,
