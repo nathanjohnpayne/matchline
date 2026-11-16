@@ -254,6 +254,14 @@ export interface UnitMatch {
    * | pre-#435        | present   | absent        | absent  |
    * | #435-era        | present   | present       | absent  |
    * | post-#444       | present   | present       | 1       |
+   * | post-#601       | present   | present       | 2       |
+   *
+   * Version 2 (#601) changes what `rule_score` means: it is
+   * renormalized over the applicable axes, and the row carries
+   * `effective_weights`. Readers that need to tell a renormalized
+   * row from a fixed-weight one key on `effective_weights`
+   * presence, not on this number; the rationale gate is a `>= 1`
+   * floor and is unaffected.
    *
    * #435-era rows have a trustworthy rationale and no version, so
    * `isRationaleTrustworthy` is a compound until they are gone.
@@ -270,9 +278,11 @@ export interface UnitMatch {
    * The 7 weighted sub-components that produce `rule_score`.
    * Persisted alongside the score so the Matches tab's
    * sub-score breakdown tooltip (#21 / sub-issue #131) can
-   * render without re-computing. Each value is in [0, 1];
-   * `rule_score = Σ(component × weight)` with weights from
-   * `WEIGHTS` in `functions/src/matching/score.ts`.
+   * render without re-computing. Each value is in [0, 1].
+   * On a row with `effective_weights` (#601),
+   * `rule_score = Σ(component × effective_weights[component])`;
+   * on a legacy row, `rule_score = Σ(component × weight)` with the
+   * fixed `WEIGHTS` in `functions/src/matching/score.ts`.
    *
    * Optional because pre-#131 matches in storage won't have
    * it; reader falls back to a "breakdown unavailable"
@@ -301,10 +311,15 @@ export interface UnitMatch {
    *      structural axis fell back to a no-constraint default; or
    *   2. it constrains something and this Unit scored 0.0 on all
    *      of them — an evaluated mismatch.
-   * Either way `final_score` rests on semantics plus unearned
-   * neutral credit, which is why `computeGaps` refuses to let
-   * such a match cover a must-have. The match still ranks and
-   * still renders.
+   * Before #601 either case left `final_score` resting on
+   * semantics plus up to ~0.425 of unearned neutral credit.
+   * Since #601 (rows carrying `effective_weights`) the first
+   * case scores 0, and the second rests on semantics and
+   * recency against a renormalized structural weight the Unit
+   * scored 0 on. The gate stays either way: `computeGaps`
+   * refuses to let such a match cover a must-have, because a
+   * high semantic score alone is not evidence. The match still
+   * ranks and still renders.
    *
    * Optional because rows written before this field existed
    * won't have it. Readers treat `undefined` as "legacy, don't
@@ -339,6 +354,36 @@ export interface UnitMatch {
    * so assuming "measured" for legacy data reintroduces the bug.
    */
   component_applicability?: Readonly<Record<keyof ScoreComponents, boolean>>;
+  /**
+   * The weight each component actually carried in THIS row's
+   * `rule_score` (#601, parent #433).
+   *
+   * `rule_score` is renormalized over the axes marked applicable
+   * in `component_applicability`: each applicable axis keeps the
+   * PRD's relative weight (`WEIGHTS` in
+   * `functions/src/matching/score.ts`), scaled so the applicable
+   * weights sum to 1, and an inapplicable axis carries 0, so its
+   * neutral placeholder in `components` contributes nothing. A
+   * pair with no applicable structural axis (skill, domain, tool,
+   * seniority, scope) carries all zeros and `rule_score = 0`: the
+   * owner decision of 2026-10-21 on #433 is that such a
+   * Requirement is "could not be evaluated" and does not get a
+   * semantics-only score.
+   *
+   * Invariants on a row that has it: the values sum to 0 or to 1
+   * (within float rounding), and
+   * `Σ(effective_weights[k] × components[k]) = rule_score`.
+   *
+   * **This field is the marker** that distinguishes a
+   * renormalized row from a legacy fixed-weight one. Optional
+   * because every row written before #601 lacks it; a reader
+   * without it MUST assume the fixed `WEIGHTS`, which is what
+   * produced that row's `rule_score`. No migration: one rerun of
+   * matching heals a Role, and the carry-forward copies only the
+   * user action flags, so old weights are never carried onto a
+   * new row.
+   */
+  effective_weights?: Readonly<Record<keyof ScoreComponents, number>>;
 
   rationale: string;
   surface_evidence: string;
