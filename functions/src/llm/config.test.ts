@@ -15,6 +15,7 @@ import {
   STAGES,
   VALIDATION_STAGES,
 } from "./config.js";
+import { profileFor } from "./modelProfile.js";
 
 /**
  * Per-stage model configuration (#489): the three validation subtasks
@@ -23,6 +24,7 @@ import {
  */
 
 const SONNET_46 = "claude-sonnet-4-6";
+const SONNET_55 = "claude-sonnet-5-5";
 const HAIKU_45 = "claude-haiku-4-5-20251001";
 
 afterEach(() => {
@@ -49,9 +51,15 @@ describe("STAGES", () => {
 
 describe("defaults", () => {
   it("keeps the audited production defaults", () => {
-    for (const stage of [...VALIDATION_STAGES, "extraction", "rationale"] as const) {
+    for (const stage of [...VALIDATION_STAGES, "rationale"] as const) {
       expect(modelFor(stage), stage).toEqual({ provider: "anthropic", model: SONNET_46 });
     }
+    // #632: extraction moved to Sonnet 5.5 after the #495 rule 9 confirmation.
+    expect(modelFor("extraction")).toEqual({ provider: "anthropic", model: SONNET_55 });
+    // The selected configuration is Sonnet 5.5 at effort high; with no
+    // runtime override the stage runs at the model profile default.
+    expect(effortFor("extraction")).toBeUndefined();
+    expect(profileFor(SONNET_55).defaultEffort).toBe("high");
     expect(modelFor("generation")).toEqual({ provider: "anthropic", model: HAIKU_45 });
     expect(modelFor("requirement_parsing")).toEqual({ provider: "anthropic", model: HAIKU_45 });
     for (const stage of STAGES) expect(modelFor(stage).provider, stage).toBe("anthropic");
