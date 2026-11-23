@@ -16,15 +16,21 @@
  * doesn't constrain an axis — 0.5 on skill / tool / domain,
  * 1.0 on seniority and scope. That's deliberate (an
  * unconstrained axis must not read as a candidate
- * deficiency), but a Requirement that constrains NOTHING
- * evaluable stacks those defaults into ~0.425 of unearned
- * `rule_score`, and a recent Unit then clears 0.4 on
- * semantics alone. The credential-shaped Requirement
- * `jd.v1.md` emits with empty `keywords` / `tools` /
- * `domains` is the canonical case: "BS in Computer Science
- * required" would show as covered by whichever Unit happened
- * to embed closest, which is precisely the dishonesty this
- * view exists to prevent.
+ * deficiency). Before #601, a Requirement that constrained
+ * NOTHING evaluable stacked those defaults into ~0.425 of
+ * unearned `rule_score`, and a recent Unit then cleared 0.4
+ * on semantics alone. Since #601 (rows carrying
+ * `effective_weights`) an inapplicable axis carries weight 0,
+ * so such a pair scores 0, and an evaluated mismatch rests on
+ * semantics and recency against renormalized structural
+ * weight it scored 0 on. The gate below stays: legacy rows
+ * still carry the old credit, and a high semantic score must
+ * never cover a must-have on its own. The credential-shaped
+ * Requirement `jd.v1.md` emits with empty `keywords` /
+ * `tools` / `domains` is the canonical case: "BS in Computer
+ * Science required" would show as covered by whichever Unit
+ * happened to embed closest, which is precisely the
+ * dishonesty this view exists to prevent.
  *
  * Such matches are NOT hidden — `specs/matchline.md`'s
  * non-goals are explicit that low-quality matches still
@@ -82,6 +88,30 @@
  *   - The threshold is overridable so the Phase 3 eval
  *     harness (#25) can tune against real fixtures.
  *
+ * **Could not be evaluated (#602, parent #433).** A must-have on
+ * which none of the five structural axes (skill, domain, tool,
+ * seniority, scope) applied for any of its matches cannot be
+ * covered — no pair carries structural evidence — but calling it
+ * "unmet" would claim the user lacks something we never compared.
+ * The owner decision of 2026-10-21 on #433: such a Requirement is
+ * surfaced as "could not be evaluated" and gets no semantics-only
+ * score. It is a separate `GapStatus`, `not_evaluated`, decided
+ * from the persisted per-pair `component_applicability`:
+ *
+ *   - every match for the Requirement carries the field, AND
+ *   - none of them has a structural axis marked applicable, AND
+ *   - there is at least one such match.
+ *
+ * Rejected matches count toward evaluability — applicability is a
+ * fact about the pair, not about the user's decision — but never
+ * toward coverage. A single match without the field (a legacy
+ * row) keeps today's classification, so nothing written before
+ * #435 is reclassified. A Requirement with no matches at all
+ * stays `unmet`. The must-have handling is unchanged: a
+ * not-evaluated Requirement is still listed, still uncovered, and
+ * still withholds the affirmative empty state; only the label
+ * differs.
+ *
  * Non-must-have Requirements are NEVER in the gaps output —
  * the user already accepted that those don't have to be
  * grounded. The point of the Gaps view is honesty: "here
@@ -113,6 +143,15 @@ export const GAP_THRESHOLD = 0.4;
 /**
  * Why a Requirement appears in the Gaps list.
  *
+ * `not_evaluated` (#602): nothing the matcher could compare,
+ * for any Unit. Either the Requirement names no recognized
+ * skill, tool, domain, seniority level or scope, or it names
+ * only a seniority level and no Unit carries a ladder-mapped
+ * seniority signal to check it against (`effectiveAxes` then
+ * drops seniority for every pair). Either way "nothing
+ * qualifies" would be a claim about the user that was never
+ * tested.
+ *
  * `unmet` is the original meaning: nothing qualifies. `unverifiable`
  * is #441's addition: something might qualify, but the evidence
  * derivation could not reach a verdict on it — an orphaned
@@ -120,7 +159,22 @@ export const GAP_THRESHOLD = 0.4;
  * currently declines to score. The user's next action differs
  * between the two, so the view must not merge them.
  */
-export type GapStatus = "unmet" | "unverifiable";
+export type GapStatus = "unmet" | "unverifiable" | "not_evaluated";
+
+/**
+ * Client mirror of `STRUCTURAL_AXES` in
+ * `functions/src/matching/score.ts`. The app cannot import that
+ * module at runtime (its ontology loader pulls in `node:fs`), so
+ * the list is repeated here and pinned equal to the server's in
+ * `tests/structural-axes-mirror.test.ts`.
+ */
+export const STRUCTURAL_AXES = [
+  "skill_overlap",
+  "domain_overlap",
+  "tool_overlap",
+  "seniority_alignment",
+  "scope_alignment",
+] as const;
 
 export interface Gap {
   readonly requirement: JobRequirementUnit;
@@ -228,6 +282,23 @@ export function computeGaps(
   const bestCovering = new Map<string, number>();
   const doubted = new Map<string, UnverifiableReason[]>();
   const currentRequirementIds = new Set(requirements.map((r) => r.id));
+  // Evaluability (#602), over EVERY match including rejected ones.
+  // `hasLegacy`: some match lacks `component_applicability`, so no
+  // reclassification. `evaluated`: some match had a structural
+  // axis applicable. `seen`: at least one match carried the field.
+  const hasLegacy = new Set<string>();
+  const evaluated = new Set<string>();
+  const seen = new Set<string>();
+  for (const m of matches) {
+    const reqId = m.job_requirement_unit_id;
+    const axes = m.component_applicability;
+    if (axes === undefined) {
+      hasLegacy.add(reqId);
+      continue;
+    }
+    seen.add(reqId);
+    if (STRUCTURAL_AXES.some((a) => axes[a] === true)) evaluated.add(reqId);
+  }
   let strandedMatches = 0;
   for (const m of matches) {
     if (m.user_rejected) continue;
@@ -274,9 +345,19 @@ export function computeGaps(
     const best = bestCovering.get(req.id);
     if (best !== undefined && best >= threshold) continue;
     const reasons = doubted.get(req.id);
+    // Precedence: `unverifiable` first. It only arises from legacy
+    // rows, which also put the Requirement in `hasLegacy`, so the
+    // two cannot both apply; the order just makes that explicit.
+    const notEvaluated =
+      seen.has(req.id) && !hasLegacy.has(req.id) && !evaluated.has(req.id);
     gaps.push({
       requirement: req,
-      status: reasons === undefined ? "unmet" : "unverifiable",
+      status:
+        reasons !== undefined
+          ? "unverifiable"
+          : notEvaluated
+            ? "not_evaluated"
+            : "unmet",
       reasons: reasons ?? [],
     });
   }
